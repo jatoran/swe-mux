@@ -3237,18 +3237,24 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Same collapsed-disclosure shape as the auto-delivery strip above, deliberately:
    both answer "what is swe-mux doing on my behalf here", and two different
    treatments for the same question would read as two unrelated features. */
-.approval-strip-wrap{border-top:1px solid var(--line)}
-.approval-strip{display:flex;align-items:center}
-.approval-summary{flex:1 1 auto;min-width:0;min-height:24px;padding:3px 10px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:9px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Amber rather than accent: a standing grant is closer to "attention" than to
-   "on", and it must not read the same as the auto-delivery strip's accent. */
-.approval-on{color:var(--amber)}
-.approval-detail{display:grid;gap:6px;padding:6px 10px;border-top:1px solid var(--line);color:var(--muted);font-size:9px}
-.approval-modes{display:flex;gap:4px;flex-wrap:wrap}
-.approval-mode{padding:2px 8px;border:1px solid var(--line);border-radius:3px;background:transparent;color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
-.approval-mode:disabled{opacity:.45;cursor:not-allowed}
-.approval-mode.selected{border-color:var(--amber);color:var(--amber)}
-.approval-note{margin:0;color:var(--muted);line-height:1.45}
+/* The `appr:` chip sits beside `tts:` in the pane bar and inherits `.voice-chip`,
+   so the two read as one row of session controls rather than as two features. */
+.approval-chip-wrap{position:relative;display:inline-flex}
+/* Amber rather than accent or green: a standing grant is closer to "attention"
+   than to "on", and `tts:auto` next to it is already green. */
+.pane-voice .voice-chip.approval-on{border-color:var(--amber);color:var(--amber)}
+/* Anchored to the chip and clamped to the viewport, because a pane bar can sit
+   hard against the right edge on a phone. */
+.approval-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:60;display:grid;gap:2px;min-width:min(260px,calc(100vw - 24px));max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);box-shadow:0 6px 18px #0009}
+.approval-menu-item{display:grid;gap:1px;padding:5px 8px;border:0;border-radius:4px;background:transparent;color:var(--text);font:inherit;font-size:10px;text-align:left;cursor:pointer}
+.approval-menu-item:hover:not(:disabled){background:#1c222b}
+.approval-menu-item:disabled{opacity:.45;cursor:not-allowed}
+.approval-menu-item.selected{color:var(--amber)}
+.approval-menu-item.selected .approval-menu-label::after{content:' ✓'}
+.approval-menu-label{font-weight:600}
+.approval-menu-why{color:var(--muted);font-size:9px;line-height:1.4;white-space:normal}
+.approval-menu-note{margin:0;padding:2px 8px;color:var(--muted);font-size:9px;line-height:1.4}
+.approval-menu-note:first-of-type{border-top:1px solid var(--line);padding-top:5px;margin-top:2px}
 .approval-error{color:var(--red)}
 .rail-approve{color:var(--amber)}
 .rail-approve:disabled{opacity:.45}

@@ -51,7 +51,7 @@ safely.
   leaves authority standing; a read-time check cannot. `revoke_approval_policy` additionally
   clears the record at every run-identity seam (promotion, demotion, rollover, identity heal,
   process exit) — but that is for *legibility*, not safety: by the time it runs the grant is
-  already inert, and what it fixes is the strip and the sidebar badge still rendering a mode
+  already inert, and what it fixes is the chip and the sidebar badge still rendering a mode
   that no longer applies.
 - **Rules are snapshotted when the mode is set.** Two reasons, both load-bearing. The decision
   runs on the agent's blocked turn and must do no file I/O; and a grant is authorization of
@@ -122,7 +122,7 @@ answered while every one of them sat waiting.
 
 Nothing that is not a tool permission request produces a hook at all — trust dialogs, logins,
 `/clear` confirmations, Codex startup dialogs — so this can never be described to the user as
-"approves everything". The strip says so rather than leaving it to be discovered.
+"approves everything". The chip's menu says so rather than leaving it to be discovered.
 
 ## Configuration
 
@@ -165,12 +165,18 @@ Two rules about matching are not conveniences:
 
 ## UI
 
-- **The `approvals:` strip** (`ApprovalStrip.tsx`), one collapsed line directly above the pane's
-  command rail, disclosing the three-position selector, the rule count and its source, the last
-  answered request, and the floor-deferral count. The same shape as the Queue pane's `auto:`
-  strip, and for the same reason: a control that changes what mux does on the operator's behalf
-  has to be readable from the surface they are already looking at, and a brake reachable only
-  through an overlay is a brake nobody reaches in the moment they want it.
+- **The `appr:` chip** (`ApprovalChip.tsx`), in the pane bar directly beside `tts:`. Both chips
+  answer the same class of question — what mux does for this session without being asked each
+  time — so they belong in the same row at the same weight, and the pane bar is the one surface
+  visible for as long as the pane is. A brake reachable only through an overlay is a brake
+  nobody reaches in the moment they want it.
+  The label is four characters at most (`appr:wait` / `appr:list` / `appr:ALL`, plus `off` and
+  `n/a`) because it shares a bar with the session state, the path, and the tools; on a glance
+  its only job is "is authority standing here", and every number, reason, and expiry lives in
+  the drop-down. It reads the **effective** mode, so a lapsed or superseded grant shows `wait`.
+  Unlike `tts:` it does not cycle on click. The three positions are not a ladder you want to
+  pass *through* — `allow_all` is not a step on the way back to `wait` — so it opens a menu and
+  each mode is chosen directly, with the reason a blocked mode is blocked shown under it.
   Rendered for every agent pane, **including ones where no mode can be selected** — a control
   that disappears when unavailable teaches the operator it does not exist, while one that stays
   and says why teaches them what would make it work.
@@ -188,7 +194,7 @@ Two rules about matching are not conveniences:
 - **Session context menu**: "Approve this request" while one is showing, and "Stop
   auto-approving here" while a grant stands. Granting is deliberately *not* offered there —
   handing out authority from a right-click on a row you are not looking at is the wrong
-  affordance, and the pane's strip is where the mode, its rules, and its budget are visible
+  affordance, and the pane bar's chip is where the mode, its rules, and its budget are visible
   together.
 
 ## Audit
@@ -204,7 +210,7 @@ recorded:
 - `approval_mode_set` and `approval_mode_revoked`, the latter naming the seam and the count the
   retired grant reached.
 - The `approval_auto_approved` event on the bus.
-- `ApprovalPolicy.auto_approved` / `last_request` / `floor_deferred` on the record, so the strip
+- `ApprovalPolicy.auto_approved` / `last_request` / `floor_deferred` on the record, so the chip's menu
   reports what the mode has actually been doing rather than only that it is on.
 
 ## Interfaces
@@ -247,7 +253,7 @@ path itself works immediately, because the daemon owns the answer.
 - Generated hook settings and the decision timeout: `src/swe_mux/adapters/claude.py`
 - Endpoints: `src/swe_mux/server.py`
 - Project fields: `src/swe_mux/project_files.py`
-- UI: `frontend/src/ApprovalStrip.tsx`, `frontend/src/approvals.ts`,
+- UI: `frontend/src/ApprovalChip.tsx`, `frontend/src/approvals.ts`,
   `frontend/src/commandRail.ts`, `frontend/src/sessionRowFields.ts`
 
 ## Relates to

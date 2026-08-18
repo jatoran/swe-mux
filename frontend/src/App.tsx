@@ -169,6 +169,7 @@ import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseR
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
 import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
+import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
 import { activityBadges, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
@@ -5072,6 +5073,13 @@ export function App() {
     const paneVoice=agentVoice&&voiceStatus?<>
       {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
+      {/* Beside `tts:` because both chips answer the same question — what mux
+          does for this session without being asked each time — and the pane bar
+          is the one surface that is visible for as long as the pane is. Unlike
+          `tts:` it does not cycle on click: the three positions are not a ladder
+          you want to pass *through* (`allow_all` is not a step on the way back to
+          `wait`), so it opens a menu and each mode is chosen directly. */}
+      <ApprovalChip session={session}/>
       {/* speak / verbatim-summary / autoplay were repeated here for touch while the playback
           strip was buried at the bottom of the pane; the strip owns them now. The `audio…`
           settings chip went the same way once both floating surfaces grew their own gear —

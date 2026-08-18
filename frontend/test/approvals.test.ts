@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   APPROVAL_MODES,
   MODE_LABELS,
+  approvalChipLabel,
   approvalLapse,
   approvalSummary,
   effectiveApprovalMode,
@@ -117,6 +118,31 @@ test('an empty allowlist blocks allowlisted rather than granting nothing', () =>
 test('returning to wait is never blocked', () => {
   const worst = status({ enabled: false, ceiling: 'wait', rules: [], unavailable: 'off for this install' })
   assert.equal(modeUnavailableReason(worst, 'wait'), '')
+})
+
+test('the pane-bar chip stays short enough to sit beside tts:', () => {
+  // It shares a bar with the session state, the path, and the tools; on a phone
+  // there is no room for a sentence. Every reason and number is in the drop-down.
+  for (const state of [status(), status({ enabled: false }), status({ supported: false }), null]) {
+    assert.ok(approvalChipLabel(state).length <= 4, JSON.stringify(state && state.effective_mode))
+  }
+})
+
+test('the chip reads the effective mode, never the stored one', () => {
+  // A lapsed or superseded grant must not leave a chip implying authority the
+  // daemon has already dropped.
+  assert.equal(approvalChipLabel(status()), 'ALL')
+  assert.equal(approvalChipLabel(status({ effective_mode: 'allowlisted' })), 'list')
+  assert.equal(
+    approvalChipLabel(status({ policy: policy({ expires_at: NOW - 1 }), effective_mode: 'wait' })),
+    'wait',
+  )
+})
+
+test('the chip distinguishes off-for-this-install from unsupported-here', () => {
+  assert.equal(approvalChipLabel(status({ enabled: false })), 'off')
+  assert.equal(approvalChipLabel(status({ supported: false })), 'n/a')
+  assert.equal(approvalChipLabel(null), '…')
 })
 
 test('the mode ladder is ordered weakest first', () => {

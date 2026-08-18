@@ -99,6 +99,32 @@ export function approvalSummary(status: ApprovalStatus | null, now: number): str
   return parts.join(' · ')
 }
 
+/**
+ * The pane-bar chip's whole text, after the `appr:` prefix.
+ *
+ * Four characters at most, because it sits beside `tts:` in a bar that also has
+ * to hold the session state, the path, and the tools on a phone. The chip's job
+ * on a glance is only "is authority standing here"; every number, reason, and
+ * expiry lives in the drop-down. `ALL` is upper-case on purpose — it is the one
+ * value that should catch the eye from across a fleet.
+ */
+export function approvalChipLabel(status: ApprovalStatus | null): string {
+  if (!status) return '…'
+  if (!status.enabled) return 'off'
+  if (!status.supported) return 'n/a'
+  switch (status.effective_mode) {
+    case 'allow_all':
+      return 'ALL'
+    case 'allowlisted':
+      return 'list'
+    default:
+      // A grant that lapsed or was made for a replaced conversation is `wait` in
+      // effect, and says so: the chip must never imply authority the daemon has
+      // already dropped. The drop-down is where "expired" is spelled out.
+      return 'wait'
+  }
+}
+
 /** Why a mode cannot be picked right now, or '' when it can. */
 export function modeUnavailableReason(status: ApprovalStatus, mode: ApprovalMode): string {
   if (mode === 'wait') return ''

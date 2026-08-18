@@ -1223,7 +1223,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               does swe-mux do on my behalf", and both are one install switch over
               bounded per-conversation grants. */}
           <section><h3>Approvals</h3>
-          <p>With this off, every permission request an agent raises waits for you, exactly as before. With it on, a conversation can be switched to answer matching requests itself from its pane's <code>approvals:</code> strip — never here, and never for a whole install at once. Only Claude sessions can hold a mode; the other harnesses report permission requests but cannot be told the answer.</p>
+          <p>With this off, every permission request an agent raises waits for you, exactly as before. With it on, a conversation can be switched to answer matching requests itself from the <code>appr:</code> chip in its pane bar — never here, and never for a whole install at once. Only Claude sessions can hold a mode; the other harnesses report permission requests but cannot be told the answer.</p>
           <label class="check"><span>Allow swe-mux to answer approvals</span><input type="checkbox" checked={draft.approval_auto_enabled} onChange={e=>change('approval_auto_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Offer the “allow all” mode</span><input type="checkbox" checked={draft.approval_allow_all_permitted} onChange={e=>change('approval_allow_all_permitted',e.currentTarget.checked)} /></label>
           <label>Grant expires after this many minutes<input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /></label>
