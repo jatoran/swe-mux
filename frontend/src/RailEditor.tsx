@@ -2,110 +2,99 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
 import {
-  allRailBackends, defaultRailConfig, isBuiltinRailId, railPayload,
+  allRailBackends, defaultRailConfig, isBuiltinRailId, railItemVisible, railPayload,
+  railProjectScopeKind,
   RAIL_DEVICES, RAIL_SURFACES,
-  type RailBackend, type RailConfig, type RailDevice, type RailItem, type RailItemType, type RailSurface,
+  type RailBackend, type RailBlob, type RailConfig, type RailDevice, type RailItem,
+  type RailItemType, type RailRow, type RailSurface,
 } from './commandRail'
 import {
-  addRailCatalogItem, addRailRow, copyRailSurface, deleteRailCatalogItem, dropIndexForPoint,
-  insertRailItem, moveRailEntry, moveRailRow, railPlacementCounts, railRowAt, removeRailEntry,
-  removeRailRow, setRailRowLabel, toggleRailPlacement,
+  addRailRow, copyRailSurface, moveRailEntry, moveRailRow, railPlacementCounts,
+  removeRailEntry, removeRailRow, setRailRowLabel, updateRailCatalogItem,
   type RailDropTarget, type RailRef,
 } from './railLayout'
-import { clearProjectRail, loadRailConfig, projectRailIsCustom, saveRailConfig } from './deviceSettings'
-import { MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, edgeAutoScrollDelta, pointerDragMoveDecision } from './dragReorder'
-import { claimPointerDrag } from './pointerDragClaim'
-import { promptDeliveryHarnesses } from './harnessRegistry'
+import { beginRailDrag, railRefKey, type RailDragHost, type RailDragPreview, type RailDragSource } from './railDrag'
+import {
+  addProjectRailRow, addScopedRailItem, applyScopedRail, detachProjectRail,
+  removeScopedRailItem, toggleScopedPlacement,
+  type RailAddTarget, type ResolvedRail,
+} from './railScope'
+import { clearProjectRail, currentProfile, currentRailBlob, loadResolvedRail, saveRailBlob } from './deviceSettings'
+import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
 import { fetchPromptTemplates, promptItemSummary } from './promptRail'
 import type { PromptTemplate } from './PromptLibrary'
 import type { Project } from './types'
 
-// The Action configuration surface.
+// The Configure Actions surface.
 //
-// Two things are being edited here and they are deliberately not the same thing:
+// Progressive disclosure, top to bottom: one device's two layouts first (the
+// thing most visits came to rearrange), custom-action creation collapsed below
+// them, and the complete catalog collapsed at the bottom. One device at a time —
+// defaulting to the device this browser *is* — with a Desktop/Mobile switch,
+// because two columns of chips doubled the visual load for the rare cross-device
+// drag that the catalog's placement checkboxes already cover.
 //
-//  * the **catalog** at the bottom - what actions exist, what they inject, which
-//    backends they mean anything for;
-//  * the **layouts** above it — one per device class, each with rows for the strip
-//    under the terminal and for the drawer's Quick actions section.
+// The catalog is the index of everything that exists. A collapsed row is a
+// name, what it injects, and a plain-words summary of where it is placed;
+// expanding it exposes the actual controls — four placement checkboxes and a
+// named checkbox per harness — instead of the abbreviated badge code they
+// replaced.
 //
-// Desktop and mobile have genuinely separate arrangements, so there is no shared
-// row and no "applies to both" switch. What keeps two layouts manageable instead:
-// adding an action places it on *both* devices (a button you must remember to add
-// twice is a button that never reaches the phone), the catalog's placement badges
-// say at a glance where each action actually is, and a per-surface copy seeds one
-// device from the other as a one-shot.
+// Scopes: the Global layout is shared by every project. A project selected in
+// the scope picker shows its *effective* layout — shared rows plus any rows and
+// actions the project has added — and each edit lands where the touched thing
+// lives: shared rows write the global scope (all projects, said in place),
+// project rows and project actions stay project state (`railScope.ts`). Detach
+// is the deliberate escape into a full fork that stops tracking global edits.
 //
-// Everything commits immediately, like the other device-settings domains, rather
-// than through the config draft's Save button.
+// Everything commits immediately, like the other device-settings domains.
 
 const SURFACE_LABEL: Record<RailSurface, string> = { strip: 'Rail', panel: 'Drawer' }
 const SURFACE_HINT: Record<RailSurface, string> = {
-  strip: 'the scrolling strip under the terminal',
-  panel: 'Quick actions in the Actions drawer',
+  strip: 'the button strip under the terminal',
+  panel: 'Quick actions in the Actions tab',
 }
 const DEVICE_LABEL: Record<RailDevice, string> = { desktop: 'Desktop', mobile: 'Mobile' }
 const OTHER_DEVICE: Record<RailDevice, RailDevice> = { desktop: 'mobile', mobile: 'desktop' }
+const INTRO_KEY = 'mux.actions.intro.v1'
 
-/** Wide enough to show both device layouts side by side. Below it the editor
- *  keeps one column and a device switch, because two columns of chips on a phone
- *  are two columns of nothing. */
-const TWO_COLUMN_QUERY = '(min-width: 1040px)'
-
-const refKey = (ref: RailRef): string => `${ref.device}|${ref.surface}|${ref.rowId}|${ref.index}`
 const rowKey = (device: RailDevice, surface: RailSurface, rowId: string): string => `${device}|${surface}|${rowId}`
 
-type DragSource = { kind: 'chip'; ref: RailRef } | { kind: 'catalog'; itemId: string }
-
-function scrollableAncestor(start: HTMLElement | null): HTMLElement | null {
-  for (let node = start; node; node = node.parentElement) {
-    const overflow = getComputedStyle(node).overflowY
-    if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight + 1) return node
-  }
-  return null
-}
-
-/** Read the drop target under a point straight from the DOM. Rows advertise
- *  themselves with `data-rail-row` and chips with `data-reorder-id`, so this needs
- *  no registry of live element refs. */
-function targetUnderPoint(x: number, y: number, draggedKey: string | null): RailDropTarget | null {
-  const element = document.elementFromPoint(x, y)
-  const rowElement = element instanceof Element ? element.closest<HTMLElement>('[data-rail-row]') : null
-  if (!rowElement) return null
-  const [device, surface, rowId] = (rowElement.dataset.railRow || '').split('|')
-  if (!device || !surface || !rowId) return null
-  const rects = Array.from(rowElement.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).map(node => {
-    const box = node.getBoundingClientRect()
-    return { key: node.dataset.reorderId || '', left: box.left, right: box.right, top: box.top, bottom: box.bottom }
-  })
-  return {
-    device: device as RailDevice,
-    surface: surface as RailSurface,
-    rowId,
-    index: dropIndexForPoint(rects, draggedKey, x, y),
-  }
+function introSeen(): boolean {
+  try { return localStorage.getItem(INTRO_KEY) === '1' } catch { return true }
 }
 
 export function RailEditor() {
   const backends = allRailBackends()
   const rootRef = useRef<HTMLElement>(null)
-  // '' = the shared global config; a project id edits that project's override
-  // (seeded from the global one on first change).
+  // '' = the shared global config; a project id shows that project's effective
+  // layout (shared rows + project additions, or its fork).
   const [scope, setScope] = useState('')
   const [projects, setProjects] = useState<Project[]>([])
-  const [config, setConfig] = useState<RailConfig>(() => loadRailConfig())
+  const [resolved, setResolved] = useState<ResolvedRail>(() => loadResolvedRail())
   const [prompts, setPrompts] = useState<PromptTemplate[]>([])
-  const [twoColumn, setTwoColumn] = useState(() =>
-    typeof window === 'undefined' || !window.matchMedia ? true : window.matchMedia(TWO_COLUMN_QUERY).matches)
-  // Which layout the single-column (narrow) view shows. Ignored when both fit.
-  const [soloDevice, setSoloDevice] = useState<RailDevice>('desktop')
+  const [device, setDevice] = useState<RailDevice>(() => currentProfile())
+  // '' = no filter; a backend name dims what that session type would not show.
+  const [previewBackend, setPreviewBackend] = useState('')
+  const [expandedItem, setExpandedItem] = useState<string | null>(null)
+  const [catalogQuery, setCatalogQuery] = useState('')
   const [note, setNote] = useState('')
+  const [showIntro, setShowIntro] = useState(() => !introSeen())
 
+  const resolvedRef = useRef(resolved)
+  resolvedRef.current = resolved
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
+
+  const refresh = () => {
+    const next = loadResolvedRail(scopeRef.current || undefined)
+    resolvedRef.current = next
+    setResolved(next)
+  }
   useEffect(() => {
-    const reload = () => setConfig(loadRailConfig(scope || undefined))
-    reload()
-    window.addEventListener('mux:settings-changed', reload)
-    return () => window.removeEventListener('mux:settings-changed', reload)
+    refresh()
+    window.addEventListener('mux:settings-changed', refresh)
+    return () => window.removeEventListener('mux:settings-changed', refresh)
   }, [scope])
   useEffect(() => { void api<Project[]>('GET', '/api/projects').then(setProjects).catch(() => {}) }, [])
   // Prompt templates the rail can point at. Scoped like the config being edited, so
@@ -113,191 +102,107 @@ export function RailEditor() {
   useEffect(() => {
     void fetchPromptTemplates(scope || undefined).then(setPrompts).catch(() => setPrompts([]))
   }, [scope])
-  useEffect(() => {
-    const query = window.matchMedia?.(TWO_COLUMN_QUERY)
-    if (!query) return
-    const sync = () => setTwoColumn(query.matches)
-    query.addEventListener('change', sync)
-    return () => query.removeEventListener('change', sync)
-  }, [])
 
-  const configRef = useRef(config)
-  configRef.current = config
-  const scopeRef = useRef(scope)
-  scopeRef.current = scope
-  const commit = (next: RailConfig) => {
-    if (next === configRef.current) return
-    configRef.current = next
-    setConfig(next)
-    void saveRailConfig(next, scopeRef.current || undefined)
+  /** Persist a blob from the scope-aware ops and re-read the resolution. The
+   *  settings cache is updated synchronously by the save, so the re-read never
+   *  races the write. */
+  const commitBlob = (blob: RailBlob) => {
+    void saveRailBlob(blob)
+    refresh()
+  }
+  /** Persist an edited effective config, split by ownership. */
+  const commitConfig = (next: RailConfig) => {
+    if (next === resolvedRef.current.config) return
+    commitBlob(applyScopedRail(currentRailBlob(), scopeRef.current || undefined, resolvedRef.current, next))
   }
 
-  // Live drag state. `preview` is the config the drop would commit, so what is on
-  // screen mid-drag is literally the result rather than an approximation; `key`
-  // is where the dragged chip currently renders, which the hit test must exclude.
-  const [drag, setDrag] = useState<{ key: string | null; preview: RailConfig | null; active: boolean }>(
-    { key: null, preview: null, active: false })
+  // Live drag state; `config` is the layout a drop would commit.
+  const [drag, setDrag] = useState<RailDragPreview>({ key: null, config: null, active: false })
   const dragCancelRef = useRef<(() => void) | null>(null)
+  const dragEndedAt = useRef(0)
   useEffect(() => () => dragCancelRef.current?.(), [])
-
-  const shown = drag.preview || config
-  const scopeCustom = !!scope && projectRailIsCustom(scope)
-  const catalogById = useMemo(() => new Map(shown.items.map(item => [item.id, item])), [shown])
-  const devices: RailDevice[] = twoColumn ? [...RAIL_DEVICES] : [soloDevice]
-
-  const beginDrag = (event: JSX.TargetedPointerEvent<HTMLElement>, source: DragSource, label: string) => {
-    if (event.button !== 0 || !event.isPrimary) return
-    const root = rootRef.current
-    if (!root) return
-    const node = event.currentTarget
-    const pointerId = event.pointerId
-    const startX = event.clientX, startY = event.clientY
-    const activation = event.pointerType === 'touch' ? MOBILE_PROJECT_HOLD_DRAG : POINTER_MOVE_DRAG
-    const scroller = scrollableAncestor(node)
-
-    let active = false, done = false
-    let ghost: HTMLDivElement | null = null
-    let holdTimer: number | null = null
-    let scrollFrame: number | null = null
-    let releaseClaim: (() => void) | null = null
-    let latest = { x: startX, y: startY }
-    // Where the dragged chip renders right now, and the config a drop would save.
-    let previewRef: RailRef | null = source.kind === 'chip' ? source.ref : null
-    let previewConfig: RailConfig | null = null
+  const dragHost: RailDragHost = {
+    root: () => rootRef.current,
+    config: () => resolvedRef.current.config,
+    setPreview: setDrag,
+    commit: commitConfig,
+    // A project-owned action may only occupy project rows: a shared row is
+    // written to the global scope, where the project item's id does not exist.
+    canDrop: (target, itemId) => !resolvedRef.current.projectItemIds.has(itemId)
+      || resolvedRef.current.projectRowIds.has(target.rowId),
+    onEnd: () => { dragEndedAt.current = performance.now() },
+  }
+  const startDrag = (event: JSX.TargetedPointerEvent<HTMLElement>, source: RailDragSource, label: string) => {
     setNote('')
+    dragCancelRef.current = beginRailDrag(event, dragHost, source, label)
+  }
+  /** True right after a drag, so the click that ends it does not also expand a
+   *  row. Guarded on a drag having happened at all: the ref starts at 0, and
+   *  `performance.now()` is still under the window shortly after page load. */
+  const justDragged = () => dragEndedAt.current > 0 && performance.now() - dragEndedAt.current < 250
 
-    const recompute = () => {
-      const base = configRef.current
-      const target = targetUnderPoint(latest.x, latest.y, previewRef ? refKey(previewRef) : null)
-      if (!target) {
-        // Off every row: fall back to the untouched config, so letting go over
-        // nothing leaves a chip where it was and never places a catalog entry.
-        previewRef = source.kind === 'chip' ? source.ref : null
-        previewConfig = null
-        setDrag({ key: previewRef ? refKey(previewRef) : null, preview: null, active: true })
-        return
-      }
-      const itemId = source.kind === 'chip' ? (railRowAt(base, source.ref.device, source.ref.surface, source.ref.rowId)?.items[source.ref.index] ?? null) : source.itemId
-      if (itemId === null) return
-      // Always recomputed from the committed config rather than from the last
-      // preview, so a long drag cannot accumulate drift.
-      const without = source.kind === 'chip' ? removeRailEntry(base, source.ref) : base
-      const row = railRowAt(without, target.device, target.surface, target.rowId)
-      if (!row) return
-      const index = Math.max(0, Math.min(target.index, row.items.length))
-      previewRef = { device: target.device, surface: target.surface, rowId: target.rowId, index }
-      previewConfig = insertRailItem(without, itemId, { ...target, index })
-      setDrag({ key: refKey(previewRef), preview: previewConfig, active: true })
-    }
+  const shown = drag.config || resolved.config
+  const kind = scope ? resolved.kind : 'global'
+  const projectName = scope ? (projects.find(project => project.id === scope)?.name || 'this project') : ''
+  const catalogById = useMemo(() => new Map(shown.items.map(item => [item.id, item])), [shown])
 
-    const stopAutoScroll = () => {
-      if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
-      scrollFrame = null
-    }
-    const autoScroll = () => {
-      scrollFrame = null
-      if (!active || !scroller) return
-      const box = scroller.getBoundingClientRect()
-      const delta = edgeAutoScrollDelta(latest.y, box.top, box.bottom)
-      if (delta !== 0) {
-        const before = scroller.scrollTop
-        scroller.scrollTop += delta
-        if (scroller.scrollTop !== before) recompute()
-      }
-      scrollFrame = window.requestAnimationFrame(autoScroll)
-    }
+  const dismissIntro = () => {
+    setShowIntro(false)
+    try { localStorage.setItem(INTRO_KEY, '1') } catch { /* device preference is best effort */ }
+  }
 
-    const finish = (commitDrop: boolean) => {
-      if (done) return
-      done = true
-      dragCancelRef.current = null
-      if (holdTimer !== null) window.clearTimeout(holdTimer)
-      stopAutoScroll()
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onCancel)
-      window.removeEventListener('keydown', onKey, true)
-      ghost?.remove()
-      if (active) {
-        document.body.classList.remove('workspace-pointer-dragging')
-        node.classList.remove('dragging')
-        try { if (root.hasPointerCapture(pointerId)) root.releasePointerCapture(pointerId) } catch { /* already gone */ }
-        releaseClaim?.()
-      }
-      const landed = commitDrop ? previewConfig : null
-      setDrag({ key: null, preview: null, active: false })
-      if (landed) commit(landed)
-    }
+  const itemMeta = (item: RailItem): string => {
+    const builtin = isBuiltinRailId(item.id)
+    const agentPayloads = promptDeliveryHarnesses().map(harness => railPayload(item, harness.name))
+    const preview = item.type === 'skill' ? [...new Set(agentPayloads)].join(' · ')
+      : item.type === 'slash' ? agentPayloads[0] || ''
+        : item.type === 'text' ? `"${(item.text || '').slice(0, 24)}"`
+          : item.type === 'prompt' ? promptItemSummary(item, prompts) : ''
+    return `${builtin ? item.type : `custom ${item.type}`}${preview ? ` · ${preview}` : ''}${item.submit && item.type !== 'prompt' ? ' · sends' : ''}`
+  }
 
-    const activate = () => {
-      if (active || done) return
-      active = true
-      if (holdTimer !== null) window.clearTimeout(holdTimer)
-      holdTimer = null
-      releaseClaim = claimPointerDrag()
-      document.body.classList.add('workspace-pointer-dragging')
-      node.classList.add('dragging')
-      // Capture on the editor root, not on the chip: the preview reparents the
-      // chip between rows, and a captured element that leaves the document loses
-      // the pointer mid-drag. The root never moves.
-      try { root.setPointerCapture(pointerId) } catch { /* capture is best effort */ }
-      ghost = document.createElement('div')
-      ghost.className = 'mux-pointer-drag-ghost'
-      ghost.textContent = label
-      ghost.style.transform = `translate3d(${latest.x + 14}px,${latest.y + 12}px,0)`
-      document.body.appendChild(ghost)
-      recompute()
-      if (scroller && scrollFrame === null) scrollFrame = window.requestAnimationFrame(autoScroll)
+  /** Plain-words "where is it": `Desktop rail + drawer · Mobile drawer`. */
+  const placementSummary = (itemId: string): string => {
+    const counts = railPlacementCounts(shown, itemId)
+    const parts: string[] = []
+    for (const name of RAIL_DEVICES) {
+      const placed = RAIL_SURFACES.filter(surface => counts[name][surface] > 0)
+      if (placed.length) parts.push(`${DEVICE_LABEL[name]} ${placed.map(surface => SURFACE_LABEL[surface].toLowerCase()).join(' + ')}`)
     }
+    return parts.length ? parts.join(' · ') : 'not placed'
+  }
 
-    function onMove(pointer: PointerEvent) {
-      if (pointer.pointerId !== pointerId) return
-      latest = { x: pointer.clientX, y: pointer.clientY }
-      if (!active) {
-        const decision = pointerDragMoveDecision(activation, Math.hypot(pointer.clientX - startX, pointer.clientY - startY))
-        if (decision === 'wait') return
-        // A hold-drag that moves before the delay is a scroll, not a drag.
-        if (decision === 'cancel') { finish(false); return }
-        activate()
-      }
-      pointer.preventDefault()
-      if (ghost) ghost.style.transform = `translate3d(${pointer.clientX + 14}px,${pointer.clientY + 12}px,0)`
-      recompute()
-    }
-    function onUp(pointer: PointerEvent) {
-      if (pointer.pointerId !== pointerId) return
-      finish(active)
-    }
-    function onCancel(pointer: PointerEvent) {
-      if (pointer.pointerId !== pointerId) return
-      finish(false)
-    }
-    function onKey(keyEvent: KeyboardEvent) {
-      if (keyEvent.key !== 'Escape') return
-      keyEvent.preventDefault()
-      keyEvent.stopPropagation()
-      finish(false)
-    }
+  const toggleBackend = (item: RailItem, backend: RailBackend) => {
+    const set = new Set(item.backends ?? backends)
+    if (set.has(backend)) { if (set.size <= 1) return; set.delete(backend) } else set.add(backend)
+    const next = backends.filter(name => set.has(name))
+    commitConfig({
+      ...resolved.config,
+      items: resolved.config.items.map(entry => entry.id === item.id
+        ? { ...entry, backends: next.length === backends.length ? undefined : next }
+        : entry),
+    })
+  }
 
-    window.addEventListener('pointermove', onMove, { passive: false })
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onCancel)
-    window.addEventListener('keydown', onKey, true)
-    dragCancelRef.current = () => finish(false)
-    if (activation.mode === 'hold') holdTimer = window.setTimeout(activate, activation.delayMs)
+  const editCustomItem = (itemId: string, patch: Partial<RailItem>) => {
+    commitConfig(updateRailCatalogItem(resolved.config, itemId, patch))
   }
 
   /** Keyboard placement, and the only reorder path for anyone not using a pointer.
    *  Arrows move the focused chip along its row and between rows; Delete unplaces it. */
   const onChipKey = (event: JSX.TargetedKeyboardEvent<HTMLElement>, ref: RailRef) => {
+    const config = resolved.config
     const rows = config.layouts[ref.device][ref.surface]
     const rowIndex = rows.findIndex(row => row.id === ref.rowId)
     if (rowIndex < 0) return
+    const itemId = rows[rowIndex].items[ref.index]
+    const allowed = (rowId: string) => !resolved.projectItemIds.has(itemId) || resolved.projectRowIds.has(rowId)
     const move = (to: RailDropTarget) => {
+      if (!allowed(to.rowId)) return
       event.preventDefault()
-      commit(moveRailEntry(config, ref, to))
+      commitConfig(moveRailEntry(config, ref, to))
       // Follow the chip so a run of arrow presses keeps moving the same one.
-      const next = `[data-reorder-id="${refKey(to)}"]`
+      const next = `[data-reorder-id="${railRefKey(to)}"]`
       requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(next)?.focus())
     }
     if (event.key === 'ArrowLeft' && ref.index > 0) return move({ ...ref, index: ref.index - 1 })
@@ -312,7 +217,7 @@ export function RailEditor() {
     }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault()
-      commit(removeRailEntry(config, ref))
+      commitConfig(removeRailEntry(config, ref))
     }
   }
 
@@ -320,47 +225,24 @@ export function RailEditor() {
     setNote('')
     // A project reverts by dropping its override; the global scope has nothing to
     // fall back to, so it is rewritten with the shipped catalog and layouts.
-    if (scope) { void clearProjectRail(scope); setConfig(loadRailConfig(scope)) }
-    else commit(defaultRailConfig())
+    if (scope) { void clearProjectRail(scope); refresh() }
+    else commitConfig(defaultRailConfig())
   }
 
-  const itemMeta = (item: RailItem): string => {
-    const builtin = isBuiltinRailId(item.id)
-    const agentPayloads = promptDeliveryHarnesses().map(harness => railPayload(item, harness.name))
-    const preview = item.type === 'skill' ? [...new Set(agentPayloads)].join(' · ')
-      : item.type === 'slash' ? agentPayloads[0] || ''
-        : item.type === 'text' ? `"${(item.text || '').slice(0, 24)}"`
-          : item.type === 'prompt' ? promptItemSummary(item, prompts) : ''
-    return `${builtin ? item.type : `custom ${item.type}`}${preview ? ` · ${preview}` : ''}${item.submit && item.type !== 'prompt' ? ' · ⏎' : ''}`
-  }
-
-  const toggleBackend = (id: string, backend: RailBackend) => {
-    const item = config.items.find(entry => entry.id === id)
-    if (!item) return
-    const set = new Set(item.backends ?? backends)
-    if (set.has(backend)) { if (set.size <= 1) return; set.delete(backend) } else set.add(backend)
-    const next = backends.filter(name => set.has(name))
-    commit({
-      ...config,
-      items: config.items.map(entry => entry.id === id
-        ? { ...entry, backends: next.length === backends.length ? undefined : next }
-        : entry),
-    })
-  }
-
-  const renderChip = (device: RailDevice, surface: RailSurface, rowId: string, itemId: string, index: number) => {
+  const renderChip = (surface: RailSurface, rowId: string, itemId: string, index: number) => {
     const ref: RailRef = { device, surface, rowId, index }
-    const key = refKey(ref)
+    const key = railRefKey(ref)
     const item = catalogById.get(itemId)
     const label = item?.label || itemId
+    const filtered = !!previewBackend && !!item && !railItemVisible(item, previewBackend)
     return <div
       key={key}
-      class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}`}
+      class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}${filtered ? ' filtered' : ''}`}
       data-reorder-id={key}
       tabIndex={0}
       role="button"
-      title={`${label}${item ? ` — ${itemMeta(item)}` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
-      onPointerDown={event => beginDrag(event, { kind: 'chip', ref }, label)}
+      title={`${label}${item ? ` — ${itemMeta(item)}` : ''}${filtered ? `\nHidden in ${previewBackend} sessions.` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
+      onPointerDown={event => startDrag(event, { kind: 'chip', ref }, label)}
       onKeyDown={event => onChipKey(event, ref)}
     >
       <span class="rail-chip-label">{label}</span>
@@ -371,170 +253,246 @@ export function RailEditor() {
         aria-label={`Remove ${label} from this row`}
         title="Remove from this row"
         onPointerDown={event => event.stopPropagation()}
-        onClick={() => commit(removeRailEntry(config, ref))}
+        onClick={() => commitConfig(removeRailEntry(resolved.config, ref))}
       >×</button>
     </div>
   }
 
-  const renderSurface = (device: RailDevice, surface: RailSurface) => {
+  const renderRow = (surface: RailSurface, row: RailRow, indexInGroup: number, group: RailRow[]) => {
+    const projectRow = resolved.projectRowIds.has(row.id)
+    return <article class={`rail-row-editor${projectRow ? ' project-owned' : ''}`} key={row.id}>
+      <div class="rail-row-head">
+        {scope && kind !== 'fork' && <span class={`rail-origin${projectRow ? ' project' : ''}`} title={projectRow ? `Only ${projectName} has this row` : 'Shared with every project — edits here change all of them'}>{projectRow ? 'this project' : 'shared'}</span>}
+        <input
+          value={row.label || ''}
+          placeholder={`Row ${indexInGroup + 1}${surface === 'panel' ? ' (name shows as a heading)' : ''}`}
+          aria-label={`Name for row ${indexInGroup + 1}`}
+          onChange={event => commitConfig(setRailRowLabel(resolved.config, device, surface, row.id, event.currentTarget.value))}
+        />
+        <button type="button" disabled={indexInGroup === 0} title="Move this row up" onClick={() => commitConfig(moveRailRow(resolved.config, device, surface, row.id, -1))}>↑</button>
+        <button type="button" disabled={indexInGroup === group.length - 1} title="Move this row down" onClick={() => commitConfig(moveRailRow(resolved.config, device, surface, row.id, 1))}>↓</button>
+        <button type="button" class="rail-del" title={group.length === 1 && !projectRow ? 'Empty this row' : 'Delete this row and everything in it'} onClick={() => commitConfig(removeRailRow(resolved.config, device, surface, row.id))}>×</button>
+      </div>
+      <div class="rail-chips" data-rail-row={rowKey(device, surface, row.id)} role="group" aria-label={`${DEVICE_LABEL[device]} ${SURFACE_LABEL[surface]} row ${indexInGroup + 1}`}>
+        {row.items.map((itemId, index) => renderChip(surface, row.id, itemId, index))}
+        {!row.items.length && <span class="rail-chips-empty">drag actions here</span>}
+      </div>
+    </article>
+  }
+
+  const renderSurface = (surface: RailSurface) => {
     const rows = shown.layouts[device][surface]
+    const sharedRows = rows.filter(row => !resolved.projectRowIds.has(row.id))
+    const projectRows = rows.filter(row => resolved.projectRowIds.has(row.id))
     const other = OTHER_DEVICE[device]
     return <section class="rail-surface" key={`${device}-${surface}`}>
       <header class="rail-surface-head">
         <h5>{SURFACE_LABEL[surface]}<small>{SURFACE_HINT[surface]}</small></h5>
-        <button
+        {kind !== 'delta' && <button
           type="button"
           title={`Replace this device’s ${SURFACE_LABEL[surface].toLowerCase()} with a copy of ${DEVICE_LABEL[other]}’s. A one-shot copy — the two stay independent afterwards.`}
-          onClick={() => { commit(copyRailSurface(config, other, device, surface)); setNote(`Copied ${DEVICE_LABEL[other]} ${SURFACE_LABEL[surface].toLowerCase()} to ${DEVICE_LABEL[device]}.`) }}
-        >Copy from {DEVICE_LABEL[other]}</button>
-        <button type="button" title="Add another row to this surface" onClick={() => commit(addRailRow(config, device, surface))}>+ Row</button>
+          onClick={() => { commitConfig(copyRailSurface(resolved.config, other, device, surface)); setNote(`Copied ${DEVICE_LABEL[other]} ${SURFACE_LABEL[surface].toLowerCase()} to ${DEVICE_LABEL[device]}.`) }}
+        >Copy from {DEVICE_LABEL[other]}</button>}
+        <button type="button" title={scope && kind !== 'fork' ? 'Add another shared row (all projects)' : 'Add another row to this surface'} onClick={() => commitConfig(addRailRow(resolved.config, device, surface))}>+ Row</button>
+        {scope && kind !== 'fork' && <button
+          type="button"
+          title={`Add a row only ${projectName} has. Project-only actions can live there.`}
+          onClick={() => commitBlob(addProjectRailRow(currentRailBlob(), scope, device, surface))}
+        >+ Project row</button>}
       </header>
-      {rows.map((row, rowIndex) => <article class="rail-row-editor" key={row.id}>
-        <div class="rail-row-head">
-          <input
-            value={row.label || ''}
-            placeholder={`Row ${rowIndex + 1}${surface === 'panel' ? ' (name shows as a heading)' : ''}`}
-            aria-label={`Name for row ${rowIndex + 1}`}
-            onChange={event => commit(setRailRowLabel(config, device, surface, row.id, event.currentTarget.value))}
-          />
-          <button type="button" disabled={rowIndex === 0} title="Move this row up" onClick={() => commit(moveRailRow(config, device, surface, row.id, -1))}>↑</button>
-          <button type="button" disabled={rowIndex === rows.length - 1} title="Move this row down" onClick={() => commit(moveRailRow(config, device, surface, row.id, 1))}>↓</button>
-          <button type="button" class="rail-del" title={rows.length === 1 ? 'Empty this row' : 'Delete this row and everything in it'} onClick={() => commit(removeRailRow(config, device, surface, row.id))}>×</button>
-        </div>
-        <div class="rail-chips" data-rail-row={rowKey(device, surface, row.id)} role="group" aria-label={`${DEVICE_LABEL[device]} ${SURFACE_LABEL[surface]} row ${rowIndex + 1}`}>
-          {row.items.map((itemId, index) => renderChip(device, surface, row.id, itemId, index))}
-          {!row.items.length && <span class="rail-chips-empty">drag actions here</span>}
-        </div>
-      </article>)}
+      {sharedRows.map((row, index) => renderRow(surface, row, index, sharedRows))}
+      {projectRows.map((row, index) => renderRow(surface, row, index, projectRows))}
     </section>
   }
 
+  const query = catalogQuery.trim().toLowerCase()
+  const catalogItems = query
+    ? shown.items.filter(item => `${item.label} ${item.id} ${itemMeta(item)}`.toLowerCase().includes(query))
+    : shown.items
+
+  const renderCatalogRow = (item: RailItem) => {
+    const counts = railPlacementCounts(shown, item.id)
+    const placed = RAIL_DEVICES.some(name => RAIL_SURFACES.some(surface => counts[name][surface] > 0))
+    const itemBackends = item.backends ?? [...backends]
+    const meta = itemMeta(item)
+    const custom = !isBuiltinRailId(item.id)
+    const projectItem = resolved.projectItemIds.has(item.id)
+    const expanded = expandedItem === item.id
+    return <article class={`rail-catalog-row${placed ? '' : ' off'}${expanded ? ' expanded' : ''}`} key={item.id}>
+      <div
+        class="rail-catalog-head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        title={`${item.label || item.id} — ${meta}\nClick for placement and session options. Drag into a row above to place it exactly.`}
+        onPointerDown={event => startDrag(event, { kind: 'catalog', itemId: item.id }, item.label || item.id)}
+        onClick={() => { if (!justDragged()) setExpandedItem(expanded ? null : item.id) }}
+        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpandedItem(expanded ? null : item.id) } }}
+      >
+        <div class="rail-id">
+          <span class="rail-name">{item.label || item.id}{projectItem && <i class="rail-origin project" title={`Only ${projectName} has this action`}>this project</i>}</span>
+          <small class="rail-meta" title={meta}>{meta}</small>
+        </div>
+        <small class={`rail-placement-summary${placed ? '' : ' off'}`}>{placementSummary(item.id)}</small>
+        <span class="rail-expand" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+      </div>
+      {expanded && <div class="rail-catalog-detail">
+        <fieldset class="rail-detail-group">
+          <legend>Where it appears</legend>
+          {RAIL_DEVICES.map(name => RAIL_SURFACES.map(surface => {
+            const count = counts[name][surface]
+            return <label class="check" key={`${name}-${surface}`}>
+              <input
+                type="checkbox"
+                checked={count > 0}
+                onChange={() => commitBlob(toggleScopedPlacement(currentRailBlob(), scope || undefined, resolvedRef.current, item.id, name, surface))}
+              />
+              <span>{DEVICE_LABEL[name]} {SURFACE_LABEL[surface].toLowerCase()}{count > 1 ? ` (${count} copies)` : ''}</span>
+            </label>
+          }))}
+        </fieldset>
+        <fieldset class="rail-detail-group">
+          <legend>Shown in these sessions</legend>
+          {backends.map(backend => <label class="check" key={backend}>
+            <input
+              type="checkbox"
+              checked={itemBackends.includes(backend)}
+              onChange={() => toggleBackend(item, backend)}
+            />
+            <span>{backend === 'shell' ? 'Shell' : harnessDisplayName(backend)}</span>
+          </label>)}
+        </fieldset>
+        {custom && <fieldset class="rail-detail-group rail-detail-edit">
+          <legend>Edit</legend>
+          <label>Button label<input value={item.label} onChange={event => editCustomItem(item.id, { label: event.currentTarget.value.trim() || item.label })} /></label>
+          {item.type !== 'prompt' && <label>{item.type === 'text' ? 'Text to insert' : 'Name'}<input value={item.text || ''} onChange={event => editCustomItem(item.id, { text: event.currentTarget.value })} /></label>}
+          {item.type !== 'prompt' && <label class="check"><input type="checkbox" checked={!!item.submit} onChange={event => editCustomItem(item.id, { submit: event.currentTarget.checked })} /><span>Press Enter after inserting</span></label>}
+          <button
+            type="button"
+            class="rail-del"
+            title="Delete this action and every button pointing at it"
+            onClick={() => { setExpandedItem(null); commitBlob(removeScopedRailItem(currentRailBlob(), scope || undefined, item.id)) }}
+          >Delete action</button>
+        </fieldset>}
+      </div>}
+    </article>
+  }
+
   return <section class="commandrail-settings" ref={rootRef}>
-    <h3>Layouts and catalog</h3>
-    <p class="rail-intro">
-      Desktop and mobile each get their own arrangement: their own rows, their own order.
-      <b> Rail</b> is the strip under the terminal, <b>Drawer</b> is Quick actions in the Actions tab.
-      Drag an action between rows, or use the badges in <b>Action catalog</b> below to place it. An action
-      in no row simply does not appear on that device.
-    </p>
+    <h3>Actions</h3>
+    {showIntro && <div class="rail-intro-callout" role="note">
+      <strong>How this works</strong>
+      <ul>
+        <li><b>Rail</b> is the button strip under every terminal. <b>Drawer</b> is the Quick actions section of the Actions tab — the overflow with room for labels.</li>
+        <li>Desktop and mobile each keep their own arrangement. Pick a device, then drag buttons between rows, or remove them with ×.</li>
+        <li>Everything that can be placed lives under <b>All actions</b> below — open one to choose where it appears and which sessions show it.</li>
+      </ul>
+      <button type="button" onClick={dismissIntro}>Got it</button>
+    </div>}
     <div class="rail-toolbar">
-      <label class="rail-scope">Editing<select value={scope} onChange={event => setScope(event.currentTarget.value)}>
+      <label class="rail-scope">Editing<select value={scope} onChange={event => { setScope(event.currentTarget.value); setExpandedItem(null); setNote('') }}>
         <option value="">Global (all projects)</option>
-        {projects.map(project => <option value={project.id}>{project.name}{projectRailIsCustom(project.id) ? ' ✎' : ''}</option>)}
+        {projects.map(project => {
+          const projectKind = railProjectScopeKind(currentRailBlob(), project.id)
+          return <option value={project.id}>{project.name}{projectKind === 'fork' ? ' (detached)' : projectKind === 'delta' ? ' (has additions)' : ''}</option>
+        })}
       </select></label>
+      <div class="rail-device-switch" role="group" aria-label="Device layout to edit">
+        {RAIL_DEVICES.map(name => <button
+          type="button"
+          class={device === name ? 'on' : ''}
+          aria-pressed={device === name}
+          onClick={() => setDevice(name)}
+        >{DEVICE_LABEL[name]}</button>)}
+      </div>
+      <label class="rail-preview-as">Preview as<select value={previewBackend} onChange={event => setPreviewBackend(event.currentTarget.value)} title="Dim the actions a session of this type would not show">
+        <option value="">all sessions</option>
+        {backends.map(backend => <option value={backend}>{backend === 'shell' ? 'Shell' : harnessDisplayName(backend)}</option>)}
+      </select></label>
+      <span class="rail-toolbar-gap" />
+      {scope && kind !== 'fork' && <button
+        type="button"
+        title="Freeze this project’s current layout as its own copy. It stops following global edits; “Use global layout” undoes it (dropping project changes)."
+        onClick={() => { commitBlob(detachProjectRail(currentRailBlob(), scope)); setNote(`${projectName} now has a detached copy of the layout.`) }}
+      >Detach from global</button>}
       <button
         type="button"
         onClick={resetScope}
-        disabled={!!scope && !scopeCustom}
-        title={scope ? (scopeCustom ? 'Drop this project’s copy and inherit the global layout' : 'This project already uses the global layout') : 'Restore the built-in layout and drop custom actions'}
-      >{scope ? 'Use global layout' : 'Restore defaults'}</button>
-      {!twoColumn && <div class="rail-device-switch" role="group" aria-label="Layout to edit">
-        {RAIL_DEVICES.map(name => <button
-          type="button"
-          class={soloDevice === name ? 'on' : ''}
-          aria-pressed={soloDevice === name}
-          onClick={() => setSoloDevice(name)}
-        >{DEVICE_LABEL[name]}</button>)}
-      </div>}
+        disabled={!!scope && kind === 'global'}
+        title={!scope ? 'Restore the built-in layout and drop custom actions'
+          : kind === 'fork' ? 'Drop this project’s detached copy and follow the global layout again'
+            : kind === 'delta' ? 'Remove this project’s added rows and actions; the shared layout stays'
+              : 'This project has nothing project-specific yet'}
+      >{!scope ? 'Restore defaults' : kind === 'fork' ? 'Use global layout' : 'Remove project additions'}</button>
     </div>
-    {scope && <p class="rail-scope-note">{scopeCustom
-      ? 'This project has its own rail. Editing changes only this project.'
-      : 'This project inherits the global rail. Any change here creates a project-specific copy.'}</p>}
+    {scope && <p class="rail-scope-note">{kind === 'fork'
+      ? `${projectName} has a detached copy. Edits here change only this project.`
+      : `Showing the shared layout${kind === 'delta' ? ` plus ${projectName}’s additions` : ''}. Edits to shared rows change every project; rows and actions marked “this project” stay here.`}</p>}
 
-    <RailAddForm config={config} prompts={prompts} backends={backends} onAdd={commit} />
-
-    <div class={`rail-devices${twoColumn ? ' two-up' : ''}`}>
-      {devices.map(name => <div class="rail-device" key={name}>
-        <h4 class="rail-device-name">{DEVICE_LABEL[name]}</h4>
-        {RAIL_SURFACES.map(surface => renderSurface(name, surface))}
-      </div>)}
+    <div class="rail-device">
+      {RAIL_SURFACES.map(surface => renderSurface(surface))}
     </div>
 
-    <section class="rail-catalog">
-      <h4>Action catalog</h4>
-      <p class="rail-add-note">
-        Every available rail or Drawer action, and where it is placed. The four badges are desktop rail, desktop Drawer,
-        mobile rail, and mobile Drawer - click one to place the action there or take it off. Drag a row into a
-        layout to put it somewhere exact. <b>cld</b>/<b>cdx</b>/<b>sh</b> limit an action to Claude,
-        Codex, or Shell sessions.
-      </p>
-      <div class="rail-catalog-list">
-        {shown.items.map(item => {
-          const counts = railPlacementCounts(shown, item.id)
-          const placed = RAIL_DEVICES.some(name => RAIL_SURFACES.some(surface => counts[name][surface] > 0))
-          const itemBackends = item.backends ?? [...backends]
-          const meta = itemMeta(item)
-          return <article
-            class={`rail-catalog-row${placed ? '' : ' off'}`}
-            key={item.id}
-            onPointerDown={event => beginDrag(event, { kind: 'catalog', itemId: item.id }, item.label || item.id)}
-          >
-            <div class="rail-id">
-              <span class="rail-name">{item.label || item.id}</span>
-              <small class="rail-meta" title={meta}>{meta}</small>
-            </div>
-            <div class="rail-where" role="group" aria-label={`Where ${item.label || item.id} appears`}>
-              {RAIL_DEVICES.map(name => RAIL_SURFACES.map(surface => {
-                const count = counts[name][surface]
-                return <button
-                  type="button"
-                  class={count ? 'on' : ''}
-                  aria-pressed={count > 0}
-                  title={`${DEVICE_LABEL[name]} ${SURFACE_LABEL[surface].toLowerCase()}${count > 1 ? ` — ${count} copies` : ''} (${SURFACE_HINT[surface]})`}
-                  onPointerDown={event => event.stopPropagation()}
-                  onClick={() => commit(toggleRailPlacement(config, item.id, name, surface))}
-                >{name === 'desktop' ? 'D' : 'M'}{surface === 'strip' ? 'r' : 'p'}{count > 1 ? <sup>{count}</sup> : null}</button>
-              }))}
-            </div>
-            <div class="rail-tags" role="group" aria-label={`Which sessions ${item.label || item.id} applies to`}>
-              {backends.map(backend => <button
-                type="button"
-                class={itemBackends.includes(backend) ? 'on' : ''}
-                aria-pressed={itemBackends.includes(backend)}
-                title={`Available in ${backend} sessions`}
-                onPointerDown={event => event.stopPropagation()}
-                onClick={() => toggleBackend(item.id, backend)}
-              >{backend === 'shell' ? 'sh' : backend.slice(0, 3)}</button>)}
-            </div>
-            <div class="rail-order">
-              {!isBuiltinRailId(item.id) && <button
-                type="button"
-                class="rail-del"
-                title="Delete this action and every button pointing at it"
-                onPointerDown={event => event.stopPropagation()}
-                onClick={() => commit(deleteRailCatalogItem(config, item.id))}
-              >×</button>}
-            </div>
-          </article>
-        })}
+    <RailAddForm
+      items={resolved.config.items}
+      prompts={prompts}
+      projectName={scope && kind !== 'fork' ? projectName : ''}
+      onAdd={(item, target) => {
+        commitBlob(addScopedRailItem(currentRailBlob(), scope || undefined, item, target))
+        setNote(`Added “${item.label}” to the ${item.defaultSurface === 'strip' ? 'Rail' : 'Drawer'} on both devices.`)
+      }}
+    />
+
+    <details class="rail-catalog">
+      <summary>All actions ({shown.items.length})<small>everything that can be placed, and where it is</small></summary>
+      <div class="rail-catalog-tools">
+        <input
+          type="search"
+          value={catalogQuery}
+          placeholder="Filter actions…"
+          aria-label="Filter actions"
+          onInput={event => setCatalogQuery(event.currentTarget.value)}
+        />
       </div>
-    </section>
+      <div class="rail-catalog-list">
+        {catalogItems.map(renderCatalogRow)}
+        {!catalogItems.length && <p class="rail-add-note">No action matches “{catalogQuery}”.</p>}
+      </div>
+    </details>
 
     {note && <p class="rail-scope-note" aria-live="polite">{note}</p>}
   </section>
 }
 
-type AddDraft = { type: RailItemType; name: string; label: string; submit: boolean; surface: RailSurface }
+type AddDraft = { type: RailItemType; name: string; label: string; submit: boolean; surface: RailSurface; target: RailAddTarget }
 
-/** Adding an action places it into *both* device layouts. Divergence is then one
- *  drag away, but it is a deliberate act rather than something you forget. */
-function RailAddForm({ config, prompts, backends, onAdd }: {
-  config: RailConfig
+/** Adding an action places it into *both* device layouts, because a button you
+ *  must remember to add twice is a button that never reaches the phone. In a
+ *  project scope it can be added for that project alone (the default there) or
+ *  for every project. */
+function RailAddForm({ items, prompts, projectName, onAdd }: {
+  items: readonly RailItem[]
   prompts: PromptTemplate[]
-  backends: readonly RailBackend[]
-  onAdd: (next: RailConfig) => void
+  /** Non-empty enables the project-scope choice (named for the note). */
+  projectName: string
+  onAdd: (item: RailItem, target: RailAddTarget) => void
 }) {
-  const [draft, setDraft] = useState<AddDraft>({ type: 'skill', name: '', label: '', submit: true, surface: 'panel' })
+  const backends = allRailBackends()
+  const [draft, setDraft] = useState<AddDraft>({ type: 'skill', name: '', label: '', submit: true, surface: 'panel', target: projectName ? 'project' : 'global' })
+  // Entering or leaving a project scope re-defaults the target without touching
+  // the rest of a half-typed draft.
+  useEffect(() => { setDraft(current => ({ ...current, target: projectName ? 'project' : 'global' })) }, [projectName])
 
   const uniqueId = (base: string): string => {
     let candidate = base, suffix = 1
-    while (config.items.some(item => item.id === candidate)) { suffix += 1; candidate = `${base}:${suffix}` }
+    while (items.some(item => item.id === candidate)) { suffix += 1; candidate = `${base}:${suffix}` }
     return candidate
   }
 
   const add = () => {
     const name = draft.name.trim()
     if (!name) return
+    const target: RailAddTarget = projectName ? draft.target : 'global'
     // A prompt item stores the library key, never the body: the template stays the
     // source of truth, so editing it updates every button pointing at it.
     if (draft.type === 'prompt') {
@@ -543,28 +501,28 @@ function RailAddForm({ config, prompts, backends, onAdd }: {
       // Templates declare their compatible backends; carry that through instead of
       // making the user re-pick it, but only when it is actually a restriction.
       const restricted = template.backends.length === backends.length ? undefined : [...template.backends]
-      onAdd(addRailCatalogItem(config, {
+      onAdd({
         id: uniqueId(`custom:prompt:${template.id}`),
         type: 'prompt',
         label: draft.label.trim() || template.title,
         promptKey: template.key,
         defaultSurface: draft.surface,
         backends: restricted,
-      }))
+      }, target)
       setDraft({ ...draft, name: '', label: '' })
       return
     }
     const base = name.replace(/^[/$]/, '').trim() || name
     const label = draft.label.trim() || (draft.type === 'text' ? base.slice(0, 12) : base)
     const id = uniqueId(`custom:${draft.type}:${base}`)
-    onAdd(addRailCatalogItem(config, draft.type === 'text'
+    onAdd(draft.type === 'text'
       ? { id, type: 'text', label, text: name, submit: draft.submit, defaultSurface: draft.surface }
-      : { id, type: draft.type, label, text: base, submit: draft.submit, defaultSurface: draft.surface }))
+      : { id, type: draft.type, label, text: base, submit: draft.submit, defaultSurface: draft.surface }, target)
     setDraft({ ...draft, name: '', label: '' })
   }
 
-  return <details class="rail-add" open>
-    <summary>Add custom action</summary>
+  return <details class="rail-add">
+    <summary>Add custom action<small>a skill, slash command, text macro, or prompt-template button</small></summary>
     <div class="rail-add-form">
       <label>Type<select value={draft.type} onChange={event => setDraft({ ...draft, type: event.currentTarget.value as RailItemType })}>
         <option value="skill">Skill</option>
@@ -583,6 +541,10 @@ function RailAddForm({ config, prompts, backends, onAdd }: {
         <option value="panel">Drawer, on both devices</option>
         <option value="strip">Rail, on both devices</option>
       </select></label>
+      {projectName && <label>For<select value={draft.target} onChange={event => setDraft({ ...draft, target: event.currentTarget.value as RailAddTarget })}>
+        <option value="project">{projectName} only</option>
+        <option value="global">All projects</option>
+      </select></label>}
       {draft.type !== 'prompt' && <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
       <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add action</button>
     </div>
@@ -590,8 +552,8 @@ function RailAddForm({ config, prompts, backends, onAdd }: {
       ? 'A prompt button points at the template, so editing the template updates the button. It inserts without sending - templates with {{fields}} open Prompt templates in Actions to be filled in first.'
       : 'No prompt templates yet. Create one from Actions → Prompt templates → Manage, then it appears here.'}</p>}
     <p class="rail-add-note">
-      New actions land at the end of the chosen surface on <b>both</b> devices; drag them where you want
-      from there. Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands
+      Tip: skills and prompt templates can also be pinned straight from their lists in the Actions tab.
+      Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands
       inject <code>/name</code> in both. Built-in actions can be placed and filtered, but not edited.
     </p>
   </details>

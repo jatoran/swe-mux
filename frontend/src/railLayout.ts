@@ -108,8 +108,9 @@ export function duplicateRailEntry(config: RailConfig, ref: RailRef): RailConfig
 }
 
 /** How many times an item appears on each device/surface. The editor renders
- *  this as the catalog's placement badges — the one view that says at a glance
- *  that a command exists on desktop and was never put on the phone. */
+ *  this as the catalog's placement summary and checkboxes — the one view that
+ *  says at a glance that a command exists on desktop and was never put on the
+ *  phone. */
 export function railPlacementCounts(config: RailConfig, itemId: string): Record<RailDevice, Record<RailSurface, number>> {
   const counts = {} as Record<RailDevice, Record<RailSurface, number>>
   for (const device of RAIL_DEVICES) {
