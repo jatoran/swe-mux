@@ -5159,7 +5159,7 @@ export function App() {
       {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {/* Read aloud is off (or unconfigured): the chip stays and becomes the way to fix
           that, landing on the switch rather than on the Voice tab. */}
-      {!voiceAvailable&&<SettingLink target="voice.tts" title="Read aloud is disabled · open its switch"><span class="voice-chip mobile-voice-action">tts:setup</span></SettingLink>}
+      {!voiceAvailable&&<SettingLink target="voice.tts" class="voice-chip mobile-voice-action" title="Read aloud is disabled · open its switch">tts:setup</SettingLink>}
       {/* Beside `tts:` because both chips answer the same question — what mux
           does for this session without being asked each time — and the pane bar
           is the one surface that is visible for as long as the pane is. Unlike
