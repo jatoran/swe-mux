@@ -944,9 +944,9 @@ body {
 
 /* Phase 4 owned-process inspection and preview leaves. */
 .process-layer{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:72;display:grid;place-items:center;padding:12px;background:#030407cc}
-.process-panel{width:min(1100px,100%);height:min(780px,100%);min-height:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px #0009}
+.process-panel{width:min(1100px,100%);height:min(780px,100%);min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px #0009}
 .process-panel>header{min-height:50px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line)}
-.process-panel>header>div{min-width:0;display:grid;gap:4px}.process-panel>header span{color:var(--green);text-transform:uppercase}.process-panel>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.process-panel button{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}.process-panel button:disabled{opacity:.4;cursor:not-allowed}.process-panel button.confirming{color:var(--red);border-color:var(--red)}.process-panel>header>button{border:0;background:transparent}
+.process-panel>header>div{min-width:0;display:grid;gap:4px}.process-panel>header span{color:var(--green);text-transform:uppercase}.process-panel>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.process-panel button,.process-fleet-view button{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}.process-panel button:disabled,.process-fleet-view button:disabled{opacity:.4;cursor:not-allowed}.process-panel button.confirming,.process-fleet-view button.confirming{color:var(--red);border-color:var(--red)}.process-panel>header>button{border:0;background:transparent}
 .process-panel .process-back{width:max-content;min-height:20px;padding:0;border:0;background:transparent;color:var(--muted)}
 .process-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px;padding:8px;border-bottom:1px solid var(--line)}.process-toolbar input{min-width:0;border:1px solid var(--line);border-radius:0;padding:0 8px;background:var(--bg);color:var(--text);font:inherit}
 .process-fleet-summary{min-height:38px;display:flex;align-items:center;gap:14px;padding:4px 9px;border-bottom:1px solid var(--line);color:var(--muted);white-space:nowrap;overflow-x:auto}.process-fleet-summary button{margin-left:auto}
@@ -955,6 +955,14 @@ body {
 .process-ended-toggle.active{color:var(--text)}
 .process-scope-select{min-width:0;max-width:180px;height:calc(24px*var(--ui-scale));border:1px solid var(--line);background:var(--bg);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace}
 .process-fleet-list{min-width:0;min-height:0;overflow:auto}.process-session-group{border-bottom:1px solid var(--line)}
+/* The focused terminal's session is pinned to the top of its Project by the row model; the bar
+   and the badge are what say why it is there, since "first" alone reads as arbitrary. */
+.process-session-group.focused{border-left:2px solid var(--accent)}
+.process-session-bar{display:flex;align-items:stretch;border-bottom:1px solid var(--line)}
+.process-session-bar>.process-session-heading{flex:1 1 auto;min-width:0;border-bottom:0!important}
+.process-session-reveal{flex:none;min-height:0!important;padding:0 9px!important;border:0!important;border-left:1px solid var(--line)!important;background:transparent!important;color:var(--muted)!important}
+.process-session-reveal:hover{background:var(--panel2)!important;color:var(--text)!important}
+.process-session-focused{flex:none;padding:0 4px;border:1px solid var(--accent);border-radius:8px;color:var(--accent);font-style:normal;font-size:.72rem;text-transform:uppercase}
 .process-project-group>h2{position:sticky;top:0;z-index:1;margin:0;padding:4px 9px;border-bottom:1px solid var(--line);background:var(--bg);color:var(--green);font:inherit;text-transform:uppercase}
 .process-session-heading{width:100%;min-height:28px!important;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 9px!important;border:0!important;border-bottom:1px solid var(--line)!important;background:var(--panel)!important;text-align:left}.process-session-heading>span{min-width:0;display:flex;align-items:center;gap:7px}.process-session-heading strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.process-session-heading small{color:var(--muted);white-space:nowrap}.process-session-heading:hover{background:var(--panel2)!important}
 .process-error,.process-empty{margin:0;padding:10px;color:var(--red)}.process-empty{color:var(--muted)}
@@ -972,13 +980,26 @@ body {
 .process-fleet-list .process-list{overflow:visible}
 .process-evidence{display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid var(--line);color:var(--muted);font-size:.72rem;font-weight:500;text-transform:uppercase}.process-evidence.active{border-color:var(--green);color:var(--green)}.process-evidence.escaped,.process-evidence.inaccessible{border-color:var(--amber);color:var(--amber)}.process-evidence.suspected_orphan{border-color:#b36cff;color:#c58aff;background:#6c2aa622}.process-evidence.stale,.process-evidence.exited{color:var(--muted)}.process-tree li.evidence-suspected_orphan>.process-row{background:#6c2aa610!important}
 .preview-pane{width:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr) calc(24px*var(--ui-scale));overflow:hidden;background:var(--panel)}.preview-pane>header{width:100%;min-width:0;max-width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 6px;border-bottom:1px solid var(--line)}.preview-pane>header>div{min-width:0;display:flex;align-items:center;gap:7px}.preview-pane>header span{color:var(--green)}.preview-pane>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preview-pane>header small{color:var(--muted)}.preview-pane nav{min-width:0;max-width:100%;display:flex;align-items:center;gap:3px}.preview-pane button{height:calc(26px*var(--ui-scale));border:0;padding:0 5px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}.preview-pane button:hover{color:var(--text);background:var(--panel2)}.preview-frame{width:100%;min-width:0;max-width:100%;min-height:0;display:flex;justify-content:center;overflow:auto;background:#111}.preview-frame iframe{display:block;max-width:100%;width:100%;height:100%;border:0;background:white}.viewport-mobile .preview-frame iframe{width:min(390px,100%)}.viewport-tablet .preview-frame iframe{width:min(820px,100%)}.preview-pane>footer{width:100%;min-width:0;max-width:100%;display:flex;align-items:center;padding:0 6px;border-top:1px solid var(--line);color:var(--muted)}
-@media(max-width:760px){.process-layer{padding:0}.process-panel{width:100%;height:100%;border:0;box-shadow:none}.process-toolbar{grid-template-columns:minmax(0,1fr) auto}.process-toolbar button:last-child{display:none}.process-session-heading{align-items:flex-start;flex-direction:column}.process-session-heading small{white-space:normal}.process-tree ul{margin-left:5px;padding-left:11px}.process-tree li>ul>li:before{left:-11px;width:7px;top:11px}.process-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.process-panel button{min-height:44px}
+/* Process inspection is one surface inside two shells — the modal dialog and the drawer's
+   Processes tab — so its density follows the surface's own width, not the viewport's. A 300 px
+   drawer column inside a 1920 px window needs exactly the layout the modal already used on a
+   phone, which is what makes the two genuinely the same view rather than two codebases. */
+.process-fleet-view{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);container-type:inline-size}
+@container (max-width:620px){
 /* At column width the row wraps to a second line rather than truncating the numbers: the
    arguments are the first thing that stops fitting and the last thing worth the space. */
 .process-row{min-height:38px!important;flex-wrap:wrap;row-gap:1px}.process-args{display:none}.process-metrics{flex:1 1 100%;margin-left:15px}.process-detail{padding-left:9px}.process-detail dl{grid-template-columns:minmax(0,1fr);gap:0}.process-detail dt{margin-top:6px}
+.process-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.process-tree ul{margin-left:5px;padding-left:11px}.process-tree li>ul>li:before{left:-11px;width:7px;top:11px}
+.process-session-heading{align-items:flex-start;flex-direction:column;gap:2px}.process-session-heading small{white-space:normal}
+/* Wraps rather than scrolls sideways: a summary you have to drag to read is not a summary. */
+.process-fleet-summary{flex-wrap:wrap;gap:3px 11px;white-space:normal;overflow:visible}.process-fleet-summary .process-scope-select{flex:1 1 100%;max-width:none}.process-fleet-summary .process-refresh{margin-left:0}
+.process-toolbar{grid-template-columns:minmax(0,1fr) auto}
 /* The owning process is named by the tree directly below, so at column width the URL and its
    two actions keep the line to themselves. */
-.process-link-row{padding:4px 9px}.process-link-row>strong{flex:1 1 auto}.process-link-row>span{display:none}.process-link-row button{min-height:32px!important;padding:0 10px!important}.preview-pane{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:50;grid-template-rows:auto minmax(0,1fr) calc(28px*var(--ui-scale))}.preview-pane>header{min-height:54px;align-items:flex-start;padding:5px;flex-direction:column}.preview-pane nav{width:100%;overflow-x:auto}.preview-pane button{min-height:44px}.preview-pane>header small{display:none}}
+.process-link-row{padding:4px 9px}.process-link-row>strong{flex:1 1 auto}.process-link-row>span{display:none}.process-link-row button{min-height:32px!important;padding:0 10px!important}
+}
+@media(max-width:760px){.process-layer{padding:0}.process-panel{width:100%;height:100%;border:0;box-shadow:none}.process-panel button,.process-fleet-view button{min-height:44px}.preview-pane{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:50;grid-template-rows:auto minmax(0,1fr) calc(28px*var(--ui-scale))}.preview-pane>header{min-height:54px;align-items:flex-start;padding:5px;flex-direction:column}.preview-pane nav{width:100%;overflow-x:auto}.preview-pane button{min-height:44px}.preview-pane>header small{display:none}}
 .notifications-layer{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:74;display:grid;place-items:center;padding:12px;background:#030407cc}
 .notifications-panel{width:min(760px,100%);height:min(620px,100%);min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px #0009}
 .notifications-panel>header{min-height:50px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line)}
@@ -2378,40 +2399,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* A note is open in exactly one place, so the tab it left keeps its slot and says where it
    went rather than quietly rendering a second, conflicting editor. */
 .workspace-leaf-placeholder.note-in-drawer span{max-width:44ch}
-/* Processes tab: the watch half of process inspection. Rollups per session plus the loopback
-   servers they are running; trees, evidence, and terminate stay in the modal inspector, which
-   the footer links to. Reads the sample App already polls, so an open panel costs nothing. */
+/* Processes tab: the drawer shell around the shared process-inspection surface. The surface
+   itself is `.process-fleet-view` and is styled with the modal's rules — the tab is the same
+   view at a different width, not a reduced one — so what is left here is the column frame and
+   the escape hatch to the full-width dialog. */
 .processes-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.processes-filters{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:6px 9px;border-bottom:1px solid var(--line)}
-.processes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
-.processes-filters select:focus{outline:0;border-color:var(--green)}
-.processes-filters button{min-height:calc(30px*var(--ui-scale));padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
-.processes-filters button:hover{color:var(--text)}
-.processes-totals{flex:none;margin:0;padding:5px 9px;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:8px}
-.processes-body{flex:1 1 auto;min-height:0;overflow:auto}
-.processes-empty{padding:14px 10px;color:var(--muted);font-size:9px;text-align:center}
-.process-watch-row{border-bottom:1px solid var(--line)}
-/* The focused terminal's row is pinned first by the model; the bar is what says why it is
-   there, since "first" alone reads as arbitrary once the list is more than a few rows. */
-.process-watch-row.focused{border-left:2px solid var(--accent)}
-.process-watch-heading{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;background:transparent;color:var(--text);padding:7px 9px;text-align:left;cursor:pointer}
-.process-watch-heading:hover,.process-watch-heading:focus-visible{background:var(--panel2)}
-.process-watch-heading>span{min-width:0;display:flex;align-items:center;gap:6px;max-width:100%}
-.process-watch-heading strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500}
-.process-watch-heading small{color:var(--muted);font-size:8px}
-.process-watch-project{font-style:normal;margin-right:6px;padding:0 4px;border:1px solid var(--line);border-radius:8px}
-.process-watch-server{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:0 9px 6px 9px}
-.process-watch-server>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--green);font-size:9px}
-.process-watch-server button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
-.process-watch-server button:hover{background:var(--panel2);color:var(--text)}
-.processes-footnote{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
+.processes-tab>.process-fleet-view{flex:1 1 auto;min-height:0}
+.processes-footnote{flex:none;display:grid;padding:6px 9px;border-top:1px solid var(--line)}
 .processes-footnote button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;white-space:nowrap;cursor:pointer}
-@media(max-width:760px){
-  .processes-filters select,.processes-filters button{height:calc(38px*var(--ui-scale));min-height:calc(38px*var(--ui-scale))}
-  .process-watch-heading{min-height:48px}
-  .process-watch-server button{min-height:38px;font-size:9px}
-  .processes-footnote button{min-height:38px}
-}
+.processes-footnote button:hover{background:var(--panel)}
+@media(max-width:760px){.processes-footnote button{min-height:38px}}
 /* Schedule tab: the same column shape as Processes, because it answers the same question
    one step later. Rows are collapsed to label + cadence + countdown; the prompt and the run
    history open on demand, since a column this narrow cannot show five schedules at once with

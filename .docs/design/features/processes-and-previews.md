@@ -105,19 +105,37 @@
   just revalidated. Matching children against the last sample's owned set by raw PID let a
   child that respawned since (a dev server restarting) survive the action while the user
   believed the tree was gone.
-- Inspection is split in two. The **Processes drawer tab** is the watch surface: one rollup row
-  per session (process count, CPU, working set) plus the loopback servers it is listening on,
-  scoped to the active Project with the focused session's row pinned first, and `preview`/`copy`
-  as its only actions. The **modal inspector** keeps everything that needs width or a
-  confirmation: the process tree, parent lineage, evidence state/reason/confidence, the ended
-  toggle, add-preview-by-URL, and interrupt/terminate/terminate-tree. **The drawer tab cannot
-  terminate anything**, deliberately — a two-click destructive confirm in a 300 px column is how
-  the wrong tree gets killed. It reads the reduced fleet sample the frontend already polls at
-  `/api/processes?summary=1` and starts no loop of its own, so leaving it open adds no process
-  enumeration (see § Sampling cost). The summary retains watch and preview fields while omitting
-  identity evidence, ownership diagnostics, parent/connection detail, and daemon members.
-  Its `Full inspector` button opens the modal prefiltered to the tab's scope and fetches the full
-  snapshot.
+- **Inspection is one surface in two shells.** `ProcessFleetView` is the surface; the **modal
+  inspector** and the **Processes drawer tab** are shells around it. They differ in chrome and in
+  default scope, and in nothing else — the tab draws the same process trees, parent lineage,
+  evidence state/reason/confidence, listener and Preview rows, ended toggle, add-preview-by-URL,
+  and the same guarded interrupt/terminate/terminate-tree.
+  The tab adds exactly two things: it opens scoped to the active Project, and it marks the
+  focused terminal's session and pins it to the top of its Project.
+  Its footer button reopens the same view as the full-width dialog.
+  This replaced a watch/act split in which the tab drew per-session rollups and could terminate
+  nothing. The defence of that split was that a two-click destructive confirm in a 300 px column
+  is how the wrong tree gets killed — an argument about *layout*, not about *capability*, and it
+  is answered by layout: `.process-fleet-view` is a CSS container, and the column renders the
+  same narrow layout the modal already used on a phone, with the same two-press confirm. What
+  the split cost was that the surface open beside a terminal could not answer what was running
+  under it, so every investigation ended in "now open the other one".
+- Because trees and evidence are absent from the reduced `/api/processes?summary=1` projection,
+  the drawer tab no longer reads it; it subscribes to the full snapshot like the modal does.
+  The summary projection remains, and remains what the always-mounted sidebar rail polls
+  (see § Sampling cost) — that is the poll whose payload size mattered, and it is unchanged.
+  The full-snapshot poll is **refcounted and shared** (`processFleetFeed`): one request per tick
+  per distinct scope, however many surfaces are drawing it, so a tab selected in both drawer
+  stacks with the modal open over it is still one read. A surface with no subscribers polls
+  nothing, and its last result is held only long enough (6 s) to survive a tab switch, so
+  reopening redraws instantly and nothing older is ever drawn as live fleet state.
+- A Project scope excludes the daemon/infrastructure group on both shells: the swe-mux runtime
+  belongs to no Project, so a scoped view that listed it would report something the scope says
+  is not there. Scoped totals are likewise recomputed from the rows on screen; only the
+  unscoped line is the daemon's own totals plus the runtime bucket, which is the figure that
+  reconciles with the sidebar's resource summary.
+- Loopback listener rows are deduped by port, preferring the IPv4 form, so a server bound to
+  both stacks is one previewable row rather than two rows for one endpoint.
 - **The inspector draws one line per process, and expands for the rest.** The line carries what
   you scan for — executable, PID, the command with its own executable stripped off the front,
   live CPU/RSS, and network counts only when there are any — plus anything abnormal.
@@ -135,7 +153,7 @@
   it, and its rollup is suppressed when the session has a single live process, where it would
   only restate the row beneath it. Loopback listeners and registered Previews are single rows
   with their actions inline, not headed sub-lists.
-- The inspector opens from session/terminal right-click, the drawer tab's `Full inspector`,
+- The inspector opens from session/terminal right-click, the drawer tab's `Open full width`,
   sidebar
   `: menu` Process fleet, or the command palette. The pane header's `proc` chip is gone: it was
   the only pane tool with no state of its own, and the drawer tab covers what it was for. Fleet

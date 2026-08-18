@@ -82,7 +82,7 @@ import {
 import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
-import type { WatchScope } from './processWatch'
+import type { ProjectScope } from './processFleet'
 import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
@@ -408,7 +408,7 @@ export function App() {
   // watching. Project-scoped by default, like every other Project-scoped tab — a session-scoped
   // processes view would churn its whole body on each focus change and read empty most of the
   // time, since most sessions are just their agent CLI and a conhost.
-  const [processWatchScope,setProcessWatchScope]=useState<WatchScope>('')
+  const [processProjectScope,setProcessProjectScope]=useState<ProjectScope>('')
   // The Schedule tab's scope, kept here for the same reason: '' is every Project's
   // schedules ("what fires tonight"), anything else is one Project's.
   const [scheduleScope,setScheduleScope]=useState<string>('')
@@ -5210,14 +5210,20 @@ export function App() {
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{preview.port}</strong></span>
     </button>
   }
+  /** Land a registered Preview in the app: the item itself, the Project layout it was
+   *  attached into, and — when the caller was asking to see it — focus. */
+  const attachPreview=(preview:Preview,project:Project,focus=false)=>{
+    setPreviews(current=>({...current,[preview.id]:preview}))
+    setProjects(items=>items.map(item=>item.id===project.id?project:item))
+    setLayoutMap(current=>({...current,[project.id]:parseLayout(project.layout)}))
+    if(!focus)return
+    setProjectId(project.id)
+    setFocusedViewId(preview.id)
+  }
   const openDetectedServer=async(server:{url:string},session:Session)=>{
     try{
       const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:server.url,attach:true})
-      setPreviews(current=>({...current,[result.preview.id]:result.preview}))
-      setProjects(items=>items.map(item=>item.id===result.project.id?result.project:item))
-      setLayoutMap(current=>({...current,[result.project.id]:parseLayout(result.project.layout)}))
-      setProjectId(session.project_id)
-      setFocusedViewId(result.preview.id)
+      attachPreview(result.preview,result.project,true)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   /** `placement` is whether this row's session sits in the Project's pane tree. An unpaned one
@@ -5626,23 +5632,20 @@ export function App() {
         queueOpenToken={queueOpenToken || undefined}
         onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
         onChangeMapOpenAsTab={sessionId=>void openChangeMapTab(sessionId)}
-        processSnapshot={processFleet}
         projects={projects}
         // '' (all Projects) is the stored default; an unscoped tab means the Project the
         // drawer is sitting beside, so it resolves to the active one at render time and
         // follows a Project switch instead of pinning whichever was active when it opened.
-        processScope={processWatchScope&&projects.some(project=>project.id===processWatchScope)?processWatchScope:(projectId||'')}
-        onProcessScope={setProcessWatchScope}
-        onRefreshProcesses={()=>void loadProcesses()}
+        processScope={processProjectScope&&projects.some(project=>project.id===processProjectScope)?processProjectScope:(projectId||'')}
+        onProcessScope={setProcessProjectScope}
         // Same resolution as the process scope: an unscoped tab follows the Project the
         // drawer is sitting beside rather than pinning whichever was active on open.
         scheduleScope={scheduleScope&&projects.some(project=>project.id===scheduleScope)?scheduleScope:(projectId||'')}
         onScheduleScope={setScheduleScope}
         profiles={profiles}
-        onOpenPreview={(sessionId,url)=>{
-          const owner=sessions.find(item=>item.id===sessionId)
-          if(owner)void openDetectedServer({url},owner)
-        }}
+        // The Processes tab registers the preview itself, so this only lands the result:
+        // focused, because attaching a preview from the drawer is a request to look at it.
+        onPreviewAttached={(preview,project)=>attachPreview(preview,project,true)}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
         onOpenAutomationDashboard={()=>setAutomationOpen(true)}
@@ -6092,11 +6095,7 @@ export function App() {
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
-    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {
-      setPreviews(current => ({...current, [preview.id]: preview}))
-      setProjects(items => items.map(item => item.id === project.id ? project : item))
-      setLayoutMap(current => ({...current, [project.id]: parseLayout(project.layout)}))
-    }} />}
+    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={attachPreview} />}
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 

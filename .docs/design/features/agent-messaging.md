@@ -176,7 +176,7 @@ reasoning recorded so it is not rediscovered:
 ## UI
 
 - **Fleet queue** is a modal overlay, reached by app menu -> Fleet queue, `queue.fleet`, the Project menu (pre-filtered to that Project), or the Queue tab's `fleet` control.
-  It is a modal rather than a drawer tab because nothing in it delivers: it needs no terminal beside it, the same watch-here/act-there split the Processes tab has with the process fleet.
+  It is a modal rather than a drawer tab because nothing in it delivers: it needs no terminal beside it, and a wide table-shaped surface is what a modal is for.
   It partitions by author (`all | non_human | human`), not message direction, because the operator observes messages sent between agents rather than being every message's recipient.
   It opens on `non_human`: the rows the operator wrote are the ones they already know about.
   Project and target-session filters are applied by the daemon before the result limit.

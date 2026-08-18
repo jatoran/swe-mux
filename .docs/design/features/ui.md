@@ -1410,7 +1410,7 @@ responsive controls.
   Like the drawer's note editor, it renders inside the drawer, and unlike it never opens a pane and never writes.
   Git closes the Project-scoped block without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
   See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
-  **Processes** continues that block for the same reason: it is Project-scoped and reports rather than opens.
+  **Processes** continues that block for the same reason: it is Project-scoped and acts on sessions rather than opening panes.
   **Schedule** closes it, immediately after Processes, because the two answer the same question at different times: Processes is what this Project's sessions are running now, Schedule is what it will start later (`scheduled-runs.md`).
   It is a tab rather than a modal because the decisions it offers - pause this, run it now, is last night's session still open - are judgements about live sessions, which are legible in the workspace behind the drawer.
   Like Processes it carries its own Project/all-Projects scope instead of a companion modal, since "what fires tonight" spans Projects even though every schedule belongs to exactly one.
@@ -1458,7 +1458,7 @@ responsive controls.
 - The **fleet queue** is an application-scoped provenance and delivery-state view over queued messages from every Project and session, and is a **modal**, not a tab.
   It filters by explicit authorship, Project, and target session, and opens a target's Queue without pretending the global list is session-scoped.
   It is modal for the reason Queue is not: the argument for docking Queue is that the decision to interrupt is read off the terminal, and the fleet queue makes no such decision — it has no send button, so it needs nothing on screen beside it.
-  This is the same watch-here/act-there split **Processes** has with the process inspector, and it also stops the rail from carrying two queue-shaped tabs that read as duplicates.
+  It also stops the rail from carrying two queue-shaped tabs that read as duplicates.
 - **Transcript** is an *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
   A capability-gated `transcript` chip beside `queue[:N]` in each terminal header focuses that
@@ -1637,33 +1637,44 @@ responsive controls.
   directions, normalized diff confirmation, and revision-guarded restore points. Global
   instructions and learned memory are never write targets; nothing watches or synchronizes in
   the background.
-- **Processes** is the *watch* half of process inspection; the modal inspector keeps the *act*
-  half. The split is what makes a column viable at all. Watching is "which of my sessions are
-  running something, is that dev server up" — a handful of numbers and a link, and a question you
-  ask with a terminal in front of you, which is the same argument that put Queue here. Acting is
-  the full tree with parent lineage, evidence state and confidence, and the
-  interrupt/terminate/terminate-tree row; those need width to read and a visible confirm step to
-  be safe, and a 300 px column with a confirm-on-second-click destructive button is how someone
-  kills the wrong tree. **Nothing in the tab terminates anything.** `Full inspector` in the footer
-  opens the modal, prefiltered to whatever the tab is scoped to.
-- Rows are per session, not per process: a session's tree is mostly bookkeeping (`cmd`, `conhost`,
-  the agent CLI), so a per-process column would be a wall of noise around the one row that
-  matters.
-  Each row is a rollup (process count, CPU, working set) plus its raw loopback listeners.
-  A listener is not asserted to be an application server; `preview` explicitly lists one beside its session, and `copy` takes the URL.
+- **Processes** is the process inspector, docked. It renders the same component as the modal
+  `Process fleet` (`ProcessFleetView`), so it has the same process trees, the same parent
+  lineage, evidence state and confidence behind each row's expander, the same listener and
+  Preview rows, the same ended toggle, and the same guarded
+  interrupt/terminate/terminate-tree. `Open full width` in the footer reopens that view as the
+  dialog, at whatever the tab is scoped to.
+- It shipped first as a *watch* surface that could terminate nothing, on the argument that a
+  column narrow enough to sit beside a terminal is too narrow to hold a destructive
+  confirm-on-second-click. That was an argument about **layout**, and layout answers it:
+  `.process-fleet-view` is a CSS container, so the column gets the same rendering the modal
+  already used on a phone — one wrapped line per process, arguments dropped before numbers,
+  details stacked — and the confirm is the same two-press confirm. What the split actually cost
+  was that the surface docked beside a terminal could not say what was running under it: the tab
+  answered "is something up", every follow-up needed the modal, and the two surfaces drifted.
+- Rows are per process, not per session — the tree is the point. A session's tree does carry
+  bookkeeping (`cmd`, `conhost`, the agent CLI), which is why a collapsed row is one line and the
+  six lines of evidence live behind its expander rather than being dropped.
+  A listener is not asserted to be an application server; `preview` explicitly lists one beside
+  its session, and `copy` takes the URL. Listener rows are deduped by port, so a server bound to
+  both loopback stacks is one row.
   Independently, the daemon lists browser-facing HTML endpoints automatically while leaving debugger and tool listeners raw.
-  Ended processes are dropped rather than greyed:
-  they support no action here and are already excluded from every total in the app.
-- Scoped to the active Project by default, with **the focused session's row pinned first and
-  marked**. That combination is deliberate. Session-scoped would read empty most of the time (most
-  sessions are an agent CLI and a conhost) and would churn its whole body on every focus change,
-  the same objection that sank a focus-following Notes tab; Project-scoped answers the question
-  people actually have, and the pin answers "what is *this* session running" without a scope
-  change. `All projects` is one click away and the choice survives a tab switch.
-- **It starts no poll of its own**, reading the fleet sample `App` already refreshes for the
-  sidebar's resource summary. The reconcile walk behind that data
-  holds the GIL on Windows (`processes-and-previews.md` § Sampling cost), so a panel left open
-  all day must cost the daemon nothing extra. Any future addition here inherits that rule.
+  Ended processes are hidden unless the `ended` toggle asks for them: they support no action and
+  are already excluded from every total in the app.
+- Scoped to the active Project by default, with **the focused session pinned first inside its
+  Project and marked `focused`**. That combination is deliberate. Session-scoped would read empty
+  most of the time and would churn its whole body on every focus change, the same objection that
+  sank a focus-following Notes tab; Project-scoped answers the question people actually have, and
+  the pin answers "what is *this* session running" without a scope change. Clicking a session
+  heading narrows the tab to that session alone, and clicking it again widens back.
+  `All projects` is one click away and the choice survives a tab switch. A Project scope also
+  drops the daemon/infrastructure group, on both surfaces: the runtime belongs to no Project.
+- **A closed tab polls nothing, and open tabs share one poll.** Trees and evidence are absent
+  from the reduced sample the sidebar's resource summary polls, so this tab subscribes to the
+  full snapshot the way the modal does — through a refcounted shared feed, so the tab open in
+  both drawer stacks with the modal over it is still one request per tick. The reconcile walk
+  behind that data holds the GIL on Windows (`processes-and-previews.md` § Sampling cost); what
+  that rule protects is the *always-mounted* poll, and that one still reads the reduced
+  projection and is unchanged. Any future addition here inherits both halves.
 - The pane header lost its `proc` chip when this shipped. It was the only pane tool carrying no
   state of its own — `note` reports empty/written/open, `queue` its pending count — so it was pure
   navigation, and on a phone it cost 40 px of a bar that also has to fit the session name and
