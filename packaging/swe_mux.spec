@@ -43,8 +43,11 @@ analysis = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
+    # The av stub satisfies faster-whisper's module-level `import av` after the
+    # real package is excluded below; see rthook_av_stub.py for why the real
+    # one may never ship (GPL FFmpeg linkage inside the wheel).
+    runtime_hooks=[str(ROOT / "rthook_av_stub.py")],
+    excludes=["av"],
     noarchive=False,
     optimize=0,
 )

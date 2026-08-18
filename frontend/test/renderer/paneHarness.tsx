@@ -24,7 +24,7 @@ const session = { id: 'pane-harness', name: 'harness', backend: 'claude', state:
 // empty object here silently crashed the whole overlay render, and `test/` is outside
 // `tsconfig.json`'s `include`, so tsc never caught it.
 const status = {
-  enabled: true, stt_enabled: true, stt_available: true, engine: 'edge', content: 'summary',
+  enabled: true, stt_enabled: true, stt_available: true, engine: 'sapi', content: 'summary',
   default_mode: 'auto', wake_words: ['mux'],
   commands: [
     { action: 'send', phrases: ['mux send'] },

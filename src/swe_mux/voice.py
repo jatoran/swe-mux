@@ -2,11 +2,12 @@
 
 This is deliberately not an automation observer. Observers are restricted to
 annotate/notify through the fixed OpenRouter origin; audio synthesis uses a
-separate engine boundary (edge-tts network voices or offline Windows SAPI) and
-per-session interactive state. The only OpenRouter traffic here is the optional
-spoken-summary call, which records its call and spend in the shared automation
-ledger under the ``builtin:voice-summary`` rule id so budgets stay visible in
-one place.
+separate engine boundary (the offline OS voice, or local Kokoro-82M through
+onnxruntime once its pinned model is downloaded) and per-session interactive
+state. No synthesis path reaches a network service. The only OpenRouter
+traffic here is the optional spoken-summary call, which records its call and
+spend in the shared automation ledger under the ``builtin:voice-summary`` rule
+id so budgets stay visible in one place.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
 from .harness import has_observable_transcript
+from .kokoro_tts import KokoroEngine, KokoroError, KokoroPaths
+from .kokoro_tts import duration_seconds as wav_duration_seconds
 from .openrouter import OpenRouterClient, OpenRouterError
 from .sqlite_store import (
     connect_or_quarantine,
@@ -45,6 +48,7 @@ from .sqlite_store import (
 )
 from .subprocess_flags import background_creation_flags
 from .transcript_view import final_exchange
+from .voice_models import KokoroModelStore
 
 
 def _last_exchange(
@@ -346,15 +350,6 @@ def latency_report(samples: Sequence[dict[str, Any]], *, recent: int = 20) -> di
     }
 
 
-def soften_stops(text: str) -> str:
-    """Shorten edge-tts's long inter-sentence pause by turning sentence-final
-    periods into commas. Keeps ? and ! for expressiveness."""
-    text = re.sub(r"\.(\s+)", r",\1", text)
-    text = re.sub(r"\.\s*$", "", text.strip())
-    text = re.sub(r",\s*$", "", text.strip())
-    return text
-
-
 def speechify(text: str, max_chars: int) -> str:
     """Reduce a markdown agent reply to something listenable for verbatim mode."""
     text = re.sub(r"```.*?```", " Code block omitted. ", text, flags=re.S)
@@ -620,6 +615,7 @@ class VoiceService:
         store: VoiceStore,
         automation_store: AutomationStore,
         provider: OpenRouterClient,
+        kokoro_models: KokoroModelStore | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -627,6 +623,8 @@ class VoiceService:
         self.store = store
         self.automation_store = automation_store
         self.provider = provider
+        self.kokoro_models = kokoro_models or KokoroModelStore(config.data_dir)
+        self._kokoro_engine: KokoroEngine | None = None
         self.diagnostic: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Any] | None = None
@@ -1062,7 +1060,9 @@ class VoiceService:
             "voice": self._voice_label(),
             "text": "",
             "file_path": "",
-            "format": "mp3" if self.config.tts_engine == "edge" else "wav",
+            # Both engines write WAV now; MP3 rows from removed edge-tts clips
+            # remain readable because format is stored per row.
+            "format": "wav",
             "size_bytes": 0,
             "duration_hint_s": None,
             "status": "failed",
@@ -1091,8 +1091,8 @@ class VoiceService:
             raise
         row["file_path"] = str(destination)
         row["size_bytes"] = destination.stat().st_size
-        row["duration_hint_s"] = estimate_duration_seconds(
-            spoken, self.config.tts_edge_rate if self.config.tts_engine == "edge" else "+0%"
+        row["duration_hint_s"] = (
+            wav_duration_seconds(destination) or estimate_duration_seconds(spoken, "+0%")
         )
         row["status"] = "ready"
         self.diagnostic = None
@@ -1184,48 +1184,54 @@ class VoiceService:
         return speech
 
     def _voice_label(self) -> str:
-        if self.config.tts_engine == "edge":
-            return self.config.tts_edge_voice
+        if self.config.tts_engine == "kokoro":
+            return self.config.tts_kokoro_voice
         return self.config.tts_sapi_voice or "system default"
 
     async def _synthesize(self, text: str, destination: Path) -> None:
-        if self.config.tts_engine == "edge":
-            await self._synthesize_edge(text, destination)
+        if self.config.tts_engine == "kokoro":
+            await self._synthesize_kokoro(text, destination)
         else:
             await self._synthesize_sapi(text, destination)
 
-    async def _synthesize_edge(self, text: str, destination: Path) -> None:
-        try:
-            import edge_tts
-        except ImportError as exc:
+    def _ensure_kokoro(self) -> KokoroEngine:
+        """The loaded Kokoro session, constructed once per daemon.
+
+        Construction refuses when the pinned model is not `ready`: a partial
+        download must never be loadable, and the settings surface owns the
+        download with visible progress rather than this path fetching silently.
+        """
+        if not self.kokoro_models.ready():
             raise VoiceError(
-                "the edge-tts package is not installed; run `uv sync`, or switch the "
-                "voice engine to sapi in Settings"
-            ) from exc
-        if self.config.tts_soften_stops:
-            text = soften_stops(text)
+                "the Kokoro voice model is not downloaded; download it in "
+                "Settings → Voice, or switch the engine to the OS voice"
+            )
+        if self._kokoro_engine is None:
+            install = self.kokoro_models.install
+            try:
+                self._kokoro_engine = KokoroEngine(
+                    KokoroPaths(
+                        model=install.model,
+                        tokenizer=install.tokenizer,
+                        voices_dir=install.voices_dir,
+                    )
+                )
+            except KokoroError as exc:
+                raise VoiceError(str(exc)) from exc
+        return self._kokoro_engine
+
+    async def _synthesize_kokoro(self, text: str, destination: Path) -> None:
+        engine = self._ensure_kokoro()
         if not text.strip():
             raise VoiceError("nothing speakable remained after preprocessing")
-        last = ""
-        # Edge neural voices occasionally 403 on a cold call; retry briefly.
-        for attempt in range(3):
-            try:
-                communicate = edge_tts.Communicate(
-                    text,
-                    self.config.tts_edge_voice,
-                    rate=self.config.tts_edge_rate,
-                    pitch=self.config.tts_edge_pitch,
-                )
-                await communicate.save(str(destination))
-                if destination.exists() and destination.stat().st_size > 0:
-                    return
-                last = "edge-tts produced no audio"
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - edge_tts raises assorted network errors
-                last = str(exc)
-            await asyncio.sleep(0.8 * (attempt + 1))
-        raise VoiceError(f"edge-tts failed after retries: {last[:300]}")
+        voice = self.config.tts_kokoro_voice
+        speed = max(0.5, min(2.0, self.config.tts_kokoro_speed))
+        try:
+            await asyncio.to_thread(
+                engine.synthesize_wav, text, destination, voice_id=voice, speed=speed
+            )
+        except KokoroError as exc:
+            raise VoiceError(f"Kokoro synthesis failed: {str(exc)[:300]}") from exc
 
     async def _synthesize_sapi(self, text: str, destination: Path) -> None:
         script = self._ensure_sapi_script()
@@ -1654,12 +1660,18 @@ class VoiceService:
     async def status(self) -> dict[str, Any]:
         engine_available = True
         engine_diagnostic: str | None = None
-        if self.config.tts_engine == "edge":
-            try:
-                import edge_tts  # noqa: F401
-            except ImportError:
-                engine_available = False
-                engine_diagnostic = "edge-tts package is not installed; run `uv sync`"
+        kokoro_model = self.kokoro_models.status()
+        if self.config.tts_engine == "kokoro" and kokoro_model["status"] != "ready":
+            engine_available = False
+            engine_diagnostic = (
+                "the Kokoro voice model is not downloaded; download it in "
+                "Settings → Voice, or switch the engine to the OS voice"
+            )
+        elif self.config.tts_engine == "sapi" and (
+            os.name != "nt" or not shutil.which("powershell.exe")
+        ):
+            engine_available = False
+            engine_diagnostic = "the OS voice engine requires Windows PowerShell"
         stats = await self.store.cache_stats()
         spend = await self.automation_store.spend(rule_id=VOICE_RULE_ID)
         stt_available = True
@@ -1701,6 +1713,8 @@ class VoiceService:
             "cache_bytes": stats["bytes"],
             "cache_limit_bytes": self.config.tts_cache_mb * 1024 * 1024,
             "clip_count": stats["count"],
+            "kokoro_model": kokoro_model,
+            "kokoro_voice": self.config.tts_kokoro_voice,
             "stt_enabled": self.config.stt_enabled,
             "stt_engine": self.config.stt_engine,
             "stt_available": stt_available,

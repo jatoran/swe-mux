@@ -115,25 +115,30 @@ type Config = {
   observer_titler_enabled:boolean
   phase7_observers_enabled:boolean
   tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
-  tts_engine:'edge'|'sapi';tts_edge_voice:string;tts_edge_rate:string;tts_edge_pitch:string
-  tts_soften_stops:boolean;tts_sapi_voice:string;tts_sapi_rate:number
+  tts_engine:'sapi'|'kokoro';tts_kokoro_voice:string;tts_kokoro_speed:number
+  tts_sapi_voice:string;tts_sapi_rate:number
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
   tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
   stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string;stt_routing_model:string
   voice_wake_words:string[];voice_commands:{action:string;phrases:string[]}[]
+  assistant_enabled:boolean;assistant_model:string;assistant_daily_budget_usd:number
+  assistant_max_output_tokens:number;assistant_context_messages:number
+  assistant_trust_reversible:'auto'|'cancel_window'|'confirm'
+}
+type KokoroModelInfo = {
+  status:'not_downloaded'|'downloading'|'ready'|'error'
+  total_bytes:number;downloaded_bytes:number;current_file?:string|null
+  error?:string|null;voices:string[]
 }
 type VoiceStatusInfo = {
   enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
   summary_model:string;spend_today:{tokens:number;cost_usd:number};daily_budget_usd:number
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
+  kokoro_model?:KokoroModelInfo;kokoro_voice?:string
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
 }
-const EDGE_VOICE_SUGGESTIONS = [
-  'en-AU-NatashaNeural','en-AU-WilliamNeural','en-US-AndrewNeural','en-US-AriaNeural',
-  'en-US-AvaNeural','en-US-GuyNeural','en-US-JennyNeural','en-GB-SoniaNeural','en-GB-RyanNeural',
-]
 
 type AutomationStatus={enabled:boolean;diagnostic?:string;rules:Array<{id:string;name:string;enabled:boolean;shadow:boolean;revision:string}>;queue:{size:number;capacity:number;dropped:number};legacy:{active:boolean;diagnostic?:string;migration:string};repository_rules:Array<{project_scope_id:string;path:string;valid:boolean;diagnostic?:string;execution:string}>}
 type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean};models:{models:Array<{id:string;name:string}>;fetched_at?:number;error?:string;stale:boolean};origin:string;cheap_model:string;standard_model:string}
@@ -1403,18 +1408,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check" data-setting="tts_enabled"><span>Enable read aloud</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
           <label>Default mode for agent sessions<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
           <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select></label>
-          <label>Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="edge">Edge neural voices (online, free)</option><option value="sapi">Windows SAPI (offline)</option></select></label>
-          {draft.tts_engine==='edge'&&<>
-            <label>Edge voice<input list="edge-voice-suggestions" value={draft.tts_edge_voice} onInput={e=>change('tts_edge_voice',e.currentTarget.value)} /></label>
-            <datalist id="edge-voice-suggestions">{EDGE_VOICE_SUGGESTIONS.map(voice=><option value={voice}/>)}</datalist>
-            <label>Speaking rate<input value={draft.tts_edge_rate} placeholder="+10%" onInput={e=>change('tts_edge_rate',e.currentTarget.value)} /></label>
-            <label>Pitch<input value={draft.tts_edge_pitch} placeholder="+0Hz" onInput={e=>change('tts_edge_pitch',e.currentTarget.value)} /></label>
-            <label class="check"><span>Soften sentence stops (shorter pauses at periods)</span><input type="checkbox" checked={draft.tts_soften_stops} onChange={e=>change('tts_soften_stops',e.currentTarget.checked)} /></label>
-          </>}
+          <label>Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="sapi">OS voice (offline, no download)</option><option value="kokoro">Kokoro-82M (local neural, one-time download)</option></select></label>
           {draft.tts_engine==='sapi'&&<>
             <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
           </>}
+          {draft.tts_engine==='kokoro'&&<>
+            <label>Kokoro voice<select value={draft.tts_kokoro_voice} onChange={e=>change('tts_kokoro_voice',e.currentTarget.value)}>{(voiceInfo?.kokoro_model?.voices||['af_heart']).map(voice=><option key={voice} value={voice}>{voice}</option>)}</select></label>
+            <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
+          </>}
+          <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
           <h3>Spoken summary</h3>
           <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts.</p>
           <label>Summary model<select value={draft.tts_summary_model} onChange={e=>change('tts_summary_model',e.currentTarget.value)}><option value="">Use automation cheap model</option>{modelOptions(draft.tts_summary_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
@@ -1431,6 +1434,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
           <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. It acts only when an utterance ends with a wake word followed by a command phrase; everything before that is buffered as your message. Raw audio is deleted after transcription.</p>
+          <h3>Mux assistant</h3>
+          <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
+          <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
+          <label>Assistant model<select value={draft.assistant_model} onChange={e=>change('assistant_model',e.currentTarget.value)}>{!modelOptions(draft.assistant_model).some(model=>model.id===draft.assistant_model)&&<option value={draft.assistant_model}>{draft.assistant_model}</option>}{modelOptions(draft.assistant_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select><small>Needs reliable tool calling. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
+          <label>Daily assistant budget (USD)<input type="number" step="0.05" min="0" max="1000" value={draft.assistant_daily_budget_usd} onInput={e=>change('assistant_daily_budget_usd',Number(e.currentTarget.value))} /></label>
+          <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
+          <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
+          <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
           <h3>Spoken command latency</h3>
           <p>End of speech to executed action, broken into the four stages it passes through. Samples are recorded by the browser after each utterance and also written to <code>daemon.log</code>. The target is under 500 ms for a short command.</p>
           <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />
@@ -1678,5 +1689,50 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       <div class="modal-footer"><span>Settings stay open if saving fails.</span><button onClick={()=>setCloseIntent(null)}>Keep editing</button><button class="danger" onClick={discardAndLeave}>Discard</button><button class="primary" disabled={status==='saving…'} onClick={()=>void saveAndLeave()}>Save changes</button></div>
     </section>
   </div>}
+  </div>
+}
+
+/**
+ * Kokoro model acquisition: pinned revision, per-file SHA-256, explicit
+ * not-downloaded / downloading / ready / error state — a partial download can
+ * never be loaded. Progress arrives over the event stream (any device may have
+ * started the download); a poll backstops a missed event.
+ */
+function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
+  const [model,setModel]=useState<KokoroModelInfo|null>(initial)
+  const [starting,setStarting]=useState(false)
+  useEffect(()=>{setModel(initial)},[initial])
+  useEffect(()=>{
+    const handler=(raw:Event)=>{
+      const detail=(raw as CustomEvent).detail as Partial<KokoroModelInfo>&{model?:string}
+      if(detail&&(detail.model===undefined||detail.model==='kokoro')&&detail.status)setModel(current=>({...(current||{total_bytes:0,downloaded_bytes:0,voices:[]}),...detail} as KokoroModelInfo))
+    }
+    window.addEventListener('mux:voice-model',handler)
+    return()=>window.removeEventListener('mux:voice-model',handler)
+  },[])
+  useEffect(()=>{
+    if(model?.status!=='downloading')return
+    const timer=setInterval(()=>{void api<KokoroModelInfo>('GET','/api/voice/models/kokoro').then(setModel).catch(()=>{})},2000)
+    return()=>clearInterval(timer)
+  },[model?.status])
+  const download=async()=>{
+    setStarting(true)
+    try{const next=await api<KokoroModelInfo&{started:boolean}>('POST','/api/voice/models/kokoro/download');setModel(next)}
+    catch{/* surfaced by the next status refresh */}
+    finally{setStarting(false)}
+  }
+  const status=model?.status||'not_downloaded'
+  const total=model?.total_bytes||0
+  const done=model?.downloaded_bytes||0
+  const pct=total?Math.min(100,Math.round(done/total*100)):0
+  return <div class="kokoro-model-panel">
+    <p aria-live="polite">
+      <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>
+      Kokoro model::{status}
+      {status==='downloading'&&` · ${pct}% (${Math.round(done/1048576)}/${Math.round(total/1048576)} MB)${model?.current_file?` · ${model.current_file}`:''}`}
+      {status==='ready'&&` · ${Math.round(total/1048576)} MB, hash-verified`}
+      {status==='error'&&model?.error&&` · ${model.error}`}
+    </p>
+    {status!=='ready'&&status!=='downloading'&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':'Download Kokoro voices (~106 MB)'}</button>}
   </div>
 }

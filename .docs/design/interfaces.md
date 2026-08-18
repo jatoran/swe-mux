@@ -1112,7 +1112,28 @@ POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback pro
 GET    /voice/clips[?session=&run=&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
+GET    /voice/models/kokoro               pinned-download state
+POST   /voice/models/kokoro/download      202; progress rides voice_model_progress events
 ```
+
+The Mux assistant (`design/features/assistant.md`) adds its own surface:
+
+```text
+GET    /assistant                          enabled, model, budget, spend, trust, diagnostic
+GET    /assistant/dialogs[?limit=]
+POST   /assistant/dialogs                  {title?}
+GET    /assistant/dialogs/{id}             messages, actions, turn_running
+POST   /assistant/dialogs/{id}/turns       {text, client_context?} -> 202 {turn_id}
+POST   /assistant/dialogs/{id}/interrupt
+POST   /assistant/actions/{id}/confirm
+POST   /assistant/actions/{id}/cancel
+POST   /assistant/actions/{id}/ui-result   {ok, detail?, candidates?} from the executing device
+```
+
+Turn progress arrives over `/events` as `assistant_turn_started`, `assistant_sentence`
+(dual-form `display`/`speech`), `assistant_tool_status`, `assistant_action` (the typed
+pending/scheduled/executed confirmation state), `assistant_turn_done`, and
+`assistant_turn_failed`, each carrying `dialog_id` and `turn_id`.
 
 Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 16 kHz.
 Whisper decodes the validated PCM from memory and never writes it to disk.

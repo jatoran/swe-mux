@@ -107,6 +107,29 @@ class OpenRouterResult:
 
 
 @dataclass(slots=True, frozen=True)
+class OpenRouterToolTurn:
+    """One assistant turn from a tool-calling completion.
+
+    `message` is the provider's assistant message verbatim (content plus any
+    `tool_calls`), suitable for appending straight back onto the conversation
+    the agentic loop is building.
+    """
+
+    generation_id: str | None
+    requested_model: str
+    resolved_model: str
+    content: str
+    tool_calls: list[dict[str, Any]]
+    message: dict[str, Any]
+    finish_reason: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float | None
+    latency_ms: int
+    provider_name: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class _ModelCapabilities:
     supported_parameters: frozenset[str]
     reasoning_efforts: frozenset[str] | None
@@ -406,6 +429,72 @@ class OpenRouterClient:
             finish_reason=finish_reason,
             response_content_type=content_type,
             response_content_length=content_length,
+        )
+
+    async def complete_tools(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        max_tokens: int,
+    ) -> OpenRouterToolTurn:
+        """One tool-calling chat completion for the assistant's agentic loop.
+
+        Unlike `complete_json` there is no schema to defend, so this method has
+        no response_format and no parameter-profile ladder: `require_parameters`
+        restricts routing to providers that honour `tools`, which is the one
+        capability a malformed fallback would silently drop.
+        """
+        if not model:
+            raise OpenRouterError("an exact OpenRouter model id is required")
+        if max_tokens <= 0:
+            raise OpenRouterError("OpenRouter max_tokens must be greater than zero")
+        started = time.monotonic()
+        safe_messages = cast(list[dict[str, Any]], utf8_safe_value(messages))
+        payload = await self._request(
+            "POST",
+            "/chat/completions",
+            json_body={
+                "model": model,
+                "messages": safe_messages,
+                "stream": False,
+                "tools": tools,
+                "tool_choice": "auto",
+                "max_tokens": max_tokens,
+                "provider": {"require_parameters": True, "allow_fallbacks": True},
+            },
+        )
+        choices = payload.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(message, dict):
+            raise OpenRouterError(
+                "OpenRouter returned no assistant message", status=200, retryable=True
+            )
+        usage = payload.get("usage") or {}
+        raw_calls = message.get("tool_calls")
+        tool_calls = [call for call in raw_calls if isinstance(call, dict)] if isinstance(
+            raw_calls, list
+        ) else []
+        content = message.get("content")
+        return OpenRouterToolTurn(
+            generation_id=str(payload.get("id")) if payload.get("id") else None,
+            requested_model=model,
+            resolved_model=str(payload.get("model") or model),
+            content=content if isinstance(content, str) else "",
+            tool_calls=tool_calls,
+            message=message,
+            finish_reason=(
+                str(choice.get("finish_reason"))
+                if isinstance(choice, dict) and choice.get("finish_reason")
+                else None
+            ),
+            input_tokens=int(usage.get("prompt_tokens") or 0),
+            output_tokens=int(usage.get("completion_tokens") or 0),
+            cost_usd=_number(usage.get("cost")),
+            latency_ms=int((time.monotonic() - started) * 1000),
+            provider_name=str(payload.get("provider")) if payload.get("provider") else None,
         )
 
     async def generation_cost(self, generation_id: str) -> float | None:

@@ -205,11 +205,18 @@ export interface VoiceClip {
   stream_id?:string; segment_count?:number
 }
 
+export interface KokoroModelStatus {
+  status:'not_downloaded'|'downloading'|'ready'|'error'
+  revision:string; repo:string; total_bytes:number; downloaded_bytes:number
+  current_file?:string|null; error?:string|null; voices:string[]
+}
+
 export interface VoiceStatus {
   enabled:boolean; engine:string; engine_available:boolean; diagnostic?:string|null
   content:'summary'|'verbatim'; default_mode:VoiceMode; voice:string; summary_model:string
   spend_today:{tokens:number;cost_usd:number}; daily_budget_usd:number
   cache_bytes:number; cache_limit_bytes:number; clip_count:number; stt_enabled:boolean
+  kokoro_model?:KokoroModelStatus; kokoro_voice?:string
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]

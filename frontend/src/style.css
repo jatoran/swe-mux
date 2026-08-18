@@ -2214,6 +2214,47 @@ body {
 /* faster-whisper returns whole utterances, never partial words, so there is no text to
    stream in. The flash is the arrival signal — honest about being discrete. */
 .dictation-panel.landed .dictation-draft{border-color:var(--green,#8bd450)}
+/* Chat mode: the same floating panel, grown for real back-and-forth. The height
+   is the whole point of the mode — a conversation you can only see two lines of
+   is a transcript, not a dialog. */
+.dictation-panel.chat-mode{max-height:min(84dvh,760px);grid-template-rows:auto minmax(0,1fr)}
+.voice-mode-toggle{display:inline-flex;gap:1px;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.voice-mode-toggle button{height:calc(19px*var(--ui-scale));padding:0 8px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.voice-mode-toggle button.active{background:var(--panel2);color:var(--text)}
+.voice-mode-toggle button:disabled{opacity:.4;cursor:default}
+.assistant-panel{min-height:280px;display:grid;grid-template-rows:minmax(0,1fr) auto auto;gap:5px;min-width:0}
+.assistant-panel.disabled{min-height:0;display:block;padding:8px;color:var(--muted)}
+.assistant-log{min-height:220px;overflow:auto;overscroll-behavior:contain;display:grid;align-content:start;gap:6px;padding:6px;border:1px solid var(--line);background:var(--bg)}
+.assistant-empty{margin:0;color:var(--muted);font:10px/1.5 'JetBrains Mono'}
+.assistant-message{display:grid;gap:2px;padding:5px 7px;border-left:2px solid var(--line);background:var(--panel)}
+.assistant-message.user{border-left-color:var(--blue,#7aa2f7)}
+.assistant-message.assistant{border-left-color:var(--green,#8bd450)}
+.assistant-message.failed{border-left-color:var(--error,#f07178)}
+.assistant-message>header{color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.06em}
+.assistant-message p{margin:0;color:var(--text);font:10px/1.5 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere}
+.assistant-thinking{margin:0;color:var(--muted);font:9px/1.4 'JetBrains Mono';animation:voice-rec-pulse 1.4s ease-in-out infinite}
+/* Confirmation is typed state rendered as a card, never prose: the same object
+   spoken confirm/cancel resolves. The countdown is the cancel window. */
+.assistant-action{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;padding:6px 7px;border:1px solid var(--amber);background:var(--panel)}
+.assistant-action.consequential{border-color:var(--error,#f07178)}
+.assistant-action p{margin:0;color:var(--text);font:10px/1.4 'JetBrains Mono';overflow-wrap:anywhere}
+.assistant-action .assistant-countdown{color:var(--amber);font-variant-numeric:tabular-nums}
+.assistant-action div{display:flex;gap:4px}
+.assistant-action button{height:calc(20px*var(--ui-scale));padding:0 8px;border:0;border-radius:4px;font:inherit;cursor:pointer;background:transparent}
+.assistant-action button.confirm{color:var(--green,#8bd450)}
+.assistant-action button.cancel{color:var(--error,#f07178)}
+.assistant-action button:hover{background:#252b32}
+.assistant-error{margin:0;color:var(--error,#f07178);font:9px/1.4 'JetBrains Mono'}
+.assistant-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px;align-items:end}
+.assistant-input{box-sizing:border-box;width:100%;min-height:calc(1.5em + 10px);max-height:calc(6em + 10px);resize:none;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:10px/1.45 'JetBrains Mono'}
+.assistant-input:focus{outline:0;border-color:var(--green,#8bd450)}
+.assistant-input-row button{height:calc(22px*var(--ui-scale));padding:0 9px;border:0;border-radius:4px;background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
+.assistant-input-row button:hover:not(:disabled){color:var(--text)}
+.assistant-input-row button:disabled{opacity:.4;cursor:default}
+.assistant-input-row .assistant-send{color:var(--green,#8bd450)}
+.assistant-input-row .assistant-stop{color:var(--error,#f07178)}
+.kokoro-model-panel{display:grid;gap:4px;margin:4px 0}
+.kokoro-model-panel button{justify-self:start}
 .voice-command-dialog-backdrop{position:fixed;inset:0;z-index:220;display:grid;place-items:center;padding:16px;background:#0009;pointer-events:auto}
 .voice-command-dialog{width:min(760px,calc(100vw - 24px));max-height:min(82dvh,720px);display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #000a;color:var(--text);font:11px/1.45 'JetBrains Mono';overflow:hidden}
 .voice-command-dialog>header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--line)}

@@ -1,0 +1,211 @@
+"""Kokoro TTS (Phase 10.5): the espeak-free G2P constraint and the repair ladder."""
+
+from __future__ import annotations
+
+import runpy
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from swe_mux import kokoro_tts
+from swe_mux.config import load_config
+from swe_mux.kokoro_tts import (
+    MAX_PHONEME_TOKENS,
+    KokoroEngine,
+    KokoroError,
+    KokoroPaths,
+    assert_espeak_free,
+    spell_out,
+    split_compound,
+)
+from swe_mux.voice_models import (
+    ENGLISH_VOICES,
+    KOKORO_FILES,
+    KokoroModelStore,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def make_engine(tmp_path: Path) -> KokoroEngine:
+    return KokoroEngine(
+        KokoroPaths(
+            model=tmp_path / "model.onnx",
+            tokenizer=tmp_path / "tokenizer.json",
+            voices_dir=tmp_path / "voices",
+        )
+    )
+
+
+class FakeG2P:
+    """Lexicon-only G2P double: known words phonemize, everything else is ❓."""
+
+    KNOWN = {
+        "the", "pie", "project", "health", "check", "work", "tree", "passed",
+        "and", "is", "clean", "s", "w", "e", "mux", "on", "a", "b", "c",
+        "ess", "double", "you", "ee", "why", "pee", "con",
+    }
+
+    def __call__(self, text: str) -> tuple[str, Any]:
+        words = [word.strip(".,!?:;").casefold() for word in text.split()]
+        phonemes = " ".join(
+            "x" if (not word or word in self.KNOWN or word.isdigit()) else "❓"
+            for word in words
+        )
+        return phonemes, None
+
+
+def test_split_compound_covers_the_measured_failures() -> None:
+    assert split_compound("pyproject") == ["pyproject"]  # no boundary to split on
+    assert split_compound("swe-mux") == ["swe", "mux"]
+    assert split_compound("healthcheck") == ["healthcheck"]
+    assert split_compound("HealthCheck") == ["Health", "Check"]
+    assert split_compound("worktree_verify") == ["worktree", "verify"]
+    assert split_compound("ConPTY") == ["Con", "PTY"]
+    assert split_compound("v2ray4") == ["v", "2", "ray", "4"]
+
+
+def test_spell_out_is_the_unambiguous_last_resort() -> None:
+    assert spell_out("ab1") == "eigh bee one"
+    assert spell_out("!!") == "!!"  # nothing spellable: keep the token, never drop it
+
+
+def test_prepare_text_repairs_unknowns_via_lexicon_splitter_then_spelling(
+    tmp_path: Path,
+) -> None:
+    engine = make_engine(tmp_path)
+    engine._g2p = FakeG2P()
+    prepared = engine.prepare_text("The pyproject healthcheck passed on swe-mux and is clean.")
+    # The lexicon rewrites the measured vocabulary; nothing is silently dropped.
+    assert "pie project" in prepared
+    assert "health check" in prepared
+    assert "S W E" in prepared
+    assert "❓" not in engine.phonemize(prepared)
+
+
+def test_prepare_text_leaves_resolvable_text_untouched(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._g2p = FakeG2P()
+    text = "The work tree is clean."
+    assert engine.prepare_text(text) == text
+
+
+def test_espeak_presence_fails_construction_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib.util
+
+    real = importlib.util.find_spec
+
+    def fake(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "espeakng_loader":
+            return object()
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake)
+    with pytest.raises(KokoroError, match="espeak"):
+        assert_espeak_free()
+
+
+def test_token_chunking_bounds_every_chunk(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._vocab = {"a": 1, "b": 2, ".": 3}
+    phonemes = ("ab" * 400) + "." + ("ba" * 400)
+    chunks = engine._token_chunks(phonemes)
+    assert len(chunks) > 1
+    assert all(0 < len(chunk) <= MAX_PHONEME_TOKENS for chunk in chunks)
+    assert sum(len(chunk) for chunk in chunks) == len(phonemes)
+
+
+# --------------------------------------------------------------------------- #
+# Model acquisition
+# --------------------------------------------------------------------------- #
+
+
+def test_manifest_pins_every_english_voice() -> None:
+    for voice in ENGLISH_VOICES:
+        size, sha = KOKORO_FILES[f"voices/{voice}.bin"]
+        assert size == 522240 and len(sha) == 64
+
+
+def test_partial_or_tampered_download_is_never_ready(tmp_path: Path) -> None:
+    store = KokoroModelStore(tmp_path)
+    assert store.status()["status"] == "not_downloaded"
+    assert store.ready() is False
+    # Files on disk without a verified `ready` state are a partial download.
+    store.install.model.parent.mkdir(parents=True, exist_ok=True)
+    store.install.model.write_bytes(b"not a model")
+    store.install.tokenizer.write_text("{}", encoding="utf-8")
+    assert store.ready() is False
+    # A state file claiming ready still fails the size check on the real pin.
+    store._write_state({"status": "ready", "revision": store.status()["revision"]})
+    assert store.ready() is False
+    # An interrupted download (state says downloading, no task) reads as error.
+    store._write_state({"status": "downloading", "revision": store.status()["revision"]})
+    assert store.status()["status"] == "error"
+
+
+def test_file_verification_requires_exact_size_and_hash(tmp_path: Path) -> None:
+    target = tmp_path / "voice.bin"
+    target.write_bytes(b"z" * 16)
+    import hashlib
+
+    sha = hashlib.sha256(b"z" * 16).hexdigest()
+    assert KokoroModelStore._file_verified(target, 16, sha) is True
+    assert KokoroModelStore._file_verified(target, 17, sha) is False
+    assert KokoroModelStore._file_verified(target, 16, "0" * 64) is False
+
+
+# --------------------------------------------------------------------------- #
+# Config migration and the av stub
+# --------------------------------------------------------------------------- #
+
+
+def test_edge_engine_config_migrates_to_the_os_voice(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('schema_version = 25\ntts_engine = "edge"\n', encoding="utf-8")
+    config = load_config(path)
+    assert config.tts_engine == "sapi"
+    # A deliberate engine choice survives the migration untouched.
+    chosen = tmp_path / "chosen" / "config.toml"
+    chosen.parent.mkdir()
+    chosen.write_text('schema_version = 25\ntts_engine = "sapi"\n', encoding="utf-8")
+    assert load_config(chosen).tts_engine == "sapi"
+
+
+def test_av_runtime_stub_satisfies_import_and_refuses_use() -> None:
+    hook = REPO_ROOT / "packaging" / "rthook_av_stub.py"
+    saved = sys.modules.pop("av", None)
+    try:
+        runpy.run_path(str(hook))
+        stub = sys.modules["av"]
+        with pytest.raises(RuntimeError, match="not bundled"):
+            _ = stub.open  # any attribute use must fail loudly
+    finally:
+        sys.modules.pop("av", None)
+        if saved is not None:
+            sys.modules["av"] = saved
+
+
+def test_spec_excludes_av_and_installs_the_stub() -> None:
+    """The bundle gate's static half; build_desktop.verify_no_gpl_av is the dynamic half."""
+    spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
+    assert 'excludes=["av"]' in spec
+    assert "rthook_av_stub.py" in spec
+
+
+def test_project_g2p_measurement_holds() -> None:
+    """The real misaki G2P, espeak-free, resolves this project's vocabulary.
+
+    This is the live half of the constraint: `assert_espeak_free` passing means
+    no GPL phonemizer is installed, and the repair ladder must still produce a
+    fully resolvable sentence for the words the 2026-08-17 audit measured.
+    """
+    pytest.importorskip("misaki")
+    assert_espeak_free()
+    engine = make_engine(Path("."))
+    prepared = engine.prepare_text(
+        "The pyproject healthcheck passed on ConPTY, and the swe-mux worktree is clean."
+    )
+    phonemes, _tokens = engine._ensure_g2p()(prepared)
+    assert kokoro_tts.UNKNOWN_TOKEN not in phonemes

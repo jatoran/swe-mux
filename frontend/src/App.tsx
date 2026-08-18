@@ -96,10 +96,16 @@ import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
-import { ConversationSurface, ConversationToggle, useConversation } from './ConversationControl'
+import { ConversationSurface, ConversationToggle, useConversation, type VoicePanelMode } from './ConversationControl'
+import { AssistantPanel } from './AssistantPanel'
+import {
+  assistantStatus, ensureDialog, reportUiResult, sendTurn as sendAssistantTurnApi,
+  type AssistantClientContext, type AssistantStatus,
+} from './assistant'
+import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, enqueueAutoplay, enqueueRequestedStreamClip, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playClip, playRequestedStreamFirst, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
 import {
@@ -1933,6 +1939,7 @@ export function App() {
           if (event.type === 'clipboard_changed') window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT))
           if (!isReplay && event.type === 'configuration_changed') {
             void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
+            void assistantStatus().then(setAssistantInfo).catch(()=>{})
             // A change made from another device (or by editing the config file)
             // has to reach this tab's copy of *every* config-derived setting, not
             // the subset this handler happened to list.
@@ -1953,6 +1960,11 @@ export function App() {
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
           if(!isReplay&&event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
+          // Assistant dialog events fan out to the panel and the UI-action
+          // executor; replay is forwarded flagged so views can rebuild state
+          // without re-firing side effects (speech, earcons, UI commands).
+          if(typeof event.type==='string'&&event.type.startsWith('assistant_'))window.dispatchEvent(new CustomEvent('mux:assistant-event',{detail:{type:event.type,payload:event.payload||{},replay:isReplay}}))
+          if(event.type==='voice_model_progress')window.dispatchEvent(new CustomEvent('mux:voice-model',{detail:event.payload||{}}))
         } catch {
           // A malformed event cannot be classified safely. Keep the REST snapshot as
           // the recovery path, while well-formed telemetry events avoid that cost.
@@ -2116,6 +2128,78 @@ export function App() {
   const spokenListContext=useRef<SpokenListContext|null>(null)
   const voiceQueryHandler=useRef<(query:VoiceQuery)=>Promise<VoiceCommandResult>>(async()=>({detail:'Voice queries are still loading.'}))
   const [approvalConfirmation,setApprovalConfirmation]=useState<{sessionId:string;confirmationId:string;operation:string}|null>(null)
+  // ---- Mux assistant (Phase 10.6): tier 3 behind the grammar, plus the chat view ----
+  const [assistantInfo,setAssistantInfo]=useState<AssistantStatus|null>(null)
+  const [assistantOpen,setAssistantOpen]=useState(false)
+  const [voicePanelMode,setVoicePanelMode]=useState<VoicePanelMode>('dictation')
+  useEffect(()=>{void assistantStatus().then(setAssistantInfo).catch(()=>setAssistantInfo(null))},[])
+  const assistantContextRef=useRef<AssistantClientContext>({})
+  assistantContextRef.current={
+    focused_session_id:activeId||null,
+    active_project_id:activeProject?.id||null,
+    commands:commandRegistryRef.current.filter(item=>item.available).slice(0,400).map(item=>({id:item.id,label:item.label})),
+  }
+  const assistantClientContext=()=>assistantContextRef.current
+  // Assistant replies speak through the same application-speech pipeline the
+  // deterministic query answers use: client-claimed stream, segmented clips.
+  const speakAssistantReply=async(text:string)=>{
+    if(!voiceStatus?.enabled)throw new Error('Read aloud is off.')
+    const streamId=newVoiceStreamId()
+    unlockPlayback();beginRequestedStream(streamId,'system','system')
+    try{
+      const clip=await api<VoiceClip>('POST','/api/voice/speak',{text,stream_id:streamId})
+      await playRequestedStreamFirst(clip.id,clip.stream_id||streamId,'system','system')
+    }catch(cause){cancelRequestedStream(streamId);throw cause}
+  }
+  /** Route one utterance/typed line to the assistant; false when it is disabled. */
+  const sendAssistantTurn=async(text:string):Promise<boolean>=>{
+    if(!assistantInfo?.enabled)return false
+    const dialogId=await ensureDialog()
+    setAssistantOpen(true);setVoicePanelMode('chat')
+    await sendAssistantTurnApi(dialogId,text,assistantClientContext())
+    return true
+  }
+  // The daemon dispatches UI commands (focus, drawer tabs, panels) to the
+  // device the dialog turn came from; this executor resolves the label against
+  // the live registry — the same authority spoken phrases compile to — runs it,
+  // and reports the outcome so the assistant's tool call can complete.
+  useEffect(()=>{
+    const handler=(raw:Event)=>{
+      const event=(raw as CustomEvent).detail as {type:string;payload:Record<string,unknown>;replay?:boolean}
+      if(event.replay||event.type!=='assistant_action')return
+      const payload=event.payload||{}
+      if(String(payload.kind)!=='run_ui_command'||String(payload.status)!=='dispatched')return
+      const actionId=String(payload.id||'')
+      const commandText=String((payload.arguments as Record<string,unknown>|undefined)?.command||'')
+      if(!actionId||!commandText)return
+      void (async()=>{
+        const registry=commandRegistryRef.current
+        const resolution=resolveVoiceIntent(registry,commandText)
+        let target=resolution.match?.command||null
+        if(!target){
+          const fuzzy=resolveVoiceFuzzy(registry,commandText)
+          if(fuzzy)target=fuzzy.command
+        }
+        if(!target){
+          const normalized=normalizeSpokenText(commandText)
+          target=registry.find(item=>item.available&&normalizeSpokenText(item.label)===normalized)
+            ||searchCommands(registry.filter(item=>item.available),commandText)[0]
+            ||null
+        }
+        if(!target){
+          await reportUiResult(actionId,{ok:false,detail:'no command matched',candidates:resolution.candidates.map(item=>item.command.label)}).catch(()=>{})
+          return
+        }
+        const ran=runCommand(registry,target.id)
+        await reportUiResult(actionId,{
+          ok:ran==='ran',
+          detail:ran==='ran'?`ran ${target.label}`:(target.disabledReason||`${target.label} is unavailable`),
+        }).catch(()=>{})
+      })()
+    }
+    window.addEventListener('mux:assistant-event',handler)
+    return()=>window.removeEventListener('mux:assistant-event',handler)
+  },[])
   const handleVoiceIntent=async(spoken:string)=>{
     const selected=selectNumberedCandidate(pendingVoiceCandidates.current,spoken)
     const resolution=selected
@@ -2139,7 +2223,15 @@ export function App() {
   }
   // Capture is a workspace flag. Focus only changes this commit target; it never
   // restarts the microphone or clears the draft, and pinning freezes the target.
-  const conversation = useConversation(voiceStatus, updateSession, conversationTarget, handleVoiceIntent)
+  const conversation = useConversation(voiceStatus, updateSession, conversationTarget, handleVoiceIntent, sendAssistantTurn)
+  // One assistant view instance shared by both surface placements, so switching
+  // between pane overlay and the fixed top layer never remounts the chat.
+  const assistantView=<AssistantPanel
+    enabled={!!assistantInfo?.enabled}
+    clientContext={assistantClientContext}
+    speak={voiceStatus?.enabled?speakAssistantReply:null}
+    voiceActive={conversation.phase!=='off'}
+  />
 
   // Sessions on screen right now (visible pane of the displayed project). Being
   // on screen is half of what marks a row read; a human at the window is the
@@ -4442,15 +4534,36 @@ export function App() {
     }},
     { id:'voice.query',label:'Ask a deterministic voice lookup',category:'voice',available:true,run:()=>{},voice:{
       phrases:['{text}'],
-      execute:text=>{
+      execute:async text=>{
         const query=parseVoiceQuery(text)
         if(!query){
-          const detail=`No voice command matched “${text}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list voice commands” for help.`
+          // Tier 2: a conservative fuzzy pass over the same grammar absorbs
+          // STT noise before an utterance costs a model call.
+          const fuzzy=resolveVoiceFuzzy(commandRegistryRef.current,text)
+          if(fuzzy){
+            if(fuzzy.command.voice?.execute)return await fuzzy.command.voice.execute('')
+            const ran=runCommand(commandRegistryRef.current,fuzzy.command.id)
+            if(ran==='ran')return{detail:`${fuzzy.command.label} (heard as “${text}”). Still listening.`}
+          }
+          // Tier 3: the assistant. An unmatched wake-word utterance becomes a
+          // conversation turn instead of a refusal; the reply arrives in the
+          // chat view and, in voice mode, through application speech.
+          if(await sendAssistantTurn(text).catch(()=>false)){
+            return{detail:`Asking the assistant: “${text}”`,transcript:`Asked the assistant: “${text}”`}
+          }
+          const detail=`No voice command matched “${text}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list voice commands” for help, or enable the assistant in Settings.`
           return{detail,speech:detail}
         }
         return voiceQueryHandler.current(query)
       },
     }},
+    { id:'assistant.toggle',label:assistantOpen?'Close the assistant chat':'Open the assistant chat',category:'voice',available:true,run:()=>{
+      setAssistantOpen(open=>{
+        const next=!open
+        if(next)setVoicePanelMode('chat')
+        return next
+      })
+    },voice:{phrases:['assistant','open assistant','open the assistant','chat','close assistant','close the assistant']}},
     { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
       phrases:['approve','review approval','confirm tool use'],
       execute:async()=>{
@@ -5177,7 +5290,7 @@ export function App() {
     // The read-aloud strip hangs off a zero-height pane anchor. Dictation no longer
     // participates in pane layout at all.
     const conversationSurface=id===conversationPaneId
-      ?<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus?.commands} onOpenSettings={openVoiceSettings} placement="pane"/>
+      ?<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus?.commands} onOpenSettings={openVoiceSettings} placement="pane" mode={voicePanelMode} onMode={setVoicePanelMode} assistantView={assistantView} assistantOpen={assistantOpen} onCloseAssistant={()=>setAssistantOpen(false)}/>
       :null
     const voiceOverlayNode=voiceStripNode||conversationSurface
       ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
@@ -5513,7 +5626,7 @@ export function App() {
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
-    {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus.commands} onOpenSettings={()=>openSettings('Voice')}/>}
+    {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus.commands} onOpenSettings={()=>openSettings('Voice')} mode={voicePanelMode} onMode={setVoicePanelMode} assistantView={assistantView} assistantOpen={assistantOpen} onCloseAssistant={()=>setAssistantOpen(false)}/>}
 
     <ContinuityBanner />
     {uiUpdateAvailable && <div class="ui-update-banner" role="status" aria-live="polite">

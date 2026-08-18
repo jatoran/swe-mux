@@ -27,6 +27,9 @@ import type { VoiceConversationEntry, VoiceConversationRole } from './voiceConve
 import { insertIntoTerminal } from './terminalActions'
 import { voiceCommsMessage } from './voiceComms'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
+import { assistantFollowUpActive } from './assistant'
+import { playEarcon } from './earcons'
+import type { ComponentChildren } from 'preact'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -92,6 +95,7 @@ export function useConversation(
   onSession:(session:Session)=>void,
   followingTarget:ConversationTarget|null,
   onIntent?:(spoken:string)=>VoiceCommandResult|Promise<VoiceCommandResult>,
+  onAssistantUtterance?:(spoken:string)=>Promise<boolean>,
 ):Conversation{
   const wake=primaryWake(status?.wake_words)
   const matcher=useMemo(
@@ -139,6 +143,7 @@ export function useConversation(
   const wakeRef=useRef(wake);wakeRef.current=wake
   const onSessionRef=useRef(onSession);onSessionRef.current=onSession
   const onIntentRef=useRef(onIntent);onIntentRef.current=onIntent
+  const onAssistantRef=useRef(onAssistantUtterance);onAssistantRef.current=onAssistantUtterance
 
   const listeningDetail=()=>`Listening. Say “${wakeRef.current}, send” to submit.`
   // Matched exactly when the detector resolves, so the readiness line is replaced only
@@ -325,6 +330,20 @@ export function useConversation(
     if(parsed.command==='standby'){
       enterStandby(true);setPhase('standby')
       respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
+    }
+    // The follow-up window: right after the assistant speaks, the next
+    // utterance has a single addressee, so it needs no wake word. Only plain
+    // speech takes this route — a wake-word command keeps its normal meaning,
+    // which is what lets "Mux, stop" still kill playback mid-dialog.
+    if(parsed.command===null&&onAssistantRef.current&&assistantFollowUpActive()){
+      const wakeIntent=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
+      if(wakeIntent===null&&rawText.trim()){
+        setPhase('sending');setDetail('Asking the assistant…')
+        try{
+          if(await onAssistantRef.current(rawText.trim())){setPhase('listening');return}
+        }catch(cause){reportFailure(cause);return}
+        setPhase('listening')
+      }
     }
     if(parsed.command===null&&onIntentRef.current){
       const spoken=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
@@ -536,7 +555,7 @@ export function useConversation(
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the
       // decode does, or the pause reads as a failure.
-      onSpeechEnd:()=>{if(!enabledRef.current||standbyRef.current)return;setPhase('heard');setDetail('Heard you.')},
+      onSpeechEnd:()=>{if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail('Heard you.')},
       onSpeculative:(audio,marks)=>{void speculate(audio,marks)},
       onSpeculativeAbort:utteranceId=>{
         const pending=speculationRef.current
@@ -653,22 +672,50 @@ export function ConversationToggle({
   ><MicIcon slashed={!active}/></button>
 }
 
-/** The global draft card exists only while workspace-level capture is running. */
+export type VoicePanelMode='dictation'|'chat'
+
+/**
+ * The global voice surface: the dictation draft card, and (toggleable inside
+ * the same floating panel) the assistant conversation view. It renders while
+ * capture runs, and also with the microphone off when the chat was opened
+ * explicitly — the assistant is voice-first, not voice-only.
+ */
 export function ConversationSurface({
   conversation,
   commands,
   configuredCommands,
   onOpenSettings,
   placement='fallback',
+  mode='dictation',
+  onMode,
+  assistantView,
+  assistantOpen=false,
+  onCloseAssistant,
 }:{
   conversation:Conversation
   commands:Command[]
   configuredCommands?:{action:string;phrases:string[]}[]
   onOpenSettings:()=>void
   placement?:'pane'|'fallback'
+  mode?:VoicePanelMode
+  onMode?:(mode:VoicePanelMode)=>void
+  assistantView?:ComponentChildren
+  assistantOpen?:boolean
+  onCloseAssistant?:()=>void
 }){
-  if(conversation.phase==='off')return null
-  const panel=<DictationPanel conversation={conversation} commands={commands} configuredCommands={configuredCommands} onOpenSettings={onOpenSettings}/>
+  const talkActive=conversation.phase!=='off'
+  if(!talkActive&&!assistantOpen)return null
+  const effectiveMode:VoicePanelMode=talkActive?mode:'chat'
+  const panel=<DictationPanel
+    conversation={conversation}
+    commands={commands}
+    configuredCommands={configuredCommands}
+    onOpenSettings={onOpenSettings}
+    mode={effectiveMode}
+    onMode={onMode}
+    assistantView={assistantView}
+    onCloseAssistant={onCloseAssistant}
+  />
   return placement==='pane'?panel:<div class="conversation-layer active">{panel}</div>
 }
 
@@ -676,7 +723,19 @@ export function ConversationSurface({
  * The app-level dictation state can render in a pane overlay without belonging to that pane.
  * Moving the view follows focus; capture, history, target pinning, and the draft stay alive.
  */
-export function DictationPanel({conversation,commands,configuredCommands,onOpenSettings}:{conversation:Conversation;commands:Command[];configuredCommands?:{action:string;phrases:string[]}[];onOpenSettings:()=>void}){
+export function DictationPanel({
+  conversation,commands,configuredCommands,onOpenSettings,
+  mode='dictation',onMode,assistantView,onCloseAssistant,
+}:{
+  conversation:Conversation
+  commands:Command[]
+  configuredCommands?:{action:string;phrases:string[]}[]
+  onOpenSettings:()=>void
+  mode?:VoicePanelMode
+  onMode?:(mode:VoicePanelMode)=>void
+  assistantView?:ComponentChildren
+  onCloseAssistant?:()=>void
+}){
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
   const historyRef=useRef<HTMLDivElement|null>(null)
   const [landed,setLanded]=useState(false)
@@ -726,8 +785,33 @@ export function DictationPanel({conversation,commands,configuredCommands,onOpenS
     return next
   })
   const send=()=>conversation.send()
+  const talkActive=conversation.phase!=='off'
+  const chat=mode==='chat'
+  const modeToggle=(assistantView!==undefined&&onMode)?<div class="voice-mode-toggle" role="tablist" aria-label="Voice panel mode">
+    <button role="tab" aria-selected={!chat} class={chat?'':'active'} disabled={!talkActive} title={talkActive?'Dictation draft and Talk history':'Start Talk to dictate'} onClick={()=>onMode('dictation')}>talk</button>
+    <button role="tab" aria-selected={chat} class={chat?'active':''} title="Converse with the Mux assistant" onClick={()=>onMode('chat')}>chat</button>
+  </div>:null
+  if(chat){
+    // Chat mode: the same floating panel, taller, holding the assistant
+    // conversation. Capture (when running) keeps listening underneath it —
+    // the mode changes what the panel shows, never what the microphone does.
+    return <section class={`dictation-panel chat-mode ${conversation.phase}`} aria-label="Mux assistant conversation">
+      <header>
+        {modeToggle}
+        {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={conversation.detail}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
+        <div class="dictation-actions">
+          {talkActive&&<button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop mic</button>}
+          <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
+          <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings" onClick={onOpenSettings}>⚙</button>
+          {!talkActive&&onCloseAssistant&&<button class="dictation-stop" title="Close the assistant panel" onClick={onCloseAssistant}>close</button>}
+        </div>
+      </header>
+      {assistantView}
+    </section>
+  }
   return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">
     <header>
+      {modeToggle}
       <span
         class={`dictation-phase ${conversation.phase}`}
         title={`${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null

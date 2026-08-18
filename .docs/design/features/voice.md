@@ -48,11 +48,27 @@ affect the PTY, session state, transcripts, history, or projects.
   strip), and verbatim never touches an LLM. Summary calls check the daily budget
   (`tts_daily_budget_usd`) before spending and need a model (`tts_summary_model` or the
   automation cheap model).
-- Engines: `edge` (edge-tts neural voices, e.g. `en-AU-NatashaNeural`, with rate/pitch and
-  optional `soften_stops` preprocessing that converts sentence-final periods to commas; MP3
-  output, three cold-call retries) and `sapi` (offline Windows `System.Speech` through a
-  generated PowerShell script; WAV output). Engine problems surface as typed unavailable/error
-  status; terminals are unaffected.
+- Engines: `sapi` (the OS voice — offline Windows `System.Speech` through a generated
+  PowerShell script; the default, because it speaks with no download and no network call) and
+  `kokoro` (Kokoro-82M int8 through a **direct onnxruntime session** — no wrapper library,
+  because every published Kokoro wrapper pulls a GPL espeak-ng payload). Both write WAV.
+  The network `edge` engine is removed (Phase 10.5): it redistributed LGPL code and made
+  unauthorized calls to a Microsoft endpoint; a config carrying `tts_engine = "edge"`
+  migrates to `sapi`.
+- **Kokoro's model is downloaded, never bundled** (`voice_models.py`): a pinned immutable
+  Hugging Face revision, per-file SHA-256 verified while streaming, with explicit
+  `not_downloaded → downloading → ready → error` state — a partial download can never be
+  loaded. Settings → Voice owns the download with visible progress
+  (`voice_model_progress` events); `kokoro` is selectable but reports itself unavailable
+  until the model is `ready`. English voices only, because the phonemizer is English-only.
+- **Phonemization is lexicon-only misaki with `fallback=None`, and no espeak-ng package may
+  enter the closure** (`kokoro_tts.py`). The engine refuses to construct if an espeak wrapper
+  is importable. Out-of-vocabulary words go through a repair ladder — project lexicon
+  respelling, compound splitter (camelCase, digits, hyphens, underscores), then spelling the
+  word out letter by letter — and every replacement is re-verified recursively, so no token is
+  ever silently dropped from speech. GPU execution providers (CUDA/DirectML) are used when
+  onnxruntime reports them; CPU int8 measures RTF ~0.55-0.7.
+  Engine problems surface as typed unavailable/error status; terminals are unaffected.
 
 ### Storage and playback
 
@@ -281,6 +297,14 @@ executed action — so that number is measured rather than estimated.
 
 ### Command grammar and submission
 
+- **Routing is three tiers.** Tier 1 is this deterministic grammar. Tier 2 is a conservative
+  token-level fuzzy pass over the same compiled phrases (`voiceFuzzy.ts`: positional token
+  alignment, an 0.78 similarity threshold, an ambiguity margin, and no `{text}` slot phrases —
+  a fuzzy-captured slot would turn a misheard word into a mis-*targeted* action), which
+  absorbs STT noise before an utterance costs a model call. Tier 3 is the Mux assistant
+  (`assistant.md`): a wake-word utterance neither tier matched becomes a conversation turn
+  instead of a spoken refusal, when the assistant is enabled. The reflex path never waits on
+  a model.
 - Commands are recognized only as an utterance **suffix**: a **wake word** followed by a
   known **command phrase** at the very end. Everything before it is buffered draft text, and
   commands accumulate across pauses. Both the wake words and the phrase→action mapping are
@@ -456,7 +480,10 @@ and never touches the daemon or an LLM.
 
 ## HTTP surface
 
-- `GET  /api/voice` — engine/STT availability, content/mode defaults, spend, cache stats.
+- `GET  /api/voice` — engine/STT availability, content/mode defaults, spend, cache stats,
+  and the Kokoro model state.
+- `GET|POST /api/voice/models/kokoro[/download]` — the pinned Kokoro download's state, and
+  starting it (idempotent while running; progress rides `voice_model_progress` events).
 - `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`.
   Whisper decodes from memory; the optional legacy SAPI engine uses bounded temporary files.
   Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and
@@ -477,17 +504,21 @@ and never touches the daemon or an LLM.
 
 ## Config knobs (`config.py`)
 
-`tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine`, `tts_edge_voice`/`_rate`/
-`_pitch`, `tts_soften_stops`, `tts_sapi_voice`/`_rate`, `tts_summary_model`,
+`tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine` (`sapi`/`kokoro`),
+`tts_kokoro_voice`/`_speed`, `tts_sapi_voice`/`_rate`, `tts_summary_model`,
 `tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget_usd`, `tts_cache_mb`;
 `stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
 `stt_routing_model` (spoken commands; blank falls back to the dictation model);
 `voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases).
+The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 
 ## Key files
 
 - `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`, the
   decode profiles, and the latency report helpers.
+- `src/swe_mux/kokoro_tts.py` — the direct-onnxruntime Kokoro engine, the espeak-free G2P
+  constraint, and the out-of-vocabulary repair ladder.
+- `src/swe_mux/voice_models.py` — the pinned, hash-verified Kokoro model download state machine.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.

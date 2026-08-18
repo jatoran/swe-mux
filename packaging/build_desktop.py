@@ -133,7 +133,31 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         cwd=ROOT,
         check=True,
     )
+    verify_no_gpl_av(output_root / "swe-mux")
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
+
+
+def verify_no_gpl_av(bundle_root: Path) -> None:
+    """Fail the build if PyAV's GPL FFmpeg payload re-entered the bundle.
+
+    Phase 10.5: the spec excludes `av` and satisfies faster-whisper with a
+    runtime stub. Regenerating the spec or upgrading PyInstaller can silently
+    undo that, and nothing at runtime would notice — the stub simply loses the
+    race to the real module. The bundle check is the regression gate.
+    """
+    internal = bundle_root / "_internal"
+    offenders = [
+        path
+        for path in (internal / "av.libs", internal / "av")
+        if path.exists()
+    ]
+    offenders += sorted(internal.glob("av/**/*.pyd")) if (internal / "av").exists() else []
+    if offenders:
+        raise SystemExit(
+            "GPL closure regression: PyAV was collected into the bundle "
+            f"({', '.join(str(item) for item in offenders[:3])}). The swe_mux.spec "
+            "excludes=['av'] plus rthook_av_stub.py must keep it out."
+        )
 
 
 def build_supervisor_bundle(*, force: bool = False) -> bool:

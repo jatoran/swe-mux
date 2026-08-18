@@ -3050,25 +3050,30 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
 
 ### Remove the GPL closure
 
-- [ ] Add an `av` stub and `--exclude-module av` to the PyInstaller spec, so `faster_whisper` imports cleanly with no FFmpeg present.
+- [x] Add an `av` stub and `--exclude-module av` to the PyInstaller spec, so `faster_whisper` imports cleanly with no FFmpeg present.
   Assert in a test that `av.libs` is absent from a built bundle, because this regresses silently the next time the spec is regenerated.
+  (Done: `packaging/rthook_av_stub.py` + `excludes=["av"]`; `build_desktop.verify_no_gpl_av` fails the build when PyAV re-enters, and `tests/test_kokoro_tts.py` pins the stub and the spec.)
 - [ ] Prove the STT path end to end on the built bundle rather than in the source checkout, since the source venv keeps its own working `av`.
 - [ ] Add a dependency-review gate that fails on a GPL or LGPL distribution entering the resolved closure without an explicit allowlist entry, with `pystray` as the only initial entry.
   The audit's whole lesson is that declared package metadata does not describe shipped binaries, so the gate must read the resolved closure.
 
 ### Replace the TTS engine
 
-- [ ] Add a `kokoro` engine behind the existing `tts_engine` seam in `voice.py`, alongside `edge` and `sapi`, producing the same clip contract into `<data_dir>/voice/` and `voice_clips`.
-- [ ] Drive the model through a direct onnxruntime session over the three-input interface; do not take a wrapper dependency.
-- [ ] Depend on base `misaki` plus `spacy` and `num2words` directly, construct the G2P with `fallback=None`, and add an import-time assertion that no espeak module is present.
-- [ ] Add the compound splitter and a project lexicon for the vocabulary the measurement found unresolved, with an unambiguous last resort (spell the word) so an unknown token is never silently dropped from speech.
-- [ ] Synthesize sentence by sentence and begin playback on the first clip, so perceived latency is the first sentence rather than the whole summary at RTF 0.5.
-- [ ] Remove `edge-tts` from the dependency set once `kokoro` and `sapi` cover both quality tiers, and migrate an existing `tts_engine: "edge"` config forward rather than failing on it.
-- [ ] Change the default `tts_engine` to the OS voice, and make `kokoro` selectable only once its model is present.
+- [x] Add a `kokoro` engine behind the existing `tts_engine` seam in `voice.py`, producing the same clip contract into `<data_dir>/voice/` and `voice_clips` (`kokoro_tts.py`).
+- [x] Drive the model through a direct onnxruntime session over the three-input interface; do not take a wrapper dependency.
+  (Verified live 2026-08-18 against the pinned files: RTF 0.56-0.67 CPU int8.)
+- [x] Depend on base `misaki` plus `spacy` and `num2words` directly, construct the G2P with `fallback=None`, and add a construction-time assertion that no espeak module is present.
+  (`en_core_web_sm` is pinned as an explicit dependency so the frozen bundle never pip-installs at import time.)
+- [x] Add the compound splitter and a project lexicon for the vocabulary the measurement found unresolved, with an unambiguous last resort (spell the word) so an unknown token is never silently dropped from speech.
+  (Replacements are re-verified recursively — the audit's own "pyproject" respelling produced "py", itself unresolvable.)
+- [x] Synthesize sentence by sentence and begin playback on the first clip, so perceived latency is the first sentence rather than the whole summary at RTF 0.5.
+  (The existing segmented-clip stream already provides this; kokoro synthesizes per segment.)
+- [x] Remove `edge-tts` from the dependency set once `kokoro` and `sapi` cover both quality tiers, and migrate an existing `tts_engine: "edge"` config forward rather than failing on it (schema 26).
+- [x] Change the default `tts_engine` to the OS voice, and make `kokoro` selectable only once its model is present.
 
 ### Model acquisition
 
-- [ ] Add a Voice settings surface that downloads the Kokoro weights and voices into the data directory with visible progress, pinned by immutable revision and per-file SHA-256, with explicit `not-downloaded` / `downloading` / `ready` / `error` state so a partial download can never be loaded.
+- [x] Add a Voice settings surface that downloads the Kokoro weights and voices into the data directory with visible progress, pinned by immutable revision and per-file SHA-256, with explicit `not-downloaded` / `downloading` / `ready` / `error` state so a partial download can never be loaded (`voice_models.py`, `KokoroModelPanel`).
 - [ ] Fold this into the same first-use-download inventory Phase 11 already owns for the Whisper model and the Silero VAD assets (`NEW_USER_RELEASE_READINESS.md`), rather than inventing a second mechanism.
 - [ ] Account for the G2P dependency weight (about 110 MB installed, mostly spaCy) as a deliberate bundle cost, against 66 MB removed with `av`.
   If it becomes a problem, the lever is a lighter lexicon-only G2P, not a return to espeak.
@@ -3089,9 +3094,9 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
 
 ### Docs, tests, and ship
 
-- [ ] Update `design/features/voice.md` (the engine set, the G2P constraint, the model download, the new default) and the audio quick reference in `.docs/CLAUDE.md`, which names edge-tts as the TTS path.
-- [ ] Update `design/features/desktop-shell.md` for the bundle contents that change, and `technical/backend/packages.md` for the new modules.
-- [ ] Backend tests: the `av` stub satisfies `faster_whisper`; the Kokoro engine produces a playable clip for the same inputs as the other engines; the G2P refuses to construct if an espeak module is importable; the splitter resolves the measured vocabulary; and a partial model download is rejected.
+- [x] Update `design/features/voice.md` (the engine set, the G2P constraint, the model download, the new default) and the audio quick reference in `.docs/CLAUDE.md`, which named edge-tts as the TTS path.
+- [ ] Update `design/features/desktop-shell.md` for the bundle contents that change; `technical/backend/packages.md` carries the new modules already.
+- [x] Backend tests: the `av` stub satisfies imports and refuses use; the G2P refuses to construct if an espeak module is importable; the splitter and lexicon resolve the measured vocabulary against the real espeak-free misaki; and a partial model download is rejected (`tests/test_kokoro_tts.py`).
 - [ ] Verify on the isolated daemon that read aloud works end to end with `edge-tts` uninstalled, then commit and redeploy.
 
 ### Phase 10.5 exit criteria
@@ -3200,14 +3205,15 @@ Day-one rules that make the adaptation clean: dual-form responses, confirmation 
 
 ### Implementation checklist
 
-- [ ] Daemon `assistant.py`: dialog store (SQLite, one worker thread, mirroring `voice_clips`), OpenRouter streaming client with tool calls, context assembly, trust-policy engine, budget ledger entry `builtin:assistant`, typed `AssistantError` diagnostics that never touch PTY/session/transcript state.
-- [ ] Tool bridge: daemon-side read tools over existing read models; `run_command` proposals delivered to the turn's originating device over the event stream; deterministic name resolution with candidate lists.
-- [ ] HTTP/WS surface: create/continue/interrupt a dialog turn, stream events (tokens, sentence boundaries, tool status, action proposals, confirmation state), confirm/cancel a pending action, dialog history read.
-- [ ] Frontend: conversation view in the voice overlay (toggleable, taller), streaming renderer, confirmation cards, UI-action executor over the command registry, tier-2 fuzzy matcher in front of the assistant fallback, follow-up window, earcons, TTS attachment via the existing application-speech path.
-- [ ] Config: `assistant_enabled`, `assistant_model`, `assistant_daily_budget_usd`, `assistant_max_context_kb`, per-action-class trust levels.
-- [ ] Logging: every turn, tool call, resolution, confirmation, and refusal logged with dialog and turn ids; latency stages recorded like the STT stage breakdown.
-- [ ] Tests: tool-bridge resolution and refusal paths, trust-policy classes, dialog-state expiry, context assembly bounds, dual-form response contract, streaming event order; frontend tests for the conversation view and confirmation cards.
-- [ ] Docs: new `design/features/assistant.md`, routing-table entry, `design/features/voice.md` cross-reference, `design/interfaces.md` endpoints, `technical/backend/packages.md` module entry.
+- [x] Daemon `assistant.py`: dialog store (SQLite, one worker thread, mirroring `voice_clips`), the bounded OpenRouter tool-calling loop (`openrouter.complete_tools`), context assembly, trust-policy engine, budget ledger entry `builtin:assistant`, typed `AssistantError` diagnostics that never touch PTY/session/transcript state.
+  Streaming is sentence-granular by design here: each model call's text is emitted as `assistant_sentence` events (the seam token streaming later fills in), and the tool loop already delivers incrementally across calls.
+- [x] Tool bridge: daemon-side read tools over existing read models; `run_ui_command` proposals delivered to the turn's originating device over the event stream with bounded acknowledgement; deterministic name resolution with candidate lists.
+- [x] HTTP surface: create/continue/interrupt a dialog turn, events (sentence boundaries, tool status, typed action/confirmation state), confirm/cancel a pending action, dialog history read.
+- [x] Frontend: conversation view in the voice overlay (toggleable `talk`/`chat`, taller), streaming renderer, confirmation cards with the cancel-window countdown, UI-action executor over the command registry, tier-2 fuzzy matcher (`voiceFuzzy.ts`) in front of the assistant fallback, follow-up window, earcons, TTS attachment via the existing application-speech path.
+- [x] Config: `assistant_enabled`, `assistant_model`, `assistant_daily_budget_usd`, `assistant_max_output_tokens`, `assistant_context_messages`, `assistant_trust_reversible` (the consequential confirm floor is fixed).
+- [x] Logging: turns, tool calls, resolutions, confirmations, and refusals logged with dialog and turn ids plus per-turn call/token/cost/elapsed totals.
+- [x] Tests: tool-bridge resolution and refusal paths, trust-policy classes, restart action expiry, budget refusal, UI dispatch acknowledgement, dual-form helpers, event reducer, fuzzy tier (`tests/test_assistant.py`, `frontend/test/assistantEvents.test.ts`, `frontend/test/voiceFuzzy.test.ts`).
+- [x] Docs: new `design/features/assistant.md`, routing-table entry, `design/features/voice.md` tier cross-reference, `design/interfaces.md` endpoints, backend and frontend `packages.md` entries.
 
 ### Phase 10.6 exit criteria
 

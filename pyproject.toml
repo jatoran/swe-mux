@@ -6,19 +6,23 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "aiohttp>=3.11",
-  "edge-tts>=7.0",
+  "en-core-web-sm",
   "faster-whisper>=1.2",
   # Pillow is not a Windows feature: Project image presentation is the same
   # capability on every target and Pillow ships wheels for all of them. It was
   # marked win32 only while Windows was the sole host, which then made
   # `project_files` unimportable everywhere else. Its absence is still handled as
   # a degraded capability rather than an import error.
+  "misaki>=0.9.4",
+  "num2words>=0.5.14",
+  "onnxruntime>=1.27.0",
   "pillow>=11.0",
   "psutil>=6.1",
   "pywebpush>=2.0",
   # Genuinely Windows-only: there is no ConPTY anywhere else. The POSIX target
   # uses the stdlib `pty` module, which needs no third-party dependency.
   "pywinpty>=3.0.2; sys_platform == 'win32'",
+  "spacy>=3.8.15",
   "tree-sitter>=0.23",
   "tree-sitter-language-pack>=0.7",
   # Windows ships no IANA timezone database, so `zoneinfo.ZoneInfo("Europe/Oslo")`
@@ -115,3 +119,6 @@ module = [
   "swe_mux.win_jobobj",
 ]
 ignore_errors = true
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

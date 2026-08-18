@@ -445,8 +445,11 @@ def test_new_user_voice_defaults_are_neutral_and_off(tmp_path: Any) -> None:
     config = Config(data_dir=tmp_path)
     # STT off so a fresh install never downloads the Whisper model unprompted.
     assert config.stt_enabled is False
-    # A neutral en-US voice rather than one operator's locale.
-    assert config.tts_edge_voice == "en-US-JennyNeural"
+    # The OS voice speaks with no download and no network call; Kokoro is a
+    # deliberate choice once its pinned model is downloaded (Phase 10.5).
+    assert config.tts_engine == "sapi"
+    # The assistant is a model-cost feature and starts off like every other.
+    assert config.assistant_enabled is False
 
 
 def test_instrumentation_toggles_default_empty_and_are_restart_scoped(tmp_path: Any) -> None:

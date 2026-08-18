@@ -35,7 +35,6 @@ from swe_mux.voice import (
     latency_stages,
     normalize_latency_sample,
     percentile,
-    soften_stops,
     speechify,
     streaming_segments,
 )
@@ -219,13 +218,15 @@ def patch_engine(service: VoiceService, *, fail: str | None = None) -> list[str]
 
 def test_voice_config_fields_validate_and_hot_apply(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
-    hot, restart = update_config(config, {"tts_enabled": True, "tts_engine": "sapi"})
+    hot, restart = update_config(config, {"tts_enabled": True, "tts_engine": "kokoro"})
     assert restart == set()
     assert {"tts_enabled", "tts_engine"} <= hot
     with pytest.raises(ValueError, match="tts_engine"):
         update_config(config, {"tts_engine": "espeak"})
-    with pytest.raises(ValueError, match="tts_edge_rate"):
-        update_config(config, {"tts_edge_rate": "fast"})
+    with pytest.raises(ValueError, match="tts_kokoro_speed"):
+        update_config(config, {"tts_kokoro_speed": 9.0})
+    with pytest.raises(ValueError, match="tts_kokoro_voice"):
+        update_config(config, {"tts_kokoro_voice": "Robot Voice!"})
     with pytest.raises(ValueError, match="tts_default_mode"):
         update_config(config, {"tts_default_mode": "always"})
     with pytest.raises(ValueError, match="tts_sapi_rate"):
@@ -245,8 +246,7 @@ def test_speechify_strips_markdown_and_truncates() -> None:
     assert len(long) <= 220 and long.endswith("… reply truncated.")
 
 
-def test_soften_stops_shortens_sentence_pauses() -> None:
-    assert soften_stops("Done. Next step. Ready?") == "Done, Next step, Ready?"
+def test_estimate_duration_is_positive_for_ordinary_text() -> None:
     assert estimate_duration_seconds("one two three four five six", "+0%") > 0
 
 
@@ -373,7 +373,7 @@ async def test_summary_budget_exhaustion_fails_closed(tmp_path: Path) -> None:
 async def test_engine_failure_records_failed_clip(tmp_path: Path) -> None:
     service, _events, emitted, _record = make_service(tmp_path, content="verbatim")
     write_transcript(service, REPLY_EVENTS)
-    patch_engine(service, fail="edge-tts failed after retries: boom")
+    patch_engine(service, fail="Kokoro synthesis failed: boom")
     try:
         with pytest.raises(VoiceError, match="boom"):
             await service.generate("s1", trigger="manual")

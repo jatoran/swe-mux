@@ -201,6 +201,13 @@
 - Changing read aloud or hands-free conversation: `design/features/voice.md`;
   completed voice-interaction phases and their decisions:
   `development/archive/VOICE_INTERACTION_ROADMAP.md`
+- Changing the Mux assistant (the chat surface, the tool bridge, the trust policy, the
+  voice fallback tiers, or its dialogs/actions): `design/features/assistant.md`,
+  `design/features/voice.md`, `design/interfaces.md`, `technical/backend/packages.md`,
+  `technical/frontend/packages.md`; the plan: `development/ROADMAP.md` Phase 10.6.
+  The rule the design enforces: the model proposes names, deterministic code resolves and
+  executes through existing paths, and the consequential-action confirmation floor is not
+  configurable.
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
@@ -215,7 +222,8 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
 
 - **Read aloud (TTS):** `turn_ended` (auto, 1s debounce) or manual → last-turn slice →
   `summary` (OpenRouter cheap model, budgeted under `builtin:voice-summary`) or `verbatim`
-  (`speechify`, no LLM) → edge-tts MP3 / Windows SAPI WAV clips in `<data_dir>/voice/` +
+  (`speechify`, no LLM) → OS-voice (SAPI) or local Kokoro-82M (onnxruntime; pinned
+  hash-verified download, espeak-free misaki G2P) WAV clips in `<data_dir>/voice/` +
   `voice_clips` SQLite.
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
@@ -248,6 +256,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.
   `voiceQueries.ts` adds the non-configurable deterministic query grammar for help, scoped fleet lists/status, numbered navigation, and one-shot summary/verbatim reply reading.
+  Routing is three tiers: this deterministic grammar, a conservative fuzzy pass (`voiceFuzzy.ts`), and — only on no-match, only when enabled — the Mux assistant (`design/features/assistant.md`), whose replies render in the voice panel's `chat` mode and speak through the application-speech path.
 
 **Mobile mic needs HTTPS (secure context).** swe-mux runs **Tailscale Serve on 443**
 (`https://<device>.ts.net/`) proxying to the daemon's loopback port — auto-started at boot

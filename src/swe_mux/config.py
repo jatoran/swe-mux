@@ -72,7 +72,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -826,6 +826,26 @@ class Config:
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
+    # Phase 10.6 Mux assistant: the conversational operator behind the voice
+    # grammar's tier-3 fallback and the workspace chat surface. Off by default
+    # like every model-cost feature; the model slot is configurable with a
+    # verified tool-calling default, and spend is capped by its own daily
+    # budget under the `builtin:assistant` ledger rule.
+    assistant_enabled: bool = False
+    assistant_model: str = "openai/gpt-5.6-terra"
+    assistant_daily_budget_usd: float = 2.0
+    assistant_max_output_tokens: int = 700
+    # How many stored dialog messages one turn's prompt may carry. The fleet
+    # snapshot and command catalog ride every turn regardless; this bounds only
+    # conversational memory so a days-old dialog cannot grow the prompt without
+    # limit.
+    assistant_context_messages: int = 30
+    # Trust for the reversible action class (queue a message, append to a note,
+    # spawn a session): `auto` executes silently, `cancel_window` announces and
+    # waits a short grace period, `confirm` requires an explicit confirmation.
+    # The consequential class (send-now, interrupt, end session) always
+    # confirms and is deliberately not configurable below that.
+    assistant_trust_reversible: str = "cancel_window"
     observer_titler_enabled: bool = False
     # Phase 7.7 retired the turn summarizer; the scan timeline is the single
     # behavioral-summary producer. A config predating the removal still carries
@@ -836,14 +856,17 @@ class Config:
     tts_enabled: bool = False
     tts_default_mode: str = "off"
     tts_content: str = "summary"
-    tts_engine: str = "edge"
-    # A neutral en-US default rather than a locale-specific voice, so every new
-    # user gets a sensible voice without an accent chosen for one operator. TTS is
-    # off by default, so this only matters once a user turns it on.
-    tts_edge_voice: str = "en-US-JennyNeural"
-    tts_edge_rate: str = "+10%"
-    tts_edge_pitch: str = "+0Hz"
-    tts_soften_stops: bool = True
+    # The OS voice is the default because it speaks with no download and no
+    # network call; `kokoro` is the quality tier, selectable once its pinned
+    # model has been downloaded (Phase 10.5). The network `edge` engine is gone:
+    # it redistributed LGPL code and made unauthorized calls to a Microsoft
+    # endpoint from every install. A config carrying `edge` migrates to `sapi`.
+    tts_engine: str = "sapi"
+    # Kokoro-82M through onnxruntime. The voice must be one of the downloaded
+    # English voice vectors; existence is enforced at synthesis time so config
+    # loading never depends on model files.
+    tts_kokoro_voice: str = "af_heart"
+    tts_kokoro_speed: float = 1.0
     tts_sapi_voice: str = ""
     tts_sapi_rate: int = 0
     tts_summary_model: str = ""
@@ -1247,18 +1270,26 @@ def _validate(config: Config) -> None:
         errors["attention_narration_max_output_tokens"] = "must be between 32 and 2048"
     if not 1 <= config.openrouter_request_timeout_seconds <= 120:
         errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
+    if not config.assistant_model.strip() or len(config.assistant_model) > 200:
+        errors["assistant_model"] = "must be an exact OpenRouter model id"
+    if not 0 <= config.assistant_daily_budget_usd <= 1_000:
+        errors["assistant_daily_budget_usd"] = "must be between 0 and 1000"
+    if not 128 <= config.assistant_max_output_tokens <= 8_192:
+        errors["assistant_max_output_tokens"] = "must be between 128 and 8192"
+    if not 2 <= config.assistant_context_messages <= 200:
+        errors["assistant_context_messages"] = "must be between 2 and 200"
+    if config.assistant_trust_reversible not in {"auto", "cancel_window", "confirm"}:
+        errors["assistant_trust_reversible"] = "must be auto, cancel_window, or confirm"
     if config.tts_default_mode not in {"off", "on_demand", "auto"}:
         errors["tts_default_mode"] = "must be off, on_demand, or auto"
     if config.tts_content not in {"summary", "verbatim"}:
         errors["tts_content"] = "must be summary or verbatim"
-    if config.tts_engine not in {"edge", "sapi"}:
-        errors["tts_engine"] = "must be edge or sapi"
-    if not config.tts_edge_voice.strip():
-        errors["tts_edge_voice"] = "must name an edge-tts voice, e.g. en-US-JennyNeural"
-    if not re.fullmatch(r"[+-]\d{1,3}%", config.tts_edge_rate):
-        errors["tts_edge_rate"] = "must look like +10% or -5%"
-    if not re.fullmatch(r"[+-]\d{1,3}Hz", config.tts_edge_pitch):
-        errors["tts_edge_pitch"] = "must look like +0Hz or -20Hz"
+    if config.tts_engine not in {"sapi", "kokoro"}:
+        errors["tts_engine"] = "must be sapi (the OS voice) or kokoro"
+    if not re.fullmatch(r"[a-z]{2}_[a-z]+", config.tts_kokoro_voice):
+        errors["tts_kokoro_voice"] = "must be a Kokoro voice id such as af_heart"
+    if not 0.5 <= config.tts_kokoro_speed <= 2.0:
+        errors["tts_kokoro_speed"] = "must be between 0.5 and 2.0"
     if not -10 <= config.tts_sapi_rate <= 10:
         errors["tts_sapi_rate"] = "must be between -10 and 10"
     if not 64 <= config.tts_summary_max_tokens <= 2000:
@@ -1632,6 +1663,12 @@ def load_config(path: Path | None = None) -> Config:
                 if key not in raw or raw[key] == legacy:
                     setattr(cfg, key, Config.__dataclass_fields__[key].default)
                     migrated = True
+        if source_schema < 26 and raw.get("tts_engine") == "edge":
+            # Phase 10.5 removed the network edge-tts engine (LGPL payload,
+            # unauthorized Microsoft endpoint). The OS voice is the engine that
+            # always works with no download, so an `edge` config lands there;
+            # Kokoro stays a deliberate choice once its model is downloaded.
+            cfg.tts_engine = "sapi"
         if source_schema < 22 and "harness_setup_complete" not in raw:
             # The first-run harness panel is new. An existing config is by definition
             # not a first run, so mark setup complete on upgrade; only a brand-new
