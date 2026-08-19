@@ -193,6 +193,27 @@ def test_check_respelling_mirrors_what_the_ladder_would_speak(tmp_path: Path) ->
     assert link["ok"] is True and link["unspeakable"] == []
 
 
+def test_build_respelling_links_only_the_unpronounceable_pieces(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._g2p = FakeG2P()
+    # Known words pass through as text; the OOV piece becomes an exact link.
+    built = engine.build_respelling("swe", "swee tree")
+    assert built["ok"] is True
+    assert built["value"] == "[swee](/swˈi/) tree"
+    # An empty value reads the word itself as its phonetic spelling — the
+    # zero-typing path for the "words I had to spell" list.
+    built = engine.build_respelling("swemux", "")
+    assert built["ok"] is True
+    assert built["value"] == "[swemux](/swˈɛmʌks/)"
+    # A fully pronounceable value is returned unchanged.
+    built = engine.build_respelling("x", "work tree")
+    assert built["ok"] is True and built["value"] == "work tree"
+    # Unmappable input is a verdict, not a guess.
+    built = engine.build_respelling("x", "it's")
+    assert built["ok"] is False and built["value"] is None
+    assert "it's" in str(built["diagnostic"])
+
+
 def test_audition_report_suppression_keeps_telemetry_clean(tmp_path: Path) -> None:
     reported: list[str] = []
     engine = make_engine(tmp_path, on_spell_out=reported.append)
@@ -394,3 +415,9 @@ def test_real_g2p_phoneme_links_and_punctuated_lexicon_hits() -> None:
     assert "[swe](/swˈi/)" in prepared
     phonemes, _tokens = engine._ensure_g2p()(prepared)
     assert kokoro_tts.UNKNOWN_TOKEN not in phonemes
+    # The builder turns the user's own failed spelling into a passing link.
+    built = engine.build_respelling("swe", "swee")
+    assert built["ok"] is True and built["value"] == "[swee](/swˈi/)"
+    built = engine.build_respelling("chronotron", "")
+    assert built["ok"] is True
+    assert str(built["value"]).startswith("[chronotron](/")

@@ -1494,7 +1494,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             />
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
             <h4>Pronunciation</h4>
-            <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). A respelling must itself be pronounceable — real dictionary words, or the exact-phoneme form <code>{'[word](/phonemes/)'}</code> (e.g. <code>{'[swe](/swˈi/)'}</code> says “swee”). Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix.</p>
+            <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Spell the sound with plain letters — if it isn't a real word (<code>swee</code>), tap ✨ and the exact phonemes are built for you; you never have to write them by hand. Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix — ✨ there with an empty box pronounces the word the way it reads.</p>
             <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
           </>}
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
@@ -1910,6 +1910,18 @@ function TtsLexiconEditor({lexicon,spelled,onChange}:{
     audioRef.current=audio
     void audio.play().catch(()=>{})
   }
+  const [buildError,setBuildError]=useState<string|null>(null)
+  // The phoneme builder: the daemon derives an exact [word](/phonemes/) value
+  // from a plain spelled-how-it-sounds input (or from the word itself when the
+  // input is empty), so nobody has to type IPA by hand.
+  const build=async(word:string,value:string):Promise<string|null>=>{
+    setBuildError(null)
+    try{
+      const result=await api<{ok:boolean;value?:string|null;diagnostic?:string|null}>('POST','/api/voice/lexicon/build',{word,value})
+      if(!result.ok||!result.value){setBuildError(result.diagnostic||'Could not build a pronunciation from that spelling.');return null}
+      return result.value
+    }catch(cause){setBuildError(cause instanceof Error?cause.message:String(cause));return null}
+  }
   const verdict=(word:string):LexiconVerdict|null=>check?.available?check.results[word]??null:null
   const add=(word:string,spoken:string)=>{
     const key=word.trim().toLowerCase();const value=spoken.trim()
@@ -1926,24 +1938,28 @@ function TtsLexiconEditor({lexicon,spelled,onChange}:{
           <code>{word}</code>
           <input aria-label={`Pronunciation for ${word}`} value={spoken} onInput={e=>onChange({...lexicon,[word]:e.currentTarget.value})}/>
           {state&&<span class={`tts-lexicon-verdict ${state.ok?'ok':'bad'}`} title={state.ok?(state.phonemes?`Speaks as written · ${state.phonemes}`:'Speaks as written'):'This respelling would be rejected and the word spelled out'}>{state.ok?'✓':'✗'}</span>}
+          {state&&!state.ok&&<button type="button" title="Build exact phonemes from this spelling" onClick={()=>void build(word,spoken).then(value=>{if(value)onChange({...lexicon,[word]:value})})}>✨</button>}
           <button type="button" title="Hear this pronunciation" onClick={()=>hear(spoken)}>♪</button>
           <button type="button" title={`Remove ${word}`} onClick={()=>{const next={...lexicon};delete next[word];onChange(next)}}>✕</button>
         </div>
-        {state&&!state.ok&&<p class="tts-lexicon-hint">{state.unspeakable?.length?<>Not pronounceable: {state.unspeakable.map(piece=><code key={piece}>{piece}</code>)} — use dictionary words, or the exact-phoneme form <code>{'[word](/phonemes/)'}</code>.</>:<>This respelling cannot be pronounced as written.</>}</p>}
+        {state&&!state.ok&&<p class="tts-lexicon-hint">{state.unspeakable?.length?<>Not pronounceable: {state.unspeakable.map(piece=><code key={piece}>{piece}</code>)} — tap ✨ to build the exact phonemes from this spelling.</>:<>This respelling cannot be pronounced as written.</>}</p>}
       </Fragment>
     })}
     <div class="tts-lexicon-row">
       <input placeholder="word" aria-label="New lexicon word" value={newWord} onInput={e=>setNewWord(e.currentTarget.value)}/>
       <input placeholder="spoken as… e.g. vault spaces" aria-label="New lexicon pronunciation" value={newSpoken} onInput={e=>setNewSpoken(e.currentTarget.value)}/>
+      <button type="button" title="Build exact phonemes from the spelling (uses the word itself if blank)" disabled={!newWord.trim()&&!newSpoken.trim()} onClick={()=>void build(newWord,newSpoken).then(value=>{if(value)setNewSpoken(value)})}>✨</button>
       <button type="button" title="Hear this pronunciation" disabled={!newSpoken.trim()} onClick={()=>hear(newSpoken)}>♪</button>
       <button type="button" disabled={!newWord.trim()||!newSpoken.trim()} onClick={()=>{add(newWord,newSpoken);setNewWord('');setNewSpoken('')}}>Add</button>
     </div>
+    {buildError&&<p class="tts-lexicon-hint tts-lexicon-error" role="alert">{buildError}</p>}
     {check&&!check.available&&<p class="tts-lexicon-hint">{check.diagnostic||'Pronunciation checking needs the Kokoro model.'}</p>}
     {!!pending.length&&<div class="tts-lexicon-spelled">
       <h5>Words the voice had to spell out</h5>
       {pending.map(item=><div class="tts-lexicon-row" key={item.word}>
         <code>{item.word}</code><small>×{item.count}</small>
         <input placeholder="spoken as…" aria-label={`Respell ${item.word}`} value={respell[item.word]??''} onInput={e=>{const value=e.currentTarget.value;setRespell(current=>({...current,[item.word]:value}))}}/>
+        <button type="button" title="Build exact phonemes (from your spelling, or from the word itself if blank)" onClick={()=>void build(item.word,respell[item.word]||'').then(value=>{if(value)setRespell(current=>({...current,[item.word]:value}))})}>✨</button>
         <button type="button" title="Hear this pronunciation" disabled={!(respell[item.word]||'').trim()} onClick={()=>hear(respell[item.word]||'')}>♪</button>
         <button type="button" disabled={!(respell[item.word]||'').trim()} onClick={()=>add(item.word,respell[item.word]||'')}>Respell</button>
       </div>)}

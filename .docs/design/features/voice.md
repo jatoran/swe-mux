@@ -100,6 +100,18 @@ affect the PTY, session state, transcripts, history, or projects.
   lexicon**: `_WORD` absorbs `'_.-` tails, so a sentence-final `vaultspaces.` resolves its
   core against the `vaultspaces` entry and keeps the tail for prosody; the floor reports
   the core, not the punctuated token.
+- **Nobody types phonemes by hand: the ✨ builder derives them from a phonetic spelling**
+  (`phonics.py` + `KokoroEngine.build_respelling`, `POST /api/voice/lexicon/build`). The
+  user spells the sound with plain letters ("swee", "kroh no tron" — or nothing, in which
+  case the word itself is read as its own phonetic spelling) and deterministic English
+  phonics rules — longest-match grapheme teams, silent-final-e lengthening, doubled-consonant
+  collapse, first-vowel stress — emit misaki phonemes from a fixed alphabet verified against
+  the pinned Kokoro tokenizer vocabulary. Pieces the G2P already knows pass through as text;
+  only unknown pieces become links, and the result is re-checked with the real machinery
+  before it is offered. Deliberately rule-based, not a trained model: no new dependency
+  (espeak-ng stays banned), offline, and the same input always builds the same phonemes —
+  the user tunes by ear with the ♪ audition, so predictability beats cleverness. Unmappable
+  input (digits, apostrophes) is a reported verdict, never a guess.
 
 ### Storage and playback
 

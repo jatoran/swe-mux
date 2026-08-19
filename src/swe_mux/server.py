@@ -966,6 +966,7 @@ def create_app(
             web.post("/api/voice/models/kokoro/download", kokoro_model_download),
             web.get("/api/voice/models/kokoro/preview", kokoro_voice_preview),
             web.post("/api/voice/lexicon/check", voice_lexicon_check),
+            web.post("/api/voice/lexicon/build", voice_lexicon_build),
             web.get("/api/voice/lexicon/preview", voice_lexicon_preview),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
             web.post("/api/voice/transcribe", voice_transcribe),
@@ -4015,7 +4016,19 @@ def _prompt_project(request: web.Request, body: dict[str, Any] | None = None):  
 
 
 async def list_prompts(request: web.Request) -> web.Response:
-    return json_response(request.app["prompt_library"].list(_prompt_project(request)))
+    # `all_projects=1` is the management view: it reads every registered Project's
+    # library so templates can be found and edited without first focusing their
+    # Project. It is opt-in because the default listing is also what the Action
+    # layout pins from, and that must stay confined to the focused Project.
+    others: list[ProjectRecord] = []
+    if request.query.get("all_projects") in {"1", "true"}:
+        others = sorted(
+            request.app["projects"].projects.values(),
+            key=lambda item: (item.position, item.name.casefold()),
+        )
+    return json_response(
+        request.app["prompt_library"].list(_prompt_project(request), other_projects=others)
+    )
 
 
 async def create_prompt(request: web.Request) -> web.Response:
@@ -9800,6 +9813,26 @@ async def voice_lexicon_check(request: web.Request) -> web.Response:
         return json_response(await voice.check_lexicon(body.get("entries")))
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 400)
+
+
+async def voice_lexicon_build(request: web.Request) -> web.Response:
+    """Derive an exact-pronunciation lexicon value from a phonetic spelling.
+
+    `{word, value}` → `{ok, value, phonemes, diagnostic}`. An empty value reads
+    the word itself as its phonetic spelling. Failure to build is a verdict in
+    a 200, not an HTTP error — the editor shows the diagnostic inline.
+    """
+    voice: VoiceService = request.app["voice"]
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("lexicon build body must be an object")
+    try:
+        result = await voice.build_lexicon_entry(
+            body.get("word") or "", body.get("value") or ""
+        )
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(result)
 
 
 async def voice_lexicon_preview(request: web.Request) -> web.Response:

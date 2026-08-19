@@ -507,6 +507,46 @@ class KokoroEngine:
             "unspeakable": unspeakable,
         }
 
+    def build_respelling(self, word: str, value: str) -> dict[str, Any]:
+        """Derive a ladder-accepted value from a phonetic spelling.
+
+        The user types how the word sounds (or nothing, in which case the word
+        itself is read as its own phonetic spelling); every piece the G2P
+        already knows passes through as text, and each unknown piece becomes an
+        exact ``[piece](/phonemes/)`` link via the deterministic phonics rules.
+        The result is re-checked with the real machinery before it is offered.
+        """
+        from .phonics import phonetic_to_phonemes
+
+        source = value.strip() or word.strip()
+        if not source:
+            return {"ok": False, "value": None, "diagnostic": "nothing to build from"}
+        pieces: list[str] = []
+        with self._lock:
+            for piece in replacement_pieces(source):
+                if PHONEME_LINK.fullmatch(piece) or self._word_resolves(piece):
+                    pieces.append(piece)
+                    continue
+                phonemes = phonetic_to_phonemes(piece)
+                if phonemes is None:
+                    return {
+                        "ok": False,
+                        "value": None,
+                        "diagnostic": (
+                            f"could not derive phonemes for “{piece[:40]}” — "
+                            "spell it with plain letters, the way it sounds"
+                        ),
+                    }
+                pieces.append(f"[{piece}](/{phonemes}/)")
+        built = " ".join(pieces)
+        verdict = self.check_respelling(word, built)
+        return {
+            "ok": bool(verdict["ok"]),
+            "value": built,
+            "phonemes": verdict["phonemes"],
+            "diagnostic": None if verdict["ok"] else "the built value still fails verification",
+        }
+
     def prepare_text(self, text: str, report: bool = True) -> str:
         """Rewrite any word the lexicon-only G2P cannot resolve.
 

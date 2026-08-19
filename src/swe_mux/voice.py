@@ -1034,6 +1034,27 @@ class VoiceService:
             )
         return {"available": True, "diagnostic": None, "results": results}
 
+    async def build_lexicon_entry(self, word: Any, value: Any) -> dict[str, Any]:
+        """Build an exact-pronunciation value from a phonetic spelling.
+
+        The editor's escape hatch for users who can neither type IPA nor find
+        dictionary words for a sound: the phonics rules derive the phoneme
+        link, and the caller auditions the result rather than trusting it.
+        """
+        if not isinstance(word, str) or not isinstance(value, str):
+            raise VoiceError("word and value must be strings")
+        if len(word) > 60 or len(value) > 200:
+            raise VoiceError("word must be at most 60 characters and value at most 200")
+        if not self.kokoro_models.ready():
+            raise VoiceError(
+                "the Kokoro voice model is not downloaded; download it in "
+                "Settings → Voice first"
+            )
+        engine = self._ensure_kokoro()
+        return await asyncio.to_thread(
+            engine.build_respelling, word.strip().casefold(), value
+        )
+
     async def lexicon_preview(self, text: str) -> bytes:
         """Audition one respelling with the configured Kokoro voice.
 

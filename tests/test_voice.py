@@ -266,6 +266,12 @@ async def test_lexicon_check_and_preview_guard_their_inputs(tmp_path: Path) -> N
         await service.lexicon_preview("x" * 201)
     with pytest.raises(VoiceError, match="not downloaded"):
         await service.lexicon_preview("vault spaces")
+    with pytest.raises(VoiceError, match="strings"):
+        await service.build_lexicon_entry("swe", 7)
+    with pytest.raises(VoiceError, match="at most 60"):
+        await service.build_lexicon_entry("x" * 61, "swee")
+    with pytest.raises(VoiceError, match="not downloaded"):
+        await service.build_lexicon_entry("swe", "swee")
 
 
 def test_apply_lexicon_invalidates_every_kokoro_cache(tmp_path: Path) -> None:
