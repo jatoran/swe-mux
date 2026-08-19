@@ -87,6 +87,7 @@ field the bus lifts out of the payload) and the device reports back through the 
 The assistant is text-first and voice-attached, not voice-only:
 
 - In the voice overlay, a `talk`/`chat` mode toggle switches the same floating panel between the dictation draft and the conversation view (`AssistantPanel`); the chat is also reachable with the microphone off (`assistant.toggle`).
+  **Chat is the default mode** (device-local, persisted; a deliberate switch sticks): the assistant lane is the primary one, and talk — free, deterministic, model-less — stays one tab away as the degradation path for budget exhaustion, provider outages, and verbatim dictation. Talk mode is deliberately not removed: the tier-1 grammar it carries is load-bearing inside chat mode too ("Mux, stop", confirm/cancel, navigation), and the assistant's composer tools execute through the same acknowledged terminal path.
   Chat mode is bounded to roughly half the viewport — a dialog consulted beside the terminals, never a takeover — and collapses to its header (device-local, persisted); the collapsed body stays mounted so streaming, card speech, and earcons keep working while folded.
 - **Thinking out loud is not answered at every pause.** Two deterministic client mechanisms
   (both in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the

@@ -2228,7 +2228,17 @@ export function App() {
   // ---- Mux assistant (Phase 10.6): tier 3 behind the grammar, plus the chat view ----
   const [assistantInfo,setAssistantInfo]=useState<AssistantStatus|null>(null)
   const [assistantOpen,setAssistantOpen]=useState(false)
-  const [voicePanelMode,setVoicePanelMode]=useState<VoicePanelMode>('dictation')
+  // Chat is the default addressee: the assistant lane is the one people reach
+  // for, while talk (the free deterministic dictation draft) stays one tab away
+  // as the degradation path for budget exhaustion, outages, or verbatim
+  // dictation. Device-local and persisted, so a deliberate switch sticks.
+  const [voicePanelMode,setVoicePanelModeState]=useState<VoicePanelMode>(()=>{
+    try{const saved=localStorage.getItem('mux.voice.panelMode');return saved==='dictation'||saved==='chat'?saved:'chat'}catch{return 'chat'}
+  })
+  const setVoicePanelMode=(mode:VoicePanelMode)=>{
+    setVoicePanelModeState(mode)
+    try{localStorage.setItem('mux.voice.panelMode',mode)}catch{/* private mode */}
+  }
   useEffect(()=>{void assistantStatus().then(setAssistantInfo).catch(()=>setAssistantInfo(null))},[])
   const assistantContextRef=useRef<AssistantClientContext>({})
   assistantContextRef.current={
