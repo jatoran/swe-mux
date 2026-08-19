@@ -165,6 +165,7 @@ from .preview_capture import (
     capture_available,
     capture_loopback,
 )
+from .preview_store import PreviewStore
 from .process_reaper import create_reaper
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import find_profile, profile_payload, resolve_agent_profile, resolve_profile
@@ -1334,7 +1335,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         cadence=config.ghost_window_poll_seconds,
         enabled=config.ghost_window_sweep_enabled,
     )
-    previews = PreviewRegistry(process_inspector, sessions)
+    previews = PreviewRegistry(
+        process_inspector, sessions, store=PreviewStore(config.data_dir)
+    )
     fleet = FleetIntelligence(
         sessions, events, automation_store, process_inspector, previews, config
     )
@@ -2492,6 +2495,58 @@ def _redeploy_lock_pid(config: Config) -> int | None:
     return pid if psutil.pid_exists(pid) else None
 
 
+#: Said in the same breath as the interruption list, every time. The reflex when
+#: a redeploy is announced is to assume it will take your dev server with it, and
+#: the reflex after that is to start killing things defensively. It will not:
+#: `stop_app_processes` targets the app's own image, and even the blunt
+#: `force_stop_app_images` escalation is scoped to `swe-mux.exe`.
+REDEPLOY_INTERRUPTION_NOTE = (
+    "Your servers keep running - a redeploy never stops them. Only swe-mux's proxy "
+    "to them restarts, so these URLs are unreachable until the app is back."
+)
+
+
+def _redeploy_interruptions(request: web.Request) -> dict[str, Any]:
+    """What a redeploy would make unreachable, without stopping anything.
+
+    Read straight off the in-memory registry rather than through
+    `PreviewRegistry.list`, which forces a process scan: this runs on the accept
+    path and on every status poll, and an answer that is one detection cycle
+    stale is worth far more than one that costs a scan.
+
+    Reported, never enforced. Refusing a redeploy because a port is open would
+    make it nearly un-runnable - there is almost always a dev server up - and
+    redeploy is the only mechanism that ships anything, including the fix for a
+    gate that refuses wrongly. The genuine blocker (a process anchoring the
+    bundle, which really does fail the swap) is a separate, existing refusal.
+    """
+    previews: PreviewRegistry | None = request.app.get("previews")
+    items = []
+    if previews is not None:
+        items = [
+            {
+                "id": item.id,
+                "url": item.url,
+                "host": item.host,
+                "port": item.port,
+                "source": item.source,
+                "project_id": item.project_id,
+                "session_id": item.session_id,
+                # The proxy path a phone or a copied link actually uses. Stable
+                # across the restart now (`preview_id`), so it is the same URL
+                # afterwards - which is exactly what the caller wants to know.
+                "proxy_path": f"/preview/{item.id}/",
+            }
+            for item in previews.items.values()
+            if item.listed
+        ]
+    return {
+        "previews": sorted(items, key=lambda entry: (entry["host"], entry["port"])),
+        "kills_processes": False,
+        "note": REDEPLOY_INTERRUPTION_NOTE,
+    }
+
+
 def _redeploy_last_result(config: Config) -> dict[str, Any] | None:
     """The previous redeploy's machine-readable outcome, or None.
 
@@ -2668,7 +2723,16 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
     # as failed requests. The script does not announce a run spawned from here.
     await _announce_redeploy_started(request, pid=process.pid)
     response = json_response(
-        {"status": "redeploying", "pid": process.pid, "log": str(log_path)}, 202
+        {
+            "status": "redeploying",
+            "pid": process.pid,
+            "log": str(log_path),
+            # An agent that triggered this gets the consequences in the same
+            # reply, so it can say what it is about to interrupt rather than
+            # discovering it as a dead proxy minutes later.
+            "interrupted": _redeploy_interruptions(request),
+        },
+        202,
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -2747,6 +2811,10 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
             "phase": "building" if pid is not None else "idle",
             "log_tail": tail.splitlines()[-40:],
             "last_result": _redeploy_last_result(config),
+            # Served whether or not one is in flight: the confirm dialog reads it
+            # before you commit, which is the only moment the answer can change
+            # what you do.
+            "interrupted": _redeploy_interruptions(request),
             "available": redeploy_source_root() is not None and shutil.which("uv") is not None,
         }
     )

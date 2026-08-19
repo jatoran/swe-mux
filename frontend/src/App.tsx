@@ -93,10 +93,10 @@ import {
 import { InteractionHud, showInteractionHud } from './InteractionHud'
 import { RedeployChip } from './RedeployChip'
 import {
-  applyProbe, beginRedeploy, enterOutage, IDLE_REDEPLOY, loadRedeploy, markResultPending,
-  outcomeIsFresh, outcomeNotice, REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS, saveRedeploy,
-  takeResultPending,
-  type ProbeResult, type RedeployState, type RedeployStatus,
+  applyProbe, beginRedeploy, enterOutage, IDLE_REDEPLOY, interruptionSummary, loadRedeploy,
+  markResultPending, outcomeIsFresh, outcomeNotice, REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS,
+  saveRedeploy, takeResultPending,
+  type ProbeResult, type RedeployInterruptions, type RedeployState, type RedeployStatus,
 } from './redeployProgress'
 import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subscribeInsertTarget } from './insertTarget'
 import type { InsertTarget } from './insertTarget'
@@ -436,6 +436,9 @@ export function App() {
   const suppressErrorsRef = useRef(suppressTransientErrors)
   suppressErrorsRef.current = suppressTransientErrors
   const [redeployNotice, setRedeployNotice] = useState('')
+  // What the confirm dialog reports will go dark. Advisory: nothing here can
+  // refuse a redeploy, because a port being open is not a reason it would fail.
+  const [redeployInterruptions, setRedeployInterruptions] = useState<RedeployInterruptions | null>(null)
   const loadedBuildId = useRef(loadedUiBuildId())
   const [uiUpdateAvailable, setUiUpdateAvailable] = useState(false)
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
@@ -4251,6 +4254,19 @@ export function App() {
     setPaletteOpen(false)
     setSidebarMenu(null)
     setRedeployConfirmOpen(true)
+    // Fetched as the dialog opens rather than passed in: this is the one moment
+    // the answer can change what the user does, and it is cheap (the daemon reads
+    // its in-memory registry). A failure leaves the dialog saying nothing extra,
+    // which is the old behaviour.
+    setRedeployInterruptions(null)
+    void (async () => {
+      try {
+        const response = await fetch('/api/daemon/redeploy', { cache: 'no-store' })
+        if (!response.ok) return
+        const status = await response.json() as RedeployStatus
+        setRedeployInterruptions(status.interrupted ?? null)
+      } catch { /* advisory only */ }
+    })()
   }
 
   async function startRedeploy() {
@@ -6649,7 +6665,7 @@ export function App() {
     {/* Only the daemon-down stage blocks. While the build runs the app is fully
         usable and the corner chip is the whole of the UI's report. */}
     {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
-    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p><div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
+    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 

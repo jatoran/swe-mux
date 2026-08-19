@@ -40,13 +40,41 @@ export type RedeployOutcome = {
   log_tail?: string[]
 }
 
+/** What a redeploy will make unreachable while it runs. Reported, never enforced:
+ *  refusing a redeploy because a port is open would make it nearly un-runnable,
+ *  and it is the only mechanism that ships anything. */
+export type RedeployInterruptions = {
+  previews?: Array<{ id: string; url: string; host: string; port: number; proxy_path: string }>
+  kills_processes?: boolean
+  note?: string
+}
+
 export type RedeployStatus = {
   running?: boolean
   phase?: string
   pid?: number | null
   log_tail?: string[]
   last_result?: RedeployOutcome | null
+  interrupted?: RedeployInterruptions | null
   available?: boolean
+}
+
+/** One line naming what goes dark, or '' when nothing does.
+ *
+ *  Ports rather than URLs: the host is always loopback and the port is what the
+ *  user recognises as "my dev server". Bounded, because a Project with a dozen
+ *  services would otherwise push the buttons off a phone screen. */
+export function interruptionSummary(
+  interrupted: RedeployInterruptions | null | undefined, limit = 4,
+): string {
+  const previews = interrupted?.previews ?? []
+  if (!previews.length) return ''
+  const ports = previews.map(preview => `:${preview.port}`)
+  const shown = ports.slice(0, limit).join(', ')
+  const rest = ports.length - limit
+  const list = rest > 0 ? `${shown} and ${rest} more` : shown
+  const count = previews.length === 1 ? '1 preview' : `${previews.length} previews`
+  return `${count} unreachable while the app restarts: ${list}.`
 }
 
 /** Persisted so a reload, a second tab, or a client that was not the initiator

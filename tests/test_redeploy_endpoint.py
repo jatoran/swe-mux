@@ -716,3 +716,95 @@ def test_an_outcome_never_carries_an_earlier_runs_log(tmp_path: Path) -> None:
     module.Outcome(config, 500_000.0).record(module.OUTCOME_SUCCEEDED, "fine", code=0)
     payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
     assert payload["log_tail"] == ["[redeploy] daemon healthy: live_sessions=2"]
+
+
+# --- what a redeploy interrupts, reported and never enforced ----------------
+
+
+class FakePreviews:
+    """Just enough PreviewRegistry surface for the interruption report."""
+
+    def __init__(self, *items: Any) -> None:
+        self.items = {item.id: item for item in items}
+
+
+def _preview(preview_id: str, port: int, *, listed: bool = True) -> Any:
+    return SimpleNamespace(
+        id=preview_id,
+        url=f"http://127.0.0.1:{port}/",
+        host="127.0.0.1",
+        port=port,
+        source="detected",
+        project_id="default",
+        session_id="session-a",
+        listed=listed,
+    )
+
+
+async def test_accepting_a_redeploy_reports_what_goes_dark(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """An agent gets the consequences in the same reply that accepts the redeploy.
+
+    Without this it discovers them minutes later as a dead proxy, which reads as
+    "the redeploy broke my server" when the server never stopped.
+    """
+    monkeypatch.setattr(
+        server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
+    )
+    app = _app(tmp_path)
+    app["previews"] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080))
+    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 202
+    interrupted = _payload(response)["interrupted"]
+    assert [entry["port"] for entry in interrupted["previews"]] == [5173, 8080]
+    # The proxy path is the thing that actually stops answering, and it is stable
+    # across the restart, so the same URL works again afterwards.
+    assert interrupted["previews"][0]["proxy_path"] == "/preview/aaa/"
+    # Nothing is killed, and the reply says so in as many words.
+    assert interrupted["kills_processes"] is False
+    assert "keep running" in interrupted["note"]
+
+
+async def test_an_open_port_never_refuses_a_redeploy(tmp_path: Path, monkeypatch: Any) -> None:
+    """Reported, not enforced.
+
+    Refusing here would make redeploy nearly un-runnable - there is almost always
+    a dev server up - and it is the only mechanism that ships anything, including
+    a fix for a gate that refuses wrongly.
+    """
+    monkeypatch.setattr(
+        server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
+    )
+    app = _app(tmp_path)
+    app["previews"] = FakePreviews(*(_preview(f"p{index}", 3000 + index) for index in range(12)))
+    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 202
+
+
+async def test_unlisted_previews_are_not_reported(tmp_path: Path) -> None:
+    """`listed` is what belongs in navigation; the rest is routing plumbing."""
+    app = _app(tmp_path)
+    app["previews"] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080, listed=False))
+    response = await server.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
+    ports = [entry["port"] for entry in _payload(response)["interrupted"]["previews"]]
+    assert ports == [5173]
+
+
+async def test_the_status_reports_interruptions_before_any_redeploy_starts(
+    tmp_path: Path,
+) -> None:
+    """The confirm dialog reads this, which is the only moment it can change a decision."""
+    app = _app(tmp_path)
+    app["previews"] = FakePreviews(_preview("aaa", 5173))
+    response = await server.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
+    body = _payload(response)
+    assert body["running"] is False
+    assert len(body["interrupted"]["previews"]) == 1
+
+
+async def test_a_daemon_with_no_preview_registry_still_answers(tmp_path: Path) -> None:
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    interrupted = _payload(response)["interrupted"]
+    assert interrupted["previews"] == []
+    assert interrupted["kills_processes"] is False

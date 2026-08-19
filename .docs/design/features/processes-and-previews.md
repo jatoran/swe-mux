@@ -401,8 +401,39 @@ more — swe-mux does not reap or share language servers.
   gap rather than disappear on each reload. A user-approved registration is never reaped: mux
   could not attribute that listener in the first place, so its absence is not evidence the
   server stopped, and only an explicit close removes it.
-- Registrations live with the daemon. An ended source session returns `preview unavailable`;
-  daemon restart leaves any restored preview leaf stale rather than guessing a destination.
+- Registrations live with the daemon. An ended source session returns `preview unavailable`.
+- **A registration id survives the daemon that made it.** The id is the path segment of the
+  proxy route (`/preview/<id>/`), which is how a phone reaches a dev server over the tailnet,
+  and the pane offers a button to copy that URL.
+  It is derived (`preview_id`) from the endpoint identity the registry already dedupes on -
+  Project, scheme, host, port - so re-detecting the same server after a restart reproduces the
+  same id and every copied link keeps working.
+  Session id is deliberately not in the material, because ownership legitimately moves between
+  sessions in the same Project and the registry already reassigns it while keeping the id.
+  Minting it from `uuid4` instead made every such URL die on any daemon restart - a redeploy, a
+  "Reload daemon", a crash - while the server itself kept running perfectly, so the failure
+  read as "the redeploy broke my server" when only the route to it had been re-keyed.
+- **User-approved registrations are mirrored to `<data_dir>/previews.json`** (`preview_store.py`)
+  and restored at startup. Detected ones are deliberately not: they come back from the live
+  listener set within a poll, under the same id, so persisting them would only mirror state
+  that can go stale. An approved registration is the opposite case - it exists precisely
+  because mux could not attribute the listener (WSL, Docker, a tree mux does not own), so
+  nothing will ever rediscover it, and before this it vanished on every restart. Removal is
+  mirrored too, or the next restart would resurrect the one the user just deleted. The file is
+  a mirror and never authoritative: unreadable content costs the approved previews and never
+  the daemon's ability to start.
+- **A redeploy reports what it will make unreachable, and refuses nothing for it.**
+  `POST /api/daemon/redeploy` returns the affected previews in its 202, and
+  `GET /api/daemon/redeploy` serves the same list whether or not one is in flight, so the
+  confirm dialog can show it at the one moment it can change a decision. The payload states
+  `kills_processes: false` in as many words: a redeploy never stops a dev server
+  (`stop_app_processes` targets the app's own image, and even the blunt
+  `force_stop_app_images` escalation is scoped to `swe-mux.exe`), it only takes the proxy away
+  for the length of the restart. This is advisory on purpose - refusing a redeploy because a
+  port is open would make it nearly un-runnable, since there is almost always a dev server up
+  and redeploy is the only mechanism that ships anything, including the fix for a gate that
+  refuses wrongly. The one genuine blocker, a process anchoring the bundle, remains a separate
+  refusal (`409 bundle_in_use`) because that one really does fail the swap.
 
 ## Preview capture
 

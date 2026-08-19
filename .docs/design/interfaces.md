@@ -93,7 +93,13 @@ The endpoint passes `--restore-visibility`; the script samples whether a desktop
 It also passes `--lock-held`, because the lock above is already claimed and
 already names the child; without it the script would refuse itself.
 
-GET returns `{running, pid, phase, log_tail, last_result, available}`.
+GET returns `{running, pid, phase, log_tail, last_result, interrupted, available}`.
+`interrupted` is served whether or not a redeploy is in flight - the confirm
+dialog reads it before you commit - and carries `previews[]` (each with its
+`proxy_path`, stable across the restart), `kills_processes: false`, and a note
+saying so. The 202 from POST carries the same object, so an agent that triggered
+the redeploy can say what it is about to interrupt rather than discovering it as
+a dead proxy minutes later. Nothing in it can refuse a redeploy.
 `log_tail` is served only when it belongs to the run being reported: the lock is
 created at run start, so while one is in flight a `redeploy.log` older than the
 lock is a previous run's and is withheld. Only a redeploy this daemon spawned
