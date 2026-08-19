@@ -33,6 +33,7 @@ from .session import (
     pty_tail_waiting_on_background,
     session_cli_state_status,
     set_standing_activity,
+    settle_running_work_anchor,
     standing_activity_kinds,
     transition_proof,
 )
@@ -2124,6 +2125,9 @@ async def _finish_root_turn(
             )
             return
         _record_turn_duration(session, state, payload)
+        # A close with nothing running is where a request ends; a close with
+        # agents still going is the hand-off this anchor exists to span.
+        settle_running_work_anchor(session.record)
         _clear_active_turn_identity(session, state)
         _clear_interrupt_intent(session, reason=outcome)
         _publish_update(session)
@@ -2153,6 +2157,9 @@ async def _finish_root_turn(
             )
             return
         _record_turn_duration(session, state, payload)
+        # A close with nothing running is where a request ends; a close with
+        # agents still going is the hand-off this anchor exists to span.
+        settle_running_work_anchor(session.record)
         _clear_active_turn_identity(session, state)
         _clear_interrupt_intent(session, reason=outcome)
         _publish_update(session)

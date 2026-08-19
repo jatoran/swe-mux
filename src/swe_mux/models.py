@@ -265,6 +265,31 @@ class SessionRecord:
     #: and is left None on a cold adoption rather than guessed. Reset with
     #: observation identity, like the turn fields.
     last_human_prompt_at: float | None = None
+    #: Epoch seconds the current stretch of *running* work began; None when no
+    #: such stretch is open.
+    #:
+    #: The third answer to "how long has this been going", and the one the other
+    #: two cannot give. A harness that dispatches background agents ends its root
+    #: turn and hands off: ``turn_started_at`` goes None, ``last_turn_ms`` freezes
+    #: at the length of the dispatching turn, and the row then reports a finished
+    #: fragment of the request as though it were the whole of it — measured live
+    #: 2026-08-19 as `10m` on a session 80 minutes into work whose subagents were
+    #: still running.
+    #:
+    #: Latched, not tracked. It is stamped when a running annotation
+    #: (``RUNNING_ACTIVITY_KINDS``) opens with none already latched, anchored to
+    #: the turn that dispatched the work rather than to the annotation, because
+    #: the request started when the operator asked for it and not when the first
+    #: agent happened to register. It deliberately survives the gaps between
+    #: phases: a workflow's subagent count reaches zero for seconds at a time
+    #: between rounds, and re-anchoring there would report a multi-phase run as
+    #: however long its newest phase has lasted.
+    #:
+    #: Cleared only when a root turn closes with nothing running — the main loop
+    #: came back, finished, and left nothing behind, which is the one observable
+    #: that means the request is over. Reset with observation identity, like the
+    #: turn fields.
+    running_work_since: float | None = None
     # Set whenever state == "awaiting"; cleared by every transition elsewhere.
     awaiting_reason: str | None = None
     # The idle-axis sibling of `awaiting_reason`. `waiting_on_background` means

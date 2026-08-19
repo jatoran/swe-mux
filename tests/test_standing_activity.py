@@ -15,10 +15,12 @@ from typing import Any
 
 from swe_mux.models import SessionRecord, StandingActivity
 from swe_mux.session import (
+    MAX_RUNNING_WORK_ANCHOR_AGE_SECONDS,
     clear_all_standing_activity,
     clear_standing_activity,
     expire_standing_activity,
     set_standing_activity,
+    settle_running_work_anchor,
 )
 from tests.support.detection_replay import DetectionReplay, ReplaySession
 
@@ -149,6 +151,95 @@ def test_clear_all_ledgers_each_annotation() -> None:
     assert {entry["activity"] for entry in removed} == {"loop", "cron"}
     assert all(entry["evidence"] == "conversation_rolled:clear" for entry in removed)
     assert not clear_all_standing_activity(session, evidence="again", now=now)
+
+
+# --------------------------------------------------------- running-work anchor
+
+
+def test_running_work_anchors_to_the_turn_that_dispatched_it() -> None:
+    # The request started when the operator asked for it, not when the first
+    # agent happened to register — which on a workflow is minutes later.
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    session.record.turn_started_at = now - 300
+    set_standing_activity(session, "subagents", source="hook", evidence="e", now=now)
+    assert session.record.running_work_since == now - 300
+
+
+def test_a_scheduled_engagement_never_anchors() -> None:
+    # An armed loop is not work in flight. Same split the blue ring and the
+    # notification suppression use.
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    session.record.turn_started_at = now - 300
+    set_standing_activity(session, "loop", source="transcript", evidence="e", now=now)
+    set_standing_activity(session, "cron", source="transcript", evidence="e", now=now)
+    assert session.record.running_work_since is None
+
+
+def test_an_unusable_turn_start_anchors_to_now_rather_than_to_a_lie() -> None:
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    for started in (None, 0.0, now + 60, now - (MAX_RUNNING_WORK_ANCHOR_AGE_SECONDS + 1)):
+        session.record.running_work_since = None
+        session.record.turn_started_at = started
+        set_standing_activity(session, "subagents", source="hook", evidence="e", now=now)
+        assert session.record.running_work_since == now
+
+
+def test_the_anchor_latches_once_and_survives_the_gaps_between_phases() -> None:
+    # Measured live 2026-08-19: a 37-minute run whose subagent count emptied and
+    # re-opened four seconds later. Re-anchoring on that would have reported the
+    # whole run as however long its newest phase had lasted.
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    session.record.turn_started_at = now - 600
+    set_standing_activity(session, "subagents", source="hook", evidence="e", count=5, now=now)
+    anchored = session.record.running_work_since
+    # A refresh does not re-anchor.
+    set_standing_activity(session, "subagents", source="hook", evidence="e", count=4, now=now + 60)
+    assert session.record.running_work_since == anchored
+    # Nor does the per-kind clear that a phase boundary goes through, nor the
+    # re-open on the far side of it.
+    clear_standing_activity(session, "subagents", evidence="SubagentStop", now=now + 120)
+    assert session.record.running_work_since == anchored
+    set_standing_activity(session, "subagents", source="hook", evidence="e", now=now + 124)
+    assert session.record.running_work_since == anchored
+
+
+def test_the_anchor_is_released_only_by_a_turn_close_with_nothing_running() -> None:
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    session.record.turn_started_at = now - 600
+    set_standing_activity(session, "subagents", source="hook", evidence="e", now=now)
+    # The hand-off close: the harness ends its turn precisely so its agents can
+    # carry on, which is the case the anchor exists to span.
+    assert settle_running_work_anchor(session.record) is False
+    assert session.record.running_work_since == now - 600
+    # The close that means the request is over.
+    clear_standing_activity(session, "subagents", evidence="SubagentStop", now=now + 900)
+    assert settle_running_work_anchor(session.record) is True
+    assert session.record.running_work_since is None
+    assert settle_running_work_anchor(session.record) is False
+
+
+def test_a_run_scope_clear_releases_the_anchor() -> None:
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    session.record.turn_started_at = now - 600
+    set_standing_activity(session, "subagents", source="hook", evidence="e", now=now)
+    assert clear_all_standing_activity(session, evidence="conversation_rolled:clear", now=now)
+    assert session.record.running_work_since is None
+
+
+def test_provider_observation_reset_drops_the_anchor() -> None:
+    # It dates work dispatched by the conversation being replaced.
+    from swe_mux.session import SessionManager
+
+    record = agent_record()
+    record.running_work_since = 1.0
+    SessionManager._reset_provider_observation(record)
+    assert record.running_work_since is None
 
 
 # ------------------------------------------------------------ axis separation
@@ -333,6 +424,91 @@ async def test_subagent_hooks_own_the_count_over_the_transcript_fallback() -> No
     )
     (activity,) = replay.session.record.standing_activity
     assert activity.count == 1
+
+
+async def test_a_hand_off_end_turn_keeps_the_running_work_anchor() -> None:
+    # The measured live defect (2026-08-19), end to end. An ultracode run
+    # dispatches background agents and the harness closes its root turn to hand
+    # off — a real `stop_reason=end_turn`, a real idle, a real `last_turn_ms`.
+    # For the next half hour the only evidence is the subagents' own hook stream,
+    # and the row had nothing left to age from: three sessions 37-80 minutes into
+    # their requests all read ~10m, the length of the turn that dispatched them.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step({"kind": "hook", "event": "UserPromptSubmit", "payload": {}})
+    assert replay.session.record.state == "working"
+    turn_started = replay.session.record.turn_started_at
+    assert turn_started is not None
+
+    replay.clock.advance(300)
+    for agent in ("agent-1", "agent-2"):
+        await replay.step(
+            {
+                "kind": "hook",
+                "event": "SubagentStart",
+                "payload": {"session_id": OWN_CONVERSATION, "agent_id": agent},
+            }
+        )
+    # Anchored to the dispatching turn, not to the agents that registered five
+    # minutes into it.
+    assert replay.session.record.running_work_since == turn_started
+
+    replay.clock.advance(120)
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "text", "text": "dispatched"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+        }
+    )
+    # The state axis is untouched on purpose: the turn really did end, the
+    # composer really does accept input. What must survive is the clock.
+    assert replay.session.record.state == "idle"
+    assert replay.session.record.turn_started_at is None
+    assert replay.session.record.last_turn_ms is not None
+    assert replay.session.record.running_work_since == turn_started
+
+    # The phases run themselves out. The count reaching zero between rounds is
+    # not the request ending, so the anchor holds through it.
+    replay.clock.advance(1800)
+    for agent in ("agent-1", "agent-2"):
+        await replay.step(
+            {
+                "kind": "hook",
+                "event": "SubagentStop",
+                "payload": {"session_id": OWN_CONVERSATION, "agent_id": agent},
+            }
+        )
+    assert replay.session.record.standing_activity == []
+    assert replay.session.record.running_work_since == turn_started
+
+    # The main loop comes back, finishes, and leaves nothing behind. That close —
+    # and only that one — is where the request is over.
+    await replay.step({"kind": "hook", "event": "UserPromptSubmit", "payload": {}})
+    replay.clock.advance(30)
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "text", "text": "done"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+        }
+    )
+    assert replay.session.record.state == "idle"
+    assert replay.session.record.running_work_since is None
 
 
 async def test_trailing_transcript_records_never_reopen_a_hook_cleared_fleet() -> None:

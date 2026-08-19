@@ -10,7 +10,9 @@
 // space every other field is competing for.
 
 import { MODE_LABELS, effectiveApprovalMode } from './approvals.ts'
-import { activityBadges, awaitingLabel, type ActivityBadge } from './sessionStatus.ts'
+import {
+  activityBadges, awaitingLabel, hasRunningActivity, type ActivityBadge,
+} from './sessionStatus.ts'
 import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harnessRegistry.ts'
 import { displayModelName } from './modelDisplay.ts'
 import type { Session } from './types'
@@ -249,6 +251,59 @@ function ageOf(stamp: number, now: number): number | null {
 const isEnded = (session: Session) => session.state === 'exited' || session.state === 'crashed'
 
 /**
+ * How long the request in flight has been running, on a session whose root turn
+ * has ended but whose work has not.
+ *
+ * A harness that dispatches background agents closes its turn to hand off. The
+ * state is genuinely `idle` — you can type, delivery is safe, and the ring and
+ * badges say an agent is engaged — but both of the row's usual clocks stop:
+ * `turn_started_at` goes away, and `last_turn_ms` freezes at the length of the
+ * *dispatching* turn. Reporting that as "the time" says a request 80 minutes in
+ * has taken 10 minutes, and it can shrink as the run continues, because every
+ * phase ends with a short main-loop turn that overwrites the measurement.
+ *
+ * `running_work_since` is the daemon's answer and the one to prefer.
+ * `last_human_prompt_at` is the fallback for records written before it existed
+ * and for sessions adopted mid-flight; it answers a slightly different question
+ * ("since you asked" rather than "since the work started"), which is why it is
+ * second and why the title says which one is being read.
+ *
+ * Null whenever the question does not apply, so the caller keeps the existing
+ * behaviour rather than inventing a number: nothing is running, or no anchor
+ * survived, or the clocks disagree by more than `ageOf` will correct.
+ */
+function runningWorkAge(session: Session, now: number): { seconds: number; anchor: 'work' | 'prompt' } | null {
+  if (isEnded(session) || !hasRunningActivity(session)) return null
+  const since = session.running_work_since
+  if (typeof since === 'number' && since > 0) {
+    const seconds = ageOf(since, now)
+    return seconds === null ? null : { seconds, anchor: 'work' }
+  }
+  const prompted = session.last_human_prompt_at
+  if (typeof prompted === 'number' && prompted > 0) {
+    const seconds = ageOf(prompted, now)
+    return seconds === null ? null : { seconds, anchor: 'prompt' }
+  }
+  return null
+}
+
+/**
+ * The span the duration column is currently measuring, or null when it is
+ * measuring nothing live.
+ *
+ * Exists so `sincePrompt` can decide whether it would be saying the same thing
+ * twice without re-deriving which branch `durationToken` took. An idle session
+ * with running work is now a live measurement, which it was not before.
+ */
+function liveDurationAge(session: Session, context: SessionRowContext): number | null {
+  if (isEnded(session)) return null
+  if (session.turn_started_at) {
+    return ageOf(session.turn_started_at, session.interrupt_pending_at ?? context.now)
+  }
+  return runningWorkAge(session, context.now)?.seconds ?? null
+}
+
+/**
  * The time this state has cost, which is a different question per state.
  *
  * A working session is aged from the **turn** it is in, not from the state it is
@@ -268,7 +323,10 @@ const isEnded = (session: Session) => session.state === 'exited' || session.stat
  *
  * A ready session reports how long its last turn took rather than how long it
  * has been ready — that number is static, which also means a settled fleet
- * re-renders on no clock at all.
+ * re-renders on no clock at all. The exception is a ready session with *running*
+ * work, which is not settled and whose last turn is a fragment of a request
+ * still in flight; it is aged from `runningWorkAge` instead, and is the only
+ * ready row whose token changes between ticks.
  *
  * Every branch renders nothing rather than a placeholder when it cannot answer.
  * A row that says nothing is read as "no measurement"; a row that says `0s` is
@@ -284,6 +342,17 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
       : null
   }
   if (session.state === 'idle') {
+    // Running work outranks the finished turn. The turn really did end, but it
+    // ended to hand off, and "last turn took 10m" on a request 80 minutes deep
+    // is the finished fragment standing in for the whole.
+    const running = runningWorkAge(session, context.now)
+    if (running) {
+      const label = formatRowDuration(running.seconds)
+      const title = running.anchor === 'work'
+        ? `work has been running ${label} — the turn ended, its agents did not`
+        : `${label} since you prompted — the turn ended, its agents did not`
+      return { text: label, title, seconds: running.seconds }
+    }
     if (typeof session.last_turn_ms !== 'number' || session.last_turn_ms < MIN_REPORTABLE_TURN_MS) return null
     const seconds = session.last_turn_ms / 1000
     return { text: formatRowDuration(seconds), title: `last turn took ${formatRowDuration(seconds)}`, seconds }
@@ -305,7 +374,12 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
 
 function durationIsNotable(session: Session, seconds: number): boolean {
   if (isEnded(session)) return true
-  if (session.state === 'idle') return seconds >= LAST_TURN_NOTABLE_SECONDS
+  // Idle-with-running-work is measuring live work, so it takes the working
+  // threshold: the low last-turn one exists because a *finished* turn is worth
+  // reporting sooner than a running one is worth interrupting for.
+  if (session.state === 'idle' && !hasRunningActivity(session)) {
+    return seconds >= LAST_TURN_NOTABLE_SECONDS
+  }
   // `awaiting` shares the working threshold because it now reports the same
   // quantity — the turn. How long the block itself has stood is `detailText`'s.
   return seconds >= WORKING_NOTABLE_SECONDS
@@ -531,14 +605,14 @@ function candidateFor(
       const seconds = ageOf(session.last_human_prompt_at, context.now)
       if (seconds === null) return null
       const label = formatRowDuration(seconds)
-      // Notable only when it disagrees with the turn — on a session whose turns
-      // you open yourself, the two numbers track each other and the second one
-      // is noise. An idle session is never notable here: nothing is running, so
-      // "you asked an hour ago" describes no outstanding work.
-      const turn = session.turn_started_at ? ageOf(session.turn_started_at, context.now) : null
-      const notable = session.state !== 'idle'
-        && turn !== null
-        && seconds - turn >= PROMPT_GAP_NOTABLE_SECONDS
+      // Notable only when it disagrees with whatever the duration column is
+      // measuring — on a session whose turns you open yourself, the two numbers
+      // track each other and the second one is noise. An idle session with
+      // nothing running is never notable: "you asked an hour ago" describes no
+      // outstanding work. An idle session with running work is, because there
+      // the duration column is a live measurement and the two can genuinely part.
+      const live = liveDurationAge(session, context)
+      const notable = live !== null && seconds - live >= PROMPT_GAP_NOTABLE_SECONDS
       return make(
         {
           kind: 'text',

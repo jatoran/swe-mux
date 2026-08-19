@@ -729,6 +729,13 @@ class AssistantService:
                 entry["cold"] = True
             if record.turn_started_at:
                 entry["turn_running_for"] = self._age(now, record.turn_started_at)
+            if record.running_work_since:
+                # The same blind spot the sidebar had. A harness that dispatches
+                # background agents ends its root turn to hand off, so `state:
+                # idle` with no `turn_running_for` is the shape of a session an
+                # hour into a request — and answering "how long has that been
+                # going" from `state_age` alone reports the hand-off instead.
+                entry["running_work_for"] = self._age(now, record.running_work_since)
             if record.model:
                 entry["model"] = record.model
             rows.append(entry)

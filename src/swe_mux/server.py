@@ -5955,6 +5955,14 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         "agent_lifecycle_id": session.agent_lifecycle_id,
         "awaiting_reason": session.record.awaiting_reason,
         "standing_activity": [activity.snapshot() for activity in session.record.standing_activity],
+        # Start of the current stretch of running work, and the turn fields it is
+        # read against. Reported together because the diagnosis is the trio: an
+        # anchor far older than `last_turn_ms` on a session with no open turn is a
+        # harness that handed off to background agents, which is exactly when the
+        # turn alone stops answering "how long has this been going".
+        "running_work_since": session.record.running_work_since,
+        "turn_started_at": session.record.turn_started_at,
+        "last_turn_ms": session.record.last_turn_ms,
         # The CLI's own published state for this conversation
         # (~/.claude/sessions/<pid>.json) — corroboration only, never a
         # transition source. None until the poller matches a file.

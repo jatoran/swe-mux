@@ -821,6 +821,71 @@ def _standing_activity_ledger(
     )
 
 
+#: Annotation kinds that mean work is running *right now*, as opposed to a
+#: scheduled engagement (`loop`, `cron`) with nothing in flight. This is the same
+#: split the dot uses (`hasRunningActivity` in the frontend) and the one the
+#: notification path suppresses on: an idle session with live subagents has not
+#: finished, while an idle session with an armed loop genuinely has.
+RUNNING_ACTIVITY_KINDS: frozenset[str] = frozenset({"subagents", "background_tasks"})
+
+#: Ceiling on how far back the running-work anchor may be dragged by the turn it
+#: is anchored to. Mirrors `MAX_TURN_DURATION_SECONDS` in `observation.py`, which
+#: is the length past which a turn is treated as an unclosed boundary rather than
+#: a measurement — a start that stale is exactly the input that would publish
+#: "this request has run 9 hours" on a session that was idle overnight.
+MAX_RUNNING_WORK_ANCHOR_AGE_SECONDS = 6 * 60 * 60
+
+
+def _latch_running_work(record: Any, kind: str, now: float) -> None:
+    """Anchor `running_work_since` the first time running work opens.
+
+    Anchored to the **dispatching turn**, not to the annotation. A workflow's
+    first subagent registers seconds-to-minutes after the operator asked for the
+    work, and the question the anchor answers is how long the request has been
+    going, not how long the newest agent has.
+
+    Latching once is the whole point: `set_standing_activity` is also the refresh
+    path, and a running annotation's count reaches zero for seconds at a time
+    between a workflow's phases (measured live 2026-08-19: a 37-minute run whose
+    subagent count emptied and re-opened four seconds later). Re-anchoring on
+    those would report a long multi-phase run as however long its newest phase
+    has lasted, which is the failure this field exists to remove.
+    """
+    if kind not in RUNNING_ACTIVITY_KINDS or record.running_work_since is not None:
+        return
+    started = record.turn_started_at
+    usable = (
+        isinstance(started, int | float)
+        and not isinstance(started, bool)
+        and 0.0 < float(started) <= now
+        and now - float(started) <= MAX_RUNNING_WORK_ANCHOR_AGE_SECONDS
+    )
+    record.running_work_since = float(started) if usable else now
+
+
+def settle_running_work_anchor(record: Any) -> bool:
+    """Release the anchor when a closing root turn leaves nothing running.
+
+    Called at every root-turn close. Nothing running at that moment is the one
+    observable that means the request is over: the main loop came back, finished
+    a turn, and left no agents behind. The close that *does* have running work —
+    the hand-off, where the harness ends its turn precisely so background agents
+    can carry on — keeps the anchor, which is the case the field exists for.
+
+    Deliberately not driven by the annotations emptying on their own. They expire
+    on a quiet timer and they gap between phases, and a request is not over
+    because its evidence went quiet for two minutes.
+    """
+    if record.running_work_since is None:
+        return False
+    if any(
+        activity.kind in RUNNING_ACTIVITY_KINDS for activity in record.standing_activity
+    ):
+        return False
+    record.running_work_since = None
+    return True
+
+
 def set_standing_activity(
     session: Any,
     kind: StandingActivityKind,
@@ -844,6 +909,7 @@ def set_standing_activity(
     """
     now = time.time() if now is None else now
     record = session.record
+    _latch_running_work(record, kind, now)
     for activity in record.standing_activity:
         if activity.kind != kind:
             continue
@@ -870,14 +936,6 @@ def set_standing_activity(
     record.standing_activity.append(activity)
     _standing_activity_ledger(session, "added", activity, now)
     return True
-
-
-#: Annotation kinds that mean work is running *right now*, as opposed to a
-#: scheduled engagement (`loop`, `cron`) with nothing in flight. This is the same
-#: split the dot uses (`hasRunningActivity` in the frontend) and the one the
-#: notification path suppresses on: an idle session with live subagents has not
-#: finished, while an idle session with an armed loop genuinely has.
-RUNNING_ACTIVITY_KINDS: frozenset[str] = frozenset({"subagents", "background_tasks"})
 
 
 def standing_activity_kinds(session: Any) -> list[str]:
@@ -945,8 +1003,14 @@ def clear_all_standing_activity(session: Any, *, evidence: str, now: float | Non
     """
     now = time.time() if now is None else now
     record = session.record
+    # The anchor is scoped to the annotations it was latched from, so it goes
+    # with them. Unlike the per-kind clear — which is also how a workflow's
+    # subagent count reaches zero between phases, and must leave the anchor
+    # standing — this one is a statement that the run holds nothing at all.
+    released = record.running_work_since is not None
+    record.running_work_since = None
     if not record.standing_activity:
-        return False
+        return released
     for activity in tuple(record.standing_activity):
         _standing_activity_ledger(session, "removed", activity, now, evidence=evidence)
     record.standing_activity.clear()
@@ -3646,6 +3710,10 @@ class SessionManager:
         # not addressed to this one, and carrying it over would report the new
         # run as hours into work nobody has asked it for yet.
         record.last_human_prompt_at = None
+        # Same again: the anchor dates work dispatched by the conversation being
+        # replaced, so carrying it over would report the successor as hours into
+        # a request it has not been given.
+        record.running_work_since = None
         # Annotations describe the observation identity being reset here. This is
         # a silent record-level clear for the adoption-repair paths (no Session,
         # no ledger yet); live callers ledger via clear_all_standing_activity
@@ -4125,6 +4193,7 @@ class SessionManager:
         # be inventing a cause of death.
         record.standing_activity = []
         record.turn_started_at = None
+        record.running_work_since = None
         record.active_turn_id = None
         record.awaiting_reason = None
         record.idle_reason = None

@@ -833,6 +833,11 @@ Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 up. Completion sounds and push alerts skip that turn end; the next one is the moment worth
 the user's attention.
 Rows carry `turn_started_at`, monotonic `turn_epoch`, and nullable `active_turn_id` for the open root-turn generation.
+Rows also carry nullable `running_work_since`, the start of the current stretch of running work.
+It is the only timestamp that dates a request whose harness has handed off to background agents:
+that hand-off is a real turn end, so `turn_started_at` is absent and `last_turn_ms` describes only
+the turn that dispatched the work. A client rendering "how long has this been going" must prefer
+it over both while `standing_activity` holds a `subagents` or `background_tasks` entry.
 Rows also carry nullable `interrupt_pending_at` and `interrupt_pending_source`; these expose exact operator interrupt intent without claiming completion or changing delivery readiness.
 Rows carry nullable `agent_loaded_at`, the start of the current Claude or Codex process generation.
 Unlike `agent_run_started_at`, it survives an in-process conversation rollover and daemon adoption.
@@ -954,6 +959,12 @@ It also carries
 (`~/.claude/sessions/<pid>.json`; Claude `waiting` vetoes raw PTY evidence that would hide an approval, and `busy` vetoes only a transient raw idle repaint, but neither initiates a transition) - beside
 the `standing_activity` list and `layer_readings`, the last observed reading per
 detection-ladder layer.
+It reports `running_work_since` beside `turn_started_at` and `last_turn_ms` for the same
+reason the transcript timestamps travel together: the trio is the diagnosis. An anchor far
+older than `last_turn_ms` on a session with no open turn is a harness that handed off to
+background agents, which is exactly when the turn alone stops answering "how long has this
+been going" — and it is the shape a row reading `idle` while `cli_state` reads `busy` and
+`pty_tail` reads `working` will have.
 Its `pty_explain` object exposes the effective `outcome`, raw `screen_outcome`, `outcome_source`, `cli_state_status`, and all evaluated screen rules.
 The timeline and `layer_readings` expose the raw value as `pty_tail_screen`, the effective value as `pty_tail`, and its source as `pty_tail_arbitration`.
 

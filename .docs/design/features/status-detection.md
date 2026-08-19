@@ -621,6 +621,17 @@ Two timings cross the API boundary so a client can age a session without a secon
   Plenty of turns are opened by something other than a person: mux delivering an agent-authored queued message, or a Stop hook injecting a teammate message the instant the previous turn ends.
   A session can therefore be minutes into a fresh turn and an hour past anything its operator said — measured live at a `3m22` turn on a session thirteen minutes into work asked for once.
   Run-scoped like the turn fields, and `None` rather than guessed when unknown.
+- `running_work_since` is when the current stretch of **running** work began, and is the third answer to "how long has this been going" — the one the other two cannot give.
+  A harness that dispatches background agents ends its root turn to hand off: `turn_started_at` goes `None`, `last_turn_ms` freezes at the length of the *dispatching* turn, and the row then reports a finished fragment of a request that is still running.
+  Measured live 2026-08-19 on three ultracode sessions 37, 64, and 81 minutes into their requests, all three reading ~10m, with `cli_state: busy`, `pty_tail: working`, and live `subagents` annotations on every one of them.
+  It is worse than stale: every phase of a workflow ends with a short main-loop turn that overwrites `last_turn_ms`, so the number can *shrink* as the run continues.
+  Latched, not tracked. Stamped when a `RUNNING_ACTIVITY_KINDS` annotation opens with none already latched, and anchored to the **turn that dispatched the work** rather than to the annotation, because the request started when the operator asked for it and not when the first agent happened to register minutes later.
+  A turn start that is missing, in the future, or older than `MAX_RUNNING_WORK_ANCHOR_AGE_SECONDS` (6 h, the same ceiling `last_turn_ms` refuses at) falls back to the annotation's own instant rather than publishing it.
+  Released only when a **root turn closes with nothing running** — the main loop came back, finished, and left nothing behind, which is the one observable that means the request is over.
+  Deliberately not released by the annotations emptying on their own: a workflow's subagent count reaches zero for seconds at a time between phases (measured at four seconds on the 37-minute session above), and re-anchoring there would report a long multi-phase run as however long its newest phase has lasted.
+  The per-kind clear that a phase boundary goes through therefore leaves it standing, while the run-scope clear at a lifecycle seam takes it with the annotations it was latched from.
+  Run-scoped like the turn fields.
+  This changes the **time** axis only. `idle` stays the correct state — the turn really did end, the composer really does accept input, and delivery is untouched.
 - `interrupt_pending_at` and `interrupt_pending_source` record exact operator Esc or Ctrl-C intent while a root turn is working.
   Intent is not completion proof, so state remains `working` and delivery remains blocked.
   The UI renders `interrupt requested` and freezes the displayed duration at the request instant instead of continuing to claim that cancellation time is active work.

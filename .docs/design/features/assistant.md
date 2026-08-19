@@ -28,6 +28,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
   Any device resumes the same conversation; a dropped tab cannot orphan a half-confirmed action.
 - **Freshness is computed by the system, never self-assessed.**
   The per-turn workspace snapshot (`fleet_snapshot`) carries ages derived from session records; `state_since == 0` reads as unknown, never as "just now".
+  A session whose harness handed off to background agents carries `running_work_for` beside `state_age`, because `idle` with no `turn_running_for` is also the shape of a session an hour into a request, and answering "how long has that been going" from `state_age` alone reports the hand-off instead of the work (`features/status-detection.md`).
 - **Budgeted like every model feature.**
   Calls run on the configured OpenRouter model (`assistant_model`, default `openai/gpt-5.6-terra`; tool calling verified against the live catalog), spend lands in the shared automation ledger under `builtin:assistant`, and the daily budget is checked before each call — an exhausted budget fails the turn closed.
 - Failures are typed `AssistantError` and never touch PTY, session, transcript, history, or project state.

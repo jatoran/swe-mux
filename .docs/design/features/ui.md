@@ -2373,12 +2373,21 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   That answer is worth having, but not at the cost of the number changing what it measures underneath the reader: a session with several subagents raising permission prompts made the figure collapse to seconds and spring back to the turn length each time one appeared and was answered, which reads as a timer resetting at random.
   How long the block has stood now rides the **detail** text, where it is labelled (`awaiting approval 5m`) and can disagree with the turn without either looking broken.
   `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
+- **A ready session with running work reports the request, not the turn that dispatched it.**
+  The one exception to the rule above, and the case that rule could not see.
+  A harness that dispatches background agents ends its root turn to hand off, so both of the column's clocks stop at once: `turn_started_at` goes away and `last_turn_ms` freezes at the length of the dispatching turn.
+  Measured live 2026-08-19 on three ultracode sessions 37, 64, and 81 minutes into their requests, every one of them reading ~10m — and the number can shrink as the run continues, because every phase ends with a short main-loop turn that overwrites the measurement.
+  The row prefers the daemon's `running_work_since`, falls back to `last_human_prompt_at` for records written before that field and for sessions adopted mid-flight, and falls back again to the last turn when neither anchor survives — a stale-but-real number still beats a fresh invented one.
+  Gated on the same `hasRunningActivity` split the blue ring and the notification suppression use, so an armed `loop` or `cron` never turns a settled row into a running clock.
+  It takes the **working** notability threshold rather than the last-turn one: the low threshold exists because a finished turn is worth reporting sooner than a running one is worth interrupting for.
+  The state axis is untouched — the turn really did end, the dot stays a ready ring, and typing is still safe.
 - **`Since your prompt` answers what the turn cannot.**
   A turn is one request-to-completion cycle, and auto-delivery or an injected teammate message opens turns nobody asked for, so a busy session can be minutes into a fresh turn and an hour past anything its operator said.
   The field reads `last_human_prompt_at` and carries a `⌨` mark, which is load-bearing rather than decorative on the same grounds as the branch scope mark: two bare durations in one section are indistinguishable, and these two are exactly the pair a reader is trying to tell apart.
-  Notable only when it exceeds the turn by `PROMPT_GAP_NOTABLE_SECONDS`, and never on an `idle` session — where the two numbers track each other the second one is one fact twice, and where nothing is running "you asked an hour ago" describes no outstanding work.
+  Notable only when it exceeds *whatever the duration column is currently measuring* by `PROMPT_GAP_NOTABLE_SECONDS` — where the two numbers track each other the second one is one fact twice.
+  On an `idle` session with nothing running it never speaks, because "you asked an hour ago" describes no outstanding work; on an `idle` session with running work it can, because there the duration column is a live measurement and the two can genuinely part.
   Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
-  A ready session's number is static, so a settled fleet re-renders on no clock at all.
+  A ready session's number is static, so a settled fleet re-renders on no clock at all — the one ready row whose token changes between ticks is the one with work still running.
 - **The duration renders nothing rather than a placeholder when it cannot answer.**
   A row that says nothing is read as "no measurement"; a row that says `0s` is read as a measurement of zero, and both failures this field has actually produced were indistinguishable from a turn that had just begun.
   A `last_turn_ms` under `MIN_REPORTABLE_TURN_MS` (250 ms) is refused: daemons predating record-dated turn boundaries wrote the replay's own elapsed time into records that survive a restart, so those values are already on disk and the row has to refuse them on the way out too.

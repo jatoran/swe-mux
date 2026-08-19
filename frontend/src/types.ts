@@ -82,6 +82,13 @@ export interface Session {
    *  Not the same question as `turn_started_at`: auto-delivery and injected
    *  teammate messages open turns nobody asked for. Run-scoped. */
   last_human_prompt_at?: number | null
+  /** Epoch seconds the current stretch of running work began; absent when none
+   *  is open. Latched when a `subagents`/`background_tasks` annotation opens and
+   *  released only when a root turn closes with nothing running, so it spans a
+   *  harness that ends its turn to hand off to background agents — the case where
+   *  `turn_started_at` is absent and `last_turn_ms` describes a finished fragment
+   *  of a request that is still going. Run-scoped. */
+  running_work_since?: number | null
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]

@@ -61,6 +61,91 @@ test('a ready session reports its last turn, not how long it has been ready', ()
   assert.deepEqual(bottomText(ready, config), ['1m12'])
 })
 
+test('a ready session with running work reports the request, not the turn that dispatched it', () => {
+  // The measured case (2026-08-19): three sessions 37-80 minutes into ultracode
+  // runs, each reading ~10m. The harness ends its root turn to hand off to
+  // background agents, so `turn_started_at` goes away and `last_turn_ms` freezes
+  // at the length of the dispatching turn — a finished fragment standing in for
+  // a request still in flight. Worse, it shrinks: every phase ends with a short
+  // main-loop turn that overwrites the measurement.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const handedOff = session({
+    state: 'idle', state_since: NOW - 1770, last_turn_ms: 416_000,
+    turn_started_at: null, running_work_since: NOW - 2210,
+    standing_activity: STANDING,
+  })
+  assert.deepEqual(bottomText(handedOff, config), ['36m'])
+})
+
+test('a ready session with running work and no anchor falls back to your prompt', () => {
+  // Records written before the daemon latched the anchor, and sessions adopted
+  // mid-flight. "Since you asked" is a slightly different question, which is why
+  // it is second — but it is the right order of magnitude, and the alternative
+  // is the finished fragment.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const adopted = session({
+    state: 'idle', last_turn_ms: 416_000, turn_started_at: null,
+    running_work_since: null, last_human_prompt_at: NOW - 2210,
+    standing_activity: STANDING,
+  })
+  assert.deepEqual(bottomText(adopted, config), ['36m'])
+})
+
+test('running work with no anchor at all leaves the last turn in place', () => {
+  // A stale-but-real number beats a fresh invented one, the same rule the rest
+  // of this column runs on.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const anchorless = session({
+    state: 'idle', last_turn_ms: 72_000, turn_started_at: null,
+    running_work_since: null, last_human_prompt_at: null,
+    standing_activity: STANDING,
+  })
+  assert.deepEqual(bottomText(anchorless, config), ['1m12'])
+})
+
+test('a merely scheduled engagement does not turn the last turn into a request clock', () => {
+  // An armed loop is not work in flight: the turn genuinely ended and nothing is
+  // running, so the ready session's static number is still the honest one. Same
+  // split the blue ring and the notification suppression use.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const armed = session({
+    state: 'idle', last_turn_ms: 72_000, turn_started_at: null,
+    running_work_since: NOW - 3600, last_human_prompt_at: NOW - 3600,
+    standing_activity: [{
+      kind: 'loop', source: 'hook', evidence: 'hook:loop',
+      since: NOW - 3600, expires_at: null, count: 1, detail: null,
+    }] as StandingActivity[],
+  })
+  assert.deepEqual(bottomText(armed, config), ['1m12'])
+})
+
+test('a request in flight is notable on the working threshold, not the last-turn one', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['duration'], 'notable')
+  const base = {
+    state: 'idle' as const, turn_started_at: null, standing_activity: STANDING,
+  }
+  // 30s of live work is not yet worth marking; a finished 30s turn would be.
+  assert.deepEqual(bottomText(session({ ...base, running_work_since: NOW - 30 }), config), [])
+  assert.deepEqual(bottomText(session({ ...base, running_work_since: NOW - 90 }), config), ['1m30'])
+})
+
+test('since-your-prompt speaks on a handed-off session when it disagrees', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['duration', 'sincePrompt'], 'notable')
+  // The work was dispatched long after you asked — an injected message, or a
+  // first phase that ran before anything went to background.
+  const drifted = session({
+    state: 'idle', turn_started_at: null, standing_activity: STANDING,
+    running_work_since: NOW - 300, last_human_prompt_at: NOW - 3600,
+  })
+  assert.deepEqual(bottomText(drifted, config), ['5m', '1h'])
+  // Your prompt is what started the work, so the two numbers are one fact.
+  const own = session({
+    state: 'idle', turn_started_at: null, standing_activity: STANDING,
+    running_work_since: NOW - 3600, last_human_prompt_at: NOW - 3603,
+  })
+  assert.deepEqual(bottomText(own, config), ['1h'])
+})
+
 test('a working session reports elapsed time in state', () => {
   const config = withBottom(defaultSessionRowConfig(), ['duration'])
   const working = session({ state: 'working', state_since: NOW - 1320 })

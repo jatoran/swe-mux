@@ -33,6 +33,12 @@
 - `SessionRecord.turn_epoch`, `active_turn_id`, and `turn_started_at` identify the open root-turn generation and its clock.
   The epoch increases on every root open, the opaque ID is provider-native or mux-synthesized when available, and both the ID and start timestamp clear on terminal evidence.
   A mismatched terminal ID is diagnosable stale evidence and cannot close a newer generation.
+- `SessionRecord.running_work_since`: volatile, run-scoped. The start of the current stretch of
+  running work, latched when a `RUNNING_ACTIVITY_KINDS` annotation opens and anchored to the turn
+  that dispatched it. It exists because a harness that hands off to background agents clears
+  `turn_started_at` and freezes `last_turn_ms`, leaving nothing on the record that dates a request
+  still in flight. Released only when a root turn closes with nothing running, so it spans both the
+  hand-off and the gaps between a workflow's phases.
 - `SessionRecord.interrupt_pending_at` and `interrupt_pending_source` expose operator interrupt intent separately from lifecycle proof.
   They freeze the user-visible timer and status wording while delivery remains blocked, clear on terminal evidence or a new root generation, and expire when an interrupt cannot be confirmed.
 - `SessionRecord.requested_end_reason`: the end reason to persist when this session terminates,
