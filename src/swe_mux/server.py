@@ -270,6 +270,7 @@ from .session_attachments import (
 )
 from .session_control import SessionControlService
 from .session_recovery import SessionRecoveryStore
+from .session_resume import ResumeRefused, resolve_latest_run, resume_run
 from .settings_store import SettingsStore
 from .spawn_contract import (
     SpawnRequest,
@@ -307,6 +308,7 @@ from .transcript_view import (
     conversation_view_cached,
     final_reply_text,
     parse_transcript_with_watermark,
+    resolve_cut_offset,
 )
 from .ui_build import read_ui_build_id
 from .usage import UsageManager
@@ -936,6 +938,7 @@ def create_app(
             web.get("/api/history/duplicates", list_history_duplicates),
             web.post("/api/history/duplicates/repair", repair_history_duplicates),
             web.get("/api/history/{sid}/transcript", history_transcript),
+            web.get("/api/history/{sid}/branch-points", history_branch_points),
             web.post("/api/history/{sid}/resume", resume_history),
             web.delete("/api/history/{sid}", delete_history_entry),
             web.get("/api/events", list_events),
@@ -1612,6 +1615,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         spawn_op=lambda body: _spawn_from_body(app, body),
         enqueue=prompt_queue.enqueue,
         notify=automation_store.notify,
+        # Read-only, and only for a schedule whose action is `resume`: the conversation
+        # is named by a history run id, and following one to where it has got to walks
+        # rollovers in the index and `resume` edges in the lineage table.
+        history=history,
+        automation_store=automation_store,
     )
     app["schedules"] = schedules
     app["schedule_store"] = schedule_store
@@ -4760,7 +4768,60 @@ async def _schedule_view(
         **schedule,
         "project_name": project.name if project else "",
         "blocked": blocked,
+        "target": await _schedule_target_view(request, schedule),
         "runs": await store.runs(str(schedule["id"]), limit=runs),
+    }
+
+
+async def _schedule_target_view(
+    request: web.Request, schedule: dict[str, Any]
+) -> dict[str, Any] | None:
+    """What a resume schedule points at, named the way the operator would name it.
+
+    Resolved on read rather than stored beside the id, for the same reason `blocked`
+    is: a stored label would keep claiming a conversation that has since been deleted
+    from History, and a row that reads armed against a target that no longer exists is
+    exactly the lie this surface exists to avoid. ``missing`` is the honest answer, and
+    the schedule's next fire will disable itself on it.
+
+    For a rolling continuation this also reports where the conversation has actually
+    got to, which is the one thing about that kind a reader cannot work out for
+    themselves.
+    """
+    if str(schedule.get("action") or "spawn") != "resume":
+        return None
+    run_id = str(schedule.get("target_run_id") or "")
+    history = request.app.get("history")
+    if not run_id or history is None:
+        return {"run_id": run_id, "missing": True}
+    row = await history.history_entry(run_id)
+    if row is None:
+        return {"run_id": run_id, "missing": True}
+    resolved = row
+    if str(schedule.get("target_kind")) == "latest_of_session":
+        resolved = (
+            await resolve_latest_run(
+                run_id,
+                history=history,
+                automation_store=request.app["automation_store"],
+            )
+            or row
+        )
+    # The two-name rule is `session_titles.py`'s, and asking it is what keeps this row in
+    # step with the History browser, the sidebar, and every other surface that names a run.
+    titles = await session_titles.generated_titles(
+        request.app.get("automation_store"),
+        {session_titles.row_run_id(row), session_titles.row_run_id(resolved)},
+    )
+    return {
+        "run_id": run_id,
+        "missing": False,
+        "backend": str(row.get("backend") or ""),
+        "name": session_titles.row_display_name(row, titles),
+        "resolved_run_id": str(resolved["id"]),
+        "resolved_name": session_titles.row_display_name(resolved, titles),
+        "resolved_at": resolved.get("last_message_at") or resolved.get("spawned_at"),
+        "context_pct": resolved.get("final_context_pct"),
     }
 
 
@@ -6850,7 +6911,7 @@ def _branch_point_payload(
     to continue from.
 
     ``before`` is answered from the *preceding* message, because that is the record
-    the cut actually lands on. Stated here exactly as `_resolve_branch_cut` decides it:
+    the cut actually lands on. Stated here exactly as `resolve_cut_offset` decides it:
     a listing that offered a cut the request then refused would be a picker whose rows
     lie.
     """
@@ -6875,34 +6936,6 @@ def _branch_mode_state(cut_at: CutPoint | None) -> dict[str, Any]:
     if cut_at.open_tool_calls:
         return {"eligible": False, "reason": "unanswered_tool_calls"}
     return {"eligible": True, "reason": None}
-
-
-def _resolve_branch_cut(
-    points: list[CutPoint], message_id: str, mode: str
-) -> tuple[int, CutPoint] | tuple[None, str]:
-    """The byte offset a branch is cut at, or the code explaining why there is none.
-
-    Every cut lands on some message's end offset, never on an arbitrary byte: cutting
-    *before* a message means cutting after the one that precedes it. That is what
-    keeps a fork's last record a real conversational record rather than whichever
-    housekeeping line the CLI happened to write next, and it is why "before the
-    oldest message this window can name" is refused instead of approximated with
-    byte zero.
-    """
-    index = next((i for i, point in enumerate(points) if point.message_id == message_id), None)
-    if index is None:
-        return None, "branch_point_unknown"
-    if mode == "after":
-        point = points[index]
-        if point.open_tool_calls:
-            return None, "unanswered_tool_calls"
-        return point.source_end, point
-    if index == 0:
-        return None, "outside_window"
-    previous = points[index - 1]
-    if previous.open_tool_calls:
-        return None, "unanswered_tool_calls"
-    return previous.source_end, points[index]
 
 
 def _branch_source(request: web.Request) -> tuple[Any, str, Any] | web.Response:
@@ -6932,26 +6965,29 @@ def _branch_source(request: web.Request) -> tuple[Any, str, Any] | web.Response:
 
 
 async def _read_branch_points(
-    session: Any, limit: int
+    path: Path | None, backend: str, native_id: str | None, limit: int
 ) -> tuple[list[CutPoint], dict[str, str], bool] | str:
     """``(points, text_by_id, truncated)`` for this conversation, or a refusal code.
 
     The reader answers two questions in one parse: where the cuts are, and what the
     operator would recognise each one by. Both come from the same window, so a point
     can never be offered with somebody else's words beside it.
+
+    Takes a conversation rather than a session, because the two pickers that need it
+    do not both have a pane: the rail's Branch button has one, and choosing the fixed
+    point a *schedule* will fork every night is done from a History row whose session
+    ended weeks ago.
     """
-    record = session.record
-    path = session.transcript_path
-    if not conversation_is_readable(path, record.backend, record.native_session_id):
+    if not conversation_is_readable(path, backend, native_id):
         return "no_transcript"
     try:
         points = await asyncio.wait_for(
             asyncio.to_thread(
                 conversation_cut_points,
                 path,
-                record.backend,
+                backend,
                 limit=limit,
-                native_id=record.native_session_id,
+                native_id=native_id,
             ),
             timeout=BRANCH_POINTS_TIMEOUT_SECONDS,
         )
@@ -6959,9 +6995,9 @@ async def _read_branch_points(
             asyncio.to_thread(
                 conversation_view_cached,
                 path,
-                record.backend,
+                backend,
                 limit=limit,
-                native_id=record.native_session_id,
+                native_id=native_id,
             ),
             timeout=BRANCH_POINTS_TIMEOUT_SECONDS,
         )
@@ -7011,7 +7047,9 @@ async def session_branch_points(request: web.Request) -> web.Response:
     }
     if strategy != "transcript_fork":
         return json_response({**empty, "reason": "strategy_has_no_points"})
-    outcome = await _read_branch_points(session, limit)
+    outcome = await _read_branch_points(
+        session.transcript_path, record.backend, record.native_session_id, limit
+    )
     if isinstance(outcome, str):
         return json_response({**empty, "reason": outcome})
     points, text_by_id, truncated = outcome
@@ -7020,6 +7058,61 @@ async def session_branch_points(request: web.Request) -> web.Response:
     # truncated is beside the point: a fork always carries the conversation from its
     # first byte, so a bounded read costs which cuts can be *named*, never what one
     # contains.
+    payload = [
+        _branch_point_payload(
+            point,
+            points[index - 1] if index else None,
+            text_by_id.get(point.message_id, ""),
+        )
+        for index, point in enumerate(points)
+    ]
+    return json_response({**empty, "points": payload, "truncated": truncated})
+
+
+async def history_branch_points(request: web.Request) -> web.Response:
+    """Where an *ended* conversation can be forked, for a schedule to pin a point in.
+
+    The same listing `session_branch_points` produces, read from a History row instead
+    of a live pane. It exists because the fixed point a nightly fork-and-resume cuts at
+    is chosen from History - the pane that held that conversation is usually long gone,
+    and requiring one would restrict the choice to conversations that happen to be open.
+
+    Every "nothing to offer" case answers 200 with a ``reason``, for the same reason the
+    session listing does: asking a conversation with nothing to fork is ordinary.
+    """
+    row = await request.app["history"].history_entry(request.match_info["sid"])
+    if not row:
+        raise KeyError(request.match_info["sid"])
+    backend = str(row.get("backend") or "")
+    try:
+        limit = int(request.query.get("limit") or CONVERSATION_DEFAULT_LIMIT)
+    except ValueError:
+        raise web.HTTPBadRequest(text="limit must be an integer") from None
+    limit = max(1, min(limit, CONVERSATION_MAX_LIMIT))
+    strategy = branch_strategy(backend)
+    empty: dict[str, Any] = {
+        "history_id": str(row["id"]),
+        "backend": backend,
+        "conversation_id": str(row.get("native_id") or ""),
+        "strategy": strategy,
+        "from_message": strategy == "transcript_fork",
+        "points": [],
+        "truncated": False,
+        "reason": None,
+    }
+    if not row.get("agent_visible") or not has_observable_transcript(backend):
+        return json_response({**empty, "reason": "not_agent"})
+    if strategy != "transcript_fork":
+        return json_response({**empty, "reason": "strategy_has_no_points"})
+    outcome = await _read_branch_points(
+        Path(str(row["transcript_path"])) if row.get("transcript_path") else None,
+        backend,
+        str(row.get("native_id") or ""),
+        limit,
+    )
+    if isinstance(outcome, str):
+        return json_response({**empty, "reason": outcome})
+    points, text_by_id, truncated = outcome
     payload = [
         _branch_point_payload(
             point,
@@ -7049,7 +7142,12 @@ async def _branch_by_transcript_fork(
         return json_response(
             {"error": f"no adapter for {record.backend}", "code": "adapter_missing"}, 422
         )
-    outcome = await _read_branch_points(session, CONVERSATION_MAX_LIMIT)
+    outcome = await _read_branch_points(
+        session.transcript_path,
+        record.backend,
+        record.native_session_id,
+        CONVERSATION_MAX_LIMIT,
+    )
     if isinstance(outcome, str):
         return json_response(
             {"error": f"the conversation cannot be forked: {outcome}", "code": outcome}, 409
@@ -7069,7 +7167,7 @@ async def _branch_by_transcript_fork(
         return json_response(
             {"error": "mode must be 'before' or 'after'", "code": "bad_mode"}, 422
         )
-    cut, detail = _resolve_branch_cut(points, message_id, mode)
+    cut, detail = resolve_cut_offset(points, message_id, mode)
     if cut is None:
         assert isinstance(detail, str)
         log.info(
@@ -9259,18 +9357,14 @@ async def history_transcript(request: web.Request) -> web.Response:
     )
 
 
-# How long a resumed pane must stay up before the resume counts as done. The
-# refusal this measures killed a pane 1.65 s after spawn (measured 2026-08-14), so
-# the window has to clear that with margin. It is paid by every successful resume
-# too, which is the deliberate trade: a resume already spends seconds replaying a
-# conversation, and the alternative is answering 201 for a pane that is gone.
-RESUME_SETTLE_SECONDS = 2.5
-# One retry, for the narrow race of resuming the instant the previous pane closed.
-RESUME_ATTEMPTS = 2
-RESUME_RETRY_BACKOFF_SECONDS = 1.0
-
-
 async def resume_history(request: web.Request) -> web.Response:
+    """Reopen a conversation from its History row, in a pane beside the current one.
+
+    The decision to resume, every refusal, and the proof that the pane came up all
+    live in `session_resume.py`, which the scheduled-resume path calls too. What stays
+    here is what a *browser* resume owes and a scheduled one does not: the effective
+    display name, where the pane is attached in the layout, and an HTTP answer.
+    """
     row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
@@ -9288,152 +9382,18 @@ async def resume_history(request: web.Request) -> web.Response:
         await _decorate_generated_titles(request.app, [row])
     body = await request.json() if request.can_read_body else {}
     target_project = str(body.get("project_id") or row.get("project_id") or "")
-    requirements = {
-        "native_id_missing": not row.get("native_id"),
-        "cwd_missing": not row.get("cwd") or not Path(str(row["cwd"])).is_dir(),
-        "transcript_unavailable": not row.get("transcript_path")
-        or not Path(str(row["transcript_path"])).is_file(),
-        "target_project_missing": target_project not in request.app["projects"].projects,
-        "adapter_missing": row.get("backend") not in request.app["sessions"].adapters,
-    }
-    if code := next((key for key, failed in requirements.items() if failed), None):
-        return json_response(
-            {"error": code.replace("_", " "), "code": code},
-            409 if code == "transcript_unavailable" else 422,
+    try:
+        outcome = await resume_run(
+            row,
+            sessions=request.app["sessions"],
+            projects=request.app["projects"],
+            target_project_id=target_project,
+            name=str(body.get("name") or ""),
         )
-    # A conversation a live session currently claims must not be resumed into a
-    # second pane: two sessions tracking one conversation is exactly the linked
-    # status/token cross-attribution the identity invariant forbids. The live
-    # pane is where that conversation continues; Branch is the flow for forking
-    # it. Rows whose pane has since rolled to a different conversation resume
-    # fine — their native id is no longer claimed.
-    live_owner = next(
-        (
-            other
-            for other in request.app["sessions"].sessions.values()
-            if other.record.backend == row["backend"]
-            and other.record.state not in {"exited", "crashed"}
-            and other.record.native_session_id == row["native_id"]
-        ),
-        None,
-    )
-    if live_owner is not None:
-        return json_response(
-            {
-                "error": f"conversation is live in session {live_owner.record.name}",
-                "code": "conversation_live",
-                "session_id": live_owner.record.id,
-            },
-            409,
-        )
-    # The same conversation can also be held by a process mux does not own, and the
-    # check above cannot see one: a conversation parked into a Claude background
-    # agent outlives the pane that parked it, keeps running under the CLI's own
-    # daemon, and stays checked out for as long as it lives. Resuming it spawns a
-    # CLI that prints its refusal and exits 1 about a second later, so without this
-    # the operator gets a grey pane and no reason. Refused rather than forked,
-    # because forking silently produces a *second* conversation where the operator
-    # asked to return to one.
-    holder = request.app["sessions"].conversation_holder(
-        str(row["backend"]), str(row["native_id"])
-    )
-    if holder is not None:
-        log.info(
-            "resume of run %s refused: %s held by pid %s (kind %s, job %s)",
-            row["id"],
-            row["native_id"],
-            holder.pid,
-            holder.kind or "unknown",
-            holder.job_id or "-",
-        )
-        return json_response(
-            {
-                "error": holder.describe(),
-                "code": "conversation_held",
-                "holder": {
-                    "kind": holder.kind,
-                    "pid": holder.pid,
-                    "job_id": holder.job_id,
-                    "name": holder.name,
-                },
-            },
-            409,
-        )
+    except ResumeRefused as refusal:
+        return json_response(refusal.payload(), refusal.status)
+    session = outcome.session
     owning_project = request.app["projects"].projects[target_project]
-    # A resume that reopens the same conversation, in the same file, under the same
-    # id continues an agent run that already has a row: the pane inherits it rather
-    # than opening a second entry over one file. Only the adapter can say whether
-    # this resume is that, because the answer is the CLI's own transcript-resolution
-    # rule -- Claude resolves by working directory (a resume into another root writes
-    # a different file, so that is a new conversation), Codex by thread id.
-    adapter = request.app["sessions"].adapters[str(row["backend"])]
-    adopts_run = bool(adapter.resume_continues_conversation(str(row["cwd"]), owning_project.root))
-    requested_name = str(body.get("name") or "")
-    # `auto_named` arrives from SQLite as 0/1, so an `is not False` test never
-    # matched: a conversation the user had renamed came back under its *generated*
-    # title instead of the name they pinned.
-    inherited_name = (
-        str(row.get("generated_title"))
-        if bool(row.get("auto_named")) and row.get("generated_title")
-        else str(row["name"])
-    )
-
-    def _took_the_conversation(pane: Any) -> bool:
-        """The resumed CLI publishing our own pid against the conversation.
-
-        The same file that proves somebody else holds a conversation proves *we*
-        do once the resume lands, which ends the settle window as soon as the
-        answer is known instead of paying it in full on every success. Matched on
-        pid: a state file naming the conversation but another process is the
-        failure this whole path exists to catch, not evidence of it working.
-        """
-        holder = request.app["sessions"].conversation_holder(
-            str(row["backend"]), str(row["native_id"])
-        )
-        return holder is not None and holder.pid == getattr(pane.record, "pid", 0)
-
-    # Spawned and then *proved*: the preflight above rules out the one refusal mux
-    # can predict, and this reports every other one in the CLI's own words rather
-    # than returning 201 for a pane that is already gone. Two attempts, because a
-    # resume issued the moment the previous pane closed can lose one race with the
-    # exiting process, and one retry is the whole cost of surviving it.
-    session, attempts, failure = await spawn_settled(
-        request.app["sessions"],
-        alive=_took_the_conversation,
-        flow=f"resume of run {row['id']}",
-        settle_seconds=RESUME_SETTLE_SECONDS,
-        attempts=RESUME_ATTEMPTS,
-        retry_backoff_seconds=RESUME_RETRY_BACKOFF_SECONDS,
-        backend=str(row["backend"]),
-        # The conversation keeps its name. A suffix here compounded on every
-        # resume ("… resumed resumed") and, for Claude, retitled an entry the
-        # resumed pane now shares rather than replaces.
-        name=requested_name or inherited_name,
-        cwd=owning_project.root,
-        project_id=target_project,
-        resume_native_id=str(row["native_id"]),
-        adopt_run_id=str(row["id"]) if adopts_run else None,
-        auto_named=None if requested_name else bool(row.get("auto_named")),
-        project_label=owning_project.name,
-    )
-    if session is None:
-        detail = failure.describe() if failure is not None else "no failure recorded"
-        log.error(
-            "resume of run %s (conversation %s) died on spawn after %d attempts: %s",
-            row["id"],
-            row["native_id"],
-            attempts,
-            detail,
-        )
-        return json_response(
-            {
-                "error": f"the resumed session exited immediately: {detail}",
-                "code": "resume_failed",
-                "attempts": attempts,
-                "detail": failure.text if failure is not None else "",
-            },
-            503,
-        )
     next_layout = attach_terminal(
         owning_project.layout,
         session.record.id,

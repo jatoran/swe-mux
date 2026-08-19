@@ -20,6 +20,7 @@ import {
 import { drawerTabVisible, visibleDrawerTabs } from './drawerVisibility'
 import { ProcessesTab } from './ProcessesTab'
 import { ScheduleTab } from './ScheduleTab'
+import type { ScheduleDraft } from './schedules'
 import type { Preview, ProjectScope } from './processFleet'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
@@ -109,6 +110,11 @@ type Props = {
    *  Processes one so it survives a tab switch and a Project change. */
   scheduleScope: string
   onScheduleScope: (scope: string) => void
+  /** Schedule: a resume seeded from a History row or a pane, opened straight into the
+   *  editor. Owned by the caller because the seed is created where the conversation is
+   *  (History, the session menu), not in the drawer. */
+  scheduleSeed: ScheduleDraft | null
+  onScheduleSeedConsumed: () => void
   /** Schedule: the launch profiles the editor offers, where a model flag lives. */
   profiles: LaunchProfile[]
   /** A loopback server the Processes tab registered as a preview tab beside its session. */
@@ -385,6 +391,8 @@ export function UtilityDrawer(props: Props) {
           profiles={props.profiles}
           scope={props.scheduleScope}
           onScope={props.onScheduleScope}
+          seed={props.scheduleSeed}
+          onSeedConsumed={props.onScheduleSeedConsumed}
           onOpenSession={props.onOpenSession}
           // A blocked schedule's way out is a `SettingLink`, which routes itself and closes
           // this drawer on mobile like every other settings navigation.

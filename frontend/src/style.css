@@ -2714,11 +2714,35 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .schedule-editor-actions{display:flex;justify-content:flex-end;gap:6px}
 .schedule-editor-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;cursor:pointer}
 .schedule-editor-actions button.primary{border-color:var(--green)}
+.schedule-editor-actions button:disabled{opacity:.5;cursor:default}
+/* What a resume points at. Two names can appear here - the conversation it was pinned
+   to and where that work actually is now - so both wrap rather than clipping: this is
+   the row's only statement of what it will reopen, and a truncated one is a row that
+   names the wrong conversation. */
+.schedule-target{display:flex;flex-direction:column;gap:2px;margin:6px 0;padding:5px 7px;border:1px solid var(--line);background:var(--panel2)}
+.schedule-target strong{font-size:9px;font-weight:500}
+.schedule-target small{color:var(--muted);font-size:8px;line-height:1.5;word-break:break-word}
+.schedule-target-summary{display:flex;flex-direction:column;gap:2px;margin:0;padding:5px 7px;border:1px solid var(--line);background:var(--panel2);font-size:9px}
+.schedule-target-summary strong{color:var(--muted);font-size:8px;font-weight:400;text-transform:uppercase;letter-spacing:.06em}
+.schedule-target-summary span{min-width:0;word-break:break-word}
+.schedule-note{margin:0;color:var(--muted);font-size:8px;line-height:1.5}
+.schedule-branch-points{display:flex;flex-direction:column;gap:5px;margin:0;padding:7px;border:1px solid var(--line);max-height:260px;overflow:auto}
+.schedule-branch-points legend{padding:0 4px;color:var(--muted);font-size:8px}
+/* Qualified for the same reason `.schedule-check` is: the editor's own column rule is
+   two classes deep, and a bare class here would stack the radio above its text. */
+.schedule-editor label.schedule-branch-point{flex-direction:row;align-items:flex-start;gap:6px;padding:4px;border:1px solid transparent;cursor:pointer}
+.schedule-editor label.schedule-branch-point input{flex:none;margin-top:2px}
+.schedule-editor label.schedule-branch-point>span{min-width:0;display:flex;flex-direction:column;gap:2px}
+.schedule-editor label.schedule-branch-point strong{color:var(--text);font-size:8px;font-weight:500}
+.schedule-editor label.schedule-branch-point small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.schedule-editor label.schedule-branch-point.active{border-color:var(--green);background:var(--panel2)}
+.schedule-editor label.schedule-branch-point.blocked{opacity:.45;cursor:default}
 @media(max-width:760px){
   .schedule-filters select,.schedule-filters button{height:calc(38px*var(--ui-scale));min-height:calc(38px*var(--ui-scale))}
   .schedule-heading{min-height:48px}
   .schedule-actions button,.schedule-followup-editor button{min-height:38px}
   .schedule-editor-actions button{min-height:42px}
+  .schedule-editor label.schedule-branch-point{min-height:44px}
 }
 /* Files tab: the browser fills the drawer column. Its own header carries the Project
    root, which is the only thing identifying which tree this is once it left the pane

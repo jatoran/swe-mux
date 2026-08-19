@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from swe_mux import server
+from swe_mux import session_resume
 from swe_mux.adapters import CodexAdapter
 from swe_mux.config import Config, LaunchProfile, load_config, update_config
 from swe_mux.models import ProjectRecord
@@ -237,7 +237,9 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(
     # Codex publishes no per-process state, so nothing can prove the resumed pane
     # took the conversation early and it waits the settle window out. Shortened
     # here rather than skipped: the wait is part of what this path now does.
-    monkeypatch.setattr(server, "RESUME_SETTLE_SECONDS", 0.3)
+    # Patched on `session_resume`, which owns the resume for both the route and the
+    # scheduled-resume path.
+    monkeypatch.setattr(session_resume, "RESUME_SETTLE_SECONDS", 0.3)
     captured: list[dict[str, Any]] = []
     lineage: list[tuple[str, str, str, dict[str, Any]]] = []
     transcript = tmp_path / "rollout.jsonl"

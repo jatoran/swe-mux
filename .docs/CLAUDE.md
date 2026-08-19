@@ -139,15 +139,19 @@
   `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing scheduled runs (the triggers and their wall-clock/DST arithmetic, the missed-window
-  policy, the fire guards, the Schedule drawer tab, or where a definition is stored):
+  policy, the fire guards, the resume action and its target kinds, the Schedule drawer tab, or
+  where a definition is stored):
   `design/features/scheduled-runs.md`, `design/features/automation-enablement.md`,
-  `design/features/prompt-queue.md`, `design/features/ui.md`, `design/interfaces.md`,
-  `design/data-model.md`, `technical/backend/packages.md`, `technical/backend/sqlite.md`,
-  `technical/frontend/packages.md`.
-  The rule the design turns on: a schedule is a *user-authored deferred spawn*, so it goes
-  through the ordinary spawn path and the ordinary prompt queue and never grows a second
-  authority; and the definitions stay machine-local, because a schedule committed to a
-  repository would arm itself in every clone and worktree.
+  `design/features/prompt-queue.md`, `design/features/history.md`, `design/features/ui.md`,
+  `design/interfaces.md`, `design/data-model.md`, `technical/backend/packages.md`,
+  `technical/backend/sqlite.md`, `technical/frontend/packages.md`.
+  The rule the design turns on: a schedule is a *user-authored deferred press of a button the
+  author could have pressed themselves*, so it goes through the ordinary spawn path, the
+  ordinary resume path (`session_resume.py`, shared with the History Resume button) and the
+  ordinary prompt queue, and never grows a second authority; a resume names its conversation by
+  history *run* id rather than session id, because a session is exactly the thing that drifts;
+  and the definitions stay machine-local, because a schedule committed to a repository would
+  arm itself in every clone and worktree.
 - Changing per-project automation opt-in, the enablement dependency graph, or its toggle
   surface: `design/features/automation-enablement.md`,
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`

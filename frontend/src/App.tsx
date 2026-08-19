@@ -25,7 +25,7 @@ import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
 import { agentTargetName } from './agentTargets'
-import { runDisplayName } from './sessionNames'
+import { runDisplayName, sessionDisplayName } from './sessionNames'
 import {
   defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
   projectCreateRoot, suggestFolderName, toggleInitScript,
@@ -42,6 +42,7 @@ import { UsageDashboard } from './UsageDashboardView'
 import { NetworkUsageModal } from './NetworkUsageModal'
 import { StorageUsageModal } from './StorageUsageModal'
 import { HistoryBrowser } from './HistoryBrowser'
+import { resumeDraft, type ScheduleDraft, type ScheduleTargetKind } from './schedules'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
@@ -426,6 +427,11 @@ export function App() {
   // The Schedule tab's scope, kept here for the same reason: '' is every Project's
   // schedules ("what fires tonight"), anything else is one Project's.
   const [scheduleScope,setScheduleScope]=useState<string>('')
+  // A resume schedule seeded from the conversation it reopens. It lives here rather
+  // than in the Schedule tab because the two places that create one - a History row
+  // and a pane's own menu - are the two places that know which conversation is meant,
+  // and the tab has no way to find one.
+  const [scheduleSeed,setScheduleSeed]=useState<ScheduleDraft|null>(null)
   // Which Project's templates join the global ones. Unlike the other surfaces
   // this is additive rather than restrictive, so the app menu still passes the
   // active Project: opening "unscoped" would remove templates, not filters.
@@ -3901,6 +3907,47 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
+  // "Resume later…": author a schedule that reopens this conversation, seeded from the
+  // conversation itself. The Schedule tab owns everything about *when*; it cannot find
+  // a conversation, which is why the seed is made here, where one is in hand.
+  //
+  // The two entry points seed different kinds deliberately. A History row is a
+  // conversation somebody is reading, so it pins that one. A live pane is work in
+  // progress whose conversation will keep moving - a rollover, a resume - so it follows
+  // the work rather than freezing today's row.
+  const scheduleResume = (
+    seed: { run_id: string; label: string; backend: string; kind: ScheduleTargetKind },
+    targetProject: string,
+  ) => {
+    const owner = targetProject || projectId
+    if (!owner) { setError('A schedule belongs to a Project, and this conversation has none.'); return }
+    setScheduleScope(owner)
+    setScheduleSeed(resumeDraft(seed))
+    setHistoryOpen(false)
+    setContextMenu(null)
+    openDrawerTab('schedule', owner)
+    // Same reason the History resume closes these: the drawer is behind a full-screen
+    // overlay and, on a phone, a side panel too.
+    setSidebarOpen(false)
+  }
+
+  const scheduleResumeFromHistory = (entry: HistoryEntry) => scheduleResume(
+    { run_id: entry.id, label: historyName(entry), backend: entry.backend, kind: 'run' },
+    entry.project_id || projectId,
+  )
+
+  // A pane's own run, not its session id: a pane that rolled its conversation or
+  // inherited one owns a History row keyed by the run, and a session id finds nothing.
+  const scheduleResumeFromSession = (session: Session) => scheduleResume(
+    {
+      run_id: session.agent_run_id || session.id,
+      label: sessionDisplayName(session),
+      backend: session.backend,
+      kind: 'latest_of_session',
+    },
+    session.project_id,
+  )
+
   // Fork a conversation into a sibling pane. The daemon writes the forked
   // conversation itself (`transcript_fork`) or asks the CLI for a child thread,
   // attaches the new pane, and returns the new session; refresh() re-syncs the
@@ -4734,6 +4781,9 @@ export function App() {
     { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.project_id, 'horizontal') } } },
     { id: 'session.broadcastMembership', label: commandSession?.broadcast ? 'Remove selected session from broadcast' : 'Add selected session to broadcast', category: 'input', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api<Session>('POST', `/api/sessions/${commandSession.id}/broadcast-set`, { include: !commandSession.broadcast }).then(updated => { updateSession(updated); setContextMenu(null) }) } },
     { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
+    // Offered on a live pane too, and that is the point: "pick this up on Tuesday" is
+    // asked about work in progress far more often than about something already ended.
+    { id: 'session.resumeLater', label: 'Resume selected agent later…', category: 'history', available: !!commandSession && isAgent(commandSession), disabledReason: 'Select an agent session', run: () => commandSession && scheduleResumeFromSession(commandSession) },
     { id: 'project.newTerminal', label: 'New terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void spawnTerminal(commandProject.id); setProjectMenu(null) } },
     { id: 'project.newTerminalCustom', label: 'New custom terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) openLauncher(commandProject.id); setProjectMenu(null) } },
     { id: 'project.reveal', label: 'Reveal selected project in Explorer', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void api('POST', '/api/reveal', { path: commandProject.root }); setProjectMenu(null) } },
@@ -5963,6 +6013,8 @@ export function App() {
         // drawer is sitting beside rather than pinning whichever was active on open.
         scheduleScope={scheduleScope&&projects.some(project=>project.id===scheduleScope)?scheduleScope:(projectId||'')}
         onScheduleScope={setScheduleScope}
+        scheduleSeed={scheduleSeed}
+        onScheduleSeedConsumed={()=>setScheduleSeed(null)}
         profiles={profiles}
         // The Processes tab registers the preview itself, so this only lands the result:
         // focused, because attaching a preview from the drawer is a request to look at it.
@@ -6372,7 +6424,7 @@ export function App() {
     {redeploying&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App redeploying"><div class="modal daemon-reload-modal"><h2>Rebuilding + redeploying app…</h2><p>The new bundle builds while the current app keeps running, then the app restarts around your live sessions. This takes a few minutes; the page reloads automatically. A failed build leaves the current app untouched.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions (a few minutes). A failed build leaves the current app running.</p><div class="modal-actions"><button onClick={()=>void startRedeploy()}>Rebuild + redeploy</button><button onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button></div></div></div>}
 
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialSetting={projectsManagerFocus?.setting} revealToken={revealToken} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 

@@ -38,14 +38,19 @@ test('every row fits the drawer column, and a long label ellipsizes rather than 
   await page.waitForSelector(ROW)
   const g = await geometry(page)
 
-  expect(g.rows).toHaveLength(3)
+  expect(g.rows).toHaveLength(4)
   expect(g.overflow).toBeLessThanOrEqual(1)
   for (const row of g.rows) expect(row.right).toBeLessThanOrEqual(g.columnRight + 0.5)
-  // The second schedule's label is far longer than the column; it must be the part that clips.
-  expect(g.headings[1].clipped).toBe(true)
-  const overflow = await page.evaluate(() =>
-    getComputedStyle(document.querySelectorAll('.schedule-heading strong')[1]).textOverflow)
-  expect(overflow).toBe('ellipsis')
+  // One schedule's label is far longer than the column; it must be the part that clips.
+  // Found by its text rather than by position, because the order is the daemon's sort
+  // and a new row landing between two others is not this test's subject.
+  const long = await page.evaluate(() => {
+    const heading = [...document.querySelectorAll('.schedule-heading strong')]
+      .find(element => element.textContent?.startsWith('Weekly dependency')) as HTMLElement
+    return { clipped: heading.scrollWidth > heading.clientWidth, overflow: getComputedStyle(heading).textOverflow }
+  })
+  expect(long.clipped).toBe(true)
+  expect(long.overflow).toBe('ellipsis')
   // Collapsed means collapsed: no prompt body and no run history until asked for.
   expect(g.details).toBe(0)
 })
@@ -131,6 +136,71 @@ test('the cron field and its presets share one row, and a preset fills the field
   await input.fill('0 10 * * *')
   await expect(select).toHaveValue('')
   await expect(select.locator('option').first()).toHaveText('Custom')
+})
+
+test('a resume row says what it reopens and where that conversation has got to', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/schedule-harness.html')
+  await page.waitForSelector(ROW)
+
+  // The cadence alone does not say what a schedule does once two actions exist, so the
+  // heading carries both.
+  const resume = page.locator(ROW).filter({ hasText: 'Pick the migration back up' })
+  await expect(resume.locator('.schedule-heading small')).toContainText('continues Storage migration (continued)')
+
+  await resume.locator('.schedule-heading').click()
+  const target = resume.locator('.schedule-target')
+  await expect(target).toContainText('Wherever this work has got to')
+  // Both names, because the pinned row and where the work actually is have diverged -
+  // which is the one thing about a rolling target a reader cannot work out themselves.
+  await expect(target).toContainText('[claude] Storage migration')
+  await expect(target).toContainText('now at Storage migration (continued)')
+  await expect(target).toContainText('stops above 70% context')
+  const overflow = await page.evaluate(() => {
+    const body = document.querySelector('.schedule-body') as HTMLElement
+    return body.scrollWidth - body.clientWidth
+  })
+  expect(overflow).toBeLessThanOrEqual(1)
+})
+
+test('editing a resume offers the three target kinds and never a backend', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/schedule-harness.html')
+  await page.waitForSelector(ROW)
+  await page.locator(ROW).filter({ hasText: 'Pick the migration back up' })
+    .getByRole('button', { name: 'edit' }).click()
+
+  await expect(page.locator('.schedule-target-summary')).toContainText('[claude] Storage migration')
+  // A resume runs the harness the conversation belongs to. Offering an Agent select
+  // would offer control the daemon refuses.
+  await expect(page.getByLabel('Agent', { exact: true })).toHaveCount(0)
+  const kind = page.getByLabel('What to reopen')
+  await expect(kind).toHaveValue('latest_of_session')
+  await expect(kind.locator('option')).toHaveCount(3)
+  // The ceiling belongs to the accumulating kind and to nothing else.
+  await expect(page.getByLabel('Stop above')).toHaveValue('70')
+  await kind.selectOption('run')
+  await expect(page.getByLabel('Stop above')).toHaveCount(0)
+})
+
+test('a fork schedule cannot be saved until a legal cut point is chosen', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/schedule-harness.html')
+  await page.waitForSelector(ROW)
+  await page.locator(ROW).filter({ hasText: 'Pick the migration back up' })
+    .getByRole('button', { name: 'edit' }).click()
+  await page.getByLabel('What to reopen').selectOption('fork_point')
+
+  const points = page.locator('.schedule-branch-point')
+  await expect(points).toHaveCount(3)
+  const save = page.getByRole('button', { name: 'Save' })
+  await expect(save).toBeDisabled()
+  // The daemon decided this one is illegal; the browser renders that answer rather than
+  // recomputing it, and an unselectable row is what stops a nightly fork that fails.
+  await expect(points.filter({ hasText: 'Reading the remaining migrations' }).locator('input')).toBeDisabled()
+
+  await points.filter({ hasText: 'Migrated the first two tables' }).locator('input').check()
+  await expect(save).toBeEnabled()
 })
 
 test('at phone width the rows still fit and the controls stay tappable', async ({ page }) => {

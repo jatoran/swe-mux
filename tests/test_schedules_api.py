@@ -18,6 +18,7 @@ from swe_mux.server import (
     create_project_schedule,
     delete_schedule,
     error_middleware,
+    history_branch_points,
     list_project_schedules,
     list_schedule_runs,
     list_schedules,
@@ -26,6 +27,8 @@ from swe_mux.server import (
     run_schedule_now,
 )
 
+from .support.claude_transcript import SOURCE_ID, write_source
+
 
 class EventsStub:
     def __init__(self) -> None:
@@ -33,6 +36,48 @@ class EventsStub:
 
     async def emit(self, event_type: str, **payload: Any) -> None:
         self.emitted.append((event_type, payload))
+
+
+class HistoryStub:
+    """The two reads a resume schedule needs from History, and nothing else."""
+
+    def __init__(self, rows: dict[str, dict[str, Any]]) -> None:
+        self.rows = rows
+
+    async def history_entry(self, run_id: str) -> dict[str, Any] | None:
+        return self.rows.get(run_id)
+
+    async def agent_runs_for_session(self, note_id: str) -> list[dict[str, Any]]:
+        return [row for row in self.rows.values() if str(row.get("note_id") or "") == note_id]
+
+
+class AutomationStoreStub:
+    async def lineage(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        return []
+
+    async def annotations(self, **_kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+
+def conversation_row(directory: Path) -> dict[str, Any]:
+    """A History row over a real Claude transcript, which the cut-point list reads."""
+    transcript = write_source(directory)
+    return {
+        "id": "run_a",
+        "native_id": SOURCE_ID,
+        "backend": "claude",
+        "name": "Storage migration",
+        "cwd": str(directory),
+        "project_id": "p1",
+        "note_id": "",
+        "agent_run_seq": 0,
+        "spawned_at": 1.0,
+        "agent_visible": 1,
+        "auto_named": 0,
+        "transcript_path": str(transcript),
+        "final_context_pct": 0.4,
+        "last_message_at": 2.0,
+    }
 
 
 def build_app(tmp_path: Path, *, enabled: frozenset[str]) -> tuple[web.Application, list[Any]]:
@@ -63,6 +108,10 @@ def build_app(tmp_path: Path, *, enabled: frozenset[str]) -> tuple[web.Applicati
     app["config"] = config
     app["events"] = EventsStub()
     app["automation_gate"] = gate
+    conversations = tmp_path / "conversations"
+    conversations.mkdir(exist_ok=True)
+    app["history"] = HistoryStub({"run_a": conversation_row(conversations)})
+    app["automation_store"] = AutomationStoreStub()
     app["schedules"] = ScheduleService(
         store=store,
         projects=projects,
@@ -81,6 +130,7 @@ def build_app(tmp_path: Path, *, enabled: frozenset[str]) -> tuple[web.Applicati
     app.router.add_delete("/api/schedules/{schedule_id}", delete_schedule)
     app.router.add_post("/api/schedules/{schedule_id}/run", run_schedule_now)
     app.router.add_get("/api/schedules/{schedule_id}/runs", list_schedule_runs)
+    app.router.add_get("/api/history/{sid}/branch-points", history_branch_points)
     return app, spawned
 
 
@@ -221,3 +271,92 @@ async def test_unknown_schedule_is_a_404(app_and_spawns) -> None:  # type: ignor
         assert (await client.post("/api/schedules/sch_nope/run")).status == 404
         assert (await client.delete("/api/schedules/sch_nope")).status == 404
         assert (await client.get("/api/schedules/sch_nope/runs")).status == 404
+
+
+def resume_definition(**overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "label": "Pick the migration back up",
+        "prompt": "Carry on where we left off.",
+        "action": "resume",
+        "target_run_id": "run_a",
+        "trigger_kind": "cron",
+        "cron": "0 9 * * mon-fri",
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_a_resume_schedule_is_answered_with_what_it_points_at(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
+    app, _ = app_and_spawns
+    async with TestClient(TestServer(app)) as client:
+        created = await client.post("/api/projects/p1/schedules", json=resume_definition())
+        assert created.status == 201
+        row = await created.json()
+        assert row["action"] == "resume"
+        # Resolved on read rather than stored beside the id, so a row can never go on
+        # naming a conversation that has since been deleted.
+        assert row["target"]["missing"] is False
+        assert row["target"]["name"] == "Storage migration"
+        assert row["target"]["backend"] == "claude"
+        # A spawn has nothing to point at, and says so rather than carrying an empty one.
+        spawn = await (await client.post("/api/projects/p1/schedules", json=definition())).json()
+        assert spawn["target"] is None
+
+
+async def test_a_resume_whose_conversation_is_gone_says_so(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
+    app, _ = app_and_spawns
+    async with TestClient(TestServer(app)) as client:
+        row = await (
+            await client.post("/api/projects/p1/schedules", json=resume_definition())
+        ).json()
+        app["history"].rows.clear()
+        listed = await (await client.get("/api/schedules")).json()
+        target = next(item for item in listed["schedules"] if item["id"] == row["id"])["target"]
+        assert target == {"run_id": "run_a", "missing": True}
+
+
+async def test_a_resume_may_not_name_a_harness(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
+    app, _ = app_and_spawns
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/projects/p1/schedules", json=resume_definition(backend="claude")
+        )
+        assert response.status == 400
+        payload = await response.json()
+        assert payload["code"] == "invalid_backend"
+        assert "backend" in payload["fields"]
+
+
+async def test_history_offers_the_cut_points_a_scheduled_fork_can_pin(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
+    # Read from a History row rather than a live pane, because the conversation a nightly
+    # fork is cut from is normally one whose session ended long ago.
+    app, _ = app_and_spawns
+    async with TestClient(TestServer(app)) as client:
+        payload = await (await client.get("/api/history/run_a/branch-points")).json()
+        assert payload["history_id"] == "run_a"
+        assert payload["from_message"] is True
+        assert payload["reason"] is None
+        assert payload["points"]
+        roles = {point["role"] for point in payload["points"]}
+        assert roles == {"user", "assistant"}
+        # Eligibility is the daemon's answer, per point, and travels with it.
+        assert all("modes" in point for point in payload["points"])
+
+
+async def test_cut_points_for_an_unknown_row_are_a_404(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
+    app, _ = app_and_spawns
+    async with TestClient(TestServer(app)) as client:
+        assert (await client.get("/api/history/run_nope/branch-points")).status == 404
+
+
+async def test_cut_points_for_a_harness_that_cannot_fork_are_a_reason_not_an_error(  # type: ignore[no-untyped-def]
+    app_and_spawns,
+) -> None:
+    app, _ = app_and_spawns
+    app["history"].rows["run_a"]["backend"] = "codex"
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/api/history/run_a/branch-points")
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["points"] == []
+        assert payload["reason"] == "strategy_has_no_points"

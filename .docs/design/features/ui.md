@@ -1785,11 +1785,18 @@ responsive controls.
   implementation, in the daemon, and the editor previews through it, so what is promised before
   saving is what will happen);
   **it never renders a schedule that cannot fire as if it can** (a Project that has not opted
-  into `scheduled_runs`, or an install-wide switch that is off, is drawn on the row itself with
-  the way to fix it, because an armed-looking row that is silently inert is the failure this
-  surface exists to prevent);
+  into `scheduled_runs`, an install-wide switch that is off, or a resume whose conversation has
+  been deleted from History, is drawn on the row itself with the way to fix it, because an
+  armed-looking row that is silently inert is the failure this surface exists to prevent);
   and **a deliberate pause is not an alarm** - a paused schedule is dimmed but never counted as
   needing attention.
+  A schedule that *reopens* a conversation rather than starting a new session is never authored
+  from a blank form here. It arrives seeded from the conversation itself - the History row's
+  "Resume later…" or a pane's own menu - because the one thing this tab cannot offer is a way
+  to find a conversation, and a form with an empty run-id box would be a worse conversation
+  picker than the two that already exist. What the tab does own for a seeded resume is
+  everything else: the trigger, whether the target may move, the ceiling on a rolling
+  continuation, the fixed point a fork is cut at, and what to say on arrival.
   The editor replaces the list rather than opening beside it, for the same width reason.
 - **Alerts** leads with ranked attention (`attention-ranking.md`): the fan-out headline, the
   daily interrupt budget, incidents grouped by channel, any behaviour-mined rule awaiting an

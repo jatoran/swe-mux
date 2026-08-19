@@ -47,6 +47,24 @@ export type BranchPoints = Readonly<{
   reason: BranchPointsReason
 }>
 
+/** The same listing read from a History row instead of a live pane.
+ *
+ *  Its own type rather than a widened `BranchPoints`, because the identity differs and
+ *  conflating them is how a caller ends up sending a history id where a session id was
+ *  meant. Only the point list is shared, which is the part that has to agree: a
+ *  schedule that forks at a point the picker would have refused is an unattended
+ *  session opened on a conversation the provider rejects. */
+export type HistoryBranchPoints = Readonly<{
+  history_id: string
+  backend: string
+  conversation_id: string
+  strategy: string | null
+  from_message: boolean
+  points: BranchPoint[]
+  truncated: boolean
+  reason: BranchPointsReason
+}>
+
 /** What the branch request carries, and what the daemon hands back on success. */
 export type BranchRequest = Readonly<{ from_message_id?: string; mode?: BranchMode }>
 

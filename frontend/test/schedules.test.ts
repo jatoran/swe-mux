@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
-  CRON_PRESETS, cadenceLabel, draftFromSchedule, draftToBody, durationLabel, emptyDraft,
-  needsAttention, orderSchedules, outcomeLabel, presetForCron, untilLabel, type Schedule,
+  CRON_PRESETS, TARGET_KIND_COPY, actionLabel, cadenceLabel, draftFromSchedule, draftToBody,
+  durationLabel, emptyDraft, needsAttention, orderSchedules, outcomeLabel, presetForCron,
+  resumeDraft, targetIsMissing, untilLabel, type Schedule,
 } from '../src/schedules.ts'
 
 const schedule = (overrides: Partial<Schedule> = {}): Schedule => ({
@@ -38,6 +39,23 @@ const schedule = (overrides: Partial<Schedule> = {}): Schedule => ({
   revision: 1,
   created_at: 0,
   updated_at: 0,
+  action: 'spawn',
+  target_run_id: '',
+  target_kind: 'run',
+  target_cut_message_id: '',
+  target_cut_mode: '',
+  context_ceiling_pct: 0,
+  target: null,
+  ...overrides,
+})
+
+const resuming = (overrides: Partial<Schedule> = {}): Schedule => schedule({
+  action: 'resume',
+  target_run_id: 'run_a',
+  target: {
+    run_id: 'run_a', missing: false, backend: 'claude', name: 'Storage migration',
+    resolved_run_id: 'run_a', resolved_name: 'Storage migration',
+  },
   ...overrides,
 })
 
@@ -175,4 +193,79 @@ test('the fortnightly case is named rather than faked', () => {
   assert.match(weekly[0].teaches, /never weeks/)
   assert.match(weekly[0].teaches, /interval/)
   assert.ok(CRON_PRESETS.some(preset => preset.cron === '0 13 1,15 * *'))
+})
+
+
+test('a resume body carries its target and never a harness', () => {
+  // The conversation's History row already fixes the harness, its arguments and the
+  // working directory; the daemon refuses all three on a resume rather than ignoring
+  // them, so a body that sent one would be rejected outright.
+  const seeded = resumeDraft({ run_id: 'run_a', label: 'Migration', backend: 'claude', kind: 'run' })
+  const body = draftToBody({ ...seeded, backend: 'codex', profile_id: 'p' })
+  assert.equal(body.action, 'resume')
+  assert.equal(body.target_run_id, 'run_a')
+  assert.equal(body.target_kind, 'run')
+  assert.equal(body.backend, undefined)
+  assert.equal(body.profile_id, undefined)
+  // A conversation opens once, so there is no overlap policy to choose.
+  assert.equal(body.overlap, 'skip')
+})
+
+test('a resume seeded from a pane follows the work; one seeded from History pins it', () => {
+  // The difference is the whole point of the two entry points: a row somebody is reading
+  // is *that* conversation, while a live pane's conversation is still moving.
+  const fromPane = resumeDraft({ run_id: 'run_a', label: 'Migration', backend: 'claude', kind: 'latest_of_session' })
+  assert.equal(fromPane.target_kind, 'latest_of_session')
+  assert.ok(fromPane.context_ceiling_pct > 0, 'a rolling target must carry a ceiling')
+  const fromHistory = resumeDraft({ run_id: 'run_a', label: 'Migration', backend: 'claude', kind: 'run' })
+  assert.equal(fromHistory.target_kind, 'run')
+  assert.equal(fromHistory.context_ceiling_pct, 0)
+  // `once` rather than a cron expression: "pick this up on Tuesday" must not arm a
+  // nightly agent by accident.
+  assert.equal(fromHistory.trigger_kind, 'once')
+})
+
+test('only the accumulating target carries a ceiling onto the wire', () => {
+  const seeded = resumeDraft({ run_id: 'run_a', label: 'M', backend: 'claude', kind: 'latest_of_session' })
+  const body = draftToBody({
+    ...seeded,
+    target_kind: 'fork_point',
+    target_cut_message_id: 'm2',
+    target_cut_mode: 'after',
+  })
+  assert.equal(body.context_ceiling_pct, 0, 'a fork starts fresh, so a ceiling would do nothing')
+  assert.equal(body.target_cut_message_id, 'm2')
+  assert.equal(body.target_cut_mode, 'after')
+})
+
+test('a resume row says what it does, and names where rolling work has got to', () => {
+  assert.equal(actionLabel(schedule()), 'starts a new session')
+  assert.equal(actionLabel(resuming()), 'resumes Storage migration')
+  const rolled = resuming({
+    target_kind: 'latest_of_session',
+    target: {
+      run_id: 'run_a', missing: false, backend: 'claude', name: 'Storage migration',
+      resolved_run_id: 'run_c', resolved_name: 'Storage migration (continued)',
+    },
+  })
+  assert.equal(actionLabel(rolled), 'continues Storage migration (continued)')
+  assert.equal(actionLabel(resuming({ target_kind: 'fork_point' })), 'forks Storage migration')
+})
+
+test('a resume whose conversation is gone reads as broken rather than as armed', () => {
+  const orphan = resuming({ target: { run_id: 'run_a', missing: true } })
+  assert.equal(targetIsMissing(orphan), true)
+  assert.equal(actionLabel(orphan), 'resumes a conversation that is gone')
+  // Badged before the next fire records it, which may be a week away.
+  assert.deepEqual(needsAttention([orphan]).map(item => item.id), ['sch_1'])
+  // And a paused one is still somebody's decision, not an alarm.
+  assert.deepEqual(needsAttention([{ ...orphan, enabled: false }]), [])
+})
+
+test('every target kind states its own cost', () => {
+  // The kinds differ only in what they trade, so options that did not say so would be
+  // three identical-looking choices with very different consequences at 3 a.m.
+  assert.match(TARGET_KIND_COPY.run.detail, /Nothing drifts/)
+  assert.match(TARGET_KIND_COPY.latest_of_session.detail, /compacted/)
+  assert.match(TARGET_KIND_COPY.fork_point.detail, /identical context/)
 })
