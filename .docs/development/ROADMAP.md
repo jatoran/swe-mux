@@ -3525,6 +3525,84 @@ Three injection tiers, in descending reliability, all riding seams that already 
   `../design/features/processes-and-previews.md` states the Preview/browser division so the two are
   not re-merged by a later change.
 
+## Phase 14 - Land queue: serialized branch landing
+
+Landing a finished worktree branch is three fixed commands today - merge the trunk into the branch
+inside its worktree, run the repository's verification task, fast-forward the trunk from the
+primary checkout - and the operator serializes them by hand whenever several agents finish at once.
+The sequence is mechanical until it is not: only a merge conflict or a verification failure needs
+intelligence, and both belong to the branch's own agent, which holds the context.
+This phase makes the daemon own the mechanical part, so N parallel branches land unattended in
+sequence and the operator touches only the one that genuinely conflicts.
+
+The move is the one the rest of the control plane already made: deterministic code executes a
+fixed vocabulary through existing trust boundaries, and a model is never asked to choose a git
+operation.
+Fast-forward-only is what makes the trunk step safe for a machine - Git refuses it on divergence
+and refuses to overwrite overlapping local changes, so the pipeline cannot lose work by
+construction, which is the same property that already makes it the one merge shape permitted
+outside a worktree.
+Every prerequisite is shipped: worktree tooling (`../design/features/git.md`), the Phase 7.6
+`off`/`draft`/`granted` authority grant, the Phase 4/5 queue and its readiness contract, the
+project-actions trust contract for repository-owned tasks, and Tier 0 fact capture.
+
+### The request, not the action
+
+- [ ] Add a land request as the only entry point: a `mux.request_land` MCP tool scoped to the
+  caller's own session by the existing per-session token, and an operator Land control on the
+  worktree surface. Neither performs the land; both enqueue it.
+- [ ] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
+  `off`/`draft`/`granted`, default `draft` so a human approves each land - registered as its own
+  `land_queue` automation in the enablement DAG and capped by an hourly budget.
+
+### The pipeline
+
+- [ ] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
+  in arrival order.
+- [ ] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
+  records the conflicting paths, and hands the request back to the originating agent session as a
+  bounded deterministic template through the Phase 5 queue - a draft by default, promotable by the
+  ordinary auto-delivery grant like any other item.
+- [ ] Verify: run the Project's declared verification task inside the worktree under the shipped
+  project-actions trust contract - exact-content approval, revoked by any change to the task file -
+  and record the exact commit OID that passed.
+- [ ] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
+  the verified OID or the checkout is dirty on touched paths. A refusal is a reported failure,
+  never a retried force.
+- [ ] Advance: after each successful land, re-run every remaining queued item from reconcile
+  against the new trunk automatically, so one landing does not strand the other agents' now-stale
+  reconciles.
+- [ ] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
+  end: who asked, what verified, which OID moved the trunk.
+
+### Boundaries
+
+- [ ] The pipeline never resolves a conflict, never rebases, never forces, and executes no
+  model-chosen command; its git vocabulary is fixed, and fast-forward-only is the only trunk merge
+  shape.
+- [ ] A verification failure hands back like a conflict, with the failing output attached. Retries
+  are bounded and explicit - at most one, and only when configured - never silent, because a flaky
+  gate that loops is worse than one that stops.
+- [ ] The daemon is the single writer for the trunk merge, which also closes the race two sessions
+  otherwise have over the primary checkout's one index.
+- [ ] Kill switches at the config level and per Project, per the completion policy; `off` is inert
+  and produces no queue writes at all.
+- [ ] No decision-gated entry is crossed: execution authority is the already-trusted verification
+  task plus the fixed git vocabulary, and the conflict handback rides Phase 5's bounded
+  deterministic templates rather than a new agent-to-agent path.
+
+### Phase 14 exit criteria
+
+- [ ] Three finished branches requested together land in sequence under `granted`: the second
+  reconciles against the first's result automatically, and the conflicting third is handed back
+  with its conflict list while the trunk stays clean.
+- [ ] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
+  failure - are covered by tests, and each reports rather than retries.
+- [ ] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
+  budget accounting.
+- [ ] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
+  the prompt-queue and mux-mcp documents name the handback template and the request tool.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
