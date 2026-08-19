@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import signal
 import time
-import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
@@ -18,6 +18,7 @@ from .background_tasks import background
 from .event_bus import EventBus
 from .harness import is_agent_harness
 from .operational_telemetry import command_hash, process_identity
+from .preview_store import PreviewStore
 from .session import Session, SessionManager, clear_standing_activity
 
 try:
@@ -1595,6 +1596,30 @@ class ProcessInspector:
         return await self.snapshot(session_id, force=True)
 
 
+def preview_id(project_id: str, scheme: str, host: str, port: int) -> str:
+    """The routing identity of one preview endpoint, stable across daemon restarts.
+
+    A preview id is not decoration: it is the path segment of the proxy route
+    (`/preview/<id>/`), which is how a phone reaches a dev server over the
+    tailnet, and PreviewPane offers a button to copy that URL. Minting it from
+    `uuid4` made every such URL die on any daemon restart - a redeploy, a
+    "Reload daemon", a crash - because the registry is rebuilt from scratch and
+    the still-running server is re-detected under a fresh id. The server was
+    never the casualty; the route to it was.
+
+    Derived from the endpoint identity the registry already dedupes on
+    (`_existing_endpoint`), so re-detecting the same server reproduces the same
+    id. Session id is deliberately not in the material: ownership legitimately
+    moves between sessions in the same Project (a frontend terminal often prints
+    the backend's URL), and the existing code already reassigns it while keeping
+    the id.
+    """
+    # chr(0) rather than a printable separator: a project id or host containing
+    # the delimiter would otherwise let two different endpoints hash alike.
+    material = chr(0).join((project_id, scheme, host, str(port)))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass(slots=True)
 class PreviewRegistration:
     id: str
@@ -1675,6 +1700,7 @@ class PreviewRegistry:
         sessions: SessionManager,
         *,
         preview_probe: Callable[[str], Awaitable[PreviewProbeResult]] | None = None,
+        store: PreviewStore | None = None,
     ) -> None:
         self.inspector = inspector
         self.sessions = sessions
@@ -1682,6 +1708,40 @@ class PreviewRegistry:
         self._listener_seen: dict[str, float] = {}
         self._preview_probe = preview_probe or probe_browser_preview
         self._preview_probe_state: dict[str, tuple[str, int, float]] = {}
+        # Optional so every test that only exercises detection can omit it: a
+        # detected preview is rediscovered and needs nothing from disk.
+        self._store = store
+        if store is not None:
+            self._restore(store)
+
+    def _restore(self, store: PreviewStore) -> None:
+        """Bring approved previews back from the mirror.
+
+        Their whole reason for existing is that mux cannot find them again on its
+        own, so without this a redeploy - or an ordinary "Reload daemon" - silently
+        cost the user every preview they had added by hand.
+        """
+        for record in store.load():
+            try:
+                item = PreviewRegistration(**record)
+            except TypeError as exc:
+                log.warning("skipping unrestorable preview %s (%s)", record.get("id"), exc)
+                continue
+            # Detection owns its own entries and re-creates them within a poll.
+            # Restoring one would only race that with a stale session id.
+            if item.source == "detected":
+                continue
+            self.items[item.id] = item
+        if self.items:
+            log.info("restored %d approved preview(s)", len(self.items))
+
+    def _persist(self) -> None:
+        """Mirror the approved set. Called on every change to it, never on detection."""
+        if self._store is None:
+            return
+        self._store.save(
+            [item.snapshot() for item in self.items.values() if item.source != "detected"]
+        )
 
     def prune(self, now: float | None = None) -> list[PreviewRegistration]:
         """Drop detected previews whose server has stopped listening.
@@ -1761,7 +1821,7 @@ class PreviewRegistry:
             self._listener_seen[existing.id] = time.time()
             return existing
         item = PreviewRegistration(
-            str(uuid.uuid4()),
+            preview_id(session.record.project_id, parsed.scheme, host, port),
             session.record.id,
             session.record.project_id,
             url,
@@ -1955,7 +2015,7 @@ class PreviewRegistry:
         if existing:
             return existing
         item = PreviewRegistration(
-            str(uuid.uuid4()),
+            preview_id(session.record.project_id, parsed.scheme, host, port),
             session.record.id,
             session.record.project_id,
             normalized_url,
@@ -1972,14 +2032,21 @@ class PreviewRegistry:
         )
         self.items[item.id] = item
         self._listener_seen[item.id] = time.time()
+        # This is the preview nothing will ever rediscover, so the mirror is
+        # written before the caller is told it exists.
+        self._persist()
         return item
 
     def remove(self, preview_id: str) -> None:
         if preview_id not in self.items:
             raise KeyError(preview_id)
-        del self.items[preview_id]
+        removed = self.items.pop(preview_id)
         self._listener_seen.pop(preview_id, None)
         self._preview_probe_state.pop(preview_id, None)
+        # Removing an approved preview is a decision that must outlive the daemon,
+        # or the next restart would bring back the one the user just deleted.
+        if removed.source != "detected":
+            self._persist()
 
     async def list(self, session_id: str | None = None) -> dict[str, Any]:
         await self.ensure_detected()

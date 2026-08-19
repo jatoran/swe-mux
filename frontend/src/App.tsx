@@ -93,10 +93,10 @@ import {
 import { InteractionHud, showInteractionHud } from './InteractionHud'
 import { RedeployChip } from './RedeployChip'
 import {
-  applyProbe, beginRedeploy, enterOutage, IDLE_REDEPLOY, loadRedeploy, markResultPending,
-  outcomeIsFresh, outcomeNotice, REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS, saveRedeploy,
-  takeResultPending,
-  type ProbeResult, type RedeployState, type RedeployStatus,
+  applyProbe, beginRedeploy, enterOutage, IDLE_REDEPLOY, interruptionSummary, loadRedeploy,
+  markResultPending, outcomeIsFresh, outcomeNotice, REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS,
+  saveRedeploy, takeResultPending,
+  type ProbeResult, type RedeployInterruptions, type RedeployState, type RedeployStatus,
 } from './redeployProgress'
 import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subscribeInsertTarget } from './insertTarget'
 import type { InsertTarget } from './insertTarget'
@@ -191,7 +191,7 @@ import {
 } from './projectSort'
 import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseReason } from './projectRecency'
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
-import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
+import { pendingAcks, pruneAcks, trackPinVisits, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type PinVisits, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
@@ -422,8 +422,8 @@ export function App() {
   // Three-valued, not a boolean: see redeployProgress.ts. The multi-minute build
   // stage keeps the whole app usable and only shows the corner chip; the overlay
   // and the error suppression belong to the daemon-down stage alone. Restored
-  // from sessionStorage so a reload — or a tab opened after the redeploy started
-  // — comes up knowing, instead of rendering a broken app.
+  // from sessionStorage so a reload - or a tab opened after the redeploy started
+  // - comes up knowing, instead of rendering a broken app.
   const [redeploy, setRedeploy] = useState<RedeployState>(() => loadRedeploy(sessionStorageOrNull(), Date.now()))
   const redeployDown = redeploy.phase === 'down'
   // Every request is expected to fail while the daemon is away, so the toast
@@ -436,6 +436,9 @@ export function App() {
   const suppressErrorsRef = useRef(suppressTransientErrors)
   suppressErrorsRef.current = suppressTransientErrors
   const [redeployNotice, setRedeployNotice] = useState('')
+  // What the confirm dialog reports will go dark. Advisory: nothing here can
+  // refuse a redeploy, because a port being open is not a reason it would fail.
+  const [redeployInterruptions, setRedeployInterruptions] = useState<RedeployInterruptions | null>(null)
   const loadedBuildId = useRef(loadedUiBuildId())
   const [uiUpdateAvailable, setUiUpdateAvailable] = useState(false)
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
@@ -543,6 +546,9 @@ export function App() {
   // Acknowledgements in flight for sidebar rows. The durable mark lives on the
   // session record; this is only the optimistic overlay. See sessionAttention.ts.
   const [ackedTurns,setAckedTurns]=useState<AckMap>({})
+  // Which hand-set unread marks are still owned by the visit that set them, so a
+  // return to the pane reads it rather than the mark outliving the reason for it.
+  const [pinVisits,setPinVisits]=useState<PinVisits>({})
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
@@ -2450,18 +2456,31 @@ export function App() {
   // fleet re-renders constantly, and keying the timer on that would restart it
   // forever and never acknowledge anything. `turn_seq` only moves when an agent
   // settles, so this key is stable for exactly as long as the dwell needs.
-  const pending=humanPresent?pendingAcks(sessions,visibleSessionIds,ackedTurns):[]
-  const pendingKey=pending.map(([id,seq])=>`${id}:${seq}`).join('\n')
+  // A hand-set unread mark outranks the dwell only for the visit it was made in
+  // (sessionAttention.ts). Tracked here rather than on the record because which
+  // panes are on screen is this client's own state, and it is what separates
+  // "I am marking the pane I am looking at" from "I am back to read it".
+  useEffect(()=>{
+    setPinVisits(prev=>trackPinVisits(prev,sessions,visibleSessionIds))
+  },[sessions,visibleSessionKey])
+  const pending=humanPresent?pendingAcks(sessions,visibleSessionIds,ackedTurns,pinVisits):[]
+  const pendingKey=pending.map(({id,turnSeq,explicit})=>`${id}:${turnSeq}:${explicit?'x':''}`).join('\n')
   useEffect(()=>{
     if(!pendingKey)return
     const timer=window.setTimeout(()=>{
-      for(const [id,seq] of pending){
+      for(const {id,turnSeq,explicit} of pending){
         // Optimistic first: the row must clear now, not a round-trip later. A
         // failed POST is left alone rather than rolled back - the next snapshot
         // carries the daemon's own answer, and re-lighting a row the user just
         // looked at is worse than acknowledging it slightly early.
-        setAckedTurns(current=>current[id]>=seq?current:{...current,[id]:seq})
-        void api('POST',`/api/sessions/${id}/read`,{turn_seq:seq}).catch(()=>{})
+        //
+        // A released pin is the exception and stays pessimistic: the pin is what
+        // `isUnread` reads first, so clearing it locally and having the write
+        // fail would leave the row reading as caught up against a daemon that
+        // still holds the mark. It clears on the daemon's own snapshot instead,
+        // one round trip after a dwell that already took seconds.
+        if(!explicit)setAckedTurns(current=>current[id]>=turnSeq?current:{...current,[id]:turnSeq})
+        void api('POST',`/api/sessions/${id}/read`,explicit?{read:true}:{turn_seq:turnSeq}).catch(()=>{})
       }
     },READ_ACK_DWELL_MS)
     return()=>window.clearTimeout(timer)
@@ -3386,6 +3405,8 @@ export function App() {
   // to flip on the click, and the daemon's own snapshot follows over the socket.
   // `unread_pin` is what makes marking the pane you are looking at stick - the
   // dwell timer would otherwise re-read it a second later (sessionAttention.ts).
+  // It sticks for that visit and no longer: leaving the pane releases the pin,
+  // so coming back to read the marked session clears it like any other pane.
   const toggleSessionRead = async (session: Session) => {
     setContextMenu(null)
     const unread = isUnread(session, ackedTurns)
@@ -4251,6 +4272,19 @@ export function App() {
     setPaletteOpen(false)
     setSidebarMenu(null)
     setRedeployConfirmOpen(true)
+    // Fetched as the dialog opens rather than passed in: this is the one moment
+    // the answer can change what the user does, and it is cheap (the daemon reads
+    // its in-memory registry). A failure leaves the dialog saying nothing extra,
+    // which is the old behaviour.
+    setRedeployInterruptions(null)
+    void (async () => {
+      try {
+        const response = await fetch('/api/daemon/redeploy', { cache: 'no-store' })
+        if (!response.ok) return
+        const status = await response.json() as RedeployStatus
+        setRedeployInterruptions(status.interrupted ?? null)
+      } catch { /* advisory only */ }
+    })()
   }
 
   async function startRedeploy() {
@@ -5134,8 +5168,8 @@ export function App() {
   useEffect(() => { if (redeployDown) setError('') }, [redeployDown])
   const redeployRef = useRef(redeploy)
   redeployRef.current = redeploy
-  // One wait loop for every entry path — this tab started it, the daemon
-  // broadcast it, or the boot-time sentinel found it — so a client that did not
+  // One wait loop for every entry path - this tab started it, the daemon
+  // broadcast it, or the boot-time sentinel found it - so a client that did not
   // click the button behaves exactly like the one that did. Keyed on whether a
   // redeploy is in flight, never on the state itself: reading through a ref keeps
   // each probe's own update from tearing down and restarting the timer.
@@ -5214,7 +5248,7 @@ export function App() {
   }, [])
   // A dismissable level that refuses to be dismissed: back must not walk out of the app
   // while the daemon is mid-restart, and there is nothing behind these overlays to reach.
-  // The daemon-down stage only — during a redeploy's build stage there is a working app
+  // The daemon-down stage only - during a redeploy's build stage there is a working app
   // behind this, and swallowing back there would be wrong as well as useless.
   useEffect(() => {
     if (!daemonReloading && !redeployDown) return
@@ -6649,7 +6683,7 @@ export function App() {
     {/* Only the daemon-down stage blocks. While the build runs the app is fully
         usable and the corner chip is the whole of the UI's report. */}
     {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
-    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p><div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
+    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 

@@ -648,6 +648,19 @@ body {
    anywhere in the stylesheet, so the two buttons rendered as raw platform
    controls in the middle of a themed dialog. Cancel comes first and the
    affirmative one carries `.primary`, matching `.modal-footer` elsewhere. */
+/* What a redeploy will make unreachable. Amber, not red: nothing here is an
+   error or a refusal, and the second line exists to stop the reflex that a
+   redeploy is about to kill your dev server. It never does. */
+.daemon-reload-modal .redeploy-interrupts {
+  display:grid;
+  gap:4px;
+  margin-top:12px;
+  padding:9px 11px;
+  border:1px solid var(--amber);
+  background:color-mix(in srgb,var(--panel) 90%,var(--amber));
+}
+.daemon-reload-modal .redeploy-interrupts strong { color:var(--text);font-size:11.5px;font-weight:600 }
+.daemon-reload-modal .redeploy-interrupts span { color:var(--muted);font-size:11px;line-height:1.5 }
 .daemon-reload-modal .modal-actions {
   display:flex;
   justify-content:flex-end;

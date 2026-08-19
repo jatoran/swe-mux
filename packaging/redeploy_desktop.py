@@ -34,7 +34,7 @@ relaunched daemon reattaches it.
 
 Whoever starts a run claims ``<data_dir>/redeploy.lock`` before any work: the
 endpoint does it and passes ``--lock-held``, and a terminal-launched run does it
-here. That makes single-flight and client visibility identical either way — a
+here. That makes single-flight and client visibility identical either way - a
 CLI redeploy used to take no lock at all, so two of them could race the same
 staging tree and the swap, and ``GET /api/daemon/redeploy`` reported nothing in
 flight while the UI was minutes from losing its daemon. A terminal-launched run
@@ -131,7 +131,7 @@ class Outcome:
 
     `finish` is the backstop for every other return. It writes a record derived
     from the exit code when none was made, so a new early return can never leave
-    the previous run's result standing — a stale record would tell the UI that
+    the previous run's result standing - a stale record would tell the UI that
     *this* redeploy did whatever the last one did, which is worse than silence.
     """
 
@@ -184,7 +184,7 @@ class Outcome:
         Only the daemon endpoint redirects this script's output into
         `redeploy.log`; a run launched from a terminal prints to its own stdout
         and never touches that file. Reading it unconditionally therefore
-        stamped a *previous* redeploy's output into this run's result — observed
+        stamped a *previous* redeploy's output into this run's result - observed
         live: a record whose detail said 11 live sessions carried a tail ending
         "live_sessions=2" from an unrelated earlier run. A log older than this
         run is not this run's log, and no tail beats a wrong one.

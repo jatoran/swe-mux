@@ -26,6 +26,12 @@
 // acknowledgement, which would otherwise re-read the very pane the menu was
 // opened on. The daemon retires it on the session's next completed turn.
 //
+// The pin only outranks the dwell for the *visit* it was made in, though
+// (`trackPinVisits`). Coming back to the pane later is the user reading the very
+// thing they marked, and a pin that survived that left the row lit until someone
+// hand-marked it read again - the mark behaved like a permanent flag rather than
+// like "I have not read this yet".
+//
 // Kept free of runtime imports so the logic can be unit tested under the node
 // runner.
 import type { Session } from './types'
@@ -52,6 +58,26 @@ const SETTLED: ReadonlyArray<Session['state']> = ['idle', 'awaiting']
  * missed.
  */
 export type AckMap = Record<string, number>
+
+/**
+ * Whether each pinned session's hand-set unread mark is still owned by the visit
+ * that set it. Entries exist only for sessions currently carrying `unread_pin`.
+ */
+export type PinState = 'held' | 'released'
+export type PinVisits = Record<string, PinState>
+
+/** One acknowledgement the dwell timer owes the daemon. */
+export interface PendingAck {
+  id: string
+  /** The turn being acknowledged; also the key the dwell timer restarts on. */
+  turnSeq: number
+  /**
+   * True when this acknowledgement must be written as an explicit read
+   * (`{read: true}`) rather than a cursor, because it is also retiring a
+   * released pin - the daemon refuses an implicit catch-up while one is set.
+   */
+  explicit: boolean
+}
 export type ProjectRailActivity = 'attention' | 'working' | 'waiting' | 'running' | 'inactive'
 export interface ProjectRailStatus {
   activity: ProjectRailActivity
@@ -93,24 +119,81 @@ export function isUnread(session: Session, acked: AckMap): boolean {
 }
 
 /**
- * Sessions on screen with an unacknowledged turn, as `id:turn_seq` pairs.
+ * Follow each hand-set unread mark through the visit that set it.
  *
- * The caller acknowledges these after a dwell. Returned keyed by the turn being
+ * The pin exists so that marking the pane in front of you sticks: without it the
+ * dwell acknowledgement re-reads the row a second later and the click looks
+ * ignored. That reason lasts exactly as long as the visit. A pin is therefore
+ * `held` from the moment it is first seen on a session that is on screen until
+ * that session goes off screen, and `released` from then on - so returning to
+ * the pane acknowledges it like any other pane you are looking at.
+ *
+ * A pin set from the sidebar of a session that is *not* on screen is released
+ * immediately, because there was no visit to protect it from; the first visit
+ * clears it. The two are distinguished by what the pin's first observation saw,
+ * which is why released is sticky: a released pin that scrolls back into view
+ * must not re-arm itself and start the loop again.
+ *
+ * A fresh tab is deliberately generous. With no prior state, a visible pin reads
+ * as newly set, so a reload with the pane still on screen keeps the mark - the
+ * mark is server-held and must not be undone by a refresh.
+ *
+ * Returns the same reference when nothing changed, so the caller can skip a
+ * redundant state update and the render it would cause.
+ */
+export function trackPinVisits(prev: PinVisits, sessions: Session[], visibleIds: Iterable<string>): PinVisits {
+  const visible = visibleIds instanceof Set ? visibleIds : new Set(visibleIds)
+  const next: PinVisits = {}
+  let changed = false
+  for (const session of sessions) {
+    if (!session.unread_pin) continue
+    const before = prev[session.id]
+    const state: PinState = before
+      ? before === 'held' && visible.has(session.id) ? 'held' : 'released'
+      : visible.has(session.id) ? 'held' : 'released'
+    next[session.id] = state
+    if (state !== before) changed = true
+  }
+  // Anything that lost its pin - the user marked it read, the daemon retired it
+  // on a new turn, the session ended - drops out with it.
+  for (const id in prev) if (!(id in next)) changed = true
+  return changed ? next : prev
+}
+
+/**
+ * Sessions on screen with an unacknowledged turn, and how to write each one.
+ *
+ * The caller acknowledges these after a dwell. Carries the turn being
  * acknowledged so a dwell timer restarts when a *new* turn lands and not on the
  * unrelated snapshot churn of a busy fleet - while an agent is mid-turn its
  * `turn_seq` does not move, which is what makes the timer able to fire at all.
  *
- * A hand-marked session is skipped: the daemon refuses the implicit
- * acknowledgement anyway, and sending it would still flip this tab's optimistic
- * overlay and undo the mark locally.
+ * A session whose pin is still held by the visit that set it is skipped: the
+ * daemon refuses the implicit acknowledgement anyway, and sending it would still
+ * flip this tab's optimistic overlay and undo the mark locally. A released pin
+ * is acknowledged instead, as an explicit read, which is what retires it. With
+ * no visit state supplied every pin counts as held, so a caller that does not
+ * track visits keeps the old always-skip behaviour.
  */
-export function pendingAcks(sessions: Session[], visibleIds: Iterable<string>, acked: AckMap): Array<[string, number]> {
+export function pendingAcks(
+  sessions: Session[],
+  visibleIds: Iterable<string>,
+  acked: AckMap,
+  pins: PinVisits = {},
+): PendingAck[] {
   const visible = visibleIds instanceof Set ? visibleIds : new Set(visibleIds)
-  const out: Array<[string, number]> = []
+  const out: PendingAck[] = []
   for (const session of sessions) {
-    if (!visible.has(session.id) || !isAgentSession(session) || session.unread_pin) continue
+    if (!visible.has(session.id) || !isAgentSession(session)) continue
+    const released = !session.unread_pin || pins[session.id] === 'released'
+    if (!released) continue
     const seq = turnSeq(session)
-    if (seq > ackedSeq(session, acked)) out.push([session.id, seq])
+    // A pin sits on a session whose counters may already read as caught up
+    // (`mark_unread` only rolls back one turn, and a pin can be set on a session
+    // with no counted turn at all), so the retirement cannot be conditional on
+    // there being an unacknowledged turn - that is the row it would strand.
+    if (session.unread_pin) out.push({ id: session.id, turnSeq: seq, explicit: true })
+    else if (seq > ackedSeq(session, acked)) out.push({ id: session.id, turnSeq: seq, explicit: false })
   }
   return out
 }

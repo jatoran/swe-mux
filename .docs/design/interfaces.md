@@ -93,12 +93,18 @@ The endpoint passes `--restore-visibility`; the script samples whether a desktop
 It also passes `--lock-held`, because the lock above is already claimed and
 already names the child; without it the script would refuse itself.
 
-GET returns `{running, pid, phase, log_tail, last_result, available}`.
+GET returns `{running, pid, phase, log_tail, last_result, interrupted, available}`.
+`interrupted` is served whether or not a redeploy is in flight - the confirm
+dialog reads it before you commit - and carries `previews[]` (each with its
+`proxy_path`, stable across the restart), `kills_processes: false`, and a note
+saying so. The 202 from POST carries the same object, so an agent that triggered
+the redeploy can say what it is about to interrupt rather than discovering it as
+a dead proxy minutes later. Nothing in it can refuse a redeploy.
 `log_tail` is served only when it belongs to the run being reported: the lock is
 created at run start, so while one is in flight a `redeploy.log` older than the
 lock is a previous run's and is withheld. Only a redeploy this daemon spawned
-writes that file at all — one launched from a terminal prints to its own stdout
-— so without the check the progress chip would render an earlier redeploy's
+writes that file at all - one launched from a terminal prints to its own stdout
+- so without the check the progress chip would render an earlier redeploy's
 build output for the whole of this one, which reads as real progress and is not.
 The same rule applies to the tail embedded in `redeploy-result.json`.
 `phase` is `"building"` whenever a lock is live and `"idle"` otherwise -
@@ -110,7 +116,7 @@ what lets a reconnecting client report a rollback: the app comes back looking
 normal, so otherwise nothing would say the change never shipped.
 
 POST `/api/daemon/redeploy/announce` (loopback-only) broadcasts
-`daemon_redeploy_started` for a redeploy this daemon did not spawn — one run
+`daemon_redeploy_started` for a redeploy this daemon did not spawn - one run
 straight from a terminal, which was previously invisible to every client until
 the daemon vanished underneath them. It is refused with
 `409 no_redeploy_in_flight` unless `redeploy.lock` names a live process: it
@@ -684,11 +690,18 @@ impersonate each other:
   that has not happened and silently swallow the next real one. Refused outright while
   `unread_pin` is set.
 - `{read: true}` is an **explicit** read: it clears `unread_pin` and acknowledges every counted
-  turn.
+  turn. Written by the menu item, and also by a client whose user has returned to a pane they
+  marked unread - see below.
 - `{read: false}` is an **explicit** unread: it sets `unread_pin` and rolls `read_turn_seq` back
   to just before the latest counted turn. This is the only write in the system that moves the mark
   backwards, and the pin is what keeps the dwell timer from undoing it on a pane that is still on
   screen. The daemon retires the pin when the session next completes a turn.
+
+The pin's other end is **the client's** call, because only a client knows which panes are on
+screen. It holds the pin for the visit it was set in and releases it once that session goes off
+screen; the next dwell on a released pin is written as `{read: true}` rather than as a cursor
+(`sessionAttention.ts`, `trackPinVisits`). The daemon's refusal of the implicit shape is therefore
+narrower than it looks: it stops the marking visit's own timer, not every timer thereafter.
 
 The mark is acknowledged for the **user**, not for one browser: it lives on the session record, so
 it follows every device and survives a reload.

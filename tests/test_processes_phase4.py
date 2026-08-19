@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -12,6 +13,7 @@ import pytest
 
 from swe_mux.event_bus import EventBus
 from swe_mux.layouts import attach_leaf, layout_terminal_ids, stack_leaf
+from swe_mux.preview_store import PreviewStore
 from swe_mux.processes import (
     OwnedProcess,
     PreviewProbeResult,
@@ -19,6 +21,7 @@ from swe_mux.processes import (
     ProcessInspector,
     classify_preview_response,
     listener_record,
+    preview_id,
 )
 
 
@@ -1745,3 +1748,157 @@ def test_an_empty_fleet_skips_the_sampling_pass_entirely(
     }
     inspector._collect_all()
     assert "sockets" in calls and "tree" in calls
+
+
+# --- previews survive a daemon restart -------------------------------------
+# A preview id is the path segment of the proxy route (`/preview/<id>/`), which
+# is how a phone reaches a dev server over the tailnet. Minting it from uuid4
+# meant every redeploy silently re-keyed that URL while the server itself kept
+# running perfectly, so the failure read as "the redeploy broke my server".
+
+
+def test_a_rediscovered_preview_keeps_the_url_a_phone_bookmarked() -> None:
+    """The same endpoint must come back under the same id after a restart."""
+    first = PreviewRegistry(cast(Any, FakeInspector()), cast(Any, fake_sessions()))
+    original = asyncio.run(first.register("session-a", "http://127.0.0.1:4321/"))
+
+    # A whole new daemon: fresh registry, nothing carried over in memory.
+    second = PreviewRegistry(cast(Any, FakeInspector()), cast(Any, fake_sessions()))
+    rediscovered = asyncio.run(second.register("session-a", "http://127.0.0.1:4321/"))
+
+    assert rediscovered.id == original.id
+    assert original.id != ""
+
+
+def test_different_endpoints_never_collide() -> None:
+    port_a = preview_id("default", "http", "127.0.0.1", 4321)
+    port_b = preview_id("default", "http", "127.0.0.1", 4322)
+    other_project = preview_id("other", "http", "127.0.0.1", 4321)
+    other_scheme = preview_id("default", "https", "127.0.0.1", 4321)
+    assert len({port_a, port_b, other_project, other_scheme}) == 4
+
+
+def test_a_delimiter_in_a_project_id_cannot_forge_another_endpoints_id() -> None:
+    """The separator is chr(0), which cannot appear in a project id or host."""
+    assert preview_id("a", "http", "b", 1) != preview_id("a\x00http", "", "b", 1)
+
+
+def test_an_approved_preview_outlives_the_daemon(tmp_path: Path) -> None:
+    """The one preview nothing can rediscover.
+
+    It exists *because* mux could not attribute the listener - the server is in
+    WSL, in Docker, or in a tree mux does not own - so a restart used to lose it
+    with no way back except re-adding it by hand.
+    """
+    store = PreviewStore(tmp_path)
+    registry = PreviewRegistry(
+        cast(Any, FakeInspector()), cast(Any, fake_sessions()), store=store
+    )
+    approved = asyncio.run(
+        registry.register("session-a", "http://127.0.0.1:9999/", approved=True)
+    )
+    assert approved.source == "user-approved"
+
+    successor = PreviewRegistry(
+        cast(Any, FakeInspector()), cast(Any, fake_sessions()), store=PreviewStore(tmp_path)
+    )
+    assert approved.id in successor.items
+    restored = successor.items[approved.id]
+    assert restored.url == approved.url
+    assert restored.port == 9999
+    assert restored.source == "user-approved"
+
+
+def test_removing_an_approved_preview_outlives_the_daemon_too(tmp_path: Path) -> None:
+    """Otherwise the next restart resurrects the one the user just deleted."""
+    store = PreviewStore(tmp_path)
+    registry = PreviewRegistry(
+        cast(Any, FakeInspector()), cast(Any, fake_sessions()), store=store
+    )
+    approved = asyncio.run(
+        registry.register("session-a", "http://127.0.0.1:9999/", approved=True)
+    )
+    registry.remove(approved.id)
+
+    successor = PreviewRegistry(
+        cast(Any, FakeInspector()), cast(Any, fake_sessions()), store=PreviewStore(tmp_path)
+    )
+    assert successor.items == {}
+
+
+def test_detected_previews_are_not_persisted(tmp_path: Path) -> None:
+    """They come back from the live listener set, under the same id, on their own.
+
+    Persisting them would mirror state that can only go stale - a session id that
+    no longer owns the listener, or a server that has since stopped.
+    """
+    store = PreviewStore(tmp_path)
+    registry = PreviewRegistry(
+        cast(Any, FakeInspector()), cast(Any, fake_sessions()), store=store
+    )
+    detected = asyncio.run(registry.register("session-a", "http://127.0.0.1:4321/"))
+    assert detected.source == "detected"
+    assert store.load() == []
+
+
+def test_an_unreadable_store_costs_previews_and_never_the_daemon(tmp_path: Path) -> None:
+    (tmp_path / "previews.json").write_text("{not json", encoding="utf-8")
+    store = PreviewStore(tmp_path)
+    assert store.load() == []
+    registry = PreviewRegistry(
+        cast(Any, FakeInspector()), cast(Any, fake_sessions()), store=store
+    )
+    assert registry.items == {}
+
+
+def test_stored_entries_that_cannot_route_are_dropped(tmp_path: Path) -> None:
+    """A row with no id, url, host, or usable port would occupy a row pointing nowhere."""
+    (tmp_path / "previews.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "items": [
+                    {"id": "", "url": "http://127.0.0.1:1/", "host": "127.0.0.1", "port": 1},
+                    {"id": "b", "url": "", "host": "127.0.0.1", "port": 1},
+                    {"id": "c", "url": "http://127.0.0.1:1/", "host": "", "port": 1},
+                    {"id": "d", "url": "http://127.0.0.1:1/", "host": "127.0.0.1", "port": "x"},
+                    {"id": "e", "url": "http://127.0.0.1:1/", "host": "127.0.0.1"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert PreviewStore(tmp_path).load() == []
+
+
+def test_a_stored_port_written_as_a_string_still_restores(tmp_path: Path) -> None:
+    (tmp_path / "previews.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "a",
+                        "session_id": "session-a",
+                        "project_id": "default",
+                        "url": "http://127.0.0.1:8080/",
+                        "host": "127.0.0.1",
+                        "port": "8080",
+                        "source": "user-approved",
+                        "created_at": 1.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    restored = PreviewStore(tmp_path).load()
+    assert len(restored) == 1
+    assert restored[0]["port"] == 8080
+
+
+def test_the_mirror_is_written_whole(tmp_path: Path) -> None:
+    """The successor daemon reads this while starting; a partial file is no record."""
+    store = PreviewStore(tmp_path)
+    store.save([{"id": "a", "url": "http://127.0.0.1:1/", "host": "127.0.0.1", "port": 1}])
+    assert not (tmp_path / "previews.json.tmp").exists()
+    assert PreviewStore(tmp_path).load()[0]["id"] == "a"

@@ -4,6 +4,7 @@ import {
   applyProbe, beginRedeploy, elapsedLabel, enterOutage, IDLE_REDEPLOY, loadRedeploy,
   markResultPending, outcomeIsFresh, outcomeNotice, REDEPLOY_DOWN_PROBES, REDEPLOY_MAX_MS,
   REDEPLOY_RESULT_KEY, REDEPLOY_STORAGE_KEY, saveRedeploy, takeResultPending,
+  interruptionSummary,
   type ProbeVerdict,
 } from '../src/redeployProgress.ts'
 
@@ -167,4 +168,31 @@ test('the elapsed clock is the only honest progress signal once the daemon is go
   assert.equal(elapsedLabel(1_000, 1_000 + 9_000), '0:09')
   assert.equal(elapsedLabel(1_000, 1_000 + 605_000), '10:05')
   assert.equal(elapsedLabel(5_000, 1_000), '0:00')
+})
+
+function preview(port: number) {
+  return { id: `p${port}`, url: `http://127.0.0.1:${port}/`, host: '127.0.0.1', port, proxy_path: `/preview/p${port}/` }
+}
+
+test('the confirm dialog names what goes dark, and says nothing when nothing does', () => {
+  assert.equal(interruptionSummary(null), '')
+  assert.equal(interruptionSummary({ previews: [] }), '')
+  assert.equal(interruptionSummary(undefined), '')
+  assert.equal(
+    interruptionSummary({ previews: [preview(5173)] }),
+    '1 preview unreachable while the app restarts: :5173.',
+  )
+  assert.equal(
+    interruptionSummary({ previews: [preview(5173), preview(8080)] }),
+    '2 previews unreachable while the app restarts: :5173, :8080.',
+  )
+})
+
+test('a Project with many services cannot push the dialog buttons off a phone screen', () => {
+  const many = [3000, 3001, 3002, 3003, 3004, 3005].map(preview)
+  const summary = interruptionSummary({ previews: many })
+  assert.match(summary, /^6 previews unreachable/)
+  assert.match(summary, /:3000, :3001, :3002, :3003 and 2 more\.$/)
+  // The cap is on the listed ports, never on the count: "6 previews" stays honest.
+  assert.ok(!summary.includes(':3004'))
 })
