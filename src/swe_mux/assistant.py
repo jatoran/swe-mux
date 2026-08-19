@@ -93,11 +93,13 @@ clarifying question. Every status figure you state must come from the workspace 
 a tool result, never from memory; include the provided age qualifiers when a reading is stale.
 
 Use tools for anything you cannot answer from the snapshot. Refer to sessions and projects \
-by their names exactly as the snapshot spells them. Mutating tools may return \
-pending_confirmation: tell the operator what was proposed and how to confirm (say confirm, \
-or the card in the panel); never claim a pending action already happened. If a tool reports \
-ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on the device the \
-operator is speaking through; if none is connected the tool will say so."""
+by their names exactly as the snapshot spells them. Project notes are fully editable: \
+append, prepend, insert at a specific line, or replace a unique text span \
+(edit_project_note); read a note first when a precise position matters. Mutating tools may \
+return pending_confirmation: tell the operator what was proposed and how to confirm (say \
+confirm, or the card in the panel); never claim a pending action already happened. If a \
+tool reports ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on \
+the device the operator is speaking through; if none is connected the tool will say so."""
 
 
 class AssistantError(RuntimeError):
@@ -145,6 +147,53 @@ CREATE TABLE IF NOT EXISTS assistant_actions (
 CREATE INDEX IF NOT EXISTS idx_assistant_actions_dialog
     ON assistant_actions(dialog_id, created_at);
 """
+
+
+NOTE_EDIT_ACTIONS = ("append", "prepend", "insert_line", "replace_text")
+
+
+def apply_note_edit(markdown: str, payload: dict[str, Any]) -> str:
+    """Apply one granular edit to a note body; raises AssistantError on refusal.
+
+    Pure so the transform is testable without a project on disk. Line numbers
+    are 1-indexed over the note body as the editor shows it; `insert_line` makes
+    the text *become* that line. `replace_text` demands a unique match — a find
+    string that appears three times is an ambiguity to answer, never a guess.
+    """
+    action = str(payload.get("action") or "append")
+    text = str(payload.get("text") or "")
+    if action not in NOTE_EDIT_ACTIONS:
+        raise AssistantError(f"unknown note edit action {action}")
+    if not text.strip() and action != "replace_text":
+        raise AssistantError("the edit text must not be empty")
+    if action == "append":
+        base = markdown.rstrip()
+        return f"{base}\n\n{text.strip()}\n" if base else f"{text.strip()}\n"
+    if action == "prepend":
+        rest = markdown.lstrip("\n")
+        return f"{text.strip()}\n\n{rest}" if rest else f"{text.strip()}\n"
+    if action == "insert_line":
+        try:
+            line = int(payload.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        if line < 1:
+            raise AssistantError("insert_line needs a 1-indexed line number")
+        lines = markdown.split("\n")
+        index = min(line - 1, len(lines))
+        lines[index:index] = [text]
+        return "\n".join(lines)
+    find = str(payload.get("find") or "")
+    if not find:
+        raise AssistantError("replace_text needs the text to find")
+    count = markdown.count(find)
+    if count == 0:
+        raise AssistantError(f'"{find[:80]}" was not found in the note')
+    if count > 1:
+        raise AssistantError(
+            f'"{find[:80]}" appears {count} times; give a longer, unique span'
+        )
+    return markdown.replace(find, text)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -393,6 +442,9 @@ class AssistantService:
         note_read: Callable[[str, str | None], Awaitable[dict[str, Any]]] | None = None,
         note_append: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
         note_list: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
+        note_edit: Callable[
+            [str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]
+        ] | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -408,6 +460,7 @@ class AssistantService:
         self.history_search = history_search
         self.note_read = note_read
         self.note_list = note_list
+        self.note_edit = note_edit
         self.note_append = note_append
         self.diagnostic: str | None = None
         # One turn at a time per dialog; concurrent turns would interleave the
@@ -775,6 +828,31 @@ class AssistantService:
                 ["project", "text"],
             ),
             tool(
+                "edit_project_note",
+                "Granular edit to a project note: append, prepend, insert at a "
+                "1-indexed line (the text becomes that line), or replace a unique "
+                "text span. Reversible; may need confirmation.",
+                {
+                    "project": project_property,
+                    "note": {
+                        "type": "string",
+                        "description": "Note title; omit for the primary note",
+                    },
+                    "action": {"type": "string", "enum": list(NOTE_EDIT_ACTIONS)},
+                    "line": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "For insert_line: the line the text becomes",
+                    },
+                    "find": {
+                        "type": "string",
+                        "description": "For replace_text: a unique span to replace",
+                    },
+                    "text": {"type": "string"},
+                },
+                ["project", "action", "text"],
+            ),
+            tool(
                 "send_to_session",
                 "Queue a message to a session. deliver=false stages an inert draft the "
                 "operator releases; deliver=true arms it for delivery when the session is "
@@ -840,7 +918,7 @@ class AssistantService:
             return ACTION_CLASS_READ
         if kind == "run_ui_command":
             return ACTION_CLASS_NAVIGATION
-        if kind in {"append_project_note", "spawn_session"}:
+        if kind in {"append_project_note", "edit_project_note", "spawn_session"}:
             return ACTION_CLASS_REVERSIBLE
         if kind == "send_to_session":
             return (
@@ -862,6 +940,16 @@ class AssistantService:
             return f"spawn a {backend} session in {target}{preview}"
         if kind == "append_project_note":
             return f"append to the {target} project note:{preview}"
+        if kind == "edit_project_note":
+            note = str(arguments.get("note") or "primary")
+            action = str(arguments.get("action") or "append")
+            where = f"the {target} project's {note} note"
+            if action == "insert_line":
+                return f"insert at line {arguments.get('line')} of {where}:{preview}"
+            if action == "replace_text":
+                find = str(arguments.get("find") or "")[:80]
+                return f'replace "{find}" in {where} with{preview}'
+            return f"{action} to {where}:{preview}"
         if kind == "interrupt_session":
             return f"interrupt the agent in {target}"
         if kind == "end_session":
@@ -1044,12 +1132,25 @@ class AssistantService:
             session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 return {"error": "session did not resolve", "candidates": candidates}
-            arguments["session"] = session.record.name
-        if kind in {"spawn_session", "append_project_note"}:
+            # Rewritten to the display name so the restatement the operator
+            # confirms names the session the way their screen does.
+            names = await self._display_names([session])
+            arguments["session"] = names.get(session.record.id, session.record.name)
+        if kind in {"spawn_session", "append_project_note", "edit_project_note"}:
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
             arguments["project"] = project.name
+        if kind == "edit_project_note":
+            action = str(arguments.get("action") or "")
+            if action not in NOTE_EDIT_ACTIONS:
+                return {"error": f"action must be one of {', '.join(NOTE_EDIT_ACTIONS)}"}
+            if action == "insert_line" and int(arguments.get("line") or 0) < 1:
+                return {"error": "insert_line needs a 1-indexed line number"}
+            if action == "replace_text" and not str(arguments.get("find") or ""):
+                return {"error": "replace_text needs the text to find"}
+            if action != "replace_text" and not str(arguments.get("text") or "").strip():
+                return {"error": "text must not be empty"}
         text = arguments.get("text") or arguments.get("seed_text")
         if kind in {"send_to_session", "append_project_note"} and not str(text or "").strip():
             return {"error": "text must not be empty"}
@@ -1128,6 +1229,18 @@ class AssistantService:
                 raise AssistantError("note writing is not wired on this daemon")
             note = await self.note_append(project.id, str(arguments.get("text") or ""))
             return {"appended": True, "note": note.get("title"), "bytes": note.get("bytes")}
+        if kind == "edit_project_note":
+            project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
+            if project is None:
+                raise AssistantError("the target project no longer exists")
+            if self.note_edit is None:
+                raise AssistantError("note editing is not wired on this daemon")
+            note = await self.note_edit(
+                project.id, str(arguments.get("note") or "") or None, dict(arguments)
+            )
+            if note.get("error"):
+                raise AssistantError(str(note["error"]))
+            return {"edited": True, "note": note.get("title"), "bytes": note.get("bytes")}
         raise AssistantError(f"unknown mutation {kind}")
 
     async def _execute_read(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1502,7 +1615,7 @@ class AssistantService:
                 known = {
                     "session_detail", "read_transcript", "search_history",
                     "read_project_note", "list_project_notes", "list_queue",
-                    "append_project_note", "send_to_session",
+                    "append_project_note", "edit_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
                 }
                 if name in known:

@@ -21,7 +21,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
-  - *reversible* (queue an inert draft, append to a project note, spawn a session): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
+  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — or spawn a session): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
   - *consequential* (armed send, interrupt, end session): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
   A pending or scheduled action is typed state (`assistant_actions` row) rendered as a card, and a daemon restart expires anything still pending — a confirmation minted by a dead daemon can never execute.
 - **Dialog state is daemon-owned** (`assistant_dialogs`/`assistant_messages`/`assistant_actions` in SQLite, one worker thread like `voice_clips`).
@@ -54,8 +54,14 @@ No connected client is an honest tool failure, not a silent success.
 The assistant is text-first and voice-attached, not voice-only:
 
 - In the voice overlay, a `talk`/`chat` mode toggle switches the same floating panel between the dictation draft and the conversation view (`AssistantPanel`), grown taller in chat mode; the chat is also reachable with the microphone off (`assistant.toggle`).
+- **The mode toggle is the microphone's addressee switch.**
+  While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
+  A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.
 - With Talk active, `assistant_turn_done` speech plays through the existing application-speech pipeline (client-claimed stream, segmented clips, barge-in unchanged).
-- A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant — one addressee removes the ambiguity the wake word exists to resolve; a wake-word command inside the window keeps its normal meaning.
+- A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant in dictation mode too — one addressee removes the ambiguity the wake word exists to resolve.
+- **Spoken confirmation is deterministic.**
+  A pending or scheduled card is spoken aloud with its restatement; a bare `confirm`/`cancel` (a closed word set, `spokenConfirmation` in `assistant.ts`) resolves the newest open card directly against the confirm/cancel endpoints — the model is never in that loop, so it cannot "confirm" by talking about it.
+  Anything conversational ("yes but change the wording") falls through to the model as an ordinary turn.
 - Earcons (`earcons.ts`, WebAudio oscillator blips — no assets, no fetch) acknowledge the endpoint instantly and mark turn completion and pending actions, which is what makes 1-2 s of model latency feel attended rather than dead.
 
 ## HTTP surface

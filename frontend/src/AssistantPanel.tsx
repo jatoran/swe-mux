@@ -88,7 +88,19 @@ export function AssistantPanel({
       }
       if (event.type === 'assistant_action') {
         const status = String(payload.status || '')
-        if (status === 'scheduled' || status === 'pending') playEarcon('tick')
+        if (status === 'scheduled' || status === 'pending') {
+          playEarcon('tick')
+          // Eyes-free confirmation: the card's restatement is spoken so the
+          // operator can say "confirm" or "cancel" without looking. The spoken
+          // verdict resolves deterministically (assistant.ts), never via the model.
+          const restatement = String(payload.restatement || '')
+          if (restatement && voiceActiveRef.current && speakRef.current) {
+            const line = status === 'scheduled'
+              ? `About to ${restatement}. Say cancel to stop it.`
+              : `The assistant wants to ${restatement}. Say confirm or cancel.`
+            void speakRef.current(line).catch(() => {})
+          }
+        }
       }
     }
     window.addEventListener('mux:assistant-event', handler)

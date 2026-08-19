@@ -20,6 +20,7 @@ from swe_mux.assistant import (
     AssistantService,
     AssistantStore,
     action_snapshot,
+    apply_note_edit,
     speech_form,
     split_sentences,
 )
@@ -223,6 +224,69 @@ async def run_turn(service: AssistantService, text: str) -> str:
 # --------------------------------------------------------------------------- #
 # Pure helpers
 # --------------------------------------------------------------------------- #
+
+
+async def test_apply_note_edit_covers_every_action_and_refusal() -> None:
+    body = "# Notes\nfirst item\nsecond item"
+    # insert_line: the text *becomes* that line (the live ask: "on the second
+    # line please add 'asdf'").
+    inserted = apply_note_edit(body, {"action": "insert_line", "line": 2, "text": "asdf"})
+    assert inserted.split("\n")[1] == "asdf"
+    assert inserted.split("\n")[2] == "first item"
+    # A line past the end appends rather than raising.
+    tail = apply_note_edit(body, {"action": "insert_line", "line": 99, "text": "end"})
+    assert tail.split("\n")[-1] == "end"
+    assert apply_note_edit(body, {"action": "append", "text": "new"}).endswith("new\n")
+    assert apply_note_edit(body, {"action": "prepend", "text": "top"}).startswith("top\n\n# Notes")
+    replaced = apply_note_edit(body, {"action": "replace_text", "find": "second", "text": "2nd"})
+    assert "2nd item" in replaced
+    with pytest.raises(AssistantError, match="not found"):
+        apply_note_edit(body, {"action": "replace_text", "find": "absent", "text": "x"})
+    with pytest.raises(AssistantError, match="appears 2 times"):
+        apply_note_edit(body, {"action": "replace_text", "find": "item", "text": "x"})
+    with pytest.raises(AssistantError, match="line number"):
+        apply_note_edit(body, {"action": "insert_line", "text": "x"})
+    with pytest.raises(AssistantError, match="must not be empty"):
+        apply_note_edit(body, {"action": "append", "text": "  "})
+    with pytest.raises(AssistantError, match="unknown note edit"):
+        apply_note_edit(body, {"action": "obliterate", "text": "x"})
+
+
+async def test_note_edit_is_reversible_and_routes_through_the_closure(tmp_path: Path) -> None:
+    edits: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    async def note_edit(
+        project_id: str, note: str | None, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        edits.append((project_id, note, payload))
+        return {"title": "swe-mux notes", "bytes": 42}
+
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "edit_project_note",
+            "arguments": json.dumps(
+                {"project": "pixel lab", "action": "insert_line", "line": 2, "text": "asdf"}
+            ),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Inserted.")], trust="confirm"
+    )
+    service.note_edit = note_edit
+    try:
+        assert service._classify("edit_project_note", {}) == ACTION_CLASS_REVERSIBLE
+        dialog_id = await run_turn(service, "add asdf on line 2 of the pixel lab notes")
+        actions = await service.store.actions(dialog_id)
+        assert actions[0]["status"] == "pending"  # confirm trust: nothing ran yet
+        assert "line 2" in str(actions[0]["restatement"])
+        assert edits == []
+        outcome = await service.confirm_action(str(actions[0]["id"]))
+        assert outcome["action"]["status"] == "executed"
+        assert edits[0][0] == "p1" and edits[0][2]["line"] == 2
+    finally:
+        service.store.close()
 
 
 async def test_split_sentences_and_speech_form() -> None:

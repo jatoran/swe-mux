@@ -112,6 +112,53 @@ export const reportUiResult = (
 ) => api<{ accepted: boolean }>('POST', `/api/assistant/actions/${actionId}/ui-result`, outcome)
 
 /**
+ * Open-action tracker: the newest pending/scheduled confirmation card, kept at
+ * module level so the deterministic spoken confirm/cancel path can act on it
+ * without the model in the loop. Fed by the same `assistant_action` events the
+ * panel renders; replayed events never revive an old card.
+ */
+const openActions = new Map<string, AssistantAction>()
+
+export function noteAssistantActionEvent(action: Partial<AssistantAction>, replay: boolean): void {
+  const id = String(action.id || '')
+  if (!id || replay) return
+  if (action.status === 'pending' || action.status === 'scheduled') {
+    openActions.set(id, action as AssistantAction)
+  } else {
+    openActions.delete(id)
+  }
+}
+
+export function latestOpenAction(): AssistantAction | null {
+  const now = Date.now() / 1000
+  let newest: AssistantAction | null = null
+  for (const action of openActions.values()) {
+    if (action.status === 'pending' && action.expires_at && action.expires_at < now) continue
+    if (!newest || action.created_at > newest.created_at) newest = action
+  }
+  return newest
+}
+
+const CONFIRM_WORDS = new Set([
+  'confirm', 'confirmed', 'yes', 'yes confirm', 'yep', 'do it', 'go ahead', 'approve', 'run it',
+])
+const CANCEL_WORDS = new Set([
+  'cancel', 'cancel that', 'no', 'nope', 'never mind', 'nevermind', 'stop that', 'dont', 'abort',
+])
+
+/**
+ * Deterministic spoken verdict on the open confirmation card. Confirmation is a
+ * human act: it must never route through the model, which could be asked to
+ * "confirm" by its own reply text.
+ */
+export function spokenConfirmation(text: string): 'confirm' | 'cancel' | null {
+  const normalized = text.toLowerCase().replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (CONFIRM_WORDS.has(normalized)) return 'confirm'
+  if (CANCEL_WORDS.has(normalized)) return 'cancel'
+  return null
+}
+
+/**
  * The follow-up window: for a short period after the assistant finishes a
  * spoken turn, the next utterance needs no wake word — a single addressee
  * removes the ambiguity the marker exists to resolve. Device-local because it

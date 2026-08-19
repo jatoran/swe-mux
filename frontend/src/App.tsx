@@ -99,8 +99,9 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationSurface, ConversationToggle, useConversation, type VoicePanelMode } from './ConversationControl'
 import { AssistantPanel } from './AssistantPanel'
 import {
-  assistantStatus, ensureDialog, reportUiResult, sendTurn as sendAssistantTurnApi,
-  type AssistantClientContext, type AssistantStatus,
+  assistantStatus, cancelAction, confirmAction, ensureDialog, latestOpenAction,
+  noteAssistantActionEvent, reportUiResult, sendTurn as sendAssistantTurnApi,
+  spokenConfirmation, type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
@@ -2173,13 +2174,33 @@ export function App() {
       await playRequestedStreamFirst(clip.id,clip.stream_id||streamId,'system','system')
     }catch(cause){cancelRequestedStream(streamId);throw cause}
   }
-  /** Route one utterance/typed line to the assistant; false when it is disabled. */
-  const sendAssistantTurn=async(text:string):Promise<boolean>=>{
+  /**
+   * Route one utterance/typed line to the assistant; false when it is disabled,
+   * otherwise a short status line for the Talk history. A bare confirm/cancel
+   * over an open confirmation card resolves deterministically — a human act the
+   * model must never be able to perform by talking about it.
+   */
+  const sendAssistantTurn=async(text:string):Promise<string|false>=>{
     if(!assistantInfo?.enabled)return false
+    const verdict=spokenConfirmation(text)
+    const open=verdict?latestOpenAction():null
+    if(verdict&&open){
+      const spokenOutcome=verdict==='confirm'
+        ?`Confirmed: ${open.restatement}.`
+        :`Cancelled: ${open.restatement}.`
+      try{
+        if(verdict==='confirm')await confirmAction(open.id)
+        else await cancelAction(open.id)
+      }catch(cause){
+        return `That action could not be ${verdict==='confirm'?'confirmed':'cancelled'}: ${cause instanceof Error?cause.message:String(cause)}`
+      }
+      if(voiceStatus?.enabled&&conversation.phase!=='off')void speakAssistantReply(spokenOutcome).catch(()=>{})
+      return spokenOutcome
+    }
     const dialogId=await ensureDialog()
     setAssistantOpen(true);setVoicePanelMode('chat')
     await sendAssistantTurnApi(dialogId,text,assistantClientContext())
-    return true
+    return `Asked the assistant: “${text.slice(0,80)}${text.length>80?'…':''}”`
   }
   // The daemon dispatches UI commands (focus, drawer tabs, panels) to the
   // device the dialog turn came from; this executor resolves the label against
@@ -2188,8 +2209,12 @@ export function App() {
   useEffect(()=>{
     const handler=(raw:Event)=>{
       const event=(raw as CustomEvent).detail as {type:string;payload:Record<string,unknown>;replay?:boolean}
-      if(event.replay||event.type!=='assistant_action')return
+      if(event.type!=='assistant_action')return
       const payload=event.payload||{}
+      // Every action event feeds the open-card tracker the deterministic
+      // spoken confirm/cancel path reads; replay never revives an old card.
+      noteAssistantActionEvent(payload as never,event.replay===true)
+      if(event.replay)return
       if(String(payload.kind)!=='run_ui_command'||String(payload.status)!=='dispatched')return
       const actionId=String(payload.id||'')
       const commandText=String((payload.arguments as Record<string,unknown>|undefined)?.command||'')
@@ -2251,7 +2276,12 @@ export function App() {
   }
   // Capture is a workspace flag. Focus only changes this commit target; it never
   // restarts the microphone or clears the draft, and pinning freezes the target.
-  const conversation = useConversation(voiceStatus, updateSession, conversationTarget, handleVoiceIntent, sendAssistantTurn)
+  // Chat mode makes the assistant the microphone's addressee; the callback is
+  // read per utterance so a mode flip applies to the very next thing said.
+  const conversation = useConversation(
+    voiceStatus, updateSession, conversationTarget, handleVoiceIntent, sendAssistantTurn,
+    ()=>voicePanelMode==='chat'&&!!assistantInfo?.enabled,
+  )
   // One assistant view instance shared by both surface placements, so switching
   // between pane overlay and the fixed top layer never remounts the chat.
   const assistantView=<AssistantPanel
@@ -4613,8 +4643,9 @@ export function App() {
           // Tier 3: the assistant. An unmatched wake-word utterance becomes a
           // conversation turn instead of a refusal; the reply arrives in the
           // chat view and, in voice mode, through application speech.
-          if(await sendAssistantTurn(text).catch(()=>false)){
-            return{detail:`Asking the assistant: “${text}”`,transcript:`Asked the assistant: “${text}”`}
+          const asked=await sendAssistantTurn(text).catch(()=>false as const)
+          if(asked!==false){
+            return{detail:asked,transcript:asked}
           }
           const detail=`No voice command matched “${text}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list voice commands” for help, or enable the assistant in Settings.`
           return{detail,speech:detail}

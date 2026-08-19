@@ -50,6 +50,7 @@ from .assistant import (
     AssistantService,
     AssistantStore,
     action_snapshot,
+    apply_note_edit,
 )
 from .attention_narration import NARRATION_RULE_ID, AttentionNarrator
 from .attention_ranking import AttentionRankingService
@@ -1450,41 +1451,89 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             raise ValueError("unknown project")
         return await _assistant_note_summaries(project)
 
+    async def _assistant_resolve_note(
+        project: Any, note_reference: str | None
+    ) -> dict[str, Any]:
+        """Note id for a spoken/typed title — exact casefold first, then a
+        unique substring; ambiguity is answered with candidates, never a guess."""
+        if not note_reference:
+            return {"note_id": project.id}
+        summaries = await _assistant_note_summaries(project)
+        needle = note_reference.strip().casefold()
+        exact = [
+            item for item in summaries
+            if str(item.get("title") or "").casefold() == needle
+        ]
+        matches = exact or [
+            item for item in summaries
+            if needle in str(item.get("title") or "").casefold()
+        ]
+        if len(matches) != 1:
+            return {
+                "error": "note did not resolve"
+                if not matches
+                else "more than one note matches",
+                "candidates": [str(item.get("title") or "") for item in matches[:6]],
+            }
+        return {"note_id": str(matches[0]["id"])}
+
     async def _assistant_note_read(
         project_id: str, note_reference: str | None = None
     ) -> dict[str, Any]:
         project = projects.projects.get(project_id)
         if project is None:
             raise ValueError("unknown project")
-        note_id = project.id
-        if note_reference:
-            # Resolve a spoken/typed title against the real note inventory —
-            # exact casefold first, then a unique substring; ambiguity is
-            # answered with the candidate titles, never a guess.
-            summaries = await _assistant_note_summaries(project)
-            needle = note_reference.strip().casefold()
-            exact = [
-                item for item in summaries
-                if str(item.get("title") or "").casefold() == needle
-            ]
-            matches = exact or [
-                item for item in summaries
-                if needle in str(item.get("title") or "").casefold()
-            ]
-            if len(matches) != 1:
-                return {
-                    "error": "note did not resolve"
-                    if not matches
-                    else "more than one note matches",
-                    "candidates": [str(item.get("title") or "") for item in matches[:6]],
-                }
-            note_id = str(matches[0]["id"])
+        resolved = await _assistant_resolve_note(project, note_reference)
+        if resolved.get("error"):
+            return resolved
         return await read_note(
             project.root,
-            _storage_note_id(project, note_id),
+            _storage_note_id(project, str(resolved["note_id"])),
             default_title=f"{project.name} notes",
             project=_registered_identity(project),
         )
+
+    async def _assistant_note_edit(
+        project_id: str, note_reference: str | None, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """One granular note edit through the ordinary revisioned write path.
+
+        The transform itself is `assistant.apply_note_edit` (pure, tested); this
+        closure supplies what only the daemon has — the note inventory, the
+        current revision, and the change event other devices refresh on.
+        """
+        project = projects.projects.get(project_id)
+        if project is None:
+            raise ValueError("unknown project")
+        resolved = await _assistant_resolve_note(project, note_reference)
+        if resolved.get("error"):
+            return resolved
+        identity = _registered_identity(project)
+        storage_id = _storage_note_id(project, str(resolved["note_id"]))
+        current = await read_note(
+            project.root,
+            storage_id,
+            default_title=f"{project.name} notes",
+            project=identity,
+        )
+        edited = apply_note_edit(str(current.get("markdown") or ""), payload)
+        result = await write_note(
+            project.root,
+            storage_id,
+            edited,
+            str(current.get("revision") or "missing"),
+            default_title=f"{project.name} notes",
+            project=identity,
+        )
+        await events.emit(
+            "note_changed",
+            source="assistant",
+            scope="project",
+            project_id=project.id,
+            note_id=str(resolved["note_id"]),
+            revision=result.get("revision"),
+        )
+        return result
 
     async def _assistant_note_append(project_id: str, text: str) -> dict[str, Any]:
         project = projects.projects.get(project_id)
@@ -1537,6 +1586,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         note_read=_assistant_note_read,
         note_append=_assistant_note_append,
         note_list=_assistant_note_list,
+        note_edit=_assistant_note_edit,
     )
     app["assistant"] = assistant
     app["assistant_store"] = assistant_store

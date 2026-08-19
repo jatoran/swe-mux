@@ -2343,6 +2343,9 @@ body {
 .voice-mode-toggle button{height:calc(19px*var(--ui-scale));padding:0 8px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .voice-mode-toggle button.active{background:var(--panel2);color:var(--text)}
 .voice-mode-toggle button:disabled{opacity:.4;cursor:default}
+/* Chat mode's addressee marker: while it shows, plain speech is a conversation
+   turn and the dictation draft is deliberately deaf. */
+.dictation-mic-note{flex:none;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--green,#8bd450);cursor:help}
 .assistant-panel{min-height:280px;display:grid;grid-template-rows:minmax(0,1fr) auto auto;gap:5px;min-width:0}
 .assistant-panel.disabled{min-height:0;display:block;padding:8px;color:var(--muted)}
 .assistant-log{min-height:220px;overflow:auto;overscroll-behavior:contain;display:grid;align-content:start;gap:6px;padding:6px;border:1px solid var(--line);background:var(--bg)}

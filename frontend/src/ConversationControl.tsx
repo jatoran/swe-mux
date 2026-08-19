@@ -95,7 +95,8 @@ export function useConversation(
   onSession:(session:Session)=>void,
   followingTarget:ConversationTarget|null,
   onIntent?:(spoken:string)=>VoiceCommandResult|Promise<VoiceCommandResult>,
-  onAssistantUtterance?:(spoken:string)=>Promise<boolean>,
+  onAssistantUtterance?:(spoken:string)=>Promise<string|false>,
+  assistantChatActive?:()=>boolean,
 ):Conversation{
   const wake=primaryWake(status?.wake_words)
   const matcher=useMemo(
@@ -144,6 +145,7 @@ export function useConversation(
   const onSessionRef=useRef(onSession);onSessionRef.current=onSession
   const onIntentRef=useRef(onIntent);onIntentRef.current=onIntent
   const onAssistantRef=useRef(onAssistantUtterance);onAssistantRef.current=onAssistantUtterance
+  const assistantChatRef=useRef(assistantChatActive);assistantChatRef.current=assistantChatActive
 
   const listeningDetail=()=>`Listening. Say “${wakeRef.current}, send” to submit.`
   // Matched exactly when the detector resolves, so the readiness line is replaced only
@@ -331,16 +333,19 @@ export function useConversation(
       enterStandby(true);setPhase('standby')
       respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
     }
-    // The follow-up window: right after the assistant speaks, the next
-    // utterance has a single addressee, so it needs no wake word. Only plain
-    // speech takes this route — a wake-word command keeps its normal meaning,
-    // which is what lets "Mux, stop" still kill playback mid-dialog.
-    if(parsed.command===null&&onAssistantRef.current&&assistantFollowUpActive()){
+    // A single addressee removes the wake word: while the panel is in chat
+    // mode, every plain utterance is a conversation turn — the dictation draft
+    // must NOT also hear it. The follow-up window gives the same routing for a
+    // few seconds after a spoken reply in any mode. Only plain speech takes
+    // this route — a wake-word command keeps its normal meaning, which is what
+    // lets "Mux, stop" still kill playback mid-dialog.
+    if(parsed.command===null&&onAssistantRef.current&&(assistantChatRef.current?.()||assistantFollowUpActive())){
       const wakeIntent=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
       if(wakeIntent===null&&rawText.trim()){
         setPhase('sending');setDetail('Asking the assistant…')
         try{
-          if(await onAssistantRef.current(rawText.trim())){setPhase('listening');return}
+          const outcome=await onAssistantRef.current(rawText.trim())
+          if(outcome!==false){setPhase('listening');respond(outcome||'Asked the assistant.');return}
         }catch(cause){reportFailure(cause);return}
         setPhase('listening')
       }
@@ -798,7 +803,8 @@ export function DictationPanel({
     return <section class={`dictation-panel chat-mode ${conversation.phase}`} aria-label="Mux assistant conversation">
       <header>
         {modeToggle}
-        {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={conversation.detail}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
+        {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={`${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
+        {talkActive&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
         <div class="dictation-actions">
           {talkActive&&<button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop mic</button>}
           <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
