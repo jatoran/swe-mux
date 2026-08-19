@@ -74,10 +74,12 @@ async def test_bundle_returns_every_settings_part_in_one_response(tmp_path: Path
 
     assert response.status == 200
     payload = json.loads(response.text or "")
-    # The exact part set the frontend destructures on open.
+    # The exact part set the frontend destructures on open. The rules.toml text is
+    # deliberately absent: the Automation dashboard owns the rules editor and loads
+    # `GET /api/automation/rules` itself, so Settings never holds a stale copy its
+    # Save could write back over a dashboard edit.
     assert set(payload) == {
         "config",
-        "automation_rules",
         "keybindings",
         "profiles",
         "projects",
@@ -89,7 +91,6 @@ async def test_bundle_returns_every_settings_part_in_one_response(tmp_path: Path
     }
     assert payload["errors"] == {}
     assert payload["config"]["scrollback_bytes"] == 5 * 1024 * 1024
-    assert payload["automation_rules"]["text"] == "version = 1\n"
     assert payload["keybindings"]["bindings"]
     assert isinstance(payload["profiles"]["detected"], list)
     assert payload["projects"] == []
@@ -110,7 +111,6 @@ async def test_bundle_degrades_a_failed_part_to_null_instead_of_failing(tmp_path
     # Everything else still arrives, including the parts the panel cannot open without.
     assert payload["config"]["scrollback_bytes"]
     assert payload["keybindings"]["bindings"]
-    assert payload["automation_rules"]["text"]
 
 
 async def test_bundle_reads_project_config_for_the_requested_cwd(tmp_path: Path) -> None:

@@ -1316,6 +1316,7 @@ transcript reads genuinely cannot answer.
 - [x] Full-session scan processes uncovered current-run messages oldest first, preserves source-time ordering, never moves the live cursor backwards, and reports completed, partial, or failed progress without weakening any gate or budget.
 - [x] Automation enablement is centralized in the Automation dashboard.
   Settings retains provider, model, budget, execution, and advanced rule configuration but no duplicate engine, timeline, titler, summarizer, or attention-observer switches.
+  *Superseded 2026-08-19*: the enablement-vs-configuration line proved invisible to users and inconsistent with itself (the scheduled-runs switch already lived in Settings), so the two global switches moved to Settings → Automation, the rules.toml editor moved to the dashboard, and the dashboard gained the read-only per-Project enablement matrix. The no-duplication half of this item still holds: each switch has exactly one owner (`design/features/ui.md`, `design/features/automation.md`).
 
 ### Phase 5.5 exit criteria
 

@@ -12,15 +12,15 @@
  * checks every target's `data-setting` against the source that must carry it, so renaming a
  * control fails a test rather than quietly stranding the links that point at it.
  *
- * Three overlays own switches, and the split is not arbitrary:
- *  - `settings`   — install-wide configuration (the Settings panel, tab named by `section`).
- *  - `project`    — one Project's own opt-ins (the Projects registry, the only per-Project editor).
- *  - `automation` — the two global automation master switches, which live on the Automation
- *                   dashboard rather than in Settings. Prose that sends people to
- *                   "Settings → Automation" for these is wrong, and was.
+ * Two overlays own switches, and the split is scope:
+ *  - `settings` — install-wide configuration (the Settings panel, tab named by `section`).
+ *                 Every global switch and bound lives here, including the automation
+ *                 master switches; the Automation dashboard shows their state and links
+ *                 back rather than owning a second copy.
+ *  - `project`  — one Project's own opt-ins (the Projects registry, the only per-Project editor).
  */
 
-export type SettingSurface = 'settings' | 'project' | 'automation'
+export type SettingSurface = 'settings' | 'project'
 
 export type SettingTarget = {
   surface: SettingSurface
@@ -82,20 +82,25 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Alerts', setting: 'alerts_enabled',
     label: 'Alerts for this device', where: 'Settings → Alerts',
   },
-  // The two global automation switches are on the dashboard, not in Settings.
+  // The global automation switches live in Settings with every other install-wide
+  // switch; the Automation dashboard reads their state and links here.
   'automation.engine': {
-    surface: 'automation', setting: 'automation_enabled',
-    label: 'Automation engine', where: 'Automation dashboard → Global controls',
+    surface: 'settings', section: 'Automation', setting: 'automation_enabled',
+    label: 'Automation engine', where: 'Settings → Automation',
   },
   'automation.scanTimeline': {
-    surface: 'automation', setting: 'scan_timeline_enabled',
-    label: 'Scan timeline', where: 'Automation dashboard → Global controls',
+    surface: 'settings', section: 'Automation', setting: 'scan_timeline_enabled',
+    label: 'Scan timeline', where: 'Settings → Automation',
+  },
+  'automation.budgets': {
+    surface: 'settings', section: 'Automation', setting: 'automation_daily_budget_usd',
+    label: 'Automation budgets', where: 'Settings → Automation',
   },
   // Per-Project opt-ins. Every one of these is off until a human turns it on for that
   // Project, so a surface reading from one is inert rather than empty until then.
   'project.automations': {
     surface: 'project', setting: 'automations',
-    label: 'Control-plane automations', where: 'Project settings',
+    label: 'Automations', where: 'Project settings',
   },
   'project.scanTimeline': {
     surface: 'project', setting: 'automation:scan_timeline',

@@ -1655,6 +1655,12 @@ body {
 .cost-bar{height:3px;margin:5px 0 4px;background:linear-gradient(to right,var(--accent) calc(var(--share,0)*100%),var(--line) 0)}
 .cost-model{white-space:normal}.cost-model>*{display:block}
 .cost-source{color:var(--muted);font-size:8px;white-space:normal;overflow-wrap:anywhere}
+/* The matrix's "what is on" cell is a prose list, not a figure: it wraps. */
+.automation-matrix td.automation-matrix-list{white-space:normal;text-align:left;overflow-wrap:anywhere;color:var(--muted)}
+/* The rules.toml editor is a bare textarea inside a details, not an .automation-panel
+   label, so it needs its own field styling; monospace because it is a file. */
+.automation-rules-editor{padding:10px}
+.automation-rules-editor textarea{width:100%;min-height:180px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:11px 'Cascadia Mono',Consolas,monospace;padding:6px 8px}
 .automation-pill.observer{border-color:var(--accent);color:var(--accent)}
 .automation-pill.feature{border-color:var(--green);color:var(--green)}
 .automation-pill.retired,.automation-pill.off{border-color:var(--amber);color:var(--amber)}

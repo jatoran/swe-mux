@@ -3188,7 +3188,7 @@ export function App() {
    * Route a deep link from a gated surface to the switch that ungates it.
    *
    * Every "this is off — turn it on" control in the app arrives here, because opening one of
-   * the three overlays that own switches means closing whichever other one is up, and only
+   * the two overlays that own switches means closing whichever other one is up, and only
    * this component knows which that is. The overlay then scrolls to the control and flashes
    * it (`settingReveal.ts`); this function's whole job is choosing the overlay and handing it
    * the id.
@@ -3205,11 +3205,6 @@ export function App() {
       if(!owner){setError('Select a Project first — that switch belongs to one Project.');return}
       setSettingsOpen(false);setResourcesOpen(null);setAutomationOpen(false)
       openProjectsManager({project:owner,setting:target.setting})
-      return
-    }
-    if(target.surface==='automation'){
-      setSettingsOpen(false);setResourcesOpen(null);setProjectsManagerOpen(false)
-      setSettingsSetting(target.setting);setRevealToken(token=>token+1);setAutomationOpen(true)
       return
     }
     setResourcesOpen(null);setAutomationOpen(false);setProjectsManagerOpen(false)
@@ -6735,7 +6730,7 @@ export function App() {
       onClose={()=>{setResourcesOpen(null);setProcessSession(null)}}
     />}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
-    {automationOpen&&<AutomationDashboard initialSetting={settingsSetting} revealToken={revealToken} onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}}
+    {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}}
       // The two surfaces this dashboard used to draw second copies of. Both close it on the
       // way out: they are drawer tabs, and the dialog covers the drawer.
       onOpenAlerts={()=>{setAutomationOpen(false);openDrawerTab('notifications')}}

@@ -17,7 +17,7 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     app = source("App.tsx")
 
     assert "System observers" in dashboard
-    assert "Global controls" in dashboard
+    assert "Global switches" in dashboard
     assert "automation_enabled" in dashboard
     assert "scan_timeline_enabled" in dashboard
     assert "Custom rules" in dashboard
@@ -33,17 +33,66 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     assert "Derived annotations" not in app
 
 
-def test_automation_enablement_is_centralized_in_the_dashboard() -> None:
+def test_every_switch_has_one_owner_settings_global_dashboard_per_rule() -> None:
+    """Settings owns install-wide policy; the dashboard owns per-rule state.
+
+    The earlier line — enablement on the dashboard, configuration in Settings —
+    was invisible to a user and inconsistent with itself (the scheduled-runs
+    emergency stop already lived in Settings). The invariant that survives the
+    move is that no switch has two owners: the global switches are Settings
+    draft toggles and the dashboard shows their state with a SettingLink, while
+    the per-rule and observer-group switches stay on the dashboard beside the
+    firings they explain and never grow a Settings copy.
+    """
     dashboard = source("AutomationDashboard.tsx")
     settings = source("Settings.tsx")
 
-    assert "updateControl" in dashboard
+    # Global switches: Settings owns the control, the dashboard owns only a link.
+    assert "change('automation_enabled'" in settings
+    assert "change('scan_timeline_enabled'" in settings
+    assert "updateControl" not in dashboard
+    assert 'target="automation.engine"' in dashboard
+    assert 'target="automation.scanTimeline"' in dashboard
+    # Per-rule switches: dashboard-only.
     assert "updateBuiltin" in dashboard
-    assert 'change(\'automation_enabled\'' not in settings
-    assert 'change(\'scan_timeline_enabled\'' not in settings
-    assert 'change(\'observer_titler_enabled\'' not in settings
-    assert 'change(\'observer_summarizer_enabled\'' not in settings
-    assert 'change(\'phase7_observers_enabled\'' not in settings
+    assert "change('observer_titler_enabled'" not in settings
+    assert "change('observer_summarizer_enabled'" not in settings
+    assert "change('phase7_observers_enabled'" not in settings
+
+
+def test_the_rules_editor_lives_on_the_dashboard_not_in_the_settings_save() -> None:
+    """A rule's text, live/shadow state, and firings are one object.
+
+    The rules.toml textarea used to save inside the Settings transaction, so a
+    stale copy held open there could overwrite a rule toggled or edited on the
+    dashboard. One owner now: the dashboard loads and saves the file itself,
+    validate-first, and Settings neither fetches nor writes it.
+    """
+    dashboard = source("AutomationDashboard.tsx")
+    settings = source("Settings.tsx")
+
+    assert "'/api/automation/rules?validate=1'" in dashboard
+    assert "'/api/automation/rules'" in dashboard
+    assert "rules.toml" in dashboard
+    assert "/api/automation/rules" not in settings
+    assert "rules.toml" not in settings
+
+
+def test_the_dashboard_answers_what_runs_where_read_only() -> None:
+    """Nothing runs on a Project that did not opt in, and the dashboard says so.
+
+    The projects view is the fleet aggregation of per-Project enablement — an
+    opted-out Project is a row reading "nothing", never a missing row — and it
+    is read-only: the revision-checked editor in each Project's settings stays
+    the only write path, one link away.
+    """
+    dashboard = source("AutomationDashboard.tsx")
+
+    assert "'/api/automation/projects'" in dashboard
+    assert "Where automations run" in dashboard
+    assert 'target="project.automations"' in dashboard
+    # No write verbs against the per-Project route from this surface.
+    assert "PUT','/api/projects" not in dashboard
 
 
 def test_automation_diagnostics_are_separated_from_primary_workflows() -> None:

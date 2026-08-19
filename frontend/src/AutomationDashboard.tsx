@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { revealSetting } from './settingReveal'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { SettingLink } from './SettingLink'
 import {
   buildSpendRows, callHealth, exactMoney, formatCount, formatDuration, formatMoney, formatPercent,
   type SpendBreakdown,
@@ -31,7 +31,11 @@ type Experience={id:string;backend:string;error_summary:string;resolution_summar
 type InjectionSafety={version:number;research_only:boolean;authorizes_actuation:boolean;shadow_metrics:{evaluations:Record<string,number>;reasons:Record<string,number>;tracked_sessions:number;unknown_duration_s:number;transitions:number};parser_coverage:Array<{session_id:string;backend:string;schema_version?:string;status:string;recognized:number;unknown:number;unknown_rate?:number;unknown_signatures:Record<string,number>;diagnostic?:string}>;sessions:Array<{session_id:string;backend:string;state:string;delivery_state:'safe'|'blocked'|'unknown';reason:string;reasons:string[];candidate_safe:boolean;authorized:boolean;diagnostic:string;checks:Record<string,boolean|null>;evidence:Record<string,unknown>}>}
 type EndedRun={id:string;backend:string;name:string;generated_title?:string;auto_named?:number;cwd:string;spawned_at:number;exited_at?:number;transcript_path?:string;project_label?:string}
 type ObserverBatch={id:string;kind:string;status:string;run_ids:string[];preview:unknown[];calls:number;tokens:number;cost_usd:number;error?:string;created_at:number;completed_at?:number}
-// Four views, flat.
+type MatrixAutomation={id:string;kind:'substrate'|'consumer';label:string;requires:string[];implemented:boolean}
+type MatrixProject={project_id:string;project_name:string;status:string;requested:Record<string,boolean>;enabled:string[];blocked:Record<string,string[]>;scan_timeline_auto_enable:boolean}
+type ProjectMatrix={automations:MatrixAutomation[];projects:MatrixProject[]}
+type RulesFile={text:string}
+// Five views, flat.
 //
 // This was seven views in four groups, and three of them were second copies of surfaces
 // that already had a home. The pipeline produces exactly two things — an attention item or
@@ -48,13 +52,20 @@ type ObserverBatch={id:string;kind:string;status:string;run_ids:string[];preview
 //    Resources → Tokens, following the cost column that had already left it for the same
 //    reason; and the away report moved to Alerts, which is the inbox it summarizes.
 //
-// What is left is what only this dashboard can do: configure the pipeline, account for what
-// it spent, run bounded knowledge batches, and show its own diagnostics. Four flat views
-// need no grouping, so the group rail is gone with them.
-type View='automations'|'cost'|'knowledge'|'diagnostics'
+// The global switches moved the other way, to Settings → Automation, where every other
+// install-wide switch and bound already lived: "where do I change automation behaviour
+// globally" now has one answer, and this dashboard shows their state and links there.
+// What is left is what only this dashboard can do: own the rule corpus (the rules.toml
+// editor beside the live/shadow state and the firings it produces), answer what runs
+// where (`projects`), account for what it spent, run bounded knowledge batches, and show
+// its own diagnostics. Five flat views need no grouping, so the group rail stays gone.
+type View='automations'|'projects'|'cost'|'knowledge'|'diagnostics'
 
 const VIEWS:Array<{id:View;label:string}>=[
   {id:'automations',label:'rules & observers'},
+  // Per-Project participation is its own view: the global state beside the rules says
+  // whether the pipeline may run, and this answers where it actually does.
+  {id:'projects',label:'projects'},
   // Spend is its own destination rather than a section of anything: what a thing costs and
   // whether it is behaving are different questions asked at different times.
   {id:'cost',label:'cost breakdown'},
@@ -77,22 +88,17 @@ function actionSummary(rule:Rule):string{
   return action.kind
 }
 
-export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAlerts,onOpenFindings,initialSetting,revealToken}:{
+export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAlerts,onOpenFindings}:{
   onClose:()=>void;onConfigure:()=>void;onOpenSession:(id:string)=>void
   /** The single home for attention items. This dashboard used to draw a second copy. */
   onOpenAlerts:()=>void
   /** The single home for run notes. Same story. */
   onOpenFindings:()=>void
-  /** `data-setting` id of a global control to scroll to and flash (`settingTargets.ts`). The
-   *  two install-wide automation switches live here rather than in Settings, so a gated
-   *  surface deep-links to this dashboard for them. */
-  initialSetting?:string
-  /** Changes per deep-link request, so the same link twice reveals twice. */
-  revealToken?:number
 }){
   const [data,setData]=useState<AutomationData|null>(null)
   const [experiences,setExperiences]=useState<Experience[]>([])
   const [injectionSafety,setInjectionSafety]=useState<InjectionSafety|null>(null)
+  const [matrix,setMatrix]=useState<ProjectMatrix|null>(null)
   const [view,setView]=useState<View>('automations')
   const [showHelp,setShowHelp]=useState(false)
   const [message,setMessage]=useState('Loading automation state…')
@@ -104,6 +110,13 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAle
   const [batchCandidates,setBatchCandidates]=useState<EndedRun[]>([])
   const [batches,setBatches]=useState<ObserverBatch[]>([])
   const [batchPreview,setBatchPreview]=useState<Record<string,unknown>|null>(null)
+  // The rules.toml editor is this dashboard's, not Settings': a rule's definition, its
+  // live/shadow state, and the firings it produces are one object, and splitting the text
+  // from the rest across two overlays is how a Save in one overwrote an edit in the other.
+  const [rulesText,setRulesText]=useState('')
+  const [savedRulesText,setSavedRulesText]=useState('')
+  const [rulesOpen,setRulesOpen]=useState(false)
+  const [rulesError,setRulesError]=useState('')
   const panel=useRef<HTMLElement>(null)
   const helpPanel=useRef<HTMLElement>(null)
   useModalFocus(panel,onClose,!showHelp)
@@ -111,35 +124,35 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAle
 
   const load=async()=>{
     try{
-      const [dashboard,experience,injection,history,batchHistory]=await Promise.all([
+      const [dashboard,experience,injection,history,batchHistory,projectMatrix,rulesFile]=await Promise.all([
         api<AutomationData>('GET','/api/automation/dashboard'),
         api<{items:Experience[]}>('GET','/api/experiences'),
         api<InjectionSafety>('GET','/api/automation/injection-safety'),
         api<{items:EndedRun[]}>('GET','/api/history?limit=100'),
         api<{items:ObserverBatch[]}>('GET','/api/automation/batches'),
+        api<ProjectMatrix>('GET','/api/automation/projects'),
+        api<RulesFile>('GET','/api/automation/rules'),
       ])
-      setData(dashboard);setExperiences(experience.items);setInjectionSafety(injection);setBatchCandidates(history.items.filter(item=>Boolean(item.exited_at&&item.transcript_path)));setBatches(batchHistory.items)
+      setData(dashboard);setExperiences(experience.items);setInjectionSafety(injection);setBatchCandidates(history.items.filter(item=>Boolean(item.exited_at&&item.transcript_path)));setBatches(batchHistory.items);setMatrix(projectMatrix)
+      setRulesText(current=>current===savedRulesText?rulesFile.text:current);setSavedRulesText(rulesFile.text)
       const enabledBuiltins=(dashboard.engine.built_in_rules||[]).filter(item=>item.enabled).length
       setMessage(`ready · ${enabledBuiltins} system observers on · ${dashboard.engine.rules.length} custom rules · ${dashboard.unread_notifications} unread`);setError('')
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   useEffect(()=>{void load()},[])
 
-  // A deep link to a global control also has to put the view that renders it on screen: the
-  // dashboard is tabbed, and every other tab is unmounted. The reveal then waits for the row,
-  // which only exists once the dashboard's own fetch lands.
-  useEffect(()=>{
-    if(!initialSetting)return
-    setView('automations')
-    const root=panel.current
-    if(!root)return
-    return revealSetting(root,initialSetting)
-  },[initialSetting,revealToken,data!==null])
-
   const runDry=async()=>{try{setDryRun(null);setMessage('Evaluating selected historical event with side effects disabled…');const result=await api('POST','/api/automation/dry-run',{event_seq:Number(eventSeq)});setDryRun(result);setMessage('Dry-run complete. No actions or model calls were executed.')}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
   const updateRule=async(rule:Rule,change:Partial<Pick<Rule,'enabled'|'shadow'>>)=>{try{setMessage(`Updating ${rule.name}…`);await api('PATCH',`/api/automation/rules/${encodeURIComponent(rule.id)}`,change);await load()}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
   const updateBuiltin=async(rule:BuiltInRule)=>{try{setMessage(`Updating ${rule.setting_label}…`);await api('PATCH','/api/config',{[rule.setting_key]:!rule.enabled});await load()}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
-  const updateControl=async(key:'automation_enabled'|'scan_timeline_enabled',enabled:boolean)=>{try{setMessage('Updating global automation controls…');await api('PATCH','/api/config',{[key]:enabled});await load()}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
+  const saveRules=async()=>{
+    try{
+      setRulesError('');setMessage('Validating rules.toml…')
+      await api('PUT','/api/automation/rules?validate=1',{text:rulesText})
+      await api('PUT','/api/automation/rules',{text:rulesText})
+      setSavedRulesText(rulesText);setMessage('Rules saved and reloaded.')
+      await load()
+    }catch(cause){setRulesError(cause instanceof Error?cause.message:String(cause))}
+  }
   const previewBatch=async(confirm=false)=>{try{const run_ids=Array.from(batchRuns);const result=await api<Record<string,unknown>>('POST','/api/automation/batches',{kind:batchKind,run_ids,confirm,...(confirm?{preview_token:String(batchPreview?.preview_token||'')}:{})});setBatchPreview(result);setMessage(confirm?'Batch started. Results remain preview/export-only.':'Batch estimate ready; review before starting.');if(confirm)await load()}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
   const toggleBatchRun=(id:string)=>{setBatchPreview(null);setBatchRuns(current=>{const next=new Set(current);if(next.has(id))next.delete(id);else if(next.size<25)next.add(id);return next})}
   const enabledBuiltins=(data?.engine.built_in_rules||[]).filter(item=>item.enabled).length
@@ -167,9 +180,45 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAle
               figure nor a count of anything the reader asked for. Today's calls come from the
               same ledger as today's cost, so the three spend tiles agree with each other. */}
           <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{formatCount(data?.spend_breakdown?.totals?.today_calls||0)}</strong></article><article><span>tokens today</span><strong title={integer.format(data?.spend_today.tokens||0)}>{formatCount(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article></div>
-          <section class="usage-table automation-controls"><h3>Global controls</h3><p>Enable and disable automation here. Provider, model, budget, and execution configuration remains in Settings.</p><article class="automation-row automation-rule-row" data-setting="automation_enabled"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('automation_enabled',!data?.controls.automation_enabled)}>{data?.controls.automation_enabled?'disable':'enable'}</button></div></article><article class="automation-row automation-rule-row" data-setting="scan_timeline_enabled"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('scan_timeline_enabled',!data?.controls.scan_timeline_enabled)}>{data?.controls.scan_timeline_enabled?'disable':'enable'}</button></div></article></section>
+          {/* The global switches are policy and live in Settings → Automation with every
+              other install-wide switch and bound. This dashboard reads their state and
+              links there — owning a second copy is how "where do I turn this on" grew two
+              answers. */}
+          <section class="usage-table automation-controls"><h3>Global switches</h3><p>Read here, changed in Settings → Automation beside the budgets and execution bounds they gate.</p><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine · {data?.controls.automation_enabled?'on':'off'}</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><SettingLink target="automation.engine">change in Settings</SettingLink></div></article><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline · {data?.controls.scan_timeline_enabled?'on':'off'}</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><SettingLink target="automation.scanTimeline">change in Settings</SettingLink></div></article></section>
           <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules. The three attention observers share one setting, so enabling or disabling one changes the whole attention group.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='phase7_observers_enabled'?' group':''}</button></div></article>)}</section>
-          <section class="usage-table"><h3>Custom rules</h3><p>Canonical rules saved in the daemon rules file. Configure edits the full TOML definition.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={onConfigure}>edit custom rules</button></div>}</section>
+          <section class="usage-table"><h3>Custom rules</h3><p>Canonical rules saved in the daemon rules file. The editor below owns the full TOML definition, beside the live/shadow state and the firings each rule produces.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={()=>setRulesOpen(true)}>edit custom rules</button></div>}
+          {/* The rules corpus is content this dashboard owns end to end. It was a Settings
+              textarea saved inside the Settings transaction, which meant a stale copy held
+              open there could overwrite a rule toggled or edited here. One owner now. */}
+          <details class="automation-advanced automation-rules-editor" open={rulesOpen} onToggle={event=>setRulesOpen(event.currentTarget.open)}><summary>rules.toml editor{rulesText!==savedRulesText?' · unsaved':''}</summary>
+            <p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert. Saving validates the complete file first; an invalid file changes nothing.</p>
+            <textarea value={rulesText} spellcheck={false} onInput={event=>setRulesText(event.currentTarget.value)}/>
+            {rulesError&&<p class="usage-error" role="alert">{rulesError}</p>}
+            <div class="automation-inline"><button class="primary" disabled={rulesText===savedRulesText} onClick={()=>void saveRules()}>validate + save</button><button disabled={rulesText===savedRulesText} onClick={()=>{setRulesText(savedRulesText);setRulesError('')}}>discard edits</button></div>
+          </details></section>
+        </div>}
+        {view==='projects'&&<div class="usage-tables">
+          {/* The fleet answer the global state cannot give: nothing runs anywhere without a
+              per-Project opt-in, and before this view that fact was invisible from the one
+              surface named "Automation". Read-only — the revision-checked editor in each
+              Project's settings stays the only write path, one link away. */}
+          <section class="usage-table"><h3>Where automations run</h3>
+            <p>Every automation is opted into per Project, in that Project's own settings. A Project absent from every automation is listed too — silence here means "off", never "covered".</p>
+            {matrix?<div class="usage-table-scroll"><table class="data-table automation-matrix">
+              <thead><tr><th>project</th><th>enabled</th><th>what is on</th><th/></tr></thead>
+              <tbody>{matrix.projects.map(project=>{
+                const implemented=matrix.automations.filter(item=>item.implemented)
+                const labels=project.enabled.map(id=>matrix.automations.find(item=>item.id===id)?.label||id)
+                const blockedCount=Object.keys(project.blocked).length
+                return <tr key={project.project_id}>
+                  <td data-label="project"><strong>{project.project_name}</strong>{project.status!=='ready'&&project.status!=='read-only'?<em> · config {project.status}</em>:null}</td>
+                  <td data-label="enabled">{project.enabled.length}/{implemented.length}{blockedCount?<em> · {blockedCount} blocked</em>:null}</td>
+                  <td data-label="what is on" class="automation-matrix-list">{labels.length?labels.join(' · '):'nothing'}</td>
+                  <td data-label="open"><SettingLink target="project.automations" projectId={project.project_id}>Project settings</SettingLink></td>
+                </tr>})}</tbody>
+            </table></div>:<p>Loading Projects…</p>}
+            {matrix&&!matrix.projects.length&&<div class="automation-empty"><strong>No Projects registered</strong><span>Automations run only on registered Projects that opted in.</span></div>}
+          </section>
         </div>}
         {view==='cost'&&<AutomationSpendView/>}
         {view==='knowledge'&&<>

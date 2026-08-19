@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { ProjectContextEditor } from './ProjectContextEditor'
 import { revealSetting } from './settingReveal'
+import { SettingLink } from './SettingLink'
 import { automationSetting } from './settingTargets'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
@@ -96,7 +97,7 @@ function AutomationOptIns({ project, busy, onError }: {
     finally { setSaving(false) }
   }
 
-  if (!state) return <div class="project-automations"><h4>Control-plane automations</h4><p>Loading…</p></div>
+  if (!state) return <div class="project-automations"><h4>Automations</h4><p>Loading…</p></div>
   const byId = new Map(state.automations.map(item => [item.id, item]))
   // Enabling a consumer enables its whole transitive closure: the alternative is
   // a toggle that appears on and silently does nothing.
@@ -144,8 +145,8 @@ function AutomationOptIns({ project, busy, onError }: {
   const scanOn = state.requested.scan_timeline === true
   const scanBlocked = state.blocked.scan_timeline || []
   return <div class="project-automations">
-    <h4 data-setting="automations">Control-plane automations<em class="project-setting-chip">repo</em></h4>
-    <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in Settings → Automation.</p>
+    <h4 data-setting="automations">Automations<em class="project-setting-chip">repo</em></h4>
+    <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in <SettingLink target="automation.budgets" variant="link">Settings → Automation</SettingLink>.</p>
     <ul class="project-automation-list">{substrate.map(row)}</ul>
     <ul class="project-automation-list">{consumers.map(row)}</ul>
 

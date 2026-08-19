@@ -106,6 +106,7 @@ enabled-and-working:
 ```text
 GET /api/projects/{project_id}/automations
 PUT /api/projects/{project_id}/automations   {automations: {id: bool}, revision?}
+GET /api/automation/projects
 PUT /api/sessions/{session_id}/scan-timeline/project   {enabled: bool}
 ```
 
@@ -114,6 +115,11 @@ PUT /api/sessions/{session_id}/scan-timeline/project   {enabled: bool}
 replaces the opt-in table through the ordinary project-config write: `409 revision_conflict`
 on a stale revision, `409 automation_not_implemented` for a reserved id. The typed project
 config endpoints (`GET|PUT /api/project/config`) still carry the same table.
+`GET /api/automation/projects` is the read-only fleet aggregation of the same per-Project
+resolution — one row per registered Project, including Projects that opted into nothing —
+drawn by the Automation dashboard's `projects` view so "what runs where" is answerable from
+the surface named Automation. It has no write half: the revision-checked per-Project route
+stays the only editor.
 
 ## Key files
 

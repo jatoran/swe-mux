@@ -529,9 +529,10 @@ responsive controls.
     bundle** are the Diagnostics tab. None of them is remote configuration.
   - **Scrollback** is on Terminals. `history_limit` is *not* scrollback — it is the history
     browser's page size — so it sits with native-history indexing on Harnesses.
-- Automation enablement is not duplicated in Settings.
-  The Automation dashboard owns the engine, Scan timeline, titler, summarizer, attention-observer, and custom-rule switches.
-  Settings retains budgets, execution bounds, retention, and advanced rule definitions; the credential and models are on Accounts.
+- Global automation policy is not duplicated across overlays, and Settings is its one home.
+  Settings → Automation owns every install-wide automation switch and bound: the `automation_enabled` master switch, the `scan_timeline_enabled` gate, budgets, execution bounds, and retention; the credential and models are on Accounts.
+  The Automation dashboard owns rules and runtime — per-rule enable and shadow/live state, the `rules.toml` editor, the per-Project enablement matrix, spend, and diagnostics — and shows the global switches only as read-only state linking into Settings.
+  The line users can state: Settings decides policy, the Projects registry decides participation, the dashboard shows rules and what ran.
 - Harnesses is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The tab also holds native-history reconcile: the startup toggle, a `Scan now` control with progress and cancel, and the browser's page size (`features/history.md`). That is history indexing rather than harness configuration, but the scan is scoped to exactly the enabled harnesses, so the two are read together or not at all.
 - The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Harnesses rather than duplicating the per-harness editors.
 - Git exposes the absolute `worktree_root` used by the Project Run launcher.
@@ -543,8 +544,8 @@ responsive controls.
   remembered section because that caller named an exact control rather than a region.
   A caller may also name **the control itself** rather than a section: a surface that is inert
   because a switch is off links to that switch, and Settings scrolls to it and flashes it on
-  arrival (`setting-links.md`). Those links reach the Projects registry and the Automation
-  dashboard the same way, since each owns switches Settings does not.
+  arrival (`setting-links.md`). Those links reach the Projects registry the same way, since it
+  owns the per-Project switches Settings does not.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.
@@ -569,15 +570,16 @@ responsive controls.
   On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
   rather than growing into the content. It stays a rail on both layouts — it is per-tab and
   short, unlike the seventeen-entry section list that became a drawer beside it.
-- Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
+- Opening loads one `GET /api/settings/bundle` (config, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
   header, section list, footer — renders immediately with a placeholder content area; tabs are
   selectable before data lands. The placeholder shell and the loaded one render that chrome
   from the same expressions, so the two cannot drift into different headers. `config` is required; other parts degrade to null with the
-  reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
-  form because Save writes them back unconditionally. Remote, voice, and firewall status stay
-  separate non-blocking fetches.
+  reason under `errors`, except `keybindings`, whose absence blocks the
+  form because Save writes it back unconditionally. The rules.toml text is deliberately not in
+  the bundle or the Save: the Automation dashboard owns its editor (`automation.md`). Remote,
+  voice, and firewall status stay separate non-blocking fetches.
 - The Remote tab is one section per concern: the Tailscale connection state (not-installed,
   logged-out, connecting, stopped, or connected-as-`<device>.ts.net`) with cause-pointing
   next-step text, a "Connect a phone" button, a Windows-only Defender Firewall panel with a

@@ -93,7 +93,7 @@ test('no figures table overflows its panel at desktop width', async ({ page }) =
 /** The status line used to be drawn over the first section heading in exactly this view. */
 test('the panel frame holds every view', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  for (const tab of ['cost breakdown', 'rules & observers', 'learned fixes', 'diagnostics'] as const) {
+  for (const tab of ['cost breakdown', 'rules & observers', 'projects', 'learned fixes', 'diagnostics'] as const) {
     await openTab(page, tab)
     const [progress] = await boxes(page, '.usage-progress')
     const [main] = await boxes(page, '.automation-panel > main')
@@ -145,11 +145,25 @@ test('at phone width every table row becomes a labelled card', async ({ page }) 
   await expect(page.locator('.cost-table thead')).toBeHidden()
 })
 
+test('the projects view answers what runs where, including "nothing"', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'projects')
+  const rows = page.locator('.automation-matrix tbody tr')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0)).toContainText('swe-mux')
+  await expect(rows.nth(0)).toContainText('Loop detection')
+  // An opted-out Project is a row saying so, never a missing row: silence must read
+  // as "off", not as "covered".
+  await expect(rows.nth(1)).toContainText('nothing')
+  // Read-only: the only control is the link into that Project's own editor.
+  await expect(rows.nth(1).locator('.setting-link')).toHaveText('Project settings')
+})
+
 test('the dashboard keeps no second copy of the surfaces that moved out', async ({ page }) => {
   await page.goto('/automation-cost-harness.html')
   await page.waitForSelector('.automation-tabs button')
   const tabs = await page.locator('.automation-tabs button').allInnerTexts()
-  expect(tabs).toEqual(['rules & observers', 'cost breakdown', 'learned fixes', 'diagnostics'])
+  expect(tabs).toEqual(['rules & observers', 'projects', 'cost breakdown', 'learned fixes', 'diagnostics'])
   await expect(page.locator('.automation-subtabs')).toHaveCount(0)
   // The way back to the two inboxes this dashboard used to duplicate is a permanent row,
   // not an empty-state hint: "where did the attention inbox go" is asked by someone

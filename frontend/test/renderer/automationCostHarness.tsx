@@ -68,8 +68,24 @@ const TELEMETRY = {
   cost_note: 'ccusage costs are backend/model aggregates and are not attributed to individual runs',
 }
 
+const MATRIX = {
+  automations: [
+    { id: 'raw_store', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true },
+    { id: 'tier0', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true },
+    { id: 'scan_timeline', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true },
+    { id: 'loop_detection', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true },
+    { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false },
+  ],
+  projects: [
+    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', requested: { raw_store: true, tier0: true, loop_detection: true }, enabled: ['loop_detection', 'raw_store', 'tier0'], blocked: {}, scan_timeline_auto_enable: false },
+    { project_id: 'p2', project_name: 'orca', status: 'ready', requested: {}, enabled: [], blocked: {}, scan_timeline_auto_enable: false },
+  ],
+}
+
 const ROUTES: Array<[string, unknown]> = [
   ['/api/automation/dashboard', DASHBOARD],
+  ['/api/automation/projects', MATRIX],
+  ['/api/automation/rules', { version: 1, text: 'version = 1\n', rules: [], diagnostic: null }],
   ['/api/automation/notifications', { items: [] }],
   ['/api/telemetry/workloads', TELEMETRY],
   ['/api/experiences', { items: [] }],

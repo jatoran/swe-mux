@@ -18,9 +18,10 @@ switch, and flashes it.
   when that overlay is Settings, and the `data-setting` id of the control.
   The catalogue is `frontend/src/settingTargets.ts`; ids are the daemon's own config keys for
   install settings and `automation:<registry id>` for a Project's opt-ins.
-- **Surface** (of a target): `settings`, `project` (the Projects registry, the only per-Project
-  editor), or `automation` (the Automation dashboard).
-  The two global automation switches live on the dashboard, not in Settings.
+- **Surface** (of a target): `settings` (install-wide configuration, including the global
+  automation switches) or `project` (the Projects registry, the only per-Project editor).
+  The Automation dashboard owns no switch: it shows the state of the global automation
+  switches and links to them in Settings → Automation, so one switch has one owner.
 - **Reveal**: `frontend/src/settingReveal.ts`. Waits for the marked control to exist and to have
   a layout box, opens any `<details>` above it, centres it in its scroller, flashes it, and
   focuses it.
@@ -70,6 +71,8 @@ Every surface that goes inert behind a switch, and what it offers.
 | Schedule tab (row, `install_disabled`) | `scheduled_runs_enabled` | install | `schedules.install` |
 | Schedule tab (row, `automation_disabled`) | `scheduled_runs` | Project | `project.scheduledRuns` |
 | Scan timeline (install off) | `scan_timeline_enabled` | install | `automation.scanTimeline` |
+| Automation dashboard (global switches) | `automation_enabled`, `scan_timeline_enabled` | install | `automation.engine`, `automation.scanTimeline` |
+| Project settings (spending-limits prose) | `automation_daily_budget_usd` | install | `automation.budgets` |
 | Scan timeline (Project not permitted) | `scan_timeline` | Project | `project.scanTimeline` |
 | Change map | `code_graph` | Project | `project.codeGraph` |
 | Findings pane | the four detectors | Project | `project.automations` |
@@ -102,6 +105,6 @@ Every surface that goes inert behind a switch, and what it offers.
   consumer surface tell "off" from "quiet"; invalidated by `project_configuration_changed`.
 - `frontend/src/App.tsx` — `openSettingTarget`, the only place that decides which overlay
   opens and which others close.
-- `frontend/src/Settings.tsx`, `ProjectsManager.tsx`, `AutomationDashboard.tsx` — the three
-  destinations; each takes `initialSetting` plus a `revealToken` that changes per request so
-  the same link works twice.
+- `frontend/src/Settings.tsx`, `ProjectsManager.tsx` — the two destinations; each takes
+  `initialSetting` plus a `revealToken` that changes per request so the same link works
+  twice. The Automation dashboard is a link *source* only.

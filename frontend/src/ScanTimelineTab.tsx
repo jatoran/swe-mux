@@ -145,8 +145,8 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
   const projectButton=<button class="scan-project-link" disabled={!projectId}
     onClick={()=>projectId&&onOpenProjectSettings(projectId)}>Project settings</button>
   // Two switches gate this, in order, and the off state names the one that is actually
-  // stopping it — plus the control that flips it. The install switch is on the Automation
-  // dashboard; this panel used to send people to Settings → Automation, where it is not.
+  // stopping it — plus the control that flips it. The install switch lives in
+  // Settings → Automation with the scan budgets; the link's target carries the route.
   if(!allowed)return <section class="scan-timeline-panel">
     <header>
       <div><strong>Behavior timeline</strong><small>{state.model}</small></div>

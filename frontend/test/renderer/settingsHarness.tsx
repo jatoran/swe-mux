@@ -27,7 +27,6 @@ const KEYBINDINGS = {
 
 const BUNDLE = {
   config: SETTINGS_CONFIG_FIXTURE,
-  automation_rules: { text: 'version = 1\n' },
   keybindings: KEYBINDINGS,
   profiles: { profiles: [], detected: [] },
   projects: [],

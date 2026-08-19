@@ -684,6 +684,58 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_the_project_matrix_reports_every_project_including_the_opted_out(
+    tmp_path: Path,
+) -> None:
+    # The dashboard's fleet answer: "what is running where" has to include the
+    # Projects where the answer is "nothing", because an opted-out Project that
+    # silently vanished from the list would read as covered.
+    from types import SimpleNamespace
+
+    from swe_mux.server import automation_project_matrix, put_project_automations
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    first = SimpleNamespace(id="p1", name="Alpha", root=str(root_a))
+    second = SimpleNamespace(id="p2", name="Beta", root=str(root_b))
+
+    class Events:
+        async def emit(self, kind: str, **_payload: object) -> None:
+            del kind
+
+    registry = SimpleNamespace(
+        projects={"p1": first, "p2": second},
+        ordered_projects=lambda: [first, second],
+    )
+
+    async def body() -> dict[str, object]:
+        return {"automations": {"tier0": True, "raw_store": True}}
+
+    await put_project_automations(  # type: ignore[arg-type]
+        SimpleNamespace(
+            match_info={"project_id": "p1"},
+            app={"projects": registry, "events": Events()},
+            json=body,
+        )
+    )
+
+    response = await automation_project_matrix(  # type: ignore[arg-type]
+        SimpleNamespace(app={"projects": registry})
+    )
+    payload = json.loads(response.body)
+    # The registry ships once, beside the rows, exactly as the per-Project read ships it.
+    assert any(item["id"] == "tier0" for item in payload["automations"])
+    rows = {row["project_id"]: row for row in payload["projects"]}
+    assert set(rows) == {"p1", "p2"}
+    assert rows["p1"]["project_name"] == "Alpha"
+    assert set(rows["p1"]["enabled"]) == {"tier0", "raw_store"}
+    assert rows["p2"]["enabled"] == []
+    assert rows["p2"]["requested"] == {}
+
+
+@pytest.mark.asyncio
 async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path) -> None:
     # A toggle that reads "on" while nothing runs behind it is worse than an
     # absent toggle: it makes the user believe a project is covered.

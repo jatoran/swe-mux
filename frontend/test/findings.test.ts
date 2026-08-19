@@ -80,8 +80,9 @@ test('the Automation dashboard keeps no second copy of the attention inbox', () 
   assert.ok(!dashboard.includes("view==='attention'"), 'the attention view must not come back')
   assert.ok(!dashboard.includes("view==='health'"), 'the health view was split three ways')
   assert.ok(dashboard.includes('onOpenAlerts'))
-  // Four flat views, no groups.
-  assert.ok(dashboard.includes("type View='automations'|'cost'|'knowledge'|'diagnostics'"))
+  // Five flat views, no groups. `projects` answers what runs where; it draws no copy of
+  // any other surface, only read-only rows linking to each Project's own editor.
+  assert.ok(dashboard.includes("type View='automations'|'projects'|'cost'|'knowledge'|'diagnostics'"))
   // The away report moved to the inbox it summarizes.
   assert.ok(source('Notifications.tsx').includes("api('GET','/api/attention/absence')"))
   // The workload table moved to Resources, following the cost column that left before it.

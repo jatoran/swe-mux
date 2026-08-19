@@ -44,16 +44,16 @@ test('every settings target lands on a real tab', () => {
   }
 })
 
-test('automation dashboard targets name controls the dashboard marks', () => {
+test('the Automation dashboard owns no switch — its global controls are links to Settings', () => {
   const dashboard = source('AutomationDashboard.tsx')
-  for (const id of ids) {
-    const target = settingTarget(id)
-    if (target.surface !== 'automation' || !target.setting) continue
-    assert.ok(
-      dashboard.includes(`data-setting="${target.setting}"`),
-      `${id} points at a dashboard control that is not marked: ${target.setting}`,
-    )
-  }
+  // The global switches moved to Settings → Automation with every other install-wide
+  // switch. The dashboard shows their state and links there; a `data-setting` mark
+  // reappearing here would mean a second owner for one switch.
+  assert.ok(!dashboard.includes('data-setting='), 'the dashboard must mark no deep-linkable switch')
+  assert.ok(dashboard.includes('target="automation.engine"'))
+  assert.ok(dashboard.includes('target="automation.scanTimeline"'))
+  assert.equal(settingTarget('automation.engine').surface, 'settings')
+  assert.equal(settingTarget('automation.scanTimeline').surface, 'settings')
 })
 
 test('project targets name a marked control or a real automation id', () => {

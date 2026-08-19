@@ -726,6 +726,7 @@ def create_app(
             web.patch("/api/automation/rules/{rule_id}", patch_automation_rule),
             web.post("/api/automation/dry-run", automation_dry_run),
             web.get("/api/automation/dashboard", automation_dashboard),
+            web.get("/api/automation/projects", automation_project_matrix),
             web.get("/api/automation/firings", automation_firings),
             web.get("/api/annotations", list_annotations),
             web.get("/api/automation/provider", automation_provider_status),
@@ -2839,9 +2840,6 @@ async def settings_bundle(request: web.Request) -> web.Response:
     async def keybindings() -> Any:
         return _keybindings_payload(config)
 
-    async def rules() -> Any:
-        return _automation_rules_payload(request)
-
     async def profiles() -> Any:
         # Shell detection stats a handful of executables; keep it off the loop.
         return await asyncio.to_thread(profile_payload, config)
@@ -2853,7 +2851,6 @@ async def settings_bundle(request: web.Request) -> web.Response:
         return await read_project_config(cwd) if cwd else None
 
     await asyncio.gather(
-        part("automation_rules", rules),
         part("keybindings", keybindings),
         part("profiles", profiles),
         part("projects", lambda: _projects_payload(request)),
@@ -4755,6 +4752,42 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     return json_response(result, 201)
 
 
+def _automation_registry_payload() -> list[dict[str, Any]]:
+    """The enablement registry as every opt-in surface receives it."""
+    return [
+        {
+            "id": automation.id,
+            "kind": automation.kind,
+            "label": automation.label,
+            "requires": list(automation.requires),
+            "implemented": automation.implemented,
+        }
+        for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
+    ]
+
+
+async def _project_automation_state(project) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+    """One project's opt-in table, resolved against the registry DAG."""
+    identity = _registered_identity(project)
+    config = await read_project_config(project.root, project=identity)
+    values = config["values"] if config["status"] in {"ready", "read-only"} else {}
+    requested = {
+        key: bool(value)
+        for key, value in (values.get("automations") or {}).items()
+        if key in AUTOMATION_REGISTRY
+    }
+    resolution = resolve_automation_config(requested)
+    return {
+        "project_id": project.id,
+        "revision": config["revision"],
+        "status": config["status"],
+        "requested": requested,
+        "enabled": sorted(resolution.enabled),
+        "blocked": {key: list(value) for key, value in resolution.blocked.items()},
+        "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
+    }
+
+
 async def get_project_automations(request: web.Request) -> web.Response:
     """The per-project control-plane opt-in state, with its dependency graph.
 
@@ -4765,35 +4798,29 @@ async def get_project_automations(request: web.Request) -> web.Response:
     a placeholder as ready to switch on.
     """
     project = _observations_project(request)
-    identity = _registered_identity(project)
-    config = await read_project_config(project.root, project=identity)
-    values = config["values"] if config["status"] in {"ready", "read-only"} else {}
-    requested = {
-        key: bool(value)
-        for key, value in (values.get("automations") or {}).items()
-        if key in AUTOMATION_REGISTRY
-    }
-    resolution = resolve_automation_config(requested)
-    return json_response(
+    state = await _project_automation_state(project)
+    return json_response({**state, "automations": _automation_registry_payload()})
+
+
+async def automation_project_matrix(request: web.Request) -> web.Response:
+    """Which Projects opted into which automations — the dashboard's fleet answer.
+
+    The global switches say whether the pipeline *may* run; whether anything
+    actually runs is decided per Project in each `.swe-mux/config.toml`. This
+    read aggregates those files so the Automation dashboard can answer "what is
+    running where" and link to the Project settings that change it. Read-only by
+    design: the write path stays the revision-checked per-Project route, so this
+    surface can never race an open Project editor.
+    """
+    rows = [
         {
-            "project_id": project.id,
-            "revision": config["revision"],
-            "status": config["status"],
-            "requested": requested,
-            "enabled": sorted(resolution.enabled),
-            "blocked": {key: list(value) for key, value in resolution.blocked.items()},
-            "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
-            "automations": [
-                {
-                    "id": automation.id,
-                    "kind": automation.kind,
-                    "label": automation.label,
-                    "requires": list(automation.requires),
-                    "implemented": automation.implemented,
-                }
-                for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
-            ],
+            **await _project_automation_state(project),
+            "project_name": project.name,
         }
+        for project in request.app["projects"].ordered_projects()
+    ]
+    return json_response(
+        {"automations": _automation_registry_payload(), "projects": rows}
     )
 
 

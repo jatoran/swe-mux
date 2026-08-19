@@ -1274,6 +1274,7 @@ another agent can pick up mid-plan. Section links point to the design detail.
   - [x] The Timeline drawer owns Project permission, Project context, run permission, current scan, full-session scan, spend, records, and source expansion; the topbar owns none of them.
   - [x] Full-session scans process uncovered current-run messages oldest first under ordinary gates and budgets, keep the live cursor monotonic, and expose running/completed/partial/failed progress.
   - [x] Global and built-in automation enablement is centralized in the Automation dashboard; Settings retains configuration only.
+    *Superseded 2026-08-19*: the global switches moved to Settings → Automation (one home for install-wide policy), the dashboard kept per-rule enable/shadow plus the rules.toml editor, and gained the read-only per-Project enablement matrix (`design/features/automation.md`). The invariant that survives: no switch has two owners.
 - [x] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
   A narration slice never spans two agent runs.
   Shipped 2026-08-13 as `attention_narration.py`, off by default, per-project `model_narration`

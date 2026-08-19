@@ -1700,10 +1700,13 @@ heartbeat age, and whether it counts as active — because the suppression it fe
 invisible by construction: getting it wrong shows up as a notification that never came.
 
 `GET /api/settings/bundle?cwd=<path>` aggregates the Settings panel's open payload
-(config, automation rules, keybindings, profiles, projects, automation status, provider
+(config, keybindings, profiles, projects, automation status, provider
 status, usage, and — when `cwd` is supplied — project config) into one response. `config`
 failing fails the request; any other part degrades to `null` with its reason keyed under
-`errors`. The individual endpoints remain authoritative and unchanged.
+`errors`. The individual endpoints remain authoritative and unchanged. The rules.toml text
+is deliberately not a part: the Automation dashboard owns the rules editor and reads
+`GET /api/automation/rules` itself, so Settings never holds a copy its Save could write back
+stale.
 The provider section supplies the cached structured-output model catalog used by the Automation
 tab's live-filtered cheap and standard model pickers.
 
@@ -1719,6 +1722,14 @@ features bill the observer budget without being automation rules and a raw `rule
 neither them nor the setting that governs them. The rows are grouped from
 `automation_budget_ledger` — the same table `spend_today` sums — so they reconcile with it
 exactly, including the rows a call that failed after the provider billed for its input writes.
+
+`GET /api/automation/projects` is the read-only fleet aggregation of per-Project automation
+enablement: the registry (id, kind, label, `requires`, `implemented`) once, plus one row per
+registered Project in sidebar order — `project_id`, `project_name`, config `status`, the
+`requested` table, the resolved `enabled` list, `blocked` (id → missing dependencies), and
+`scan_timeline_auto_enable`. Projects that opted into nothing are listed rather than omitted.
+Drawn by the Automation dashboard's `projects` view; it has no write half — the
+revision-checked `PUT /api/projects/{project_id}/automations` stays the only editor.
 
 `GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).

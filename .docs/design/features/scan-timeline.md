@@ -11,7 +11,8 @@ It is the Tier 1 substrate for dead-end memory and later cross-session semantic 
 Three independent gates must all be open before a scan can call OpenRouter:
 
 1. The global `scan_timeline_enabled` master switch is on.
-   It is on the **Automation dashboard**, under Global controls, not in Settings.
+   It is in **Settings → Automation**, beside the scan budgets; the Automation dashboard
+   shows its state and links there.
 2. The Project enables `scan_timeline` and its `raw_store` and `tier0` dependencies.
 3. The current `agent_run_id` is enabled from that session's Timeline drawer tab.
 

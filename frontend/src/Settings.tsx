@@ -167,7 +167,6 @@ type CloseIntent = 'close'|'usage'|'automation'|'tutorial'
 // reason under `errors`.
 type SettingsBundle = {
   config:Config
-  automation_rules:{text:string}|null
   keybindings:KeybindingsResponse|null
   profiles:{profiles:LaunchProfile[];detected:LaunchProfile[]}|null
   projects:Project[]|null
@@ -227,7 +226,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   drawerHiddenTabs?:readonly DrawerTabId[];onDrawerTabHidden?:(tab:DrawerTabId,hidden:boolean)=>void;onShowAllDrawerTabs?:()=>void }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
-  const [rules, setRules] = useState('version = 1\n')
   const [automation,setAutomation]=useState<AutomationStatus|null>(null)
   const [provider,setProvider]=useState<ProviderStatus|null>(null)
   const [openRouterKey,setOpenRouterKey]=useState('')
@@ -270,7 +268,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [diagnosticsText,setDiagnosticsText]=useState('')
   const [connectPhoneOpen,setConnectPhoneOpen]=useState(false)
   const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
-  const [savedRules, setSavedRules] = useState('version = 1\n')
   const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
@@ -309,14 +306,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // One bundled request instead of nine — on a high-RTT client (phone over
     // Tailscale) per-request connection setup dominated the panel's open delay.
     api<SettingsBundle>('GET','/api/settings/bundle').then(bundle => {
-      const { config: next, automation_rules: rulesData, keybindings: keyData } = bundle
-      // Saving unconditionally PUTs rules + keybindings back; rendering without
-      // them would let a Save overwrite their files with empty defaults.
-      if (!rulesData || !keyData) {
-        setStatus(['automation_rules','keybindings'].filter(key=>bundle.errors[key]).map(key=>`${key}: ${bundle.errors[key]}`).join(' · ')||'settings payload incomplete')
+      const { config: next, keybindings: keyData } = bundle
+      // Saving unconditionally PUTs keybindings back; rendering without them
+      // would let a Save overwrite their file with empty defaults. (The rules
+      // file left this transaction: the Automation dashboard owns its editor.)
+      if (!keyData) {
+        setStatus(bundle.errors.keybindings?`keybindings: ${bundle.errors.keybindings}`:'settings payload incomplete')
         return
       }
-      setConfig(next); setDraft(next); setRules(rulesData.text);setSavedRules(rulesData.text)
+      setConfig(next); setDraft(next)
       setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])))
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy({
@@ -496,9 +494,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const dirty = useMemo(() => Boolean(config&&draft&&(
     !sameDraftValue(config,draft)
     ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==formatCommandLine(args))
-    ||rules!==savedRules
     ||!sameDraftValue(bindings,savedBindings)
-  )),[config,draft,harnessArgs,rules,savedRules,bindings,savedBindings])
+  )),[config,draft,harnessArgs,bindings,savedBindings])
 
   const leaveSettings = useCallback((intent:CloseIntent) => {
     setCloseIntent(null)
@@ -820,17 +817,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       if (!['revision','host','port','data_dir','requires_auth'].includes(key) && savingDraft[key] !== config[key]) body[key] = savingDraft[key]
     }
     try {
-      await Promise.all([
-        api('PUT','/api/automation/rules?validate=1',{text:rules}),
-        api('PUT','/api/keybindings?validate=1',{bindings}),
-      ])
+      await api('PUT','/api/keybindings?validate=1',{bindings})
       const [next] = await Promise.all([
         api<Config & {hot_applied:string[];restart_required:string[]}>('PATCH','/api/config',body),
-        api('PUT','/api/automation/rules',{text:rules}),
         api('PUT','/api/keybindings',{bindings}),
       ])
       setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])));setErrors({})
-      setSavedRules(rules);setSavedBindings(bindings)
+      setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
       configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next)
       return true
@@ -1420,7 +1413,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         {activeTab==='automation'&&<Fragment>
           <section><h3>Automation engine</h3>
-          <p>Enable and disable automation in the Automation dashboard. Settings holds model, budget, execution, and advanced rule configuration; the OpenRouter key and the models every observer routes to are under <strong>Accounts</strong>.</p>
+          <p>Settings owns every install-wide automation switch and bound. The Automation dashboard owns the rule corpus and the runtime: rule definitions and live/shadow state, where automations run per Project, spend, and diagnostics. The OpenRouter key and the models every observer routes to are under <strong>Accounts</strong>; which automations run on a given Project is that Project's own opt-in, in Manage projects.</p>
+          <label class="settings-toggle" data-setting="automation_enabled"><input type="checkbox" checked={draft.automation_enabled} onChange={event=>change('automation_enabled',event.currentTarget.checked)}/>Run automation<small>The master switch over system observers and custom rules. Off, nothing fires and nothing is billed.</small></label>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation dashboard</button></div>
           <p class="settings-warning">Privacy boundary: each enabled observer sends only its selected bounded transcript slice to OpenRouter and the routed model provider. swe-mux does not crawl project files.</p>
           <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
@@ -1428,7 +1422,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section><h3>Budgets and execution</h3>
           <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
-          <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          <label data-setting="automation_daily_budget_usd">Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily tokens<input type="number" value={draft.automation_rule_daily_token_budget} onInput={event=>change('automation_rule_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily dollars<input type="number" step="0.01" value={draft.automation_rule_daily_budget_usd} onInput={event=>change('automation_rule_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
@@ -1448,7 +1442,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Scan timeline</h3>
-          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Its model is chosen under <strong>Accounts</strong>.</p>
+          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Its model is chosen under <strong>Accounts</strong>. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
+          <label class="settings-toggle" data-setting="scan_timeline_enabled"><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={event=>change('scan_timeline_enabled',event.currentTarget.checked)}/>Allow scan timeline<small>The install-wide gate. Off, nothing is scanned anywhere, whatever any Project permitted.</small></label>
           <label>Daily dollar budget<input type="number" min="0" max="1000" step="0.25" value={draft.scan_timeline_daily_budget_usd} onInput={event=>change('scan_timeline_daily_budget_usd',Number(event.currentTarget.value))}/><small>Across every Project and session, reset daily (UTC).</small></label>
           <label>Daily token budget<input type="number" min="512" max="100000000" value={draft.scan_timeline_daily_token_budget} onInput={event=>change('scan_timeline_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Tokens per conversation<input type="number" min="512" max="20000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
@@ -1467,9 +1462,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Narration daily dollars<input type="number" step="0.01" min="0" max="100" value={draft.attention_narration_daily_budget_usd} onInput={event=>change('attention_narration_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           </section>
 
-          <section><h3>Advanced rules</h3>
-          <details class="settings-advanced"><summary>Advanced rules.toml editor</summary><p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p><label>rules.toml<textarea value={rules} onInput={event=>setRules(event.currentTarget.value)} /></label></details>
-          </section>
         </Fragment>}
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
