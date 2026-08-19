@@ -2631,6 +2631,27 @@ async def daemon_redeploy_announce(request: web.Request) -> web.Response:
     return response
 
 
+def _redeploy_log_tail(config: Config, *, running: bool) -> str:
+    """The in-flight redeploy's build log, or "" when it is not that run's.
+
+    Only a redeploy this daemon spawned writes `redeploy.log`; one launched from
+    a terminal prints to its own stdout and leaves whatever the last endpoint
+    run left there. Serving that file regardless makes the UI's progress chip
+    show a *previous* redeploy's build output for the whole of this one, which
+    reads as real progress and is not. The lock is created at run start, so a
+    log older than the lock belongs to an earlier run.
+    """
+    log_path = config.data_dir / "redeploy.log"
+    try:
+        if running:
+            lock_mtime = (config.data_dir / "redeploy.lock").stat().st_mtime
+            if log_path.stat().st_mtime < lock_mtime:
+                return ""
+        return log_path.read_bytes()[-8192:].decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 async def daemon_redeploy_status(request: web.Request) -> web.Response:
     """Whether a redeploy is in flight, plus the tail of its build log.
 
@@ -2640,12 +2661,7 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
     """
     config: Config = request.app["config"]
     pid = _redeploy_lock_pid(config)
-    tail = ""
-    try:
-        data = (config.data_dir / "redeploy.log").read_bytes()
-        tail = data[-8192:].decode("utf-8", "replace")
-    except OSError:
-        pass
+    tail = _redeploy_log_tail(config, running=pid is not None)
     response = json_response(
         {
             "running": pid is not None,

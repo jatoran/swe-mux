@@ -94,6 +94,13 @@ It also passes `--lock-held`, because the lock above is already claimed and
 already names the child; without it the script would refuse itself.
 
 GET returns `{running, pid, phase, log_tail, last_result, available}`.
+`log_tail` is served only when it belongs to the run being reported: the lock is
+created at run start, so while one is in flight a `redeploy.log` older than the
+lock is a previous run's and is withheld. Only a redeploy this daemon spawned
+writes that file at all — one launched from a terminal prints to its own stdout
+— so without the check the progress chip would render an earlier redeploy's
+build output for the whole of this one, which reads as real progress and is not.
+The same rule applies to the tail embedded in `redeploy-result.json`.
 `phase` is `"building"` whenever a lock is live and `"idle"` otherwise -
 answering at all means the daemon is up, so a live lock is always the build
 stage; the stop/swap/relaunch stage has no daemon left to ask, which is why the

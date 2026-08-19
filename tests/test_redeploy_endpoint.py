@@ -654,3 +654,65 @@ def test_an_unreachable_daemon_does_not_stop_the_redeploy(
 
     monkeypatch.setattr(module.urllib.request, "urlopen", refuse)
     module.announce_start(SimpleNamespace(data_dir=tmp_path, port=1))
+
+
+async def test_a_stale_log_is_not_served_as_the_running_redeploys_progress(
+    tmp_path: Path,
+) -> None:
+    """Observed live: a CLI redeploy's chip would show an earlier run's build log.
+
+    Only a redeploy this daemon spawned writes redeploy.log; one launched from a
+    terminal prints to its own stdout. Serving the leftover file regardless shows
+    a previous run's output as this run's progress, which reads as real and is not.
+    """
+    log = tmp_path / "redeploy.log"
+    log.write_text("[redeploy] daemon healthy: live_sessions=2\n", encoding="utf-8")
+    lock = tmp_path / "redeploy.lock"
+    lock.write_text(str(os.getpid()), encoding="ascii")
+    # Lock claimed after the log was written: the log is a previous run's.
+    os.utime(log, (1_000_000, 1_000_000))
+    os.utime(lock, (2_000_000, 2_000_000))
+
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    body = _payload(response)
+    assert body["running"] is True
+    assert body["log_tail"] == []
+
+    # A log written during this run is served normally.
+    os.utime(log, (3_000_000, 3_000_000))
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    assert _payload(response)["log_tail"] == ["[redeploy] daemon healthy: live_sessions=2"]
+
+
+async def test_the_last_runs_log_is_still_readable_when_nothing_is_running(
+    tmp_path: Path,
+) -> None:
+    """With no redeploy in flight the file is the last run's, which is what to show."""
+    (tmp_path / "redeploy.log").write_text("[redeploy] ABORT: build failed\n", encoding="utf-8")
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    body = _payload(response)
+    assert body["running"] is False
+    assert body["log_tail"] == ["[redeploy] ABORT: build failed"]
+
+
+def test_an_outcome_never_carries_an_earlier_runs_log(tmp_path: Path) -> None:
+    """The bug this caught live: detail said 11 sessions, the tail said 2."""
+    module = _redeploy_module()
+    config = SimpleNamespace(data_dir=tmp_path)
+    log = tmp_path / "redeploy.log"
+    log.write_text("[redeploy] daemon healthy: live_sessions=2\n", encoding="utf-8")
+    os.utime(log, (1_000_000, 1_000_000))
+
+    # started_at after the log's mtime: a terminal-launched run, whose own output
+    # went to stdout and never touched this file.
+    module.Outcome(config, 2_000_000.0).record(
+        module.OUTCOME_SUCCEEDED, "The rebuilt app is running with 11 live session(s).", code=0
+    )
+    payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
+    assert payload["log_tail"] == []
+    assert "11 live session" in payload["detail"]
+
+    # A run that did write the log keeps its tail.
+    module.Outcome(config, 500_000.0).record(module.OUTCOME_SUCCEEDED, "fine", code=0)
+    payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
+    assert payload["log_tail"] == ["[redeploy] daemon healthy: live_sessions=2"]

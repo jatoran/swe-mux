@@ -179,7 +179,19 @@ class Outcome:
             log(f"could not record the redeploy outcome: {exc}")
 
     def _tail(self, lines: int = 12) -> list[str]:
+        """This run's log tail, or nothing.
+
+        Only the daemon endpoint redirects this script's output into
+        `redeploy.log`; a run launched from a terminal prints to its own stdout
+        and never touches that file. Reading it unconditionally therefore
+        stamped a *previous* redeploy's output into this run's result — observed
+        live: a record whose detail said 11 live sessions carried a tail ending
+        "live_sessions=2" from an unrelated earlier run. A log older than this
+        run is not this run's log, and no tail beats a wrong one.
+        """
         try:
+            if self._log_path.stat().st_mtime < self._started_at:
+                return []
             data = self._log_path.read_bytes()
         except OSError:
             return []
