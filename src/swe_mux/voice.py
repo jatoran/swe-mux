@@ -48,7 +48,7 @@ from .sqlite_store import (
 )
 from .subprocess_flags import background_creation_flags
 from .transcript_view import final_exchange
-from .voice_models import KokoroModelStore
+from .voice_models import ENGLISH_VOICES, KokoroModelStore
 
 
 def _last_exchange(
@@ -160,6 +160,12 @@ CREATE TABLE IF NOT EXISTS voice_clips (
 CREATE INDEX IF NOT EXISTS idx_voice_clips_session ON voice_clips(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_clips_run ON voice_clips(agent_run_id, created_at);
 """
+
+# Short and workload-flavored: long enough to carry the voice's character,
+# short enough that browsing a dozen voices stays fluid on CPU synthesis.
+KOKORO_PREVIEW_TEXT = (
+    "Hey - two of nine sessions need you, and the pixel lab build is green."
+)
 
 SAPI_SCRIPT = r"""param([string]$TextPath,[string]$OutPath,[string]$Voice,[int]$Rate)
 $ErrorActionPreference = 'Stop'
@@ -625,6 +631,10 @@ class VoiceService:
         self.provider = provider
         self.kokoro_models = kokoro_models or KokoroModelStore(config.data_dir)
         self._kokoro_engine: KokoroEngine | None = None
+        # Voice-audition samples, per voice for the daemon's lifetime: the whole
+        # English set caches at a few megabytes, and a picker that re-synthesizes
+        # on every tap would make browsing voices feel broken.
+        self._kokoro_previews: dict[str, bytes] = {}
         self.diagnostic: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Any] | None = None
@@ -939,6 +949,49 @@ class VoiceService:
             row["id"], len(spoken), len(segments),
         )
         return first
+
+    async def kokoro_preview(self, voice_id: str) -> bytes:
+        """One audition clip for a voice the operator has not committed to.
+
+        The picker's whole point is hearing a voice *before* it is the
+        configured one, so this synthesizes with the requested voice regardless
+        of `tts_engine`/`tts_kokoro_voice` and touches no config, no clip row,
+        and no cache accounting — the bytes go straight back to the tap.
+        """
+        if voice_id not in ENGLISH_VOICES:
+            raise VoiceError(f"unknown Kokoro voice {voice_id[:40]}")
+        if not self.kokoro_models.ready():
+            raise VoiceError(
+                "the Kokoro voice model is not downloaded; download it in "
+                "Settings → Voice first"
+            )
+        cached = self._kokoro_previews.get(voice_id)
+        if cached is not None:
+            return cached
+        engine = self._ensure_kokoro()
+        destination = self.clip_directory / f"preview-{voice_id}.wav"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            async with self._engine_semaphore:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        engine.synthesize_wav,
+                        KOKORO_PREVIEW_TEXT,
+                        destination,
+                        voice_id=voice_id,
+                        speed=max(0.5, min(2.0, self.config.tts_kokoro_speed)),
+                    ),
+                    timeout=ENGINE_TIMEOUT_SECONDS,
+                )
+            data = destination.read_bytes()
+        except KokoroError as exc:
+            raise VoiceError(f"Kokoro preview failed: {str(exc)[:300]}") from exc
+        finally:
+            with suppress(OSError):
+                destination.unlink(missing_ok=True)
+        self._kokoro_previews[voice_id] = data
+        log.info("kokoro preview synthesized voice=%s bytes=%d", voice_id, len(data))
+        return data
 
     @staticmethod
     def _stream_id(requested: str | None) -> str:

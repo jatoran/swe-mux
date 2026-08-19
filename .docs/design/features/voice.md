@@ -484,6 +484,10 @@ and never touches the daemon or an LLM.
   and the Kokoro model state.
 - `GET|POST /api/voice/models/kokoro[/download]` — the pinned Kokoro download's state, and
   starting it (idempotent while running; progress rides `voice_model_progress` events).
+- `POST /api/voice/models/kokoro/preview` `{voice}` — one audition WAV, synthesized with the
+  requested voice regardless of the configured engine and cached per voice on the daemon.
+  Settings → Voice renders the voices as a tap-to-audition picker (theme-picker style: a tap
+  plays the sample and sets the draft selection; nothing commits until Save).
 - `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`.
   Whisper decodes from memory; the optional legacy SAPI engine uses bounded temporary files.
   Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and

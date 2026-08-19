@@ -2335,10 +2335,20 @@ body {
 /* faster-whisper returns whole utterances, never partial words, so there is no text to
    stream in. The flash is the arrival signal — honest about being discrete. */
 .dictation-panel.landed .dictation-draft{border-color:var(--green,#8bd450)}
-/* Chat mode: the same floating panel, grown for real back-and-forth. The height
-   is the whole point of the mode — a conversation you can only see two lines of
-   is a transcript, not a dialog. */
-.dictation-panel.chat-mode{max-height:min(84dvh,760px);grid-template-rows:auto minmax(0,1fr)}
+/* Chat mode: the same floating panel, grown for real back-and-forth but bounded
+   to roughly half the viewport — a dialog you consult beside the terminals, not
+   a takeover — and collapsible to its header while the conversation keeps
+   running underneath. */
+.dictation-panel.chat-mode{max-height:min(52dvh,560px);grid-template-rows:auto minmax(0,1fr)}
+.dictation-panel.chat-mode.chat-collapsed{grid-template-rows:auto;max-height:none}
+.dictation-panel.chat-mode .assistant-body{display:grid;grid-template-rows:minmax(0,1fr);min-height:0}
+.dictation-panel.chat-mode .assistant-body[hidden]{display:none}
+.chat-collapse{flex:none;padding:0 4px;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.chat-collapse:hover{color:var(--text)}
+/* Inside the half-height cap the fixed minimums must yield, or a short viewport
+   overflows the panel instead of shrinking the log. */
+.dictation-panel.chat-mode .assistant-panel{min-height:0}
+.dictation-panel.chat-mode .assistant-log{min-height:120px}
 .voice-mode-toggle{display:inline-flex;gap:1px;border:1px solid var(--line);border-radius:4px;overflow:hidden}
 .voice-mode-toggle button{height:calc(19px*var(--ui-scale));padding:0 8px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .voice-mode-toggle button.active{background:var(--panel2);color:var(--text)}

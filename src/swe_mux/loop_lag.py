@@ -110,7 +110,12 @@ class LoopLagMonitor:
         """
         started = self._monotonic()
         await asyncio.sleep(self._interval)
-        return self._monotonic() - started - self._interval
+        # Clamped at the source: Windows' proactor timer and perf_counter can
+        # disagree by a few tens of microseconds, which reads as the sleep
+        # "returning early". Negative lag has no meaning — it is measurement
+        # noise, and returning it made every caller re-clamp (observe() already
+        # did) while intermittently failing the sign assertion under load.
+        return max(0.0, self._monotonic() - started - self._interval)
 
     def snapshot(self) -> dict[str, Any]:
         samples = sorted(self._samples)

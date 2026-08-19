@@ -271,7 +271,12 @@ def test_loop_lag_keeps_the_worst_stall_after_it_leaves_the_window() -> None:
 
 @pytest.mark.asyncio
 async def test_loop_lag_sample_measures_delay_beyond_the_interval_it_asked_for() -> None:
-    """`asyncio.sleep` never returns early, so everything past the interval is lag."""
+    """Everything past the interval is lag; a microsecond-early wake clamps to zero.
+
+    Windows' proactor timer and perf_counter disagree by tens of microseconds
+    under load, so the sample clamps at the source rather than asking every
+    consumer to know that negative lag is noise.
+    """
     from swe_mux.loop_lag import LoopLagMonitor
 
     monitor = LoopLagMonitor(interval=0.01)

@@ -964,6 +964,7 @@ def create_app(
             web.get("/api/voice", voice_status),
             web.get("/api/voice/models/kokoro", kokoro_model_status),
             web.post("/api/voice/models/kokoro/download", kokoro_model_download),
+            web.post("/api/voice/models/kokoro/preview", kokoro_voice_preview),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
             web.post("/api/voice/transcribe", voice_transcribe),
             web.get("/api/voice/stt-latency", voice_latency),
@@ -9745,6 +9746,25 @@ async def voice_status(request: web.Request) -> web.Response:
 async def kokoro_model_status(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     return json_response(voice.kokoro_models.status())
+
+
+async def kokoro_voice_preview(request: web.Request) -> web.Response:
+    """Audition one Kokoro voice: WAV bytes straight back, no clip machinery.
+
+    The settings picker taps through voices before any of them is configured,
+    so this must work whatever `tts_engine` currently is. Samples are cached
+    per voice on the service for the daemon's lifetime.
+    """
+    voice: VoiceService = request.app["voice"]
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("preview body must be an object")
+    data = await voice.kokoro_preview(str(body.get("voice") or ""))
+    return web.Response(
+        body=data,
+        content_type="audio/wav",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 async def kokoro_model_download(request: web.Request) -> web.Response:

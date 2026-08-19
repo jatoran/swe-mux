@@ -745,6 +745,16 @@ export function DictationPanel({
   const historyRef=useRef<HTMLDivElement|null>(null)
   const [landed,setLanded]=useState(false)
   const [historyOpen,setHistoryOpen]=useState(()=>loadVoiceConversationHistoryOpen())
+  // Device-local, like the Talk-history disclosure: a folded chat should stay
+  // folded across remounts of the floating panel.
+  const [chatCollapsed,setChatCollapsed]=useState(()=>{
+    try{return localStorage.getItem('mux.voice.chatCollapsed')==='1'}catch{return false}
+  })
+  const toggleChatCollapsed=()=>setChatCollapsed(value=>{
+    const next=!value
+    try{localStorage.setItem('mux.voice.chatCollapsed',next?'1':'0')}catch{/* private mode */}
+    return next
+  })
   // Whisper returns whole utterances, never partial words, so there is no stream to
   // animate. A brief flash is the honest signal that something arrived.
   useEffect(()=>{
@@ -797,11 +807,17 @@ export function DictationPanel({
     <button role="tab" aria-selected={chat} class={chat?'active':''} title="Converse with the Mux assistant" onClick={()=>onMode('chat')}>chat</button>
   </div>:null
   if(chat){
-    // Chat mode: the same floating panel, taller, holding the assistant
-    // conversation. Capture (when running) keeps listening underneath it —
-    // the mode changes what the panel shows, never what the microphone does.
-    return <section class={`dictation-panel chat-mode ${conversation.phase}`} aria-label="Mux assistant conversation">
+    // Chat mode: the same floating panel holding the assistant conversation,
+    // bounded to roughly half the viewport and collapsible to its header —
+    // a dialog you consult, not a takeover. Capture (when running) keeps
+    // listening underneath it, and the collapsed body stays *mounted* (hidden
+    // by CSS) so streaming events, card speech, and earcons keep working
+    // while the panel is folded away.
+    return <section class={`dictation-panel chat-mode${chatCollapsed?' chat-collapsed':''} ${conversation.phase}`} aria-label="Mux assistant conversation">
       <header>
+        <button class="conversation-history-toggle chat-collapse" aria-expanded={!chatCollapsed} title={chatCollapsed?'Expand the assistant conversation':'Collapse to the header — the conversation keeps running'} onClick={toggleChatCollapsed}>
+          <span class="conversation-history-caret" aria-hidden="true">{chatCollapsed?'▸':'▾'}</span>
+        </button>
         {modeToggle}
         {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={`${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
         {talkActive&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
@@ -812,7 +828,7 @@ export function DictationPanel({
           {!talkActive&&onCloseAssistant&&<button class="dictation-stop" title="Close the assistant panel" onClick={onCloseAssistant}>close</button>}
         </div>
       </header>
-      {assistantView}
+      <div class="assistant-body" hidden={chatCollapsed}>{assistantView}</div>
     </section>
   }
   return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">

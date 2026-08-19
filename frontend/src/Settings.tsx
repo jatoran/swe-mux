@@ -12,6 +12,7 @@ import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
+import { kokoroVoiceLabel, sortKokoroVoices } from './kokoroVoices'
 import { ThemePicker } from './ThemePicker'
 import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
@@ -1477,7 +1478,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
           </>}
           {draft.tts_engine==='kokoro'&&<>
-            <label>Kokoro voice<select value={draft.tts_kokoro_voice} onChange={e=>change('tts_kokoro_voice',e.currentTarget.value)}>{(voiceInfo?.kokoro_model?.voices||['af_heart']).map(voice=><option key={voice} value={voice}>{voice}</option>)}</select></label>
+            <label>Kokoro voice</label>
+            <KokoroVoicePicker
+              voices={voiceInfo?.kokoro_model?.voices||['af_heart']}
+              ready={voiceInfo?.kokoro_model?.status==='ready'}
+              selected={draft.tts_kokoro_voice}
+              onSelect={voice=>change('tts_kokoro_voice',voice)}
+            />
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
           </>}
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
@@ -1751,6 +1758,75 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
  * never be loaded. Progress arrives over the event stream (any device may have
  * started the download); a poll backstops a missed event.
  */
+/**
+ * The voice picker works like the theme picker: tap a chip to hear that voice
+ * immediately and make it the draft selection — nothing is locked in until
+ * Settings is saved, and the audition never touches the saved configuration
+ * (the daemon synthesizes the sample with the tapped voice regardless of the
+ * configured engine, and caches it per voice).
+ */
+function KokoroVoicePicker({voices,ready,selected,onSelect}:{
+  voices:string[];ready:boolean;selected:string;onSelect:(voice:string)=>void
+}){
+  const [playing,setPlaying]=useState<string|null>(null)
+  const [error,setError]=useState<string|null>(null)
+  const audioRef=useRef<HTMLAudioElement|null>(null)
+  const urlRef=useRef<string|null>(null)
+  useEffect(()=>()=>{
+    audioRef.current?.pause()
+    if(urlRef.current)URL.revokeObjectURL(urlRef.current)
+  },[])
+  const audition=async(voice:string)=>{
+    onSelect(voice)
+    if(!ready)return
+    setError(null);setPlaying(voice)
+    try{
+      const response=await fetch('/api/voice/models/kokoro/preview',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({voice}),
+      })
+      if(!response.ok){
+        const detail=await response.json().catch(()=>({error:`preview failed (${response.status})`}))
+        throw new Error(String(detail.error||`preview failed (${response.status})`))
+      }
+      const blob=await response.blob()
+      audioRef.current?.pause()
+      if(urlRef.current)URL.revokeObjectURL(urlRef.current)
+      const url=URL.createObjectURL(blob)
+      urlRef.current=url
+      const audio=new Audio(url)
+      audioRef.current=audio
+      audio.onended=()=>setPlaying(current=>current===voice?null:current)
+      await audio.play()
+    }catch(cause){
+      setPlaying(current=>current===voice?null:current)
+      setError(cause instanceof Error?cause.message:String(cause))
+    }
+  }
+  return <div class="kokoro-voice-picker">
+    {!ready&&<p class="profile-hint">Download the Kokoro model below to audition voices; tapping still selects.</p>}
+    <div class="kokoro-voice-grid" role="listbox" aria-label="Kokoro voices">
+      {sortKokoroVoices(voices).map(voice=>{
+        const label=kokoroVoiceLabel(voice)
+        return <button
+          type="button"
+          key={voice}
+          role="option"
+          aria-selected={voice===selected}
+          class={`kokoro-voice-chip${voice===selected?' selected':''}${playing===voice?' playing':''}`}
+          title={`${label.name} — ${label.flavor||voice}. Tap to hear a sample and select; Save commits.`}
+          onClick={()=>void audition(voice)}
+        >
+          <strong>{playing===voice?'♪ ':''}{label.name}</strong>
+          <span>{label.flavor||voice}</span>
+        </button>
+      })}
+    </div>
+    {error&&<p class="assistant-error" role="alert">{error}</p>}
+  </div>
+}
+
 function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   const [model,setModel]=useState<KokoroModelInfo|null>(initial)
   const [starting,setStarting]=useState(false)
