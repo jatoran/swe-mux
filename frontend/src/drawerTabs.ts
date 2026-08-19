@@ -6,18 +6,17 @@
 // workspace.
 //
 // Tab order groups by what a tab acts on. First the surfaces that *inject into the
-// focused session* (clipboard, Actions, and the prompt queue),
-// then the passive session surfaces: Transcript reads the focused conversation and Agent
-// inventories the selected CLI environment. Agent closes the session-scoped block.
+// focused session* (Actions and the prompt queue), then the passive session surfaces:
+// Transcript reads the focused conversation, Activity reads what the run did, and Agent
+// inventories the CLI environment it did it with. Agent closes the session-scoped block.
 // Then the *navigators* (files, notes): project-scoped indexes over documents rather than
 // surfaces that inject text — narrow-column surfaces that used to cost a permanent
 // workspace tab each. Files opens what you pick into a pane; Notes hosts the editor itself
 // and opens into a pane only on request, because reading or adding to a note without
-// leaving the session on screen is what the tab is for on a phone. Context follows them as
-// a read-only view of the files agents themselves consume. Git closes the Project-scoped block: it reads the
-// repository behind the Project rather than opening anything, so it is not a navigator,
-// but it acts on the same thing they do. Notifications is the one application-wide fleet
-// view that earns a permanent tab, and stays last.
+// leaving the session on screen is what the tab is for on a phone. Git closes the
+// Project-scoped block: it reads the repository behind the Project rather than opening
+// anything, so it is not a navigator, but it acts on the same thing they do. Notifications
+// is the one application-wide fleet view that earns a permanent tab, and stays last.
 //
 // Queue closes the injection block, which is where it belongs and why it is here rather
 // than in a workspace tab or a modal: deciding whether to send is a judgement about the
@@ -25,11 +24,22 @@
 // the terminal, a modal covers it; the docked column is the one placement that keeps the
 // target and the control on screen together.
 //
-// Change Map follows Insight because it answers the other half of the same question.
-// Insight reports what a session said it was doing; Change Map reports which source files
-// it actually wrote and what those writes reach. Both are read-only session surfaces, and
-// reading them together is the point, so they sit adjacent rather than one being a segment
-// of the other: the map is a graph that wants the whole column, not a third segment.
+// Three former tabs are now segments or sections of their neighbours
+// (`drawerSegments.ts`), on the rule that a low-frequency *inspection* surface can afford
+// one more click while an *injection* surface cannot:
+//
+//  * Clipboard is a section of Actions. Both put text into the focused agent — the same
+//    verb, the same `onInsert`/`onDone` — and a section is co-visible rather than a mode,
+//    so the tightest merge available also costs no extra click on the one surface that
+//    could least afford one.
+//  * Change Map is Activity's third segment. Insight reported what a session said it was
+//    doing and Change Map reported which files it actually wrote; those are two readings
+//    of one run and were never two questions. The graph still wants more width than this
+//    column has — that is what its pop-out is for, and it survived the merge.
+//  * Agent Context is Agent's Instructions segment. Tools, policies, and instruction files
+//    are the halves of "what is this agent running with", and nobody asks one without the
+//    other. Instructions has no `available` gate, so a shell session focused on this tab
+//    still reaches it; that is what the separate Project-scoped tab used to buy.
 //
 // That argument is exactly why the *fleet* queue is not a tab. It has no send button —
 // nothing there needs a terminal beside it — so it is a modal opened from the Queue tab
@@ -43,8 +53,14 @@
 // though every schedule belongs to exactly one — and it is a tab rather than a modal because
 // deciding whether a nightly run should keep running, be paused, or be run right now is a
 // judgement about live sessions, which are legible in the workspace behind it.
+//
+// Processes ships hidden by default (`DEFAULT_HIDDEN_DRAWER_TABS` in `drawerVisibility.ts`).
+// It is *not* made redundant by the Resources modal: a modal covers the terminal, and this
+// tab exists to answer "what is *this* session running" beside it, pinned to the focused
+// session. But that is asked rarely enough that it should not spend a rail slot for a new
+// user who has not asked for it.
 
-export type DrawerTabId = 'clipboard' | 'actions' | 'queue' | 'transcript' | 'insight' | 'changemap' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'schedule' | 'notifications'
+export type DrawerTabId = 'actions' | 'queue' | 'transcript' | 'activity' | 'agent' | 'files' | 'notes' | 'git' | 'processes' | 'schedule' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -64,16 +80,13 @@ export type DrawerTab = {
 // Every title leads with its tab's compact label so the icon controls announce and tooltip the
 // same identity. The longer heading is drawn once inside the active content surface.
 export const DRAWER_TABS: DrawerTab[] = [
-  { id: 'clipboard', label: 'Clipboard', heading: 'Clipboard History', title: 'Clipboard history - insert a recent copy', scope: 'session' },
-  { id: 'actions', label: 'Actions', heading: 'Actions', title: 'Actions - quick shortcuts, skills, and prompt templates', scope: 'session' },
+  { id: 'actions', label: 'Actions', heading: 'Actions', title: 'Actions - quick shortcuts, skills, prompt templates, and clipboard history', scope: 'session' },
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
-  { id: 'insight', label: 'Insight', heading: 'Insight', title: 'Insight - scan timeline and deterministic findings for this session', scope: 'session' },
-  { id: 'changemap', label: 'Change Map', heading: 'Change Map', title: 'Change Map - what this session edited, and what those edits reach', scope: 'session' },
-  { id: 'agent', label: 'Agent', heading: 'Agent Environment', title: 'Agent - inspect tools, extensions, policies, and configuration for this session', scope: 'session' },
+  { id: 'activity', label: 'Activity', heading: 'Activity', title: 'Activity - what this session narrated, what the detectors found, and what it changed', scope: 'session' },
+  { id: 'agent', label: 'Agent', heading: 'Agent', title: 'Agent - configuration, tools, and instructions this session is running with', scope: 'session' },
   { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
-  { id: 'context', label: 'Context', heading: 'Instructions & Memory', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
   { id: 'schedule', label: 'Schedule', heading: 'Scheduled Runs', title: 'Schedule - sessions this Project starts on its own, and what they did last time', scope: 'project' },

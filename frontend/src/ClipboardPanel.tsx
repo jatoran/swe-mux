@@ -16,8 +16,11 @@ import {
 import { hasSoftKeyboard } from './deviceSettings'
 import { copyPreparedText } from './terminalClipboard'
 
-// The clipboard-history tab of the utility drawer (`UtilityDrawer.tsx` owns the
-// host chrome: tab strip, close, mobile scrim, desktop column).
+// Clipboard history, drawn as a section of the Actions tab (`ActionsTab.tsx` owns the
+// section chrome; `UtilityDrawer.tsx` owns the host chrome above that: tab strip, close,
+// mobile scrim, desktop column). It was its own drawer tab until the consolidation, and
+// moved because every surface on Actions ends in text reaching the focused agent — the
+// same verb and, here, literally the same `onInsert`/`onDone` contract it always had.
 //
 // Inserting is the primary action and it targets whatever pane was last focused,
 // which is why the drawer is not a modal layer: the workspace has to stay visible,
@@ -38,9 +41,20 @@ type Props = {
   onInsert: (text: string) => 'terminal' | 'editor' | 'none'
   onDone: () => void
   onOpenSettings: () => void
+  /**
+   * Focus the filter, once, per new non-zero token.
+   *
+   * As a tab this autofocused on mount, which was right: opening the tab *was* the
+   * request. As a section it is on screen whenever Actions is, so focusing on mount would
+   * steal the caret from the terminal every time the drawer opened — and on a phone would
+   * throw the soft keyboard up over the Quick actions above it. So the focus now follows a
+   * deliberate arrival (the `drawer.actions.clipboard` command, or the Clipboard Action
+   * button) rather than the render.
+   */
+  autoFocusToken?: number
 }
 
-export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
+export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken = 0 }: Props) {
   const [history, setHistory] = useState<ClipboardHistory | null>(null)
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
@@ -55,13 +69,14 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
   const openRow = useRef<HTMLElement | null>(null)
 
   const load = () => loadClipboardHistory().then(setHistory).catch(cause => setNote(cause instanceof Error ? cause.message : String(cause)))
+  useEffect(() => { void load() }, [])
   useEffect(() => {
-    void load()
+    if (!autoFocusToken) return
     // Never on a touch device: autofocusing the filter throws the soft keyboard up
-    // over the history the user opened the tab to read, before they have asked to
+    // over the history the user came here to read, before they have asked to
     // type anything. There, the keyboard arrives by tapping the field.
     if (!hasSoftKeyboard()) search.current?.focus()
-  }, [])
+  }, [autoFocusToken])
   // One event name covers both a local capture and a change another device made
   // (App re-dispatches the daemon's `clipboard_changed` under the same name).
   useEffect(() => {

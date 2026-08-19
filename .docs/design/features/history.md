@@ -48,6 +48,15 @@
   after the last message. Transcript cards show each provider-native message timestamp.
   Missing/invalid native message timestamps remain unavailable; process exit and file mtime are
   never presented as message time.
+- **Resume has one implementation, in `session_resume.py`.** The Resume button and a schedule
+  whose action is `resume` (`scheduled-runs.md`) both call it, so the refusals below are the same
+  five refusals worded the same way for both. Only what the two genuinely differ on stays with
+  the caller: the route attaches the pane beside the one the operator was looking at and answers
+  HTTP, while a schedule has no such pane and records a run row instead. A second resume path
+  would be a second authority, and the one that drifted would do so unattended.
+  `GET /history/{id}/branch-points` is the same reason in the other direction: the cut points a
+  scheduled fork pins are chosen from a History row, whose pane usually ended long ago, and they
+  must be the cut points the interactive picker would offer.
 - Resume requires a valid target Project, native ID, transcript, cwd record, and adapter. It
   creates a new Project-owned session at the target root and atomically updates its layout.
   A conversation a live session currently claims is refused (`409 conversation_live`, naming

@@ -39,7 +39,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-SCHEDULE_SCHEMA_VERSION = 1
+SCHEDULE_SCHEMA_VERSION = 2
 
 SCHEDULE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schedules(
@@ -70,7 +70,13 @@ CREATE TABLE IF NOT EXISTS schedules(
   disabled_reason TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 1
+  revision INTEGER NOT NULL DEFAULT 1,
+  action TEXT NOT NULL DEFAULT 'spawn',
+  target_run_id TEXT NOT NULL DEFAULT '',
+  target_kind TEXT NOT NULL DEFAULT 'run',
+  target_cut_message_id TEXT NOT NULL DEFAULT '',
+  target_cut_mode TEXT NOT NULL DEFAULT '',
+  context_ceiling_pct REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS schedules_project ON schedules(project_id);
 CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_fire_at);
@@ -94,6 +100,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS schedule_runs_occurrence
 CREATE INDEX IF NOT EXISTS schedule_runs_recent ON schedule_runs(schedule_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS schedule_runs_project ON schedule_runs(project_id, started_at DESC);
 """
+
+# Added by schema version 2, when a schedule stopped being only a deferred spawn.
+# Applied as ``ALTER TABLE ... ADD COLUMN`` rather than a table rebuild because every
+# one of them has a default that reads as the old behaviour: an existing row is a
+# ``spawn`` with no target, which is exactly what it was.
+_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("action", "TEXT NOT NULL DEFAULT 'spawn'"),
+    ("target_run_id", "TEXT NOT NULL DEFAULT ''"),
+    ("target_kind", "TEXT NOT NULL DEFAULT 'run'"),
+    ("target_cut_message_id", "TEXT NOT NULL DEFAULT ''"),
+    ("target_cut_mode", "TEXT NOT NULL DEFAULT ''"),
+    ("context_ceiling_pct", "REAL NOT NULL DEFAULT 0"),
+)
 
 # Outcomes a run row can settle on. `started` is the transient claim state, and a
 # row left in it is a fire the daemon did not live long enough to finish - which
@@ -149,6 +168,12 @@ def _row_to_schedule(row: sqlite3.Row) -> dict[str, Any]:
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
         "revision": int(row["revision"]),
+        "action": str(row["action"] or "spawn"),
+        "target_run_id": str(row["target_run_id"] or ""),
+        "target_kind": str(row["target_kind"] or "run"),
+        "target_cut_message_id": str(row["target_cut_message_id"] or ""),
+        "target_cut_mode": str(row["target_cut_mode"] or ""),
+        "context_ceiling_pct": float(row["context_ceiling_pct"] or 0.0),
     }
 
 
@@ -187,8 +212,23 @@ class ScheduleStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self._path, self._open)
             self._db.executescript(SCHEDULE_SCHEMA)
+            self._migrate()
             write_schema_version(self._db, "schedules", SCHEDULE_SCHEMA_VERSION)
             self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns a newer version introduced, idempotently.
+
+        Read from `PRAGMA table_info` rather than from a recorded version, so a
+        database that was created by a newer build and then opened by an older one and
+        back again still ends up with every column exactly once.
+        """
+        present = {
+            str(row["name"]) for row in self._db.execute("PRAGMA table_info(schedules)")
+        }
+        for column, declaration in _ADDED_COLUMNS:
+            if column not in present:
+                self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} {declaration}")
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, check_same_thread=False)
@@ -229,8 +269,9 @@ class ScheduleStore:
                 "INSERT INTO schedules(id,project_id,project_root,label,enabled,trigger_kind,"
                 "cron,interval_seconds,run_at,timezone,catch_up,overlap,backend,profile_id,"
                 "cwd,session_name,prompt,follow_ups_json,daily_run_cap,next_fire_at,"
-                "created_at,updated_at,revision)"
-                " VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                "created_at,updated_at,revision,action,target_run_id,target_kind,"
+                "target_cut_message_id,target_cut_mode,context_ceiling_pct)"
+                " VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
                 (
                     schedule_id,
                     project_id,
@@ -253,6 +294,12 @@ class ScheduleStore:
                     next_fire_at,
                     moment,
                     moment,
+                    spec.action,
+                    spec.target_run_id,
+                    spec.target_kind,
+                    spec.target_cut_message_id,
+                    spec.target_cut_mode,
+                    spec.context_ceiling_pct,
                 ),
             )
             self._db.commit()
@@ -294,6 +341,12 @@ class ScheduleStore:
                 spec.daily_run_cap,
                 next_fire_at,
                 moment,
+                spec.action,
+                spec.target_run_id,
+                spec.target_kind,
+                spec.target_cut_message_id,
+                spec.target_cut_mode,
+                spec.context_ceiling_pct,
                 schedule_id,
             ]
             clause = ""
@@ -304,6 +357,8 @@ class ScheduleStore:
                 "UPDATE schedules SET label=?,trigger_kind=?,cron=?,interval_seconds=?,run_at=?,"
                 "timezone=?,catch_up=?,overlap=?,backend=?,profile_id=?,cwd=?,session_name=?,"
                 "prompt=?,follow_ups_json=?,daily_run_cap=?,next_fire_at=?,updated_at=?,"
+                "action=?,target_run_id=?,target_kind=?,target_cut_message_id=?,"
+                "target_cut_mode=?,context_ceiling_pct=?,"
                 "revision=revision+1,disabled_reason=''"
                 f" WHERE id=?{clause}",
                 params,

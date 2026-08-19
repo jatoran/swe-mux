@@ -10,7 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.clipboard_store import ClipboardStore, clipboard_preview, looks_like_secret
 from swe_mux.config import SCHEMA_VERSION, Config, default_mobile_gestures, load_config
-from swe_mux.keybindings import COMMAND_IDS
+from swe_mux.keybindings import COMMAND_IDS, normalize_binding
 from swe_mux.server import (
     capture_clipboard_entry,
     clear_clipboard_entries,
@@ -294,13 +294,25 @@ def test_preview_collapses_whitespace_and_bounds_length() -> None:
 def test_drawer_commands_are_bindable_and_gesture_default_is_the_panel() -> None:
     assert {
         "drawer.toggle",
-        "drawer.clipboard",
-        "drawer.commands",
-        "drawer.prompts",
+        "drawer.actions",
+        "drawer.actions.clipboard",
+        "drawer.actions.prompts",
         "drawer.notifications",
         "clipboard.open",
         "clipboard.clear",
     } <= COMMAND_IDS
+    # The ids those replaced are retired, not merely renamed: a keybindings file is
+    # durable, so each one must still resolve to whatever now answers the same request.
+    for retired, survivor in {
+        "drawer.clipboard": "drawer.actions.clipboard",
+        "drawer.commands": "drawer.actions",
+        "drawer.prompts": "drawer.actions.prompts",
+        "drawer.context": "drawer.agent.instructions",
+        "drawer.insight": "drawer.activity",
+        "drawer.changemap": "drawer.activity.changes",
+    }.items():
+        assert retired not in COMMAND_IDS
+        assert normalize_binding("ctrl+alt+9", retired) == ("ctrl+alt+9", survivor)
     # The right-edge drawer is pulled in by the leftward two-finger swipe; the
     # sidebar keeps the rightward one.
     assert default_mobile_gestures()["two_finger_swipe_left"] == "drawer.toggle"

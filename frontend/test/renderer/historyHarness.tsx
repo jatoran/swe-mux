@@ -23,4 +23,4 @@ globalThis.fetch=async(input)=>{
   throw new Error(`Unexpected harness request: ${url}`)
 }
 
-render(<HistoryBrowser projects={[project]} initialProjectId={project.id} onClose={()=>undefined} onResume={()=>undefined} onSecondOpinion={()=>undefined} onHandoff={()=>undefined}/>,document.querySelector('#root')!)
+render(<HistoryBrowser projects={[project]} initialProjectId={project.id} onClose={()=>undefined} onResume={()=>undefined} onScheduleResume={()=>undefined} onSecondOpinion={()=>undefined} onHandoff={()=>undefined}/>,document.querySelector('#root')!)

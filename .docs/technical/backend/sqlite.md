@@ -85,6 +85,9 @@ A uniqueness violation is sometimes the *mechanism* rather than an error to swal
 `schedule_runs(schedule_id, fire_key)` is unique, and `ScheduleStore.claim_run` inserts that row before a scheduled session is spawned: the losing insert raises `IntegrityError`, rolls back, and is surfaced as a typed `ScheduleConflict` the caller treats as "already claimed" (`../../design/features/scheduled-runs.md`).
 That is what makes a fire idempotent across a daemon restart, which no in-memory guard can be.
 
+`ScheduleStore` is at schema version 2 and migrates by reading `PRAGMA table_info` rather than by trusting a recorded version, so a database written by a newer build, opened by an older one, and opened again still gains each added column exactly once.
+The added columns are `ALTER TABLE ADD COLUMN` rather than a table rebuild because every default reads as the previous behaviour: a row written before the resume action existed *was* a deferred spawn with no target.
+
 Even expected uniqueness/deduplication paths must commit or roll back before return. Do not catch
 `OperationalError` and retry at the HTTP route: fix the store operation boundary so every caller
 gets the same guarantee.

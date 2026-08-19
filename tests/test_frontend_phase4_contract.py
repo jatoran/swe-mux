@@ -278,7 +278,7 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
     set_open = app[app.index("const setClipboardOpen=") : app.index("const selectDrawerTab=")]
     assert "releaseDrawerNote" not in set_open
     assert "selectedResourceId={props.drawerNoteId}" in drawer
-    assert "selected !== 'notes' && renderBody(selected)" in drawer
+    assert "selected !== 'notes' && renderSegmentedBody(stack.id, selected, segment)" in drawer
 
     # Scope follows how you arrived. Every scope-less entry point (rail, strip, drawer.notes)
     # goes through showDrawerTab and means "this Project"; only the app menu's unscoped
@@ -385,8 +385,18 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # those is only answerable with the workspace on screen. Its own geometry is pinned
     # separately by `frontend/test/renderer/schedule-layout.spec.ts`, because the drawer
     # column is the narrowest surface in the app and this tab is the densest row in it.
+    #
+    # Back to eleven (the drawer consolidation): Clipboard became a *section* of Actions,
+    # Change Map became a segment of Activity (renamed from Insight), and Agent Context
+    # became Agent's Instructions segment. A count going down is the healthy direction, and
+    # the rule that decided each one is the same bar as always, applied per surface: a
+    # low-frequency *inspection* surface can afford one more click, and an *injection*
+    # surface cannot - which is why Clipboard is a co-visible section rather than a segment,
+    # and why the Queue, which has a send button, was left alone.
+    # Nothing about the header machinery changes: eleven 36px stops is still a scroller that
+    # has been scrolling since ten.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 14, ids
+    assert len(ids) == 11, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert "drawer-chrome" not in drawer
@@ -398,6 +408,16 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
+    # And nothing left over: a mark for a retired tab is dead weight that reads as a tab
+    # somebody forgot to register.
+    assert len(re.findall(r"^  \w+: \w+Icon,$", icon_map, re.MULTILINE)) == len(ids)
+
+    # Segments and sections are registered beside the tabs and generate their own commands,
+    # which is what keeps a folded-in surface as reachable by name as it was as a tab.
+    segments = source("drawerSegments.ts")
+    assert "export const DRAWER_SEGMENTS" in segments
+    assert "...DRAWER_SEGMENTS.map((segment): Command => ({" in app
+    assert "<DrawerSegmentControl" in drawer
 
     # No text glyph survives. The configured primary mark is either the short title or icon.
     assert "glyph" not in tabs
@@ -560,7 +580,7 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     """The app menu browses every Project; a Project row browses that Project."""
     app = source("App.tsx")
     view = source("ProcessFleetView.tsx")
-    panel = source("ProcessPanel.tsx")
+    panel = source("ResourcesModal.tsx")
 
     main_menu = app[app.index('aria-label="swe-mux menu"') : app.index('class="sidebar-scrim"')]
     # The lead block carries no heading: it is the app's general-purpose surfaces,
@@ -569,8 +589,13 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     assert "BROWSE ALL PROJECTS" not in main_menu
     assert "CURRENT PROJECT" not in main_menu
     # The app menu opens each browser unscoped, never its project-scoped variant.
-    for command in ("history.open", "notes.browse", "processes.all", "prompts.open"):
+    # Processes, bandwidth, storage, and token spend are one `Resources…` row now, so the
+    # menu names the dialog rather than four of its segments; `processes.all` survives as a
+    # command and as the sidebar menu's row, and still opens the dialog on Processes.
+    for command in ("history.open", "notes.browse", "resources.open", "prompts.open"):
         assert f"runNamedCommand('{command}')" in main_menu
+    for retired_row in ("usage.open", "networkUsage.open", "storageUsage.open"):
+        assert f"runNamedCommand('{retired_row}')" not in main_menu
     for scoped in (
         "history.openProject",
         "processes.project",
@@ -593,6 +618,11 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     assert '<option value="">All projects</option>' in view
     assert "initialProjectId" in panel
     assert 'projectScope={scope}' in source("ProcessesTab.tsx")
+    # And the drawer tab is not made redundant by the dialog's Processes segment: a modal
+    # covers the terminal, so the tab is what answers "what is *this* session running"
+    # beside it. It ships hidden by default rather than removed.
+    assert "focusedSessionId" in source("ProcessesTab.tsx")
+    assert "'processes'" in source("drawerVisibility.ts")
     # History is a global overlay (not a per-project pane), opened with an
     # optional scope that pre-filters its own clearable project picker.
     assert "const showHistory = (scope:Project|null=null)" in app
@@ -684,7 +714,7 @@ def test_run_menu_leads_with_the_action_title_and_stays_a_menu_on_a_phone() -> N
 
 def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
     view = source("ProcessFleetView.tsx")
-    panel = source("ProcessPanel.tsx")
+    panel = source("ResourcesModal.tsx")
     fleet = source("processFleet.ts")
 
     assert "projectProcessGroups" in view
@@ -694,7 +724,8 @@ def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
         "sessionById.get(group.session_id)?.project_id || group.project_id" in fleet
     )
     assert "All projects, sessions, and swe-mux infrastructure" in panel
-    assert "PROCESS FLEET" in panel
+    assert "PROCESS::FLEET" in panel
+    assert "SESSION PROCESSES" in panel
     assert "buildProcessTree" in view
     assert "renderDaemonGroup" in view
     # The runtime keeps its own group. Its heading dropped the `swe-mux::` prefix that the

@@ -63,7 +63,7 @@ It is unaffected: first and last conversational timestamps are the same whicheve
 | History transcript (`GET /history/{id}/transcript`) | Absent; `abandoned_messages` reports how many |
 | History search / FTS index | Absent |
 | MCP `read_transcript` | Absent; `abandoned_messages` counts them per page |
-| Branch points (`GET /sessions/{id}/branch-points`) | Not offered |
+| Branch points (`GET /sessions/{id}/branch-points`, `GET /history/{id}/branch-points`) | Not offered |
 | Diagnostic bundle transcript slices | Absent; `abandoned_messages` reports how many |
 
 The drawer folds each contiguous run behind one row, collapsed, and does not remember the fold between mounts: an abandoned branch is something to check once, not a preference.
@@ -78,7 +78,7 @@ Nothing rewrites a native transcript at any point.
 
 ## Key files
 
-- `src/swe_mux/transcript_view.py` - `_claude_live_uuids`, `_mark_abandoned_records`, and the two projections
+- `src/swe_mux/transcript_view.py` - `_claude_live_uuids`, `_mark_abandoned_records`, the two projections, and `resolve_cut_offset` (which cut a chosen message and side names, shared by the interactive picker and a scheduled fork so the two cannot disagree)
 - `src/swe_mux/server.py` - the session, history, and diagnostic-bundle payloads
 - `src/swe_mux/mcp.py` - `read_transcript`
 - `frontend/src/transcriptView.ts` - `groupTranscriptMessages`, `transcriptLiveMessages`

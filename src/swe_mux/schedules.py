@@ -16,6 +16,17 @@ Three trigger kinds:
 - ``interval`` - every N seconds, anchored on the previous fire.
 - ``cron``     - a five-field cron expression evaluated in a named timezone.
 
+Two actions, which is what a trigger is attached to:
+
+- ``spawn``  - start a new session. The original, and still the default.
+- ``resume`` - reopen an existing conversation, named by its **history run id**. A
+  run id rather than a session id because a session is exactly the thing that
+  drifts: a pane rolls its conversation, is resumed into a new pane, or ends, while
+  agent history rows are not time-pruned and a resume that continues a conversation
+  inherits its row. The three ``target_kind``s answer the question the session id
+  would have answered wrongly - pin the conversation, follow it, or pin a moment in
+  it and fork from there. See `_parse_target`.
+
 **Wall-clock arithmetic is the whole difficulty**, so it is concentrated here.
 A cron schedule means a *local wall-clock* time, which is not a fixed number of
 seconds apart from the last one: an hour vanishes and reappears twice a year.
@@ -57,9 +68,14 @@ from .harness import is_agent_harness
 
 TriggerKind = Literal["once", "interval", "cron"]
 OverlapPolicy = Literal["skip", "allow"]
+ScheduleAction = Literal["spawn", "resume"]
+TargetKind = Literal["run", "latest_of_session", "fork_point"]
 
 TRIGGER_KINDS: tuple[str, ...] = ("once", "interval", "cron")
 OVERLAP_POLICIES: tuple[str, ...] = ("skip", "allow")
+SCHEDULE_ACTIONS: tuple[str, ...] = ("spawn", "resume")
+TARGET_KINDS: tuple[str, ...] = ("run", "latest_of_session", "fork_point")
+CUT_MODES: tuple[str, ...] = ("before", "after")
 
 # Bounds. Every one of these is a "a typo must not become a standing cost"
 # limit rather than a capability statement.
@@ -78,6 +94,18 @@ MAX_ONCE_HORIZON_SECONDS = 365 * 86_400.0
 CRON_SEARCH_DAYS = 1_500
 # A follow-up may be held back from its own session, but never past this.
 MAX_FOLLOW_UP_DELAY_SECONDS = 7 * 86_400.0
+# How far ahead a *resume* may be parked. Deliberately far shorter than the one-year
+# horizon a spawn gets, and the reason is not caution: the agent CLIs prune their own
+# transcripts on their own timers (Claude's `cleanupPeriodDays` defaults to 30 days of
+# inactivity), and mux neither owns that file nor is consulted before it goes. A
+# `once` resume parked past that window is a schedule whose most likely outcome is
+# `transcript_unavailable`, so it is refused at write time - where the author can
+# choose something else - rather than at 3 a.m. six weeks later.
+MAX_RESUME_ONCE_HORIZON_SECONDS = 21 * 86_400.0
+# The default ceiling on a rolling continuation. Above this, resuming *again* into an
+# accumulated conversation buys a turn whose early context has already been compacted
+# away; see the `context_ceiling_pct` field.
+DEFAULT_CONTEXT_CEILING_PCT = 0.7
 
 
 class ScheduleError(ValueError):
@@ -336,7 +364,21 @@ class FollowUp:
 
 @dataclass(frozen=True, slots=True)
 class ScheduleSpec:
-    """The validated definition of one schedule, without its runtime state."""
+    """The validated definition of one schedule, without its runtime state.
+
+    ``action`` is what separates the two things a schedule can be, and every field
+    below it is read by exactly one of them:
+
+    - ``spawn`` starts a **new** session. ``backend``, ``profile_id``, ``cwd`` and
+      ``prompt`` describe it, and ``prompt`` rides argv as the seed.
+    - ``resume`` reopens an **existing** conversation. The harness, the working
+      directory and the identity all come from the conversation's own history row, so
+      naming a backend or a launch profile here would be a second, contradictory
+      answer to a question the row already settles; both are refused. ``prompt``
+      becomes the first message in the prompt queue instead of a seed, because the
+      resume argv is already ``--resume <id>`` and appending a positional prompt to it
+      is per-harness luck.
+    """
 
     label: str
     prompt: str
@@ -353,6 +395,22 @@ class ScheduleSpec:
     session_name: str = ""
     daily_run_cap: int = 0
     follow_ups: tuple[FollowUp, ...] = field(default_factory=tuple)
+    action: ScheduleAction = "spawn"
+    #: The conversation this resumes, as a **history run id** rather than a session
+    #: id. A run id is the durable handle: agent history rows are not time-pruned, a
+    #: resume that continues a conversation inherits its row, and a `/clear` retires
+    #: the run instead of silently redirecting a schedule at a different conversation
+    #: the way a session id would.
+    target_run_id: str = ""
+    target_kind: TargetKind = "run"
+    #: For ``fork_point``: the message the fork is cut at, and which side of it.
+    #: Stored as an id rather than a byte offset so the daemon can say the point is
+    #: *gone* instead of cutting somewhere plausible.
+    target_cut_message_id: str = ""
+    target_cut_mode: str = ""
+    #: For ``latest_of_session``: refuse the fire when the conversation is already
+    #: this full. 0 disables the guard.
+    context_ceiling_pct: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -371,6 +429,12 @@ class ScheduleSpec:
             "session_name": self.session_name,
             "daily_run_cap": self.daily_run_cap,
             "follow_ups": [item.as_dict() for item in self.follow_ups],
+            "action": self.action,
+            "target_run_id": self.target_run_id,
+            "target_kind": self.target_kind,
+            "target_cut_message_id": self.target_cut_message_id,
+            "target_cut_mode": self.target_cut_mode,
+            "context_ceiling_pct": self.context_ceiling_pct,
         }
 
 
@@ -433,6 +497,89 @@ def parse_follow_ups(raw: Any) -> tuple[FollowUp, ...]:
     return tuple(items)
 
 
+@dataclass(frozen=True, slots=True)
+class _Target:
+    run_id: str = ""
+    kind: TargetKind = "run"
+    cut_message_id: str = ""
+    cut_mode: str = ""
+    context_ceiling_pct: float = 0.0
+
+
+def _parse_target(body: dict[str, Any], *, resuming: bool) -> _Target:
+    """Validate the three ways a resume names what it reopens.
+
+    They exist because "resume this session later" has three genuinely different
+    answers, and picking one for the author would be picking wrong:
+
+    - ``run`` pins one conversation. Nothing drifts. This is the one-off.
+    - ``latest_of_session`` follows the conversation wherever it has got to, which is
+      what "always a continuation" means - and is the one that accumulates context, so
+      it is the only kind that carries a ceiling.
+    - ``fork_point`` pins a *moment*. Every fire starts from identical context because
+      each one forks the source afresh, which is the only kind a recurring trigger can
+      repeat without run N+1 inheriting run N.
+    """
+    if not resuming:
+        # Target fields on a spawn are refused rather than dropped: a body carrying
+        # both a prompt to seed and a conversation to reopen has two meanings, and
+        # silently keeping one is how a schedule ends up doing the other.
+        for name in ("target_run_id", "target_kind", "target_cut_message_id"):
+            if str(body.get(name) or "").strip():
+                raise ScheduleError(
+                    "invalid_target",
+                    f"{name} only applies to a resume",
+                    fields={name: "only applies to a resume"},
+                )
+        return _Target()
+    run_id = _text(body.get("target_run_id"), "target_run_id", 120)
+    kind = str(body.get("target_kind") or "run").strip()
+    if kind not in TARGET_KINDS:
+        raise ScheduleError(
+            "invalid_target",
+            f"target_kind must be one of {', '.join(TARGET_KINDS)}",
+            fields={"target_kind": "unknown target"},
+        )
+    cut_message_id = ""
+    cut_mode = ""
+    if kind == "fork_point":
+        cut_message_id = _text(
+            body.get("target_cut_message_id"), "target_cut_message_id", 200
+        )
+        cut_mode = str(body.get("target_cut_mode") or "").strip()
+        if cut_mode not in CUT_MODES:
+            raise ScheduleError(
+                "invalid_target",
+                "target_cut_mode must be 'before' or 'after'",
+                fields={"target_cut_mode": "must be before or after"},
+            )
+    ceiling = body.get("context_ceiling_pct")
+    if ceiling is None:
+        ceiling = DEFAULT_CONTEXT_CEILING_PCT if kind == "latest_of_session" else 0.0
+    if not isinstance(ceiling, int | float) or isinstance(ceiling, bool):
+        raise ScheduleError(
+            "invalid_target",
+            "context_ceiling_pct must be a number between 0 and 1",
+            fields={"context_ceiling_pct": "must be a number between 0 and 1"},
+        )
+    if not 0.0 <= float(ceiling) <= 1.0:
+        raise ScheduleError(
+            "invalid_target",
+            "context_ceiling_pct must be between 0 (no ceiling) and 1",
+            fields={"context_ceiling_pct": "must be between 0 and 1"},
+        )
+    return _Target(
+        run_id=run_id,
+        kind=kind,  # type: ignore[arg-type]
+        cut_message_id=cut_message_id,
+        cut_mode=cut_mode,
+        # A ceiling only bounds an accumulating conversation. The other two kinds
+        # either pin a run or start from a fixed prefix, so carrying one there would
+        # be a switch that reads as protection and does nothing.
+        context_ceiling_pct=float(ceiling) if kind == "latest_of_session" else 0.0,
+    )
+
+
 def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpec:
     """Validate a request body into a `ScheduleSpec`.
 
@@ -448,12 +595,31 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
             f"trigger_kind must be one of {', '.join(TRIGGER_KINDS)}",
             fields={"trigger_kind": "unknown trigger"},
         )
+    action = str(body.get("action") or "spawn").strip()
+    if action not in SCHEDULE_ACTIONS:
+        raise ScheduleError(
+            "invalid_action",
+            f"action must be one of {', '.join(SCHEDULE_ACTIONS)}",
+            fields={"action": "unknown action"},
+        )
+    resuming = action == "resume"
     overlap = str(body.get("overlap") or "skip").strip()
     if overlap not in OVERLAP_POLICIES:
         raise ScheduleError(
             "invalid_overlap",
             "overlap must be skip or allow",
             fields={"overlap": "must be skip or allow"},
+        )
+    if resuming and overlap != "skip":
+        # Not ignored quietly: a CLI opens a conversation once and answers a second
+        # opener by exiting, so "start another session" is not a policy a resume can
+        # have. Saying so at write time beats a nightly `conversation_live` skip the
+        # author reads as a bug in the schedule.
+        raise ScheduleError(
+            "invalid_overlap",
+            "a conversation can only be open once, so a resume always skips an "
+            "overlapping run",
+            fields={"overlap": "must be skip for a resume"},
         )
     timezone = _text(body.get("timezone"), "timezone", 64, required=False)
     resolve_wall(timezone)
@@ -464,6 +630,26 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
             "a scheduled run starts an agent; backend must be a registered harness",
             fields={"backend": "must be a registered agent harness"},
         )
+    target = _parse_target(body, resuming=resuming)
+    if resuming:
+        # Refused rather than ignored. A resume runs the harness the conversation
+        # belongs to, in the Project root the conversation resolves from, with
+        # `--resume <id>` as its argv; a backend, a launch profile or a working
+        # directory here is a second answer to a question the history row and the
+        # adapter already settle, and accepting one silently would make the editor
+        # offer control it does not have.
+        for name, value in (
+            ("backend", backend),
+            ("profile_id", body.get("profile_id")),
+            ("cwd", body.get("cwd")),
+        ):
+            if str(value or "").strip():
+                raise ScheduleError(
+                    f"invalid_{name}",
+                    "a resume reopens a conversation whose harness, arguments and "
+                    "working directory the history row already fixes",
+                    fields={name: "cannot be set on a resume"},
+                )
     cron = ""
     interval: float | None = None
     run_at: float | None = None
@@ -494,10 +680,17 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
                 fields={"run_at": "must be epoch seconds"},
             )
         run_at = float(raw_at)
-        if run_at > moment + MAX_ONCE_HORIZON_SECONDS:
+        horizon = MAX_RESUME_ONCE_HORIZON_SECONDS if resuming else MAX_ONCE_HORIZON_SECONDS
+        if run_at > moment + horizon:
             raise ScheduleError(
                 "invalid_run_at",
-                "run_at is beyond the one-year scheduling horizon",
+                f"run_at is beyond the {int(horizon // 86_400)}-day scheduling horizon"
+                + (
+                    "; the agent CLI prunes conversations mux does not own, so a resume "
+                    "parked further out would most likely find nothing to reopen"
+                    if resuming
+                    else ""
+                ),
                 fields={"run_at": "too far in the future"},
             )
     cap = body.get("daily_run_cap", 0) or 0
@@ -525,6 +718,12 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
         ),
         daily_run_cap=int(cap),
         follow_ups=parse_follow_ups(body.get("follow_ups")),
+        action=action,  # type: ignore[arg-type]
+        target_run_id=target.run_id,
+        target_kind=target.kind,
+        target_cut_message_id=target.cut_message_id,
+        target_cut_mode=target.cut_mode,
+        context_ceiling_pct=target.context_ceiling_pct,
     )
 
 

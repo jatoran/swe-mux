@@ -130,7 +130,7 @@ An unpriced billable call reserves the conservative preflight estimate so missin
 The ledger day is UTC.
 
 The Timeline surface is session-scoped, and everything Project-wide lives in the Project's settings instead: permission, the auto-arm flag, and the Project context Markdown.
-Since Phase 7.10 the Timeline is a segment of the utility drawer's Insight tab (its other segment is the deterministic Findings pane) rather than a standalone Timeline tab; its behaviour is unchanged.
+Since Phase 7.10 the Timeline is a segment rather than a standalone tab. It now sits in the utility drawer's **Activity** tab (renamed from Insight in the drawer consolidation) beside the deterministic Findings pane and the Change Map; its behaviour is unchanged, and it keeps its own palette command and voice phrase because segments are registered rather than local state.
 Hosting those in the drawer meant every session in a Project showed the same three Project controls, competing with the tab's actual job.
 Every timeline tab carries a button to that Project's settings, and a tab whose Project has not permitted scanning shows only that fact and the same button.
 It lists **every** cap with its current usage, collapsed to one row naming whichever is closest to binding and expandable to the full set, because a drawer that shows only the caps with headroom makes a stopped timeline look healthy, and six budget lines was most of a narrow drawer.

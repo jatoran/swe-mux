@@ -7,11 +7,11 @@ export const VOICE_HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
   sessions:['list sessions','list active sessions','list working sessions','list ready sessions','list pending sessions','list approvals','list questions','list rate limited sessions','list stuck sessions','list failed sessions','status of Session 2','list sessions in the current Project','list sessions in Project 2'],
   projects:['list Projects','open Project 2','open a Project by name','open Project 2 Session 1','status of Project 2','status of the current Project','list sessions in Project 2'],
   navigation:['go to next session','go to previous session','open Session 2 in the current Project','open Project 2','open Project 2 Session 1','open Session 1 in Project 2','open a session or Project by its visible name','next page','repeat','more detail'],
-  dictation:['send','append without sending','voice comms on','voice comms off','undo last phrase','cancel','mute','summary mode','verbatim mode','interrupt agent','standby','resume','stop listening','pin the current voice target from the Talk panel'],
+  dictation:['send','append without sending','voice comms on','voice comms off','undo last phrase','cancel','mute','summary mode','verbatim mode','interrupt agent','standby','resume','listen (hold a chat brainstorm)','go ahead (release the brainstorm)','stop listening','pin the current voice target from the Talk panel'],
   approvals:['open a session awaiting approval','approve','review approval','confirm tool use','confirm approval','cancel approval'],
 }
 
-export const VOICE_ACTION_ORDER=['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','comms_on','comms_off','stop'] as const
+export const VOICE_ACTION_ORDER=['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','hold','proceed','comms_on','comms_off','stop'] as const
 
 export const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   send:{label:'Send / submit',hint:'submit the buffered message'},
@@ -26,6 +26,8 @@ export const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   help:{label:'Help',hint:'list the commands'},
   standby:{label:'Standby',hint:'keep listening but ignore speech until resumed'},
   resume:{label:'Resume',hint:'leave standby and act on speech again'},
+  hold:{label:'Hold (brainstorm)',hint:'chat mode buffers your thinking instead of answering each pause'},
+  proceed:{label:'Go ahead',hint:'send the held brainstorm to the assistant as one message'},
   comms_on:{label:'Voice Comms on',hint:'request short spoken replies from the focused agent'},
   comms_off:{label:'Voice Comms off',hint:'restore normal replies and prior read-aloud settings'},
   stop:{label:'Stop listening',hint:'turn conversation mode off and release the mic'},

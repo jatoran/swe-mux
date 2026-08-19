@@ -14,6 +14,16 @@
 // them is worth your attention and when. Keeping both on one surface is
 // deliberate: the ranked view is the one you read, and the raw list is how you
 // check what it decided against.
+//
+// This is now the *only* home for attention items. The Automation dashboard used to draw
+// the same ranked inbox and the same records under its "attend" group, so one inbox had two
+// homes and neither said the other existed; that view is a link here now. The away report
+// came with it, since it is a reading of this inbox rather than a fact about the pipeline
+// that fills it.
+//
+// Which is also why this tab is not hidden by default while Processes is. It is the only
+// drawer tab that draws an unread badge, and hiding the one surface that says something
+// needs you is the opposite of a simplification.
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { AttentionInbox } from './AttentionInbox'
@@ -34,6 +44,36 @@ export type Delivery = {
 
 export type AutomationNotification={id:string;session_id?:string;kind:string;title:string;message:string;severity:string;created_at:number;read_at?:number}
 export type NotificationData = {notifications:UiNotification[];deliveries:Delivery[];automation?:AutomationNotification[]}
+
+/**
+ * "What happened while I was away?" — a summary of attention items and run notes since the
+ * last terminal attach or input.
+ *
+ * It was a section of the Automation dashboard's health view, which is the last place
+ * anyone looked for it: the dashboard is where you configure the pipeline, and this is a
+ * reading of the inbox the pipeline fills. It reads the inbox; it lives with the inbox.
+ *
+ * Collapsed by default and fetched only on request, because generating it is a server-side
+ * scan and nobody wants it every time they check what fired.
+ */
+function AwayReport() {
+  const [report,setReport]=useState<unknown>(null)
+  const [busy,setBusy]=useState(false)
+  const [error,setError]=useState('')
+  const generate=async()=>{
+    setBusy(true);setError('')
+    try{setReport(await api('GET','/api/attention/absence'))}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+    finally{setBusy(false)}
+  }
+  return <details class="attention-away">
+    <summary>What happened while I was away?</summary>
+    <p>Summarizes attention items and run notes since your last terminal attach or input.</p>
+    <button disabled={busy} onClick={()=>void generate()}>{busy?'generating…':'generate away report'}</button>
+    {error&&<p class="usage-error">{error}</p>}
+    {report!==null&&<pre>{JSON.stringify(report,null,2)}</pre>}
+  </details>
+}
 
 export function NotificationsTab({data,onOpenSession,onChanged,project}:{
   data:NotificationData;onOpenSession:(sessionId:string)=>void;onChanged:()=>void
@@ -78,6 +118,7 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
       <SettingLink target="alerts.master">Open alert settings</SettingLink>
     </div>}
     <AttentionInbox onOpenSession={onOpenSession} project={project} />
+    <AwayReport />
     <h4 class="attention-raw-heading">Every record</h4>
     <p class="drawer-status">{error||`${open.length} open · ${records.length-open.length} dismissed · ${items.length} delivered`}</p>
     <div class="notification-list">

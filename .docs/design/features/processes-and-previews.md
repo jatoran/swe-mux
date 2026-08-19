@@ -105,14 +105,17 @@
   just revalidated. Matching children against the last sample's owned set by raw PID let a
   child that respawned since (a dev server restarting) survive the action while the user
   believed the tree was gone.
-- **Inspection is one surface in two shells.** `ProcessFleetView` is the surface; the **modal
-  inspector** and the **Processes drawer tab** are shells around it. They differ in chrome and in
+- **Inspection is one surface in two shells.** `ProcessFleetView` is the surface; the
+  **Resources dialog's Processes segment** and the **Processes drawer tab** are shells around it. They differ in chrome and in
   default scope, and in nothing else — the tab draws the same process trees, parent lineage,
   evidence state/reason/confidence, listener and Preview rows, ended toggle, add-preview-by-URL,
   and the same guarded interrupt/terminate/terminate-tree.
   The tab adds exactly two things: it opens scoped to the active Project, and it marks the
   focused terminal's session and pins it to the top of its Project.
   Its footer button reopens the same view as the full-width dialog.
+  The tab ships **hidden by default**: the dialog covers the terminal, so this tab is not
+  redundant with it, but "what is this session running" is asked rarely enough not to spend a
+  permanent rail slot on for someone who has not shown it (`ui.md`).
   This replaced a watch/act split in which the tab drew per-session rollups and could terminate
   nothing. The defence of that split was that a two-click destructive confirm in a 300 px column
   is how the wrong tree gets killed — an argument about *layout*, not about *capability*, and it
@@ -160,7 +163,8 @@
   with their actions inline, not headed sub-lists.
 - The inspector opens from session/terminal right-click, the drawer tab's `Open full width`,
   sidebar
-  `: menu` Process fleet, or the command palette. The pane header's `proc` chip is gone: it was
+  `: menu` Resources, the app menu's `Resources…` row, the sidebar's resource chip, or the
+  command palette (`processes.all`, unchanged). The pane header's `proc` chip is gone: it was
   the only pane tool with no state of its own, and the drawer tab covers what it was for. Fleet
   mode uses the coherent all-session
   snapshot when available and falls back to aggregating session-scoped snapshots for an
@@ -174,7 +178,7 @@
   familiar 0–100% whole-machine scale regardless of logical processor count.
   The first sample is unavailable until a second counter reading establishes an interval.
   The anchored viewport popover groups live attributed processes by Project, shows a separate
-  daemon/infrastructure bucket, and links to Process fleet.
+  daemon/infrastructure bucket, and links to the Resources dialog's Processes segment.
   Its top CPU figure is system-wide; memory and process counts remain explicitly owned.
   Attributed CPU remains additive for attribution detail and is presented as equivalent core
   load (`1.0×` means one logical processor), not as a misleading whole-machine percentage.

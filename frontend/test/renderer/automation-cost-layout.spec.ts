@@ -14,10 +14,27 @@ import { expect, test } from 'playwright/test'
  * heading in the other.
  */
 
+// Four flat views, no group rail: `attend` and `review` are gone, because the surfaces
+// under them had homes of their own (Alerts and Activity/Findings) and this dashboard was
+// drawing second copies. Nothing here has a sub-tab strip any more.
 const openTab = async (page: import('playwright/test').Page, tab: string) => {
   await page.goto('/automation-cost-harness.html')
   await page.waitForSelector('.automation-tabs button')
   await page.locator('.automation-tabs button', { hasText: tab }).click()
+}
+
+/**
+ * The spend view fetches when it mounts, which is when its tab is first selected.
+ *
+ * That is new: it used to be drawn from the dashboard's single startup load, so its rows
+ * were on screen before any tab could be clicked. It is a shared component now
+ * (`AutomationSpendView`) so that Resources can draw the identical table, and a shared
+ * component owns its own data. Reading the table without waiting measures the frame
+ * before the response lands and reports an empty table as a formatting regression.
+ */
+const openSpend = async (page: import('playwright/test').Page) => {
+  await openTab(page, 'cost breakdown')
+  await page.locator('.cost-table tbody tr').first().waitFor()
 }
 
 const boxes = (page: import('playwright/test').Page, selector: string) =>
@@ -28,7 +45,7 @@ const boxes = (page: import('playwright/test').Page, selector: string) =>
 
 test('the spend view answers which automation costs what, ranked', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'spend')
+  await openSpend(page)
 
   const names = await page.locator('.cost-table tbody .cost-name strong').allInnerTexts()
   expect(names[0]).toBe('Scan timeline')
@@ -51,7 +68,7 @@ test('the spend view answers which automation costs what, ranked', async ({ page
 
 test('a cost too small to print never renders as free', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'spend')
+  await openSpend(page)
 
   const row = page.locator('.cost-table tbody tr', { hasText: 'Doc drift watch' })
   await expect(row.locator('td').nth(1)).toHaveText('<$0.0001')
@@ -61,24 +78,23 @@ test('a cost too small to print never renders as free', async ({ page }) => {
 
 test('no figures table overflows its panel at desktop width', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  for (const [tab, sub] of [['spend', null], ['attend', 'all-session health']] as const) {
-    await openTab(page, tab)
-    if (sub) await page.locator('.automation-subtabs button', { hasText: sub }).click()
-    const overflow = await page.evaluate(() =>
-      [...document.querySelectorAll('.usage-table-scroll')].map(element => ({
-        scroll: element.scrollWidth, client: element.clientWidth,
-      })))
-    expect(overflow.length).toBeGreaterThan(0)
-    for (const box of overflow) expect(box.scroll).toBeLessThanOrEqual(box.client + 1)
-  }
+  // The spend view is the one that mixes ten-figure token counts with sub-cent costs, so
+  // it is the one this measures. Resources draws the same component and is covered by
+  // `resources-layout.spec.ts` at both widths.
+  await openSpend(page)
+  const overflow = await page.evaluate(() =>
+    [...document.querySelectorAll('.usage-table-scroll')].map(element => ({
+      scroll: element.scrollWidth, client: element.clientWidth,
+    })))
+  expect(overflow.length).toBeGreaterThan(0)
+  for (const box of overflow) expect(box.scroll).toBeLessThanOrEqual(box.client + 1)
 })
 
 /** The status line used to be drawn over the first section heading in exactly this view. */
-test('the panel frame holds every view, sub-tab strip or not', async ({ page }) => {
+test('the panel frame holds every view', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  for (const [tab, sub] of [['spend', null], ['attend', 'all-session health'], ['configure', null]] as const) {
+  for (const tab of ['cost breakdown', 'rules & observers', 'learned fixes', 'diagnostics'] as const) {
     await openTab(page, tab)
-    if (sub) await page.locator('.automation-subtabs button', { hasText: sub }).click()
     const [progress] = await boxes(page, '.usage-progress')
     const [main] = await boxes(page, '.automation-panel > main')
     const [footer] = await boxes(page, '.automation-panel > footer')
@@ -93,7 +109,7 @@ test('the panel frame holds every view, sub-tab strip or not', async ({ page }) 
  *  six labels, then stretched to the height of the section beside it. */
 test('the summary strip spans the columns it heads', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'configure')
+  await openTab(page, 'rules & observers')
 
   const [summary] = await boxes(page, '.usage-tables > .usage-summary')
   const [tables] = await boxes(page, '.usage-tables')
@@ -107,7 +123,7 @@ test('the summary strip spans the columns it heads', async ({ page }) => {
 
 test('at phone width every table row becomes a labelled card', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
-  await openTab(page, 'spend')
+  await openSpend(page)
 
   // No horizontal scroll anywhere: the stacked layout replaces the scroller rather than
   // living inside it.
@@ -129,15 +145,15 @@ test('at phone width every table row becomes a labelled card', async ({ page }) 
   await expect(page.locator('.cost-table thead')).toBeHidden()
 })
 
-test('the telemetry table reads at human scale rather than raw units', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'attend')
-  await page.locator('.automation-subtabs button', { hasText: 'all-session health' }).click()
-
-  const row = page.locator('.usage-table', { hasText: 'Observed workload telemetry' }).locator('tbody tr').first()
-  // 8403 seconds and 9,702,931,354 tokens are both technically present and practically unread.
-  await expect(row.locator('td').nth(2)).toHaveText('2h 20m')
-  await expect(row.locator('td').nth(6)).toHaveText('9.7B')
-  // The exact total is still one hover away rather than discarded by the rounding.
-  await expect(row.locator('td').nth(6)).toHaveAttribute('title', /9.702.931.354/)
+test('the dashboard keeps no second copy of the surfaces that moved out', async ({ page }) => {
+  await page.goto('/automation-cost-harness.html')
+  await page.waitForSelector('.automation-tabs button')
+  const tabs = await page.locator('.automation-tabs button').allInnerTexts()
+  expect(tabs).toEqual(['rules & observers', 'cost breakdown', 'learned fixes', 'diagnostics'])
+  await expect(page.locator('.automation-subtabs')).toHaveCount(0)
+  // The way back to the two inboxes this dashboard used to duplicate is a permanent row,
+  // not an empty-state hint: "where did the attention inbox go" is asked by someone
+  // looking at a full one somewhere else.
+  const elsewhere = page.locator('.automation-elsewhere button')
+  await expect(elsewhere).toHaveText([/Attention inbox/, 'Run notes'])
 })

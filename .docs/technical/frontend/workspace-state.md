@@ -42,10 +42,18 @@ Deleting a Project prunes only its presentation record and does not alter global
 Before any Project exists, App uses a transient normalized presentation so application-scoped utilities remain reachable.
 
 The first v1 layout waits for the asynchronous device-settings cache, then seeds from the former normalized server `drawerTabs` order if no local layout was created while that read was in flight.
-The former `mux.drawer.projects.v1` tab and expansion pair migrates to `mux.drawer.projects.v2`, and the former `mux.drawer.tab.v1` value seeds only the initially active Project when valid.
-A retired tab id is forward-mapped at every read through `migratedTabId` in `drawerLayout.ts`: the removed `commands`/`prompts` ids map to `actions`, and Phase 7.10's `timeline` maps to `insight` (the Insight tab folded Timeline into a segment), so no saved layout, stack selection, or focused tab loses the tab.
-The legacy `mux.drawer.tab.v1` seed in `App.tsx` bypasses that helper and so repeats the same forward-maps inline.
-The old keys are removed only after both new serializations succeed.
+The stored presentation map is read through three tiers, newest first: `mux.drawer.projects.v3` (the current shape), `mux.drawer.projects.v2` (the same shape without `selected_segments`, parsed directly since normalization fills the missing map), and the original `mux.drawer.projects.v1` tab/expansion pair.
+The former `mux.drawer.tab.v1` value seeds only the initially active Project when valid.
+
+A retired tab id is forward-mapped at every read through **`migratedTabTarget`** in `drawerLayout.ts`, which returns a tab *and, where one exists, a segment*.
+That second half is what makes a consolidation non-destructive: `changemap` maps to `{activity, changes}` and `context` to `{agent, instructions}`, so a reader who had one of those selected lands on the surface they chose rather than on the absorbing tab's first segment.
+The full table is `commands`/`prompts`/`clipboard` to `actions`, `insight` to `activity`, `timeline` and `changemap` to `activity` (with segments), and `context` to `agent/instructions`.
+Every entry stays forever: a saved arrangement is device-local and can be arbitrarily old, and an unrecognised id is dropped rather than repaired, which silently loses whichever pane the user had dragged it into.
+The legacy `mux.drawer.tab.v1` seed in `App.tsx` calls that same helper rather than re-spelling the table inline, which is what it used to do and what drifted every time a tab was folded into another.
+The old keys — v1, v2, and `mux.drawer.tab.v1` — are removed only after the new serializations succeed, so an interruption anywhere before that leaves an older record intact and the migration simply runs again.
+
+`selected_segments` records which segment each segmented tab is showing, per Project, keyed by **tab rather than by stack**: a tab lives in exactly one stack, and keying by stack would lose the choice the moment the tab were dragged into another pane.
+It is stored loosely as `string` rather than validated against the segment registry, because an unknown id costs nothing — `resolveDrawerSegment` falls back to the first available segment anyway — and because this module stays the layout's own vocabulary.
 The server continues accepting the legacy flat domain for compatibility, but recursive edits never write it or adopt later settings changes.
 
 Mobile visibility remains transient in `mobileDrawerOpen`.

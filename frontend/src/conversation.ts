@@ -5,7 +5,7 @@ import type { GateConfig } from './speechGate'
 import { CAPTURE_WORKLET_NAME, captureWorkletUrl } from './voiceCaptureWorklet.ts'
 import type { CaptureMarks } from './voiceLatency'
 
-export type MuxVoiceCommand='send'|'append'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'|'standby'|'resume'|'comms_on'|'comms_off'
+export type MuxVoiceCommand='send'|'append'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'|'standby'|'resume'|'hold'|'proceed'|'comms_on'|'comms_off'
 export type ParsedMuxVoice={command:MuxVoiceCommand|null;text:string}
 export type VoiceCommandConfig={action:string;phrases:string[]}
 export type VoiceMatcher={parse(text:string):ParsedMuxVoice}
@@ -14,7 +14,7 @@ export type VoiceMatcher={parse(text:string):ParsedMuxVoice}
 // each action are configurable (daemon config, surfaced via /api/voice). Keep in
 // sync with VOICE_COMMAND_ACTIONS / default_voice_commands in config.py — these
 // defaults are only the fallback when the daemon has not supplied a config yet.
-const VOICE_ACTIONS=new Set<MuxVoiceCommand>(['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','stop','comms_on','comms_off'])
+const VOICE_ACTIONS=new Set<MuxVoiceCommand>(['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','hold','proceed','stop','comms_on','comms_off'])
 export const DEFAULT_WAKE_WORDS=['mux','mucks','max']
 export const DEFAULT_COMMANDS:VoiceCommandConfig[]=[
   {action:'send',phrases:['send','send it','send that','send message','submit','submit it','submit that','submit message']},
@@ -29,12 +29,29 @@ export const DEFAULT_COMMANDS:VoiceCommandConfig[]=[
   {action:'help',phrases:['help','list commands','what can i say']},
   {action:'standby',phrases:['sleep','go to sleep','stand by','standby','pause listening']},
   {action:'resume',phrases:['wake','wake up','resume','start listening']},
+  {action:'hold',phrases:['listen','just listen','brainstorm','hold that thought','let me think']},
+  {action:'proceed',phrases:['go ahead','your turn','over to you','proceed']},
   {action:'comms_on',phrases:['voice comms','voice comms on','start voice comms','enter voice comms']},
   {action:'comms_off',phrases:['voice comms off','stop voice comms','exit voice comms']},
   {action:'stop',phrases:['stop listening','turn off','shut down']},
 ]
 
 const normalizePhrase=(value:string):string=>value.replace(/\s+/g,' ').trim().toLowerCase()
+
+/**
+ * Bare exact phrases for the chat-mode brainstorm hold: entering ("hold on")
+ * and releasing ("go ahead") without a wake word. Deliberately a fixed, tight
+ * list matched only when the utterance IS the phrase (nothing else), and only
+ * consulted while the assistant is the microphone's addressee — so a longer
+ * sentence that merely contains "go ahead" is never eaten.
+ */
+export const HOLD_ENTER_PHRASES=['hold on','hold up','let me think','let me think out loud',"i'm thinking",'im thinking','just listen','just listening']
+export const HOLD_RELEASE_PHRASES=['go ahead','okay go ahead','ok go ahead','go for it','your turn','over to you','what do you think','done thinking',"that's it",'thats it']
+
+export function matchesBarePhrase(text:string,phrases:string[]):boolean{
+  const cleaned=normalizePhrase(text).replace(/[.,!?…]+$/,'').trim()
+  return phrases.includes(cleaned)
+}
 const escapeRegex=(value:string):string=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
 
 // Commands are recognized only as an utterance SUFFIX: a wake word followed by a
@@ -198,6 +215,14 @@ export type CaptureHandlers={
   onDetector(detector:CaptureDetector,diagnostic:string):void
   playbackActive():boolean
   playbackOrigin?():'agent'|'system'|null
+  /**
+   * Extra trailing-silence patience in ms, consulted per frame; the silence
+   * endpoint fires at max(detector tail, this). Chat mode returns its patience
+   * here so thinking out loud is not endpointed at every pause, while the
+   * speculative decode still fires at its own threshold and lets a wake-worded
+   * command short-circuit the longer tail. Return 0 for the normal tail.
+   */
+  endpointPatienceMs?():number
 }
 
 export type PlaybackProbeResult={
@@ -239,7 +264,11 @@ export class PersistentVoiceCapture{
   private resampler:StreamingDownsampler|null=null
   private frames=new FrameAssembler()
   private gateConfig:GateConfig=ENERGY_GATE
-  private gate=new SpeechGate(ENERGY_GATE)
+  // Evaluated per frame, after the constructor has assigned `handlers`; a field
+  // initializer cannot read them eagerly, and laziness is what lets the owner
+  // change the patience between renders without touching the microphone.
+  private readonly patience=()=>this.handlers.endpointPatienceMs?.()||0
+  private gate=new SpeechGate(ENERGY_GATE,this.patience)
   private silero:SileroVad|null=null
   private detector:CaptureDetector='energy'
   private preRoll:Float32Array[]=[]
@@ -378,7 +407,7 @@ export class PersistentVoiceCapture{
       this.gateConfig=SILERO_GATE
       // Swapped only between utterances: changing the endpoint rule mid-utterance
       // would mix 900 ms and 352 ms accounting inside one gate.
-      if(!this.gate.speaking)this.gate=new SpeechGate(SILERO_GATE)
+      if(!this.gate.speaking)this.gate=new SpeechGate(SILERO_GATE,this.patience)
       this.handlers.onDetector('silero','Silero voice activity detection; utterances end after a short pause.')
     }catch(cause){
       silero.dispose()
@@ -560,7 +589,7 @@ export class PersistentVoiceCapture{
   }
 
   private resetUtterance():void{
-    this.gate=new SpeechGate(this.gateConfig)
+    this.gate=new SpeechGate(this.gateConfig,this.patience)
     this.silero?.reset()
     this.utterance=[];this.utteranceId='';this.utterancePlayback=false;this.utterancePlaybackOrigin=null
     this.bargeInFrames=[];this.bargeInConfirmed=false

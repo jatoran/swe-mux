@@ -95,6 +95,12 @@ separately opt-in.
   A scheduled run stages its follow-up messages as `rule` senders against the session it just
   started, with any per-message delay written as an ordinary `not_before` constraint rather
   than a timer that feature owns (`scheduled-runs.md`).
+  A scheduled **resume** stages its opening prompt the same way rather than as an argv seed:
+  the resumed pane's argv is already `--resume <id>`, and whether a positional prompt may follow
+  that is per-harness luck rather than a contract.
+  The consequence is the ordinary one and is not special-cased - a `rule` sender is never
+  self-arming, so that prompt is delivered automatically only where the conversation has an
+  auto-delivery grant and otherwise waits for a human.
   Bind-on-first-run is what makes that safe: each message keys to the new session *and* the
   first agent run it gets, so a message written for tonight's scheduled conversation can never
   land in a different one.

@@ -1497,6 +1497,40 @@ def conversation_cut_points(
     return points
 
 
+def resolve_cut_offset(
+    points: list[CutPoint], message_id: str, mode: str
+) -> tuple[int, CutPoint] | tuple[None, str]:
+    """The byte offset a fork cut at ``message_id``/``mode`` lands on, or a refusal code.
+
+    Every cut lands on some message's end offset, never on an arbitrary byte: cutting
+    *before* a message means cutting after the one that precedes it. That is what
+    keeps a fork's last record a real conversational record rather than whichever
+    housekeeping line the CLI happened to write next, and it is why "before the oldest
+    message this window can name" is refused instead of approximated with byte zero.
+
+    Lives with the reader rather than with the writer for the reason stated at the top
+    of `transcript_fork.py`: where a cut is *legal* is a question about a transcript's
+    own shape, and the writer is handed an offset. It is shared rather than duplicated
+    because the interactive branch picker and a scheduled fork-and-resume must decide a
+    cut identically - a schedule that fired on a rule the picker would have refused is
+    an unattended session opened on a conversation the provider rejects.
+    """
+    index = next((i for i, point in enumerate(points) if point.message_id == message_id), None)
+    if index is None:
+        return None, "branch_point_unknown"
+    if mode == "after":
+        point = points[index]
+        if point.open_tool_calls:
+            return None, "unanswered_tool_calls"
+        return point.source_end, point
+    if index == 0:
+        return None, "outside_window"
+    previous = points[index - 1]
+    if previous.open_tool_calls:
+        return None, "unanswered_tool_calls"
+    return previous.source_end, points[index]
+
+
 def _claude_open_tool_calls(events: list[dict[str, Any]]) -> dict[int, int]:
     """How many Claude tool calls are unanswered at each record boundary.
 

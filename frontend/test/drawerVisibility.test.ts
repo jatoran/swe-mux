@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DRAWER_TABS, type DrawerTabId } from '../src/drawerTabs.ts'
 import {
+  DEFAULT_HIDDEN_DRAWER_TABS,
   canHideDrawerTab,
   drawerTabStructurallyAvailable,
   drawerTabVisible,
@@ -13,21 +14,36 @@ import {
 
 const every = DRAWER_TABS.map(tab => tab.id)
 
+test('the shipped default hides Processes and nothing else', () => {
+  // Processes is not made redundant by the Resources dialog - a modal covers the terminal,
+  // and this tab pins the focused session beside it - but it answers a question asked
+  // rarely enough not to spend a rail slot on by default.
+  assert.deepEqual([...DEFAULT_HIDDEN_DRAWER_TABS], ['processes'])
+  // Alerts is deliberately not hidden: it is the only tab that draws an unread badge, so
+  // hiding it would remove the one glanceable "something needs you" signal.
+  assert.equal(DEFAULT_HIDDEN_DRAWER_TABS.includes('notifications'), false)
+  // Every shipped default must name a registered tab, or it silently hides nothing.
+  for (const id of DEFAULT_HIDDEN_DRAWER_TABS) assert.ok(every.includes(id), id)
+})
+
 test('structural absence is a property of the session, not a preference', () => {
   assert.equal(drawerTabStructurallyAvailable('transcript', false), false)
   assert.equal(drawerTabStructurallyAvailable('transcript', true), true)
-  // Insight stays available on a shell session: its Timeline segment gates itself and
-  // its Findings segment is Project-scoped.
-  assert.equal(drawerTabStructurallyAvailable('insight', false), true)
+  // Activity and Agent stay available on a shell session. Their segments gate themselves
+  // (`drawerSegments.ts`) and `resolveDrawerSegment` falls back to one that does not need a
+  // transcript or an agent harness, so a shell session still reaches Activity's findings
+  // and Agent's instruction files. Gating the whole tab would hide surfaces that work.
+  assert.equal(drawerTabStructurallyAvailable('activity', false), true)
+  assert.equal(drawerTabStructurallyAvailable('agent', false), true)
   assert.equal(drawerTabStructurallyAvailable('git', false), true)
 })
 
 test('a hidden tab is filtered out of whatever stack holds it', () => {
-  const visibility = { hidden: ['git', 'changemap'] as DrawerTabId[], hasTranscript: true }
+  const visibility = { hidden: ['git', 'processes'] as DrawerTabId[], hasTranscript: true }
   assert.equal(drawerTabVisible('git', visibility), false)
   assert.deepEqual(
-    visibleDrawerTabs(['clipboard', 'git', 'notes', 'changemap'], visibility),
-    ['clipboard', 'notes'],
+    visibleDrawerTabs(['actions', 'git', 'notes', 'processes'], visibility),
+    ['actions', 'notes'],
   )
 })
 
@@ -60,7 +76,10 @@ test('toggling is idempotent and never duplicates an id', () => {
 })
 
 test('stored sets survive junk, and a set that hides everything is discarded', () => {
-  assert.deepEqual(parseHiddenDrawerTabs(null), [])
+  // `null` is "never chosen", which is the only moment the shipped default applies. An
+  // *empty* stored set is a choice - the user showed everything - and must stay empty.
+  assert.deepEqual(parseHiddenDrawerTabs(null), [...DEFAULT_HIDDEN_DRAWER_TABS])
+  assert.deepEqual(parseHiddenDrawerTabs('[]'), [])
   assert.deepEqual(parseHiddenDrawerTabs('not json'), [])
   assert.deepEqual(parseHiddenDrawerTabs('{"git":true}'), [])
   assert.deepEqual(parseHiddenDrawerTabs('["git","nope","git",7]'), ['git'])
@@ -71,8 +90,8 @@ test('stored sets survive junk, and a set that hides everything is discarded', (
 
 test('writes are in canonical order, so toggling does not churn the stored value', () => {
   assert.equal(
-    serializeHiddenDrawerTabs(['notes', 'clipboard']),
-    serializeHiddenDrawerTabs(['clipboard', 'notes']),
+    serializeHiddenDrawerTabs(['notes', 'actions']),
+    serializeHiddenDrawerTabs(['actions', 'notes']),
   )
   // Canonical is the registry's own order, which puts Notes ahead of Git.
   assert.deepEqual(parseHiddenDrawerTabs(serializeHiddenDrawerTabs(['git', 'notes'])), ['notes', 'git'])

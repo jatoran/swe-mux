@@ -57,7 +57,7 @@ test('a worktree\'s live sessions are their own target, and lead to the session'
 test('a commit\'s session links open without expanding it, and an ended session goes to History',async({page})=>{
   await page.setViewportSize({width:360,height:640})
   await page.goto('/git-map-harness.html')
-  await page.getByRole('button',{name:'Log',exact:true}).click()
+  await page.getByRole('tab',{name:'Log',exact:true}).click()
   const row=page.locator('.git-graph-row').filter({hasText:'Fix sidebar Git lines'})
   const links=row.locator('.git-commit-links')
   await expect(links).toHaveText('2 session links')
@@ -76,21 +76,24 @@ test('a commit\'s session links open without expanding it, and an ended session 
 test('a provenance row names the current session and links to it',async({page})=>{
   await page.setViewportSize({width:360,height:640})
   await page.goto('/git-map-harness.html')
-  await page.getByRole('button',{name:'Provenance',exact:true}).click()
+  await page.getByRole('tab',{name:'Provenance',exact:true}).click()
   const names=page.locator('.git-provenance .git-session-open')
   await expect(names).toHaveText(['Fix sidebar Git lines','Land the migration'])
   await names.nth(0).click()
   expect(await page.evaluate(()=>(globalThis as unknown as {__followed:string[]}).__followed)).toEqual(['session:session'])
 })
 
-test('the Git toolbar keeps its actions together at the trailing edge',async({page})=>{
+test('the Git toolbar keeps its actions together under the shared segmented control',async({page})=>{
   await page.setViewportSize({width:360,height:640})
   await page.goto('/git-map-harness.html')
+  // The Map/Log/Provenance switch is the drawer's one segmented control now, drawn above
+  // this tab rather than inside its toolbar, so the two must stack without overlapping and
+  // the toolbar's own actions must still sit at its trailing edge.
   const geometry=await page.evaluate(()=>{
     const box=(selector:string)=>document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().toJSON()
-    return {toolbar:box('.git-toolbar'),toggle:box('.git-view-toggle'),actions:box('.git-toolbar-actions')}
+    return {toolbar:box('.git-toolbar'),segmented:box('.drawer-segmented'),actions:box('.git-toolbar-actions')}
   })
-  expect(geometry.toggle.right).toBeLessThanOrEqual(geometry.actions.left)
+  expect(geometry.segmented.bottom).toBeLessThanOrEqual(geometry.toolbar.top + 0.5)
   expect(geometry.actions.right).toBeLessThanOrEqual(geometry.toolbar.right + 0.5)
   // Glyph only, but still named for a screen reader and for voice control.
   await expect(page.locator('.git-refresh')).toHaveText('↻')
@@ -108,7 +111,7 @@ test('Git Map gives ahead its own cool emphasis',async({page})=>{
 test('Git Log labels a linear worktree tip separately from main without inventing a fork',async({page})=>{
   await page.setViewportSize({width:280,height:600})
   await page.goto('/git-map-harness.html')
-  await page.getByRole('button',{name:'Log',exact:true}).click()
+  await page.getByRole('tab',{name:'Log',exact:true}).click()
   const context=page.locator('.git-graph-context')
   await expect(context).toContainText('MAIN TREEmain@ 9299950a')
   await expect(context).toContainText('COMPAREorigin/main')

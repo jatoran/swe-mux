@@ -339,9 +339,17 @@ The schedule routes are the scheduled-run surface (`features/scheduled-runs.md`)
 A definition belongs to exactly one Project, because a spawn does; the unscoped `GET` exists because "what fires tonight" spans Projects and is what the Schedule tab's fleet toggle reads.
 Writing one is always allowed and firing it is what permission gates, so every row carries `blocked` - a live answer (`project_missing`, `automation_disabled`, `install_disabled`), recomputed per request rather than stored, plus the recent `runs` behind it.
 `PATCH` with only `enabled` is the pause switch and keeps the definition; any other body is a full replacement validated exactly like a create, with `409 revision_conflict` on a stale revision.
-A rejected definition answers `400` with a machine `code` (`invalid_cron`, `invalid_interval`, `invalid_timezone`, `invalid_run_at`, `invalid_backend`, `invalid_follow_ups`) and a `fields` map, so the editor can mark the field rather than print a sentence.
+A rejected definition answers `400` with a machine `code` (`invalid_cron`, `invalid_interval`, `invalid_timezone`, `invalid_run_at`, `invalid_backend`, `invalid_follow_ups`, `invalid_action`, `invalid_target`, `invalid_overlap`) and a `fields` map, so the editor can mark the field rather than print a sentence.
 `POST /schedules/preview` answers the next five fire times for an unsaved definition: cron plus a timezone plus daylight saving has one implementation, in the daemon, and the editor must not grow a second one that disagrees with it twice a year.
 `POST .../run` is subject to every fire-time guard except lateness, so it cannot walk around the Project opt-in, the overlap policy, or the concurrency ceiling.
+
+A definition whose `action` is `resume` carries `target_run_id` (a **history run id**, never a session id), `target_kind` (`run` | `latest_of_session` | `fork_point`), `target_cut_message_id` + `target_cut_mode` for a fork, and `context_ceiling_pct` for a rolling continuation.
+It may not carry `backend`, `profile_id`, `cwd`, or `overlap: allow`: the conversation's row and its adapter already fix the harness, the argv and the directory, and a conversation opens once.
+Each row's `target` is **resolved per request** for the same reason `blocked` is - a stored label would go on naming a conversation that has since been deleted - and reports `missing`, the conversation's display name and backend, and, for a rolling target, the run it has actually reached.
+A `spawn` answers `target: null`.
+
+`GET /history/{id}/branch-points` is the session listing (`GET /sessions/{id}/branch-points`) read from a History row, because the fixed point a nightly fork cuts at is chosen from a conversation whose pane usually ended long ago.
+Its payload is identical except that `session_id` becomes `history_id`, and every "nothing to offer" case answers `200` with a `reason` rather than an error.
 
 The Project-context routes read and revision-check one fixed user-owned Markdown file.
 `GET` returns blank content and revision `missing` when it does not exist.
@@ -1366,6 +1374,7 @@ DELETE /history/scan
 GET    /history/duplicates
 POST   /history/duplicates/repair     {dry_run?}
 POST   /history/{id}/resume           {project_id, ...}
+GET    /history/{id}/branch-points    cut points of an ended conversation, for a scheduled fork
 DELETE /history/{id}
 POST   /history/{id}/second-opinion   preview/confirm with project_id
 GET    /history/{id}/handoff

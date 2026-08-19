@@ -226,14 +226,23 @@
   writes `1` explicitly. A column default would also land on rows inserted by an opt-out and
   on the reserved pause row, where "on" is not what was meant, so the per-run default belongs
   in the one code path that grants a run rather than in the DDL.
-- `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start an
-  agent session on their own, and their run history.
+- `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start or
+  reopen an agent session on their own, and their run history.
   A definition is a deferred `SpawnRequest` (`project_id`, `backend`, `profile_id`, `cwd`,
   `session_name`, `prompt`) plus a trigger (`trigger_kind` `cron|interval|once` with `cron`,
   `interval_seconds`, `run_at`, `timezone`), the policies (`catch_up`, `overlap`,
   `daily_run_cap`), `follow_ups_json` (the messages pre-queued behind the seed prompt), a
   `revision` for the same optimistic-concurrency contract the Project files use, and the
   cached trigger state (`next_fire_at`, `last_fire_at`, `last_session_id`, `last_outcome`).
+  `action` (`spawn|resume`, schema 2) selects which button is being deferred.
+  A `resume` adds `target_run_id` - a **history run id, never a session id**, because a session
+  is exactly the thing that drifts while agent history rows are not pruned - plus `target_kind`
+  (`run|latest_of_session|fork_point`), `target_cut_message_id` and `target_cut_mode` for a
+  pinned fork, and `context_ceiling_pct` for a rolling continuation.
+  A fork stores the message it cuts at rather than a byte offset, so a conversation that moved
+  past that message is refused by name instead of cut somewhere plausible.
+  `backend`, `profile_id` and `cwd` stay empty on a `resume` and are rejected at write time:
+  the conversation's history row and its adapter already fix all three.
   **These rows are deliberately machine-local rather than portable Project config**: a
   schedule committed to a repository would arm itself in every clone and worktree, the same
   boundary Project Action trust draws.

@@ -239,6 +239,15 @@ affect the PTY, session state, transcripts, history, or projects.
   speech resumed between the decode starting and the text arriving, which is what stops "…mux,
   send me the file" from submitting at the pause after "send". **Dictation always waits the full
   tail**, because only the wake-word grammar carries that evidence.
+- **Chat patience** (`voice_chat_patience_ms`, default 1200, hot, surfaced as
+  `chat_patience_ms` on `GET /api/voice`): while the assistant is the microphone's addressee
+  (chat mode or the follow-up window), the *silence endpoint* waits
+  max(detector tail, patience) before a plain utterance becomes an assistant turn — thinking
+  out loud is not answered at every breath. The gate consults the value per frame
+  (`SpeechGate`'s `extraTail` provider), so an addressee change applies immediately, and only
+  the compared threshold moves — never the accumulated counters. Commands stay fast
+  structurally: speculation still fires at 160 ms and a wake-worded command short-circuits
+  the longer tail (energy-detector users, who have no speculation, wait the patience out).
 - **Push-to-talk** (hold `Ctrl`+`Alt`+`Space`) suspends endpointing entirely: the key release is
   the endpoint. It is the escape hatch for when detection is the problem rather than the fix — a
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
@@ -369,10 +378,11 @@ executed action — so that number is measured rather than estimated.
   phonetically distinctive, rare in ordinary speech, and not a prefix of a common word.
   Spoken tester trials retained `mux`; `mucks` and `max` remain recognition variants for that same wake word.
 - The **capture-control action set is fixed** (each is wired to code); only its trigger phrases change:
-  `send`, `append`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`, `standby`, `resume`, `comms_on`, `comms_off`, `stop`.
+  `send`, `append`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`, `standby`, `resume`, `hold`, `proceed`, `comms_on`, `comms_off`, `stop`.
   Defaults ship `mux`/`mucks`/`max` as wake words with phrases matching the historical grammar.
   Schema 20 adds only the three new action definitions to an older saved command list and preserves every existing custom phrase or disabled action.
   Schema 21 adds bare `stop` only to the untouched stock `mute` phrase list; customized or disabled mute mappings remain unchanged.
+  Schema 28 adds `hold`/`proceed` (the chat brainstorm pair, below) the same way.
 - **Workspace commands use the existing command registry.**
   `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
   When two slot templates match, the one with more fixed words wins, so `new Codex in Project 2 {text}` cannot be swallowed by the selected-Project `new Codex {text}` shorthand.
@@ -430,6 +440,11 @@ executed action — so that number is measured rather than estimated.
   `standby` keeps the mic and transcription running but **discards every utterance except a `resume` (or `stop`) command**, so it stays listening yet does nothing until woken.
   `stop` fully tears capture down and releases the mic; only an explicit mic-control or bound-command gesture can re-open it because browsers forbid silent reacquisition.
   The draft buffer survives standby.
+- **Brainstorm hold** (`hold`/`proceed`, chat-addressee only) is standby's accumulating sibling: transcription continues and plain speech **buffers instead of becoming assistant turns**, until a `proceed` cue releases the whole buffer as **one** consolidated turn — the model sees the entire train of thought instead of answering fragment one before fragment two exists.
+  Deterministic client state, never a model decision (the same rule as confirm/cancel): entry is the wake-worded `hold` action or a bare exact-match phrase ("hold on", "let me think" — `HOLD_ENTER_PHRASES`, matched only when the utterance *is* the phrase); release is `proceed` or a bare "go ahead"/"what do you think" (`HOLD_RELEASE_PHRASES`).
+  While held, every other wake-worded command keeps its meaning ("Mux, stop" still works mid-brainstorm), `cancel` clears the buffer without leaving hold, and the chat panel header shows a `holding · Nw` chip with `go ahead`/`discard` buttons.
+  The buffer is never lost to a failure: a failed or refused release (chat mode closed underneath) keeps the buffer and the hold.
+  The wake-worded `hold` outside chat mode explains itself rather than engaging — in talk mode the dictation draft already waits for `send`.
 - **Capture and target have separate lifetimes.** Talk is one workspace-level browser flag.
   The target follows the focused live Agent, Continuity editor, Scratchpad, Markdown editor, or Queue composer without restarting capture, and the editable draft survives every target change.
   A pin freezes the exact current sink until explicitly released.
@@ -564,7 +579,8 @@ built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`
 `tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget_usd`, `tts_cache_mb`;
 `stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
 `stt_routing_model` (spoken commands; blank falls back to the dictation model);
-`voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases).
+`voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases),
+`voice_chat_patience_ms` (extra endpoint patience while the assistant is the addressee).
 The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 
 ## Key files

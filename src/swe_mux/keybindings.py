@@ -124,17 +124,33 @@ KEYBINDING_COMMANDS = (
     # you open the panel with is what makes the panel "forget" which tab you left
     # it on; it is obeying the binding, not losing state.
     ("drawer.toggle", "Side panel: toggle, reopening the last tab used", "view"),
-    ("drawer.clipboard", "Side panel: always clipboard history", "clipboard"),
-    ("drawer.commands", "Side panel: always session commands", "terminal"),
-    ("drawer.prompts", "Side panel: always prompt templates", "input"),
+    ("drawer.actions", "Side panel: always actions, skills, prompts, and clipboard", "input"),
     ("drawer.queue", "Side panel: always prompt queue", "input"),
     ("drawer.transcript", "Side panel: always this session's transcript", "terminal"),
+    ("drawer.activity", "Side panel: always this session's activity", "terminal"),
+    ("drawer.agent", "Side panel: always this session's agent setup", "view"),
     ("drawer.files", "Side panel: always project files", "view"),
     ("drawer.notes", "Side panel: always project notes", "view"),
-    ("drawer.context", "Side panel: always agent context", "view"),
     ("drawer.git", "Side panel: always project Git status", "view"),
     ("drawer.processes", "Side panel: always project processes", "view"),
+    ("drawer.schedule", "Side panel: always scheduled runs", "view"),
     ("drawer.notifications", "Side panel: always notifications", "view"),
+    # Segments and sections are bindable in their own right, which is the point of
+    # registering them (`frontend/src/drawerSegments.ts`). Folding a tab into a segment
+    # must not cost the surface its shortcut.
+    ("drawer.activity.timeline", "Side panel: always the scan timeline", "terminal"),
+    ("drawer.activity.findings", "Side panel: always findings", "view"),
+    ("drawer.activity.changes", "Side panel: always the change map", "view"),
+    ("drawer.agent.config", "Side panel: always agent configuration", "view"),
+    ("drawer.agent.tools", "Side panel: always agent tools and extensions", "view"),
+    ("drawer.agent.instructions", "Side panel: always agent instructions and memory", "view"),
+    ("drawer.actions.quick", "Side panel: always quick actions", "input"),
+    ("drawer.actions.skills", "Side panel: always skills", "input"),
+    ("drawer.actions.prompts", "Side panel: always prompt templates", "input"),
+    ("drawer.actions.clipboard", "Side panel: always clipboard history", "clipboard"),
+    ("drawer.git.map", "Side panel: always the Git worktree map", "view"),
+    ("drawer.git.log", "Side panel: always the Git commit log", "view"),
+    ("drawer.git.provenance", "Side panel: always Git commit provenance", "view"),
     ("drawer.resetLayout", "Reset side panel layout", "view"),
     ("drawer.next", "Side panel: focus next tab in pane", "view"),
     ("drawer.previous", "Side panel: focus previous tab in pane", "view"),
@@ -143,6 +159,7 @@ KEYBINDING_COMMANDS = (
     ("drawer.moveUp", "Side panel: move focused tab up", "view"),
     ("drawer.moveDown", "Side panel: move focused tab down", "view"),
     ("clipboard.open", "Side panel: always clipboard history (rail Clip button)", "clipboard"),
+    ("resources.open", "Open resources (processes, bandwidth, storage, tokens)", "view"),
     ("clipboard.clear", "Clear unpinned clipboard history", "clipboard"),
     # Conversation capture is workspace-level. These commands make the visible mic
     # and target-pin controls optional gesture/keybinding destinations too.
@@ -157,10 +174,24 @@ KEYBINDING_COMMANDS = (
 COMMAND_IDS = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
 
 _PROJECT_COMMAND = re.compile(r"project\.activate\(([1-9])\)\Z")
+# A binding a user already made must survive a surface being folded into another one.
+# Every retired command id maps to whatever now answers the same request, and the entries
+# stay forever: a keybindings file is durable and can be arbitrarily old, and an unmigrated
+# id is rejected outright rather than quietly ignored (see `_normalize` below).
 _COMMAND_MIGRATIONS = {
     "drawer.resetTabs": "drawer.resetLayout",
     "project.note": "notes.open",
     "session.note": "notes.open",
+    # Commands and Prompts became the Actions tab; Clipboard became a section of it.
+    "drawer.commands": "drawer.actions",
+    "drawer.prompts": "drawer.actions.prompts",
+    "drawer.clipboard": "drawer.actions.clipboard",
+    # Insight became Activity, and Change Map became a segment of it.
+    "drawer.insight": "drawer.activity",
+    "drawer.timeline": "drawer.activity.timeline",
+    "drawer.changemap": "drawer.activity.changes",
+    # Agent Context became the Agent tab's Instructions segment.
+    "drawer.context": "drawer.agent.instructions",
 }
 
 

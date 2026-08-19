@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { useModalFocus } from './modalFocus'
 import { formatBytes } from './networkUsage'
 
 type StorageBucket={name:string;bytes:number;files:number}
@@ -28,7 +27,9 @@ const BUCKET_LABELS:Record<string,string>={
 }
 const bucketLabel=(name:string)=>BUCKET_LABELS[name]||name
 
-export function StorageUsageModal({onClose}:{onClose:()=>void}) {
+// The Storage segment of the Resources modal. See `NetworkUsageView` for why the dialog
+// shell moved out of here.
+export function StorageUsageView() {
   const [snapshot,setSnapshot]=useState<StorageUsageSnapshot|null>(null)
   const [refreshing,setRefreshing]=useState(true)
   const [error,setError]=useState('')
@@ -36,8 +37,6 @@ export function StorageUsageModal({onClose}:{onClose:()=>void}) {
   // to that single project's .swe-mux breakdown.
   const [projectFilter,setProjectFilter]=useState('')
   const sequence=useRef(0)
-  const panel=useRef<HTMLElement>(null)
-  useModalFocus(panel,onClose)
 
   // `force` re-walks the tree on the daemon (`?refresh=1`); the passive first
   // load accepts the TTL cache so opening the panel is never blocked on a walk.
@@ -68,12 +67,13 @@ export function StorageUsageModal({onClose}:{onClose:()=>void}) {
   const selected=projectFilter?projects.find(item=>item.project_id===projectFilter)||null:null
   const scoped=selected!==null
 
-  return <div class="usage-layer storage-usage-layer" role="dialog" aria-modal="true" aria-label="Storage usage" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section class="usage-panel storage-usage-panel" ref={panel}>
-      <header><div><span>STORAGE::USAGE</span><strong>Disk space swe-mux uses, by area and by project</strong></div><div class="usage-header-actions"><button disabled={refreshing} onClick={()=>void load(true)}>{refreshing?'measuring…':'refresh'}</button><button aria-label="Close storage usage" onClick={onClose}>×</button></div></header>
+  return <>
       <div class="network-usage-actions">
         <div><strong>{snapshot?`swe-mux footprint ${formatBytes(footprint)}`:'Measuring on-disk footprint…'}</strong><span>{snapshot?`${snapshot.data_dir}${snapshot.cached?` · cached ${Math.round(snapshot.age_seconds)}s ago`:` · measured in ${Math.round(snapshot.duration_ms)}ms`}`:'Walking the data directory and project files'}</span></div>
-        <label class="storage-usage-filter">project<select value={projectFilter} disabled={!snapshot} onChange={event=>setProjectFilter(event.currentTarget.value)}><option value="">All projects</option>{projects.map(project=><option key={project.project_id} value={project.project_id}>{project.label}</option>)}</select></label>
+        <div class="resource-view-actions">
+          <label class="storage-usage-filter">project<select value={projectFilter} disabled={!snapshot} onChange={event=>setProjectFilter(event.currentTarget.value)}><option value="">All projects</option>{projects.map(project=><option key={project.project_id} value={project.project_id}>{project.label}</option>)}</select></label>
+          <button disabled={refreshing} onClick={()=>void load(true)}>{refreshing?'measuring…':'refresh'}</button>
+        </div>
       </div>
       {error&&<div class="usage-error" role="alert">{error}</div>}
       <main>
@@ -108,6 +108,5 @@ export function StorageUsageModal({onClose}:{onClose:()=>void}) {
         </>}
       </main>
       <footer><span>Measures the bytes swe-mux stores: the data directory ({snapshot?snapshot.data_dir:'~/.mux'}) grouped by area, plus each project’s .swe-mux folder. The host drive’s free space is deliberately excluded, so this reflects swe-mux’s footprint rather than this machine’s disk. Read-only; nothing is deleted or pruned.</span></footer>
-    </section>
-  </div>
+  </>
 }

@@ -12,6 +12,32 @@ import { serverNow } from './serverClock.ts'
 export type ScheduleTrigger = 'cron' | 'interval' | 'once'
 export type ScheduleOverlap = 'skip' | 'allow'
 
+/** What the trigger is attached to. */
+export type ScheduleAction = 'spawn' | 'resume'
+
+/** Which conversation a resume reopens, and how the answer is allowed to move.
+ *
+ *  Three, because "resume this session later" has three genuinely different answers
+ *  and picking one for the author would be picking wrong. See `TARGET_KIND_COPY`. */
+export type ScheduleTargetKind = 'run' | 'latest_of_session' | 'fork_point'
+
+/** What the daemon says a resume schedule currently points at.
+ *
+ *  Resolved on read, never stored beside the id: a label kept with the schedule would
+ *  go on naming a conversation that has since been deleted, and `missing` is the
+ *  honest answer to that. `resolved_*` differs from the pinned row only for a rolling
+ *  continuation, which is the one kind whose target moves. */
+export type ScheduleTarget = {
+  run_id: string
+  missing: boolean
+  backend?: string
+  name?: string
+  resolved_run_id?: string
+  resolved_name?: string
+  resolved_at?: number | null
+  context_pct?: number | null
+}
+
 export type ScheduleFollowUp = {
   body: string
   delay_seconds: number
@@ -65,6 +91,14 @@ export type Schedule = {
   revision: number
   created_at: number
   updated_at: number
+  action: ScheduleAction
+  target_run_id: string
+  target_kind: ScheduleTargetKind
+  target_cut_message_id: string
+  target_cut_mode: '' | 'before' | 'after'
+  context_ceiling_pct: number
+  /** Null on a spawn, which has nothing to point at. */
+  target: ScheduleTarget | null
 }
 
 export type ScheduleStatus = {
@@ -92,6 +126,17 @@ export type ScheduleDraft = {
   session_name: string
   daily_run_cap: number
   follow_ups: string[]
+  action: ScheduleAction
+  target_run_id: string
+  target_kind: ScheduleTargetKind
+  target_cut_message_id: string
+  target_cut_mode: '' | 'before' | 'after'
+  /** 0-1. Only a rolling continuation reads it. */
+  context_ceiling_pct: number
+  /** Display only, never sent: what the target conversation is called, so the editor
+   *  can name what it is about to reopen without a second fetch. */
+  target_label: string
+  target_backend: string
 }
 
 /** A named cron expression, and the piece of the syntax it demonstrates.
@@ -152,6 +197,27 @@ export function presetForCron(cron: string): CronPreset | undefined {
   return CRON_PRESETS.find(preset => preset.cron === normalized)
 }
 
+/** The three target kinds, said in the words of what each one does and costs.
+ *
+ *  The trade-off is the whole content of the choice, so it is stated on the option
+ *  rather than hidden in a doc: a pinned run cannot drift, a rolling continuation
+ *  accumulates until compaction eats its own early context, and a pinned point is the
+ *  only one a recurring trigger repeats without run N+1 inheriting run N. */
+export const TARGET_KIND_COPY: Record<ScheduleTargetKind, { label: string; detail: string }> = {
+  run: {
+    label: 'This exact conversation',
+    detail: 'Reopens the conversation as it is now. Nothing drifts. Best for a one-off.',
+  },
+  latest_of_session: {
+    label: 'Wherever this work has got to',
+    detail: 'Follows the conversation through rollovers and earlier resumes, so each run continues the last. It keeps growing: every resume replays the whole conversation, and past the ceiling below its early context has already been compacted into a summary.',
+  },
+  fork_point: {
+    label: 'From a fixed point, every time',
+    detail: 'Forks the conversation at a message you pick and resumes the copy, leaving the original untouched. Every run starts from identical context, which is what makes a repeating trigger repeatable. Claude only.',
+  },
+}
+
 export const BLOCKED_LABELS: Record<string, string> = {
   project_missing: 'this Project is no longer registered',
   automation_disabled: 'Scheduled runs is off for this Project',
@@ -181,7 +247,50 @@ export const emptyDraft = (): ScheduleDraft => ({
   session_name: '',
   daily_run_cap: 0,
   follow_ups: [],
+  action: 'spawn',
+  target_run_id: '',
+  target_kind: 'run',
+  target_cut_message_id: '',
+  target_cut_mode: '',
+  context_ceiling_pct: 0,
+  target_label: '',
+  target_backend: '',
 })
+
+/** The conversation a resume schedule is seeded from, as the callers can describe it.
+ *
+ *  `run_id` is a **history run id**, never a session id, and both call sites have to
+ *  pass one: History rows are keyed by it, and a live pane's is `agent_run_id` rather
+ *  than its own id, because a pane that rolled its conversation owns a row keyed by
+ *  the run. */
+export type ResumeSeed = {
+  run_id: string
+  label: string
+  backend: string
+  /** Pre-selects the kind. A live pane seeds "wherever it has got to"; a History row
+   *  seeds the pinned conversation, which is what the reader is looking at. */
+  kind: ScheduleTargetKind
+}
+
+/** A one-off resume of `seed`, ready for the editor.
+ *
+ *  Defaults to `once` with an empty time rather than to a cron expression: the reason
+ *  somebody reaches this from a conversation is almost always "pick this up on
+ *  Tuesday", and offering `0 3 * * *` would arm a nightly agent by accident. */
+export function resumeDraft(seed: ResumeSeed): ScheduleDraft {
+  return {
+    ...emptyDraft(),
+    label: seed.label.slice(0, 80),
+    trigger_kind: 'once',
+    cron: '0 9 * * *',
+    action: 'resume',
+    target_run_id: seed.run_id,
+    target_kind: seed.kind,
+    context_ceiling_pct: seed.kind === 'latest_of_session' ? 0.7 : 0,
+    target_label: seed.label,
+    target_backend: seed.backend,
+  }
+}
 
 export function draftFromSchedule(schedule: Schedule): ScheduleDraft {
   return {
@@ -199,6 +308,14 @@ export function draftFromSchedule(schedule: Schedule): ScheduleDraft {
     session_name: schedule.session_name,
     daily_run_cap: schedule.daily_run_cap,
     follow_ups: schedule.follow_ups.map(item => item.body),
+    action: schedule.action,
+    target_run_id: schedule.target_run_id,
+    target_kind: schedule.target_kind,
+    target_cut_message_id: schedule.target_cut_message_id,
+    target_cut_mode: schedule.target_cut_mode,
+    context_ceiling_pct: schedule.context_ceiling_pct,
+    target_label: schedule.target?.name || '',
+    target_backend: schedule.target?.backend || '',
   }
 }
 
@@ -211,18 +328,38 @@ export function localInputValue(epochSeconds: number): string {
 }
 
 export function draftToBody(draft: ScheduleDraft): Record<string, unknown> {
+  const resuming = draft.action === 'resume'
   const body: Record<string, unknown> = {
     label: draft.label.trim(),
     prompt: draft.prompt,
     trigger_kind: draft.trigger_kind,
     timezone: draft.timezone.trim(),
     catch_up: draft.catch_up,
-    overlap: draft.overlap,
-    backend: draft.backend,
-    profile_id: draft.profile_id,
+    // A conversation opens once, so a resume has no overlap policy to choose and the
+    // daemon refuses one. Sent as the only legal value rather than omitted, so a draft
+    // that was a spawn a moment ago cannot carry `allow` across the switch.
+    overlap: resuming ? 'skip' : draft.overlap,
     session_name: draft.session_name.trim(),
     daily_run_cap: draft.daily_run_cap || 0,
     follow_ups: draft.follow_ups.map(body => body.trim()).filter(Boolean),
+    action: draft.action,
+  }
+  if (resuming) {
+    // The harness, its arguments and the working directory all come from the
+    // conversation's own History row. Sending any of them is refused rather than
+    // ignored, so they are left off entirely.
+    body.target_run_id = draft.target_run_id
+    body.target_kind = draft.target_kind
+    if (draft.target_kind === 'fork_point') {
+      body.target_cut_message_id = draft.target_cut_message_id
+      body.target_cut_mode = draft.target_cut_mode || 'after'
+    }
+    body.context_ceiling_pct = draft.target_kind === 'latest_of_session'
+      ? draft.context_ceiling_pct
+      : 0
+  } else {
+    body.backend = draft.backend
+    body.profile_id = draft.profile_id
   }
   if (draft.trigger_kind === 'cron') body.cron = draft.cron.trim()
   if (draft.trigger_kind === 'interval') body.interval_seconds = Math.round(draft.interval_minutes * 60)
@@ -232,6 +369,24 @@ export function draftToBody(draft: ScheduleDraft): Record<string, unknown> {
   }
   return body
 }
+
+/** What a row does, in one phrase: the half of a schedule the cadence does not say. */
+export function actionLabel(schedule: Schedule): string {
+  if (schedule.action !== 'resume') return 'starts a new session'
+  const target = schedule.target
+  if (!target || target.missing) return 'resumes a conversation that is gone'
+  if (schedule.target_kind === 'fork_point') return `forks ${target.name || 'a conversation'}`
+  if (schedule.target_kind === 'latest_of_session') {
+    // Names where the conversation actually is, not where it was pinned. That is the
+    // one thing about a rolling target a reader cannot work out from the row.
+    return `continues ${target.resolved_name || target.name || 'a conversation'}`
+  }
+  return `resumes ${target.name || 'a conversation'}`
+}
+
+/** Whether this schedule needs a conversation to exist, and it does not. */
+export const targetIsMissing = (schedule: Schedule): boolean =>
+  schedule.action === 'resume' && !!schedule.target?.missing
 
 /** What the row says under the label: the trigger, in words. */
 export function cadenceLabel(schedule: Schedule | ScheduleDraft): string {
@@ -294,7 +449,13 @@ export function outcomeLabel(schedule: Schedule): string {
  *  train people to ignore the badge. */
 export function needsAttention(schedules: Schedule[]): Schedule[] {
   return schedules.filter(schedule =>
-    schedule.last_outcome === 'failed' || (schedule.enabled && schedule.blocked !== ''))
+    schedule.last_outcome === 'failed'
+    || (schedule.enabled && schedule.blocked !== '')
+    // An armed resume whose conversation has been deleted can never fire. It is the
+    // same class of failure as `blocked` - a row that looks armed and is inert - and
+    // it is worth badging *before* the next fire disables it, because the fire may be
+    // a week away.
+    || (schedule.enabled && targetIsMissing(schedule)))
 }
 
 /** Sort for display: armed and soonest first, then paused, then unarmed. */
