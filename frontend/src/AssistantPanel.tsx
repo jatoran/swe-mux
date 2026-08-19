@@ -20,12 +20,21 @@ export function AssistantPanel({
   clientContext,
   speak,
   voiceActive,
+  pendingSpeech = '',
 }: {
   enabled: boolean
   clientContext: () => AssistantClientContext
   /** Speak an assistant reply through the application-speech pipeline; null when read aloud is off. */
   speak: ((text: string) => Promise<void>) | null
   voiceActive: boolean
+  /**
+   * Live transcription accumulating on this device (the brainstorm hold
+   * buffer), shown as a pending user bubble so the operator watches their
+   * thinking land in the conversation itself, not only in the talk tab. It is
+   * client-local by design — the daemon sees nothing until the release cue
+   * turns it into a real turn, which replaces this bubble with the message.
+   */
+  pendingSpeech?: string
 }) {
   const [dialogId, setDialogId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AssistantMessage[]>([])
@@ -110,7 +119,7 @@ export function AssistantPanel({
   useLayoutEffect(() => {
     const element = logRef.current
     if (element) element.scrollTop = element.scrollHeight
-  }, [messages, actions, thinking])
+  }, [messages, actions, thinking, pendingSpeech])
 
   const submit = async () => {
     const text = input.trim()
@@ -150,6 +159,10 @@ export function AssistantPanel({
         <header>{message.role === 'user' ? 'you' : 'mux'}</header>
         <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
       </article>)}
+      {pendingSpeech.trim() && <article class="assistant-message user assistant-pending-speech">
+        <header>you · holding — say “go ahead” to send</header>
+        <p>{pendingSpeech}</p>
+      </article>}
       {thinking && <p class="assistant-thinking">{thinking}</p>}
       {openActions.map(action => <AssistantActionCard key={action.id} action={action} />)}
     </div>

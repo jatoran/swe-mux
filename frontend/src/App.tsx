@@ -2345,6 +2345,7 @@ export function App() {
     clientContext={assistantClientContext}
     speak={voiceStatus?.enabled?speakAssistantReply:null}
     voiceActive={conversation.phase!=='off'}
+    pendingSpeech={conversation.hold?conversation.holdBuffer:''}
   />
 
   // Sessions on screen right now (visible pane of the displayed project). Being
