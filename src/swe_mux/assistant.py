@@ -42,7 +42,10 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from .config import Config
 from .event_bus import EventBus
+from .leaf_names import suggest_folder_name, validate_leaf_name
 from .openrouter import OpenRouterClient, OpenRouterError
+from .path_identity import same_path
+from .projects import RESERVED_PROJECT_FOLDER_NAMES
 from .session_titles import generated_titles, record_display_name, record_run_id
 from .sqlite_store import (
     connect_or_quarantine,
@@ -54,7 +57,7 @@ from .voice import speechify
 
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
-    from .project import ProjectManager
+    from .projects import ProjectManager
     from .prompt_queue import PromptQueueService
     from .session import Session, SessionManager
 
@@ -96,7 +99,9 @@ SYSTEM_PRIMER = """You are Mux, the operator's assistant inside swe-mux, a fleet
 coding-agent terminal sessions (Claude Code, Codex, and others) organized into Projects.
 You operate the workspace; you never write code and never run shell commands. When the \
 operator asks for code work, route it: offer to queue a message to an existing session or \
-spawn a new one.
+spawn a new one. When the work belongs in a project that does not exist yet, create_project \
+makes and registers a new folder (inside the operator's configured location) and \
+spawn_session can then start an agent in it.
 
 Speak the short-response protocol: answer first, one or two plain sentences, detail only on \
 request. No markdown, no bullet lists, no file paths unless essential. At most one \
@@ -461,6 +466,7 @@ class AssistantService:
         note_edit: Callable[
             [str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]
         ] | None = None,
+        create_project_op: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -478,6 +484,7 @@ class AssistantService:
         self.note_list = note_list
         self.note_edit = note_edit
         self.note_append = note_append
+        self.create_project_op = create_project_op
         self.diagnostic: str | None = None
         # One turn at a time per dialog; concurrent turns would interleave the
         # message log and race the pending-action state.
@@ -881,6 +888,32 @@ class AssistantService:
                 ["session", "text"],
             ),
             tool(
+                "create_project",
+                "Create a brand-new project: makes one new folder (named from `name`) "
+                "inside the operator's configured new-project location, then registers "
+                "it. Use before spawn_session when the operator wants work in a project "
+                "that does not exist yet. Setup commands never run here. Reversible; "
+                "may need confirmation. Fails with guidance when no new-project "
+                "location is configured.",
+                {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "The project's name; the folder name is derived from it "
+                            "deterministically (spaces become hyphens)"
+                        ),
+                    },
+                    "git": {
+                        "type": "boolean",
+                        "description": (
+                            "Also initialize an empty git repository (no commits are "
+                            "made). Recommended when coding sessions will work there."
+                        ),
+                    },
+                },
+                ["name"],
+            ),
+            tool(
                 "spawn_session",
                 "Start a new agent session in a project, optionally with a seed prompt.",
                 {
@@ -954,9 +987,13 @@ class AssistantService:
             return ACTION_CLASS_NAVIGATION
         # Typing unsent text is reversible on its face (the operator can clear
         # the composer, and nothing is delivered); submitting the composer is a
-        # send and falls through to the consequential floor below.
+        # send and falls through to the consequential floor below. Creating a
+        # project is reversible the same way spawning a session is: removal is a
+        # registration tombstone that deletes nothing on disk, and the folder the
+        # tool minted inside the configured parent is empty.
         if kind in {
             "append_project_note", "edit_project_note", "spawn_session", "type_into_session",
+            "create_project",
         }:
             return ACTION_CLASS_REVERSIBLE
         if kind == "send_to_session":
@@ -977,6 +1014,22 @@ class AssistantService:
         if kind == "spawn_session":
             backend = str(arguments.get("backend") or "default harness")
             return f"spawn a {backend} session in {target}{preview}"
+        if kind == "create_project":
+            # The absolute path is the whole point of this card: the operator
+            # confirms exactly what lands on disk, not a name they must resolve.
+            name = str(arguments.get("name") or "")
+            root = str(arguments.get("root") or "")
+            where = f" at {root}" if root else ""
+            git_note = (
+                " and initialize an empty git repository" if arguments.get("git") else ""
+            )
+            revive = ""
+            if arguments.get("restores"):
+                revive = (
+                    f' (restores the removed project "{arguments["restores"]}" with '
+                    "its history and settings)"
+                )
+            return f'create the new project "{name}"{where}{git_note}{revive}'
         if kind == "append_project_note":
             return f"append to the {target} project note:{preview}"
         if kind == "edit_project_note":
@@ -1196,6 +1249,10 @@ class AssistantService:
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
             arguments["project"] = project.name
+        if kind == "create_project":
+            refusal = await self._preflight_create_project(arguments)
+            if refusal is not None:
+                return refusal
         if kind == "edit_project_note":
             action = str(arguments.get("action") or "")
             if action not in NOTE_EDIT_ACTIONS:
@@ -1211,6 +1268,75 @@ class AssistantService:
             "send_to_session", "append_project_note", "type_into_session",
         } and not str(text or "").strip():
             return {"error": "text must not be empty"}
+        return None
+
+    async def _preflight_create_project(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Resolve a spoken name to the exact folder that would be created.
+
+        Everything that can be answered before a card pends is answered here: the
+        parent comes from configuration only (the model never supplies a path, so
+        this tool cannot create a folder anywhere else on disk), the folder leaf
+        is the deterministic normalization of the name, and the absolute result is
+        stamped into the arguments so the restatement the operator confirms shows
+        exactly what lands on disk - including whether it revives a tombstoned
+        project's identity.
+        """
+        # These two are preflight-owned outputs, never model inputs: a stray
+        # "root" cannot smuggle a path past the name-only contract, and a stray
+        # "restores" cannot make the card claim a revival that is not real.
+        arguments.pop("root", None)
+        arguments.pop("restores", None)
+        name = str(arguments.get("name") or "").strip()
+        if not name:
+            return {"error": "the project needs a name"}
+        parent_setting = str(self.config.new_project_parent or "").strip()
+        if not parent_setting:
+            return {
+                "error": "no new-project location is configured; ask the operator to "
+                "set Settings → Projects → New project location first"
+            }
+        parent = Path(parent_setting).expanduser()
+        if not parent.is_dir():
+            return {
+                "error": f"the configured new-project location does not exist: {parent}"
+                " - ask the operator to fix Settings → Projects → New project location"
+            }
+        folder = suggest_folder_name(name)
+        try:
+            validate_leaf_name(
+                folder,
+                label="project folder name",
+                reserved_names=RESERVED_PROJECT_FOLDER_NAMES,
+            )
+        except ValueError as exc:
+            return {"error": f'"{name}" does not make a usable folder name: {exc}'}
+        target = (parent / folder).resolve()
+        for record in self.projects.projects.values():
+            if same_path(record.root, target):
+                return {
+                    "error": f'that folder is already registered as the project '
+                    f'"{record.name}"'
+                }
+        try:
+            if target.exists():
+                if not target.is_dir():
+                    return {"error": f"{target} already exists and is not a folder"}
+                if any(target.iterdir()):
+                    # Adopting existing work from a chat message is the add-existing
+                    # flow's job, where a human is looking at the folder.
+                    return {
+                        "error": f"{target} already exists and is not empty; register "
+                        "it with the Add project dialog instead"
+                    }
+        except OSError as exc:
+            return {"error": f"cannot inspect {target}: {exc}"}
+        arguments["name"] = name
+        arguments["root"] = str(target)
+        removed = await self.projects.history.removed_project_for_root(str(target))
+        if removed is not None:
+            arguments["restores"] = removed.name
         return None
 
     async def _execute_mutation_row(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -1304,6 +1430,13 @@ class AssistantService:
                 body["seed_text"] = seed
             session = await self.spawn_op(body)
             return {"spawned": True, "session": session.record.name}
+        if kind == "create_project":
+            if self.create_project_op is None:
+                raise AssistantError("project creation is not wired on this daemon")
+            # The op re-registers through the ordinary registration path; the
+            # arguments carry the preflight-resolved absolute root, so what
+            # executes is exactly what the confirmed card restated.
+            return await self.create_project_op(dict(arguments))
         if kind == "interrupt_session":
             session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
@@ -1747,7 +1880,7 @@ class AssistantService:
                     "read_project_note", "list_project_notes", "list_queue",
                     "append_project_note", "edit_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
-                    "type_into_session", "submit_session_composer",
+                    "type_into_session", "submit_session_composer", "create_project",
                 }
                 if name in known:
                     try:

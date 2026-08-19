@@ -10,11 +10,17 @@ from pathlib import Path
 from .harness import is_agent_harness
 from .history import HistoryIndex
 from .layouts import normalize_layout
+from .leaf_names import validate_leaf_name
 from .models import ProjectGroupRecord, ProjectRecord
 from .path_identity import same_path
 from .project_files import DEFAULT_NOTE_STORAGE_ID, note_header
 
 log = logging.getLogger(__name__)
+
+# A brand-new project folder must not be named after a control directory: `.git`
+# would make the parent's repository state ambiguous and `.swe-mux` is the
+# project-resource control directory itself.
+RESERVED_PROJECT_FOLDER_NAMES = frozenset({".git", ".swe-mux"})
 
 
 class ProjectRegistrationResult:
@@ -39,6 +45,13 @@ def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
             raise ValueError(f"cannot create a project folder at a filesystem root: {root}")
         if not parent.is_dir():
             raise ValueError(f"parent folder does not exist: {parent}")
+        # Server-side, so every create path is covered: the dialog suggests a safe
+        # leaf but its Folder field is free text, and the assistant path has no
+        # dialog at all. Adopting a folder that already exists skips this - it is
+        # on disk under whatever name it has.
+        validate_leaf_name(
+            root.name, label="project folder name", reserved_names=RESERVED_PROJECT_FOLDER_NAMES
+        )
         root.mkdir()
     if not root.exists():
         raise ValueError(f"project folder does not exist: {root}")

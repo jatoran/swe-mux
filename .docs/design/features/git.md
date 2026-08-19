@@ -204,6 +204,7 @@ uncommitted work together.
 - The branch is named `main` unless the host sets `init.defaultBranch`, in which case Git's own configured answer stands.
 - The daemon re-resolves the folder's repository state inside the request rather than trusting what the client last read, and refuses an already-tracked folder with `already_initialized`.
 - Success emits `git_changed` for the Project, so every other client re-reads rather than holding the pre-init view.
+- The assistant's `create_project` tool may chain this initialization for a brand-new project folder (`assistant.md`); the contract is unchanged there - nothing staged, no commit.
 
 ### Reaching a session from the repository
 

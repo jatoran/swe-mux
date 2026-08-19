@@ -74,6 +74,10 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Terminals', setting: 'claude_max_columns',
     label: 'Claude width limit', where: 'Settings → Terminals',
   },
+  'projects.newProjectParent': {
+    surface: 'settings', section: 'Projects', setting: 'new_project_parent',
+    label: 'Default parent folder for new projects', where: 'Settings → Projects',
+  },
   'schedules.install': {
     surface: 'settings', section: 'Automation', setting: 'scheduled_runs_enabled',
     label: 'Let schedules start sessions', where: 'Settings → Automation',

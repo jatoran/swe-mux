@@ -164,6 +164,10 @@ Project creation rejects duplicate active canonical roots and an empty root, and
 `.swe-mux/`. `create_missing` makes exactly one folder: the parent must already exist, an
 already-present folder is accepted, and the duplicate/group checks run first so a rejected
 request leaves no stray directory.
+The new folder's leaf is validated server-side under the same Windows-safe rules as
+`POST /resources` (invalid/reserved names and the `.git`/`.swe-mux` control directories
+refused), because the dialog's folder field is free text and the assistant's create_project
+tool has no dialog at all; adopting a folder that already exists skips the leaf check.
 When the canonical root belongs to a removed Project, creation restores the original Project ID and responds with HTTP 200 plus `restored=true`; a new identity responds with HTTP 201 and `restored=false`.
 Project removal tombstones the registration, preserves History and disk contents, and returns the number of preserved history rows.
 Only live sessions block removal; the HTTP 409 response carries `code=project_has_live_sessions` and a bounded identity list.

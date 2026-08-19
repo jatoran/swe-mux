@@ -1584,6 +1584,78 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     async def _assistant_history_search(*, query: str, limit: int) -> dict[str, Any]:
         return await history.history_page(query=query, search_scope="all", limit=limit)
 
+    async def _assistant_create_project(arguments: dict[str, Any]) -> dict[str, Any]:
+        """The assistant's create_project execution: the ordinary registration path.
+
+        The preflight already resolved the absolute root inside the configured
+        new-project parent, so this only registers (creating the one missing
+        folder) and emits the same events the HTTP create path does. The optional
+        git init reuses the one-time repository initialization and keeps its
+        contract: nothing is staged and no commit is made. A git failure never
+        unwinds the registration - the same rule Project setup commands follow.
+        """
+        name = str(arguments.get("name") or "")
+        root = str(arguments.get("root") or "")
+        registration = await projects.register(name, root, create_missing=True)
+        project = registration.project
+        log.info(
+            "assistant_project_created project_id=%s root=%s restored=%s git_requested=%s",
+            project.id,
+            project.root,
+            registration.restored,
+            bool(arguments.get("git")),
+        )
+        await events.emit(
+            "project_restored" if registration.restored else "project_created",
+            source="assistant",
+            project_id=project.id,
+            root=project.root,
+        )
+        result: dict[str, Any] = {
+            "created": True,
+            "project": project.name,
+            "root": project.root,
+            "restored": registration.restored,
+            "note": "created without setup commands; the operator can run them from "
+            "the project's Run menu",
+        }
+        if arguments.get("git"):
+            operation_id = uuid4().hex
+            try:
+                await git_review.repository_identity(project.root)
+            except git_review.GitReviewError as exc:
+                if exc.code != "not_git_repository":
+                    result["git"] = f"not initialized: {exc}"
+                else:
+                    log.info(
+                        "repository_init_started operation_id=%s project_id=%s root=%s "
+                        "trigger=assistant",
+                        operation_id,
+                        project.id,
+                        project.root,
+                    )
+                    try:
+                        init = await git_init.initialize_repository(
+                            project.root, operation_id=operation_id
+                        )
+                    except git_init.RepositoryInitError as init_error:
+                        log.warning(
+                            "repository_init_failed operation_id=%s project_id=%s root=%s",
+                            operation_id,
+                            project.id,
+                            project.root,
+                        )
+                        result["git"] = f"failed: {init_error}"
+                    else:
+                        await events.emit("git_changed", project_id=project.id)
+                        result["git"] = (
+                            f"initialized an empty repository on branch {init.branch}; "
+                            "no commits were made"
+                        )
+            else:
+                result["git"] = "the folder is already inside a git repository"
+        return result
+
     assistant = AssistantService(
         config,
         events,
@@ -1601,6 +1673,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         note_append=_assistant_note_append,
         note_list=_assistant_note_list,
         note_edit=_assistant_note_edit,
+        create_project_op=_assistant_create_project,
     )
     app["assistant"] = assistant
     app["assistant_store"] = assistant_store

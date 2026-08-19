@@ -45,10 +45,41 @@ export function joinPath(parent:string, name:string):string {
 // silently collapse into the same folder.
 export function suggestFolderName(name:string):string {
   return name.trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g,'-')
+    .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g,'-')
     .replace(/\s+/g,'-')
     .replace(/-{2,}/g,'-')
     .replace(/^[-.]+|[-. ]+$/g,'')
+}
+
+export function parentPath(path:string):string {
+  const trimmed=path.trim().replace(/[\\/]+$/,'')
+  const index=Math.max(trimmed.lastIndexOf('\\'),trimmed.lastIndexOf('/'))
+  if(index<=0)return ''
+  const parent=trimmed.slice(0,index)
+  // A drive-letter parent keeps its separator: `D:` alone is a relative path.
+  return /^[A-Za-z]:$/.test(parent)?`${parent}\\`:parent
+}
+
+/**
+ * The parent directory holding the most registered project roots — the Settings
+ * placeholder for the assistant's new-project location. Case-insensitive count
+ * (Windows is the primary platform); ties keep the first-seen spelling.
+ */
+export function commonestParent(roots:string[]):string {
+  const counts=new Map<string,{count:number;value:string}>()
+  for(const root of roots){
+    const parent=parentPath(root)
+    if(!parent)continue
+    const key=parent.toLowerCase()
+    const entry=counts.get(key)
+    if(entry)entry.count+=1
+    else counts.set(key,{count:1,value:parent})
+  }
+  let best='',bestCount=0
+  for(const {count,value} of counts.values()){
+    if(count>bestCount){best=value;bestCount=count}
+  }
+  return best
 }
 
 export function projectCreateFolder(draft:ProjectCreateDraft):string {

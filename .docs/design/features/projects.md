@@ -153,6 +153,14 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   an error rather than a silently materialized tree, and the duplicate-root and group checks run
   before anything is created. Two dialogs were rejected because each would need its own copy of
   the setup-command list below.
+  The new folder's leaf is validated server-side under the shared Windows-safe leaf rules
+  (`leaf_names.py`), because the dialog's folder field is free text and not every create path
+  has a dialog; adopting an existing folder skips the leaf check.
+- The Mux assistant's `create_project` tool is a second entry point into the same create flow,
+  constrained to name-only: the folder leaf is derived from the spoken name and the parent is
+  always the configured `new_project_parent` (Settings → Projects), never a model-supplied
+  path. Empty disables it and the tool's refusal names the setting; the dialog is unaffected
+  and may name any parent. Details and the trust classification: `assistant.md`.
 - Removing a Project from swe-mux is a registration operation, not filesystem deletion.
   It requires every live session to be closed, removes the Project from the active registry, and never deletes or recreates the canonical folder or `.swe-mux/` content.
   Historical conversations, device settings, layout, name, and canonical root remain attached to a tombstoned Project identity in SQLite.

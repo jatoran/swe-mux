@@ -647,6 +647,30 @@ def test_worktree_root_defaults_below_data_dir_and_accepts_an_absolute_override(
         update_config(config, {"worktree_root": "relative/worktrees"})
 
 
+def test_new_project_parent_is_hot_shape_validated_and_defaults_empty(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.new_project_parent == ""
+
+    parent = (tmp_path / "projects-home").resolve()
+    hot, restart = update_config(config, {"new_project_parent": str(parent)})
+    assert hot == {"new_project_parent"}
+    assert restart == set()
+    assert load_config(path).new_project_parent == str(parent)
+
+    # Empty disables assistant project creation; it is always a valid value.
+    update_config(config, {"new_project_parent": ""})
+    assert config.new_project_parent == ""
+
+    with pytest.raises(ValueError, match="absolute directory"):
+        update_config(config, {"new_project_parent": "relative/projects"})
+    with pytest.raises(ValueError, match="filesystem root"):
+        update_config(config, {"new_project_parent": str(Path(tmp_path.anchor))})
+    # Shape only, deliberately: existence is checked at use time so a directory
+    # deleted while the daemon is down cannot stop the config from loading.
+    update_config(config, {"new_project_parent": str(tmp_path / "not-created-yet")})
+
+
 def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)
