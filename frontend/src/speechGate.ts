@@ -86,6 +86,13 @@ export class SpeechGate {
   private speech = 0
   private total = 0
   private speculated = false
+  /**
+   * Latched by the endpoint: an ended utterance never re-announces. The capture
+   * layer replaces the gate the moment an endpoint fires, so live frames never
+   * reach an ended gate — but a class that would scream `endpoint` once per
+   * silent frame if they did is a footgun for every other caller and test.
+   */
+  private ended = false
 
   constructor(config: GateConfig, extraTail?: () => number) {
     this.config = config
@@ -101,6 +108,7 @@ export class SpeechGate {
 
   push(probability: number): GateEvent[] {
     const events: GateEvent[] = []
+    if (this.ended) return events
     if (!this.active) {
       if (probability < this.config.speechThreshold) return events
       this.active = true
@@ -126,11 +134,13 @@ export class SpeechGate {
       this.silence += VAD_FRAME_MS
     }
     if (this.total >= this.config.maxUtteranceMs) {
+      this.ended = true
       events.push({ type: 'endpoint', reason: 'cap' })
       return events
     }
     if (this.speech < this.config.minSpeechMs) return events
     if (this.silence >= Math.max(this.config.endpointSilenceMs, this.extraTail?.() || 0)) {
+      this.ended = true
       events.push({ type: 'endpoint', reason: 'silence' })
       return events
     }
@@ -151,5 +161,6 @@ export class SpeechGate {
     this.speech = 0
     this.total = 0
     this.speculated = false
+    this.ended = false
   }
 }

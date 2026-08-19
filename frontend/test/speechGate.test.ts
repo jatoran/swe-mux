@@ -62,9 +62,13 @@ test('extra tail patience delays the endpoint but never the speculation', () => 
   const gate = new SpeechGate(SILERO_GATE, () => patience)
   assert.deepEqual(kinds(feed(gate, 0.9, frames(SILERO_GATE.minSpeechMs) + 1)), ['speech-start'])
   assert.deepEqual(kinds(feed(gate, 0.05, frames(SILERO_GATE.speculativeSilenceMs))), ['speculate'])
-  // The default endpoint passes with no event; the patient one fires on time.
+  // The default endpoint passes with no event; the patient one fires on time —
+  // and exactly once: the gate latches after its endpoint, so silence past it
+  // never re-announces (the capture layer replaces the gate anyway, but a class
+  // that would scream once per frame is a footgun for every other caller).
   assert.deepEqual(kinds(feed(gate, 0.05, frames(SILERO_GATE.endpointSilenceMs))), [])
   assert.deepEqual(kinds(feed(gate, 0.05, frames(1200) + 1)), ['endpoint'])
+  assert.deepEqual(kinds(feed(gate, 0.05, 20)), [])
   // Consulted per frame: dropping the patience takes effect immediately.
   patience = 0
   const fast = new SpeechGate(SILERO_GATE, () => patience)
