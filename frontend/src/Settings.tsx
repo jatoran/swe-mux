@@ -117,6 +117,7 @@ type Config = {
   phase7_observers_enabled:boolean
   tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
   tts_engine:'sapi'|'kokoro';tts_kokoro_voice:string;tts_kokoro_speed:number
+  tts_lexicon:Record<string,string>
   tts_sapi_voice:string;tts_sapi_rate:number
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
   tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
@@ -136,6 +137,7 @@ type VoiceStatusInfo = {
   summary_model:string;spend_today:{tokens:number;cost_usd:number};daily_budget_usd:number
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
   kokoro_model?:KokoroModelInfo;kokoro_voice?:string
+  spelled_words?:{word:string;count:number;first_seen:number;last_seen:number}[]
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
@@ -805,6 +807,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         Object.entries(harnessArgs).map(([name,text])=>[name,parseCommandLine(text)]),
       ),
       project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns),
+      // A row mid-edit can hold an empty respelling; the daemon rejects those,
+      // so an unfinished row is dropped rather than blocking the whole save.
+      tts_lexicon:Object.fromEntries(Object.entries(draft.tts_lexicon||{})
+        .map(([word,spoken])=>[word.trim().toLowerCase(),spoken.trim()])
+        .filter(([word,spoken])=>word&&spoken)),
     }
     setStatus('saving…')
     const body: Record<string,unknown> = {_revision:config.revision}
@@ -1486,6 +1493,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               onSelect={voice=>change('tts_kokoro_voice',voice)}
             />
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
+            <h4>Pronunciation</h4>
+            <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Words it recently had to spell appear below with a one-tap fix.</p>
+            <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
           </>}
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
           <h3>Spoken summary</h3>
@@ -1853,5 +1863,49 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
       {status==='error'&&model?.error&&` · ${model.error}`}
     </p>
     {status!=='ready'&&status!=='downloading'&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':'Download Kokoro voices (~106 MB)'}</button>}
+  </div>
+}
+
+/**
+ * The user half of the Kokoro repair ladder: a word→respelling map merged over
+ * the built-in project lexicon, plus the telemetry list of words the ladder had
+ * to spell out letter by letter. Respelling one of those writes a lexicon entry
+ * into the draft; Save commits it and the daemon hot-applies (the engine's
+ * per-word cache and the audition previews are invalidated server-side).
+ */
+function TtsLexiconEditor({lexicon,spelled,onChange}:{
+  lexicon:Record<string,string>
+  spelled:{word:string;count:number;last_seen:number}[]
+  onChange:(next:Record<string,string>)=>void
+}){
+  const [newWord,setNewWord]=useState('')
+  const [newSpoken,setNewSpoken]=useState('')
+  const [respell,setRespell]=useState<Record<string,string>>({})
+  const add=(word:string,spoken:string)=>{
+    const key=word.trim().toLowerCase();const value=spoken.trim()
+    if(!key||!value)return
+    onChange({...lexicon,[key]:value})
+  }
+  const entries=Object.entries(lexicon).sort(([a],[b])=>a.localeCompare(b))
+  const pending=spelled.filter(item=>!(item.word in lexicon))
+  return <div class="tts-lexicon">
+    {entries.map(([word,spoken])=><div class="tts-lexicon-row" key={word}>
+      <code>{word}</code>
+      <input aria-label={`Pronunciation for ${word}`} value={spoken} onInput={e=>onChange({...lexicon,[word]:e.currentTarget.value})}/>
+      <button type="button" title={`Remove ${word}`} onClick={()=>{const next={...lexicon};delete next[word];onChange(next)}}>✕</button>
+    </div>)}
+    <div class="tts-lexicon-row">
+      <input placeholder="word" aria-label="New lexicon word" value={newWord} onInput={e=>setNewWord(e.currentTarget.value)}/>
+      <input placeholder="spoken as… e.g. vault spaces" aria-label="New lexicon pronunciation" value={newSpoken} onInput={e=>setNewSpoken(e.currentTarget.value)}/>
+      <button type="button" disabled={!newWord.trim()||!newSpoken.trim()} onClick={()=>{add(newWord,newSpoken);setNewWord('');setNewSpoken('')}}>Add</button>
+    </div>
+    {!!pending.length&&<div class="tts-lexicon-spelled">
+      <h5>Words the voice had to spell out</h5>
+      {pending.map(item=><div class="tts-lexicon-row" key={item.word}>
+        <code>{item.word}</code><small>×{item.count}</small>
+        <input placeholder="spoken as…" aria-label={`Respell ${item.word}`} value={respell[item.word]??''} onInput={e=>{const value=e.currentTarget.value;setRespell(current=>({...current,[item.word]:value}))}}/>
+        <button type="button" disabled={!(respell[item.word]||'').trim()} onClick={()=>add(item.word,respell[item.word]||'')}>Respell</button>
+      </div>)}
+    </div>}
   </div>
 }

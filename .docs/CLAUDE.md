@@ -225,6 +225,9 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   (`speechify`, no LLM) → OS-voice (SAPI) or local Kokoro-82M (onnxruntime; pinned
   hash-verified download, espeak-free misaki G2P) WAV clips in `<data_dir>/voice/` +
   `voice_clips` SQLite.
+  Words the Kokoro repair ladder can only spell out letter by letter are fixable with a
+  `tts_lexicon` respelling (Settings → Voice; hot-applied), and each spell-out is recorded
+  durably (`spelled_words.json`, surfaced by `GET /api/voice`) with a one-tap respell there.
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.

@@ -19,10 +19,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
 import re
 import struct
 import threading
+import time
 import wave
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -122,6 +125,93 @@ def spell_out(word: str) -> str:
     return " ".join(names) or word
 
 
+class SpelledWordLog:
+    """Durable, bounded, deduplicated record of words the ladder had to spell.
+
+    A spelled word is the ladder admitting defeat, and the operator can fix each
+    one with a single lexicon entry — but only if they can see which words hit
+    the floor. Entries key on the casefolded word and carry occurrence counts
+    and timestamps; the JSON file survives daemon restarts, and the cap keeps a
+    pathological text from growing it without bound. Thread-safe, because the
+    engine reports from the synthesis worker thread.
+    """
+
+    CAP = 200
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._entries: dict[str, dict[str, Any]] | None = None
+
+    def _load(self) -> dict[str, dict[str, Any]]:
+        if self._entries is None:
+            entries: dict[str, dict[str, Any]] = {}
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    for word, item in raw.items():
+                        if isinstance(word, str) and isinstance(item, dict):
+                            entries[word] = {
+                                "count": max(1, int(item.get("count", 1))),
+                                "first_seen": float(item.get("first_seen", 0.0)),
+                                "last_seen": float(item.get("last_seen", 0.0)),
+                            }
+            except (OSError, ValueError, TypeError):
+                # A missing or corrupt file starts the log over; telemetry must
+                # never be able to break synthesis.
+                entries = {}
+            self._entries = entries
+        return self._entries
+
+    def _write(self, entries: dict[str, dict[str, Any]]) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(entries), encoding="utf-8")
+            os.replace(temporary, self.path)
+        except OSError:
+            log.warning("could not persist the spelled-word log", exc_info=True)
+
+    def record(self, word: str) -> None:
+        key = word.strip().casefold()
+        if not key or len(key) > 60:
+            return
+        now = time.time()
+        with self._lock:
+            entries = self._load()
+            entry = entries.get(key)
+            if entry is not None:
+                entry["count"] += 1
+                entry["last_seen"] = now
+            else:
+                entries[key] = {"count": 1, "first_seen": now, "last_seen": now}
+                while len(entries) > self.CAP:
+                    oldest = min(entries, key=lambda item: entries[item]["last_seen"])
+                    del entries[oldest]
+            self._write(entries)
+
+    def discard(self, words: Iterable[str]) -> None:
+        """Drop entries the lexicon now covers; a fixed word is no longer debt."""
+        keys = {str(word).strip().casefold() for word in words}
+        with self._lock:
+            entries = self._load()
+            removed = [word for word in entries if word in keys]
+            for word in removed:
+                del entries[word]
+            if removed:
+                self._write(entries)
+
+    def entries(self) -> list[dict[str, Any]]:
+        with self._lock:
+            loaded = self._load()
+            return [
+                {"word": word, **item}
+                for word, item in sorted(
+                    loaded.items(), key=lambda pair: pair[1]["last_seen"], reverse=True
+                )
+            ]
+
+
 @dataclass(frozen=True)
 class KokoroPaths:
     model: Path
@@ -140,7 +230,13 @@ class KokoroEngine:
     because its spaCy pipeline is not documented reentrant.
     """
 
-    def __init__(self, paths: KokoroPaths) -> None:
+    def __init__(
+        self,
+        paths: KokoroPaths,
+        *,
+        lexicon: dict[str, str] | None = None,
+        on_spell_out: Callable[[str], None] | None = None,
+    ) -> None:
         assert_espeak_free()
         self.paths = paths
         self._lock = threading.Lock()
@@ -148,7 +244,33 @@ class KokoroEngine:
         self._session: Any = None
         self._vocab: dict[str, int] = {}
         self._voices: dict[str, Any] = {}
-        self._word_cache: dict[str, str] = {}
+        # Reported once per spoken occurrence of a word whose final resolution
+        # involved the spelling floor — the telemetry half of the repair ladder.
+        self._on_spell_out = on_spell_out
+        self._lexicon: dict[str, str] = dict(PROJECT_LEXICON)
+        self._word_cache: dict[str, tuple[str, bool]] = {}
+        if lexicon:
+            self.set_lexicon(lexicon)
+
+    def set_lexicon(self, lexicon: dict[str, str]) -> None:
+        """Merge user respellings over the project lexicon; invalidate resolutions.
+
+        Both maps are *rebound*, never mutated in place: a synthesis run on the
+        worker thread may be mid-resolution, and rebinding lets it finish against
+        the dicts it started with while every later lookup sees the new ones.
+        The lexicon rebinds first — `_resolve_word` snapshots the cache before
+        the lexicon, so a snapshot holding the new cache has by construction
+        already seen the new lexicon, and a result computed from the old lexicon
+        can only land in the discarded old cache.
+        """
+        merged = dict(PROJECT_LEXICON)
+        for word, spoken in lexicon.items():
+            key = str(word).strip().casefold()
+            replacement = str(spoken).strip()
+            if key and replacement:
+                merged[key] = replacement
+        self._lexicon = merged
+        self._word_cache = {}
 
     # ---- loading ----------------------------------------------------------
 
@@ -230,39 +352,68 @@ class KokoroEngine:
         phonemes, _tokens = self._ensure_g2p()(word)
         return UNKNOWN_TOKEN not in phonemes
 
-    def _resolve_word(self, word: str, depth: int = 0) -> str:
+    def _resolve_word(self, word: str) -> str:
+        # Snapshot order matters against set_lexicon's rebind order; see there.
+        cache = self._word_cache
+        lexicon = self._lexicon
+        result, spelled = self._resolve_word_inner(word, 0, cache, lexicon)
+        if spelled and self._on_spell_out is not None:
+            try:
+                self._on_spell_out(word)
+            except Exception:  # noqa: BLE001 - telemetry must never break speech
+                log.warning("spell-out reporter failed for %r", word, exc_info=True)
+        return result
+
+    def _resolve_word_inner(
+        self,
+        word: str,
+        depth: int,
+        cache: dict[str, tuple[str, bool]],
+        lexicon: dict[str, str],
+    ) -> tuple[str, bool]:
         """The repair ladder: lexicon, compound split, then spell it out.
 
         Every replacement is re-verified and repaired recursively, because a
         lexicon respelling can itself contain a token the lexicon-only G2P does
         not know — the audit's own "pyproject" produced "py", which is exactly
         such a token. Spelling is the bounded floor the recursion lands on.
+        The returned flag says whether that floor was part of the final result,
+        so `_resolve_word` can report the top-level word — the token an operator
+        would actually add to the lexicon — rather than a synthetic fragment.
         """
-        cached = self._word_cache.get(word)
+        cached = cache.get(word)
         if cached is not None:
             return cached
-        result = word
+        result, spelled = word, False
         if not self._word_resolves(word):
             if depth >= 3:
-                result = spell_out(word)
+                result, spelled = spell_out(word), True
             else:
-                replacement = PROJECT_LEXICON.get(word.casefold())
+                replacement = lexicon.get(word.casefold())
                 if replacement is None:
                     pieces = split_compound(word)
                     replacement = " ".join(pieces) if len(pieces) > 1 else None
                 if replacement is not None:
-                    result = " ".join(
-                        self._resolve_word(piece, depth + 1) if piece != word else spell_out(piece)
-                        for piece in replacement.split()
-                    )
+                    resolved: list[str] = []
+                    for piece in replacement.split():
+                        if piece == word:
+                            resolved.append(spell_out(piece))
+                            spelled = True
+                        else:
+                            piece_result, piece_spelled = self._resolve_word_inner(
+                                piece, depth + 1, cache, lexicon
+                            )
+                            resolved.append(piece_result)
+                            spelled = spelled or piece_spelled
+                    result = " ".join(resolved)
                 else:
-                    result = spell_out(word)
+                    result, spelled = spell_out(word), True
                 if not self._word_resolves(result):
-                    result = spell_out(word)
-        if len(self._word_cache) > 4096:
-            self._word_cache.clear()
-        self._word_cache[word] = result
-        return result
+                    result, spelled = spell_out(word), True
+        if len(cache) > 4096:
+            cache.clear()
+        cache[word] = (result, spelled)
+        return result, spelled
 
     def prepare_text(self, text: str) -> str:
         """Rewrite any word the lexicon-only G2P cannot resolve.

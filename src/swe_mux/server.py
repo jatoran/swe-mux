@@ -2131,6 +2131,16 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
         # Owns its own side effects: disabling drops the ring, and turning
         # persistence off deletes the rows already written.
         clipboard.apply_config(config)
+    voice: VoiceService | None = app.get("voice")
+    if voice:
+        if "tts_lexicon" in changed:
+            # Rebuilds the engine's merged lexicon and drops the per-word and
+            # preview caches — without this the change silently waits for a
+            # daemon restart.
+            voice.apply_lexicon()
+        elif "tts_kokoro_speed" in changed:
+            # Audition previews cache per voice at synthesis-time speed.
+            voice.invalidate_kokoro_previews()
     telemetry: OperationalTelemetryStore | None = app.get("telemetry")
     if telemetry and "operational_telemetry_retention_days" in changed:
         telemetry.retention_days = config.operational_telemetry_retention_days

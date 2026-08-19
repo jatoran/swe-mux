@@ -16,6 +16,7 @@ from swe_mux.kokoro_tts import (
     KokoroEngine,
     KokoroError,
     KokoroPaths,
+    SpelledWordLog,
     assert_espeak_free,
     spell_out,
     split_compound,
@@ -29,13 +30,14 @@ from swe_mux.voice_models import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def make_engine(tmp_path: Path) -> KokoroEngine:
+def make_engine(tmp_path: Path, **kwargs: Any) -> KokoroEngine:
     return KokoroEngine(
         KokoroPaths(
             model=tmp_path / "model.onnx",
             tokenizer=tmp_path / "tokenizer.json",
             voices_dir=tmp_path / "voices",
-        )
+        ),
+        **kwargs,
     )
 
 
@@ -90,6 +92,89 @@ def test_prepare_text_leaves_resolvable_text_untouched(tmp_path: Path) -> None:
     engine._g2p = FakeG2P()
     text = "The work tree is clean."
     assert engine.prepare_text(text) == text
+
+
+def test_user_lexicon_overrides_the_spelling_floor_and_hot_swaps(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._g2p = FakeG2P()
+    # Without an entry the unknown word hits the spelling floor.
+    assert engine.prepare_text("vaultspaces") == spell_out("vaultspaces")
+    # A live lexicon change must invalidate the per-word cache, or the spelled
+    # resolution above would keep being served until a daemon restart.
+    engine.set_lexicon({" Vaultspaces ": " work tree "})
+    assert engine.prepare_text("vaultspaces") == "work tree"
+    # The lookup casefolds, so any casing of the word hits the same entry.
+    assert engine.prepare_text("VAULTSPACES") == "work tree"
+    # The built-in project lexicon stays underneath the user map.
+    assert engine.prepare_text("pyproject") == "pie project"
+
+
+def test_spell_out_telemetry_reports_the_word_an_operator_would_respell(
+    tmp_path: Path,
+) -> None:
+    reported: list[str] = []
+    engine = make_engine(tmp_path, on_spell_out=reported.append)
+    engine._g2p = FakeG2P()
+    # A lexicon-resolved word is fixed, not debt: nothing is reported.
+    engine.prepare_text("pyproject")
+    assert reported == []
+    # A compound whose unknown piece hits the floor reports the *top-level*
+    # word — the token the operator would actually add to the lexicon.
+    engine.prepare_text("clean-qqq")
+    assert reported == ["clean-qqq"]
+    # Every spoken occurrence reports, including cache hits, so counts track use.
+    reported.clear()
+    engine.prepare_text("qqq and qqq")
+    assert reported == ["qqq", "qqq"]
+
+
+def test_spell_out_reporter_failure_never_breaks_speech(tmp_path: Path) -> None:
+    def explode(word: str) -> None:
+        raise RuntimeError("telemetry sink down")
+
+    engine = make_engine(tmp_path, on_spell_out=explode)
+    engine._g2p = FakeG2P()
+    assert engine.prepare_text("qqq") == spell_out("qqq")
+
+
+def test_spelled_word_log_dedupes_counts_persists_and_prunes(tmp_path: Path) -> None:
+    path = tmp_path / "voice" / "spelled_words.json"
+    log = SpelledWordLog(path)
+    log.record("Vaultspaces")
+    log.record("vaultspaces ")
+    log.record("govspend")
+    entries = log.entries()
+    assert sorted(item["word"] for item in entries) == ["govspend", "vaultspaces"]
+    by_word = {item["word"]: item for item in entries}
+    assert by_word["vaultspaces"]["count"] == 2
+    assert by_word["vaultspaces"]["last_seen"] >= by_word["vaultspaces"]["first_seen"]
+    # Durable: a fresh instance reads the same entries back from disk.
+    reloaded = SpelledWordLog(path)
+    assert {item["word"] for item in reloaded.entries()} == {"vaultspaces", "govspend"}
+    # A lexicon entry pays the debt: covered words leave the list, on disk too.
+    reloaded.discard({"VaultSpaces": "vault spaces"})
+    assert {item["word"] for item in reloaded.entries()} == {"govspend"}
+    assert {item["word"] for item in SpelledWordLog(path).entries()} == {"govspend"}
+    # Unspeakable input is refused rather than stored.
+    reloaded.record("   ")
+    reloaded.record("x" * 61)
+    assert len(reloaded.entries()) == 1
+
+
+def test_spelled_word_log_is_bounded(tmp_path: Path) -> None:
+    log = SpelledWordLog(tmp_path / "spelled.json")
+    for index in range(SpelledWordLog.CAP + 25):
+        log.record(f"word{index}")
+    assert len(log.entries()) == SpelledWordLog.CAP
+
+
+def test_spelled_word_log_survives_a_corrupt_file(tmp_path: Path) -> None:
+    path = tmp_path / "spelled.json"
+    path.write_text("{not json", encoding="utf-8")
+    log = SpelledWordLog(path)
+    assert log.entries() == []
+    log.record("vaultspaces")
+    assert [item["word"] for item in log.entries()] == ["vaultspaces"]
 
 
 def test_espeak_presence_fails_construction_loudly(monkeypatch: pytest.MonkeyPatch) -> None:

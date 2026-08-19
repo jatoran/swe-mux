@@ -233,6 +233,41 @@ def test_voice_config_fields_validate_and_hot_apply(tmp_path: Path) -> None:
         update_config(config, {"tts_sapi_rate": 25})
 
 
+def test_tts_lexicon_validates_and_hot_applies(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "config.toml")
+    hot, restart = update_config(config, {"tts_lexicon": {"vaultspaces": "vault spaces"}})
+    assert "tts_lexicon" in hot and restart == set()
+    # Round-trips through the TOML file like every other field.
+    assert load_config(config.config_path or tmp_path / "config.toml").tts_lexicon == {
+        "vaultspaces": "vault spaces"
+    }
+    with pytest.raises(ValueError, match="tts_lexicon"):
+        update_config(config, {"tts_lexicon": {"two words": "nope"}})
+    with pytest.raises(ValueError, match="tts_lexicon"):
+        update_config(config, {"tts_lexicon": {"vaultspaces": "  "}})
+    with pytest.raises(ValueError, match="tts_lexicon"):
+        update_config(config, {"tts_lexicon": {"x" * 61: "too long a word"}})
+    with pytest.raises(ValueError, match="tts_lexicon"):
+        update_config(config, {"tts_lexicon": "vaultspaces"})
+
+
+def test_apply_lexicon_invalidates_every_kokoro_cache(tmp_path: Path) -> None:
+    """A lexicon change must reach a loaded engine, the audition previews, and
+    the spelled-word telemetry — or it silently waits for a daemon restart."""
+    service, _events, _emitted, _record = make_service(tmp_path)
+    applied: list[dict[str, str]] = []
+    service._kokoro_engine = cast(Any, SimpleNamespace(set_lexicon=applied.append))
+    service._kokoro_previews["af_heart"] = b"stale"
+    service.spelled_words.record("vaultspaces")
+    service.spelled_words.record("govspend")
+    update_config(service.config, {"tts_lexicon": {"Vaultspaces": "vault spaces"}})
+    service.apply_lexicon()
+    assert applied == [{"Vaultspaces": "vault spaces"}]
+    assert service._kokoro_previews == {}
+    # The covered word leaves the telemetry list; the still-broken one stays.
+    assert [item["word"] for item in service.spelled_words.entries()] == ["govspend"]
+
+
 def test_speechify_strips_markdown_and_truncates() -> None:
     text = speechify(
         "# Title\n\nUse `foo()` and see [the docs](https://example.com/x).\n"

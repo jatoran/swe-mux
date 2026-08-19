@@ -38,7 +38,7 @@ from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
 from .harness import has_observable_transcript
-from .kokoro_tts import KokoroEngine, KokoroError, KokoroPaths
+from .kokoro_tts import KokoroEngine, KokoroError, KokoroPaths, SpelledWordLog
 from .kokoro_tts import duration_seconds as wav_duration_seconds
 from .openrouter import OpenRouterClient, OpenRouterError
 from .sqlite_store import (
@@ -635,6 +635,9 @@ class VoiceService:
         # English set caches at a few megabytes, and a picker that re-synthesizes
         # on every tap would make browsing voices feel broken.
         self._kokoro_previews: dict[str, bytes] = {}
+        # Words the Kokoro repair ladder had to spell out letter by letter, kept
+        # across restarts so Settings → Voice can offer a one-tap respelling.
+        self.spelled_words = SpelledWordLog(config.data_dir / "voice" / "spelled_words.json")
         self.diagnostic: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Any] | None = None
@@ -1267,11 +1270,37 @@ class VoiceService:
                         model=install.model,
                         tokenizer=install.tokenizer,
                         voices_dir=install.voices_dir,
-                    )
+                    ),
+                    lexicon=dict(self.config.tts_lexicon),
+                    on_spell_out=self._record_spelled_word,
                 )
             except KokoroError as exc:
                 raise VoiceError(str(exc)) from exc
         return self._kokoro_engine
+
+    def _record_spelled_word(self, word: str) -> None:
+        """Called from the synthesis worker thread; the log carries its own lock."""
+        self.spelled_words.record(word)
+        log.info(
+            "kokoro spelled out unknown word word=%s (fixable with a respelling in "
+            "Settings → Voice)",
+            word,
+        )
+
+    def apply_lexicon(self) -> None:
+        """Hot-apply a `tts_lexicon` change without a daemon restart.
+
+        Three caches would otherwise silently serve pre-change resolutions: the
+        engine's per-word cache, the per-voice audition previews, and the
+        spelled-word telemetry entries the new lexicon now covers.
+        """
+        if self._kokoro_engine is not None:
+            self._kokoro_engine.set_lexicon(dict(self.config.tts_lexicon))
+        self.invalidate_kokoro_previews()
+        self.spelled_words.discard(self.config.tts_lexicon)
+
+    def invalidate_kokoro_previews(self) -> None:
+        self._kokoro_previews.clear()
 
     async def _synthesize_kokoro(self, text: str, destination: Path) -> None:
         engine = self._ensure_kokoro()
@@ -1768,6 +1797,7 @@ class VoiceService:
             "clip_count": stats["count"],
             "kokoro_model": kokoro_model,
             "kokoro_voice": self.config.tts_kokoro_voice,
+            "spelled_words": self.spelled_words.entries(),
             "stt_enabled": self.config.stt_enabled,
             "stt_engine": self.config.stt_engine,
             "stt_available": stt_available,

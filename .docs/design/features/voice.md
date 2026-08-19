@@ -69,6 +69,20 @@ affect the PTY, session state, transcripts, history, or projects.
   ever silently dropped from speech. GPU execution providers (CUDA/DirectML) are used when
   onnxruntime reports them; CPU int8 measures RTF ~0.55-0.7.
   Engine problems surface as typed unavailable/error status; terminals are unaffected.
+- **The ladder's lexicon rung is user-extensible, and its spelling floor is telemetered**
+  (the fix for glued or invented names like `vaultspaces` being spelled letter by letter).
+  `tts_lexicon` (word → respelling) merges over the built-in `PROJECT_LEXICON` with
+  casefolded whole-word keys; a change hot-applies through `VoiceService.apply_lexicon`,
+  which rebuilds the engine's merged map, drops the per-word resolution cache and the
+  per-voice audition previews (both would otherwise serve pre-change speech until a daemon
+  restart), and clears telemetry entries the new lexicon covers.
+  Every synthesis whose final resolution involved the spelling floor reports the *top-level*
+  word — the token an operator would actually respell — into `SpelledWordLog`, a bounded
+  (200), deduplicated, counted JSON store at `<data_dir>/voice/spelled_words.json` that
+  survives restarts, plus a `daemon.log` line. `GET /api/voice` surfaces the entries as
+  `spelled_words`; Settings → Voice lists them under the lexicon editor with a one-tap
+  respell input that writes the lexicon entry. Telemetry is fail-safe: a reporter error is
+  logged and speech proceeds.
 
 ### Storage and playback
 
@@ -511,7 +525,8 @@ and never touches the daemon or an LLM.
 ## Config knobs (`config.py`)
 
 `tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine` (`sapi`/`kokoro`),
-`tts_kokoro_voice`/`_speed`, `tts_sapi_voice`/`_rate`, `tts_summary_model`,
+`tts_kokoro_voice`/`_speed`, `tts_lexicon` (user pronunciation respellings, merged over the
+built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`/`_rate`, `tts_summary_model`,
 `tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget_usd`, `tts_cache_mb`;
 `stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
 `stt_routing_model` (spoken commands; blank falls back to the dictation model);

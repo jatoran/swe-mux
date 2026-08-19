@@ -2389,6 +2389,18 @@ body {
 .assistant-input-row .assistant-stop{color:var(--error,#f07178)}
 .kokoro-model-panel{display:grid;gap:4px;margin:4px 0}
 .kokoro-model-panel button{justify-self:start}
+.tts-lexicon{display:grid;gap:4px;margin:4px 0}
+.tts-lexicon-row{display:grid;grid-template-columns:minmax(90px,auto) minmax(0,1fr) auto;align-items:center;gap:6px}
+.tts-lexicon-row code{overflow-wrap:anywhere}
+.tts-lexicon-row small{color:var(--muted)}
+/* The telemetry rows carry a count between the word and the input. */
+.tts-lexicon-spelled{display:grid;gap:4px;margin-top:6px}
+.tts-lexicon-spelled h5{margin:0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.tts-lexicon-spelled .tts-lexicon-row{grid-template-columns:minmax(90px,auto) auto minmax(0,1fr) auto}
+.tts-lexicon-row input{min-width:0;box-sizing:border-box;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.tts-lexicon-row button{justify-self:start;height:calc(22px*var(--ui-scale));padding:0 9px;border:0;border-radius:4px;background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
+.tts-lexicon-row button:hover:not(:disabled){color:var(--text)}
+.tts-lexicon-row button:disabled{opacity:.4;cursor:default}
 .voice-command-dialog-backdrop{position:fixed;inset:0;z-index:220;display:grid;place-items:center;padding:16px;background:#0009;pointer-events:auto}
 .voice-command-dialog{width:min(760px,calc(100vw - 24px));max-height:min(82dvh,720px);display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #000a;color:var(--text);font:11px/1.45 'JetBrains Mono';overflow:hidden}
 .voice-command-dialog>header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--line)}

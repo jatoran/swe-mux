@@ -72,7 +72,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -867,6 +867,11 @@ class Config:
     # loading never depends on model files.
     tts_kokoro_voice: str = "af_heart"
     tts_kokoro_speed: float = 1.0
+    # User respellings for words the lexicon-only Kokoro G2P cannot resolve
+    # (word -> how to say it, e.g. "vaultspaces" -> "vault spaces"). Merged over
+    # the built-in project lexicon in the repair ladder, so one entry stops a
+    # recurring name from being spelled out letter by letter.
+    tts_lexicon: dict[str, str] = field(default_factory=dict)
     tts_sapi_voice: str = ""
     tts_sapi_rate: int = 0
     tts_summary_model: str = ""
@@ -1290,6 +1295,25 @@ def _validate(config: Config) -> None:
         errors["tts_kokoro_voice"] = "must be a Kokoro voice id such as af_heart"
     if not 0.5 <= config.tts_kokoro_speed <= 2.0:
         errors["tts_kokoro_speed"] = "must be between 0.5 and 2.0"
+    if not isinstance(config.tts_lexicon, dict) or len(config.tts_lexicon) > 500:
+        errors["tts_lexicon"] = "must be a map of at most 500 respellings"
+    else:
+        for lexicon_word, lexicon_spoken in config.tts_lexicon.items():
+            # Keys must be single tokens in the exact shape kokoro_tts._WORD
+            # matches, or the ladder's casefolded whole-word lookup can never
+            # hit them; values are what gets spoken in the word's place.
+            if (
+                not isinstance(lexicon_word, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9'_.\-]{0,59}", lexicon_word)
+                or not isinstance(lexicon_spoken, str)
+                or not lexicon_spoken.strip()
+                or len(lexicon_spoken) > 200
+            ):
+                errors["tts_lexicon"] = (
+                    "keys must be single words of at most 60 characters and values "
+                    "non-empty respellings of at most 200 characters"
+                )
+                break
     if not -10 <= config.tts_sapi_rate <= 10:
         errors["tts_sapi_rate"] = "must be between -10 and 10"
     if not 64 <= config.tts_summary_max_tokens <= 2000:
