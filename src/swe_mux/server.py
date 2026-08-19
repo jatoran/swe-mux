@@ -12818,6 +12818,27 @@ async def create_worktree(request: web.Request) -> web.Response:
     existing = await _listed_worktree_paths(cwd)
     if path.casefold() in existing:
         raise ValueError({"path": "target is already a registered worktree"})
+    # A freshly initialized repository has an unborn HEAD, and `git worktree add`
+    # answers that with a raw `fatal: invalid reference: HEAD` - true but useless.
+    # Checked here so the failure names the actual fix. Deliberately not fixed by
+    # committing anything: repository initialization stages nothing by design. An
+    # explicit start_point skips the check - git resolves that ref without HEAD.
+    head_code = 0
+    if not body.get("start_point"):
+        head_code, _head = await _git(cwd, "rev-parse", "--verify", "-q", "HEAD")
+    if head_code:
+        log.info(
+            "worktree_create_refused operation_id=%s cwd=%s reason=no_commits", operation_id, cwd
+        )
+        return json_response(
+            {
+                "error": "the repository has no commits yet - make a first commit "
+                "before creating a worktree",
+                "code": "repository_has_no_commits",
+                "operation_id": operation_id,
+            },
+            400,
+        )
     args = ["worktree", "add"]
     if branch := body.get("branch"):
         args.extend(["-b", str(branch)])

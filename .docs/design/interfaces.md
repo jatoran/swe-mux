@@ -1520,6 +1520,7 @@ Git review failures use typed JSON `{error, code}` with status 400, 404, 409, 41
 Success and error logs contain metadata only and never patch bodies or file contents.
 
 `POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`.
+A repository whose HEAD is unborn (freshly initialized, no commits) is refused before any Git mutation with `400 {code: repository_has_no_commits}` and a message naming the fix, unless an explicit `start_point` is given - Git resolves that ref without HEAD.
 With `spawn` present as an ordinary spawn body with required `project_id`, it creates the worktree and then starts a session whose cwd is forced to the new tree.
 Before spawn it runs `[worktree].setup_command` from the Project config, or an executable `.worktree-setup` convention when no override exists.
 `POST /git/worktrees/session` takes `{path, spawn}` and applies the same setup and forced-cwd spawn contract to an existing exact Git-listed Project worktree.
