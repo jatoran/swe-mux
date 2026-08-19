@@ -88,6 +88,12 @@ The assistant is text-first and voice-attached, not voice-only:
 
 - In the voice overlay, a `talk`/`chat` mode toggle switches the same floating panel between the dictation draft and the conversation view (`AssistantPanel`); the chat is also reachable with the microphone off (`assistant.toggle`).
   Chat mode is bounded to roughly half the viewport — a dialog consulted beside the terminals, never a takeover — and collapses to its header (device-local, persisted); the collapsed body stays mounted so streaming, card speech, and earcons keep working while folded.
+- **Thinking out loud is not answered at every pause.** Two deterministic client mechanisms
+  (both in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
+  assistant is the addressee (commands keep short-circuiting it), and the `hold`/`proceed`
+  brainstorm pair buffers plain speech until a "go ahead" cue releases it as one consolidated
+  turn. Deliberately not an assistant tool: a wait tool runs *inside* a turn, so every pause
+  would still cost a model call — the same reason confirm/cancel keeps the model out of the loop.
 - **The mode toggle is the microphone's addressee switch.**
   While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
   A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.

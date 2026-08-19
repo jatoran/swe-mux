@@ -71,14 +71,25 @@ export const ENERGY_GATE: GateConfig = {
 
 export class SpeechGate {
   private readonly config: GateConfig
+  /**
+   * Optional extra patience, consulted per frame: the silence endpoint fires at
+   * max(config tail, provider()). Chat mode uses it to give thinking-out-loud
+   * room to breathe without touching command latency — speculation still fires
+   * at its own threshold, so a wake-worded command short-circuits the longer
+   * tail. Per-frame (not construction-time) so an addressee change between or
+   * even during utterances takes effect immediately; only the compared
+   * threshold moves, never the accumulated counters.
+   */
+  private readonly extraTail?: () => number
   private active = false
   private silence = 0
   private speech = 0
   private total = 0
   private speculated = false
 
-  constructor(config: GateConfig) {
+  constructor(config: GateConfig, extraTail?: () => number) {
     this.config = config
+    this.extraTail = extraTail
   }
 
   get speaking(): boolean { return this.active }
@@ -119,7 +130,7 @@ export class SpeechGate {
       return events
     }
     if (this.speech < this.config.minSpeechMs) return events
-    if (this.silence >= this.config.endpointSilenceMs) {
+    if (this.silence >= Math.max(this.config.endpointSilenceMs, this.extraTail?.() || 0)) {
       events.push({ type: 'endpoint', reason: 'silence' })
       return events
     }

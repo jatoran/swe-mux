@@ -123,6 +123,7 @@ type Config = {
   tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
   stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string;stt_routing_model:string
   voice_wake_words:string[];voice_commands:{action:string;phrases:string[]}[]
+  voice_chat_patience_ms:number
   assistant_enabled:boolean;assistant_model:string;assistant_daily_budget_usd:number
   assistant_max_output_tokens:number;assistant_context_messages:number
   assistant_trust_reversible:'auto'|'cancel_window'|'confirm'
@@ -1522,6 +1523,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
           <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
+          <label>Chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>Extra pause allowed before plain chat-mode speech becomes an assistant turn, so thinking out loud is not answered at every breath. Wake-word commands stay fast regardless. For long brainstorms say <code>hold on</code> (or a wake-worded <code>listen</code>): speech buffers until you say <code>go ahead</code>.</small></label>
           <h3>Spoken command latency</h3>
           <p>End of speech to executed action, broken into the four stages it passes through. Samples are recorded by the browser after each utterance and also written to <code>daemon.log</code>. The target is under 500 ms for a short command.</p>
           <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />

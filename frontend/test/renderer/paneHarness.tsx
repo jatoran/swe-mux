@@ -44,7 +44,7 @@ const commands: Command[] = []
 // presentational, so no capture is started here.
 const conversation: Conversation = {
   target: {kind:'session',id:session.id,label:'Agent · harness',available:()=>true,agentRunId:()=>null,voiceMode:()=>null,voiceContent:()=>null},
-  targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, comms:false, wake: 'mux',
+  targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, hold: false, holdBuffer: '', comms:false, wake: 'mux',
   detail: 'Listening. Say “mux, send” to submit.', landedAt: 0, latency: null, detector: 'silero',
   history:[
     {id:'1',role:'you',text:'Mux, list active sessions.',at:1},
@@ -52,7 +52,7 @@ const conversation: Conversation = {
   ],
   draft: 'refactor the scrollback ring so it keeps bracketed paste mode across replay',
   toggle: () => {}, togglePin: () => {}, stop: () => {}, send: () => {}, append:()=>{}, undo: () => {}, clear: () => {},
-  clearHistory:()=>{},toggleStandby: () => {},toggleComms:()=>{}, edit: () => {},
+  clearHistory:()=>{},toggleStandby: () => {},toggleComms:()=>{},releaseHold:()=>{},discardHold:()=>{}, edit: () => {},
 }
 
 // The strip lists clips on mount. The harness has no daemon; VoicePlayer already treats a

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { requestSetting } from './settingTargets'
-import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, isPlaybackControl, PersistentVoiceCapture } from './conversation'
+import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, HOLD_ENTER_PHRASES, HOLD_RELEASE_PHRASES, isPlaybackControl, matchesBarePhrase, PersistentVoiceCapture } from './conversation'
 import type { CaptureDetector, ParsedMuxVoice } from './conversation'
 import { appendUtterance, clearDraft, editDraft, EMPTY_DRAFT, undoUtterance } from './conversationDraft'
 import type { Draft } from './conversationDraft'
@@ -57,6 +57,10 @@ export type Conversation={
   /** True only while capture is live; a failed start keeps the panel up to report why. */
   active:boolean
   standby:boolean
+  /** Brainstorm hold (chat mode): transcription continues, replies wait for a cue. */
+  hold:boolean
+  /** Speech accumulated while holding; released as one assistant turn. */
+  holdBuffer:string
   comms:boolean
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
@@ -80,6 +84,10 @@ export type Conversation={
   clearHistory:()=>void
   toggleStandby:()=>void
   toggleComms:()=>void
+  /** Send the held brainstorm to the assistant now (the “go ahead” cue). */
+  releaseHold:()=>void
+  /** Drop the held brainstorm and leave hold mode. */
+  discardHold:()=>void
   edit:(text:string)=>void
 }
 
@@ -108,6 +116,8 @@ export function useConversation(
   const [draft,setDraftState]=useState<Draft>(EMPTY_DRAFT)
   const [active,setActive]=useState(false)
   const [standby,setStandby]=useState(false)
+  const [hold,setHoldState]=useState(false)
+  const [holdBuffer,setHoldBufferState]=useState('')
   const [commsTargetId,setCommsTargetId]=useState<string|null>(null)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
@@ -126,6 +136,8 @@ export function useConversation(
   const startingRef=useRef<PersistentVoiceCapture|null>(null)
   const enabledRef=useRef(false)
   const standbyRef=useRef(false)
+  const holdRef=useRef(false)
+  const holdBufferRef=useRef('')
   const draftRef=useRef<Draft>(EMPTY_DRAFT)
   const queueRef=useRef<Promise<void>>(Promise.resolve())
   const commsTargetRef=useRef<string|null>(null);commsTargetRef.current=commsTargetId
@@ -155,6 +167,8 @@ export function useConversation(
 
   const setDraft=(next:Draft)=>{draftRef.current=next;setDraftState(next)}
   const enterStandby=(value:boolean)=>{standbyRef.current=value;setStandby(value)}
+  const enterHold=(value:boolean)=>{holdRef.current=value;setHoldState(value)}
+  const setHoldBuffer=(text:string)=>{holdBufferRef.current=text;setHoldBufferState(text)}
   const recordHistory=(role:VoiceConversationRole,text:string)=>setHistory(current=>{
     const next=appendVoiceConversationEntry(current,role,text)
     if(next!==current)saveVoiceConversationHistory(next)
@@ -165,7 +179,7 @@ export function useConversation(
   const stop=(record=true)=>{
     bargeInPlayback()
     if(record&&enabledRef.current)recordHistory('mux','Talk stopped.')
-    enabledRef.current=false;enterStandby(false)
+    enabledRef.current=false;enterStandby(false);enterHold(false);setHoldBuffer('')
     speculationRef.current?.controller.abort();speculationRef.current=null
     startingRef.current?.stop();startingRef.current=null
     captureRef.current?.stop();captureRef.current=null
@@ -317,6 +331,38 @@ export function useConversation(
     return true
   }
 
+  // ---- Brainstorm hold: chat mode keeps transcribing but stops answering. ----
+  // Deterministic client state, never a model decision: the annoyance is turns
+  // firing at every pause, and only the client can decline to send the next one.
+  const chatAddressee=()=>!!onAssistantRef.current&&(assistantChatRef.current?.()===true||assistantFollowUpActive())
+  const beginHold=()=>{
+    enterHold(true);setPhase('listening')
+    respond('Holding — thinking out loud is buffered, not answered. Say “go ahead” when you want the assistant to respond.')
+  }
+  const releaseHold=async(extra='')=>{
+    const combined=[holdBufferRef.current,extra].map(part=>part.trim()).filter(Boolean).join(' ')
+    if(!combined){enterHold(false);setHoldBuffer('');setPhase('listening');respond('Nothing was buffered. Chat replies normally again.');return}
+    if(!onAssistantRef.current){enterHold(false);setHoldBuffer('');setPhase('listening');respond('The assistant is unavailable; the brainstorm stays in the Talk history.');return}
+    // Kept until the turn is accepted: a failure below must never cost the
+    // buffer — the whole point of holding was that this text took minutes.
+    setHoldBuffer(combined)
+    setPhase('sending');setDetail('Sending your brainstorm to the assistant…')
+    try{
+      const outcome=await onAssistantRef.current(combined)
+      if(outcome===false){
+        setPhase('listening')
+        respond('Chat mode is off, so the brainstorm is kept. Reopen chat and say “go ahead”.')
+        return
+      }
+      enterHold(false);setHoldBuffer('')
+      setPhase('listening');respond(outcome||'Sent the brainstorm to the assistant.')
+    }catch(cause){reportFailure(cause)}
+  }
+  const discardHold=()=>{
+    enterHold(false);setHoldBuffer('')
+    setPhase('listening');respond('Brainstorm discarded. Chat replies normally again.')
+  }
+
   const handleTranscript=async(parsed:ParsedMuxVoice,rawText='')=>{
     if(!enabledRef.current)return
     const wakeWord=wakeRef.current
@@ -333,15 +379,51 @@ export function useConversation(
       enterStandby(true);setPhase('standby')
       respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
     }
+    // Brainstorm hold: transcription continues, plain speech buffers, and the
+    // assistant answers only on a proceed cue. Wake-worded commands keep their
+    // meaning throughout — anything this branch does not own falls through, so
+    // "Mux, stop" still works mid-brainstorm.
+    if(holdRef.current){
+      if(parsed.command==='proceed'){await releaseHold(parsed.text);return}
+      if(parsed.command==='hold'){setPhase('listening');respond('Already holding. Keep thinking; say “go ahead” when done.');return}
+      if(parsed.command==='cancel'){setHoldBuffer('');setPhase('listening');respond('Brainstorm cleared. Still holding.');return}
+      if(parsed.command===null){
+        const wakeIntent=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
+        if(wakeIntent===null){
+          if(matchesBarePhrase(rawText,HOLD_RELEASE_PHRASES)){await releaseHold();return}
+          const combined=[holdBufferRef.current,rawText.trim()].filter(Boolean).join(' ')
+          setHoldBuffer(combined)
+          setPhase('listening')
+          setDetail(`Holding — ${combined?combined.split(/\s+/).length:0} words buffered. Say “go ahead” when done.`)
+          return
+        }
+        // A wake-worded free intent ("mux, open project x") keeps working while
+        // holding; it falls through to the registry branch below.
+      }
+    }
+    if(parsed.command==='hold'){
+      if(!chatAddressee()){
+        setPhase('listening')
+        respond('Hold is for chat mode — switch the voice panel to chat first. In talk mode the draft already waits for “send”.')
+        return
+      }
+      beginHold();return
+    }
+    if(parsed.command==='proceed'){
+      setPhase('listening');respond('Nothing is on hold. Chat replies normally.');return
+    }
     // A single addressee removes the wake word: while the panel is in chat
     // mode, every plain utterance is a conversation turn — the dictation draft
     // must NOT also hear it. The follow-up window gives the same routing for a
     // few seconds after a spoken reply in any mode. Only plain speech takes
     // this route — a wake-word command keeps its normal meaning, which is what
     // lets "Mux, stop" still kill playback mid-dialog.
-    if(parsed.command===null&&onAssistantRef.current&&(assistantChatRef.current?.()||assistantFollowUpActive())){
+    if(parsed.command===null&&chatAddressee()&&onAssistantRef.current){
       const wakeIntent=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
       if(wakeIntent===null&&rawText.trim()){
+        // A bare "hold on" enters the brainstorm hold without the wake word;
+        // exact-match only, so a sentence merely containing it is never eaten.
+        if(matchesBarePhrase(rawText,HOLD_ENTER_PHRASES)){beginHold();return}
         setPhase('sending');setDetail('Asking the assistant…')
         try{
           const outcome=await onAssistantRef.current(rawText.trim())
@@ -580,6 +662,15 @@ export function useConversation(
           :resolved==='silero'?listeningDetail():diagnostic)
       },
       onError:message=>{if(enabledRef.current){setPhase('error');setDetail(message)}},
+      // Chat patience: while the assistant is the microphone's addressee, plain
+      // speech gets a longer trailing-silence window before it becomes a turn —
+      // thinking out loud is not answered at every pause. Commands stay fast:
+      // the speculative decode short-circuits the tail for wake-worded phrases.
+      endpointPatienceMs:()=>{
+        if(standbyRef.current||!chatAddressee())return 0
+        const configured=statusRef.current?.chat_patience_ms
+        return Math.max(0,Math.min(5000,typeof configured==='number'?configured:1200))
+      },
     })
     startingRef.current=capture
     try{
@@ -603,7 +694,7 @@ export function useConversation(
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
+    detail,draft:draft.text,active,standby,hold,holdBuffer,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()
@@ -625,6 +716,8 @@ export function useConversation(
       setDetail(next?`Standby. Still listening; say “${wakeRef.current}, resume” to continue.`:'Resumed. Listening for your message.')
     },
     toggleComms:()=>{void toggleComms()},
+    releaseHold:()=>{void releaseHold()},
+    discardHold,
     edit:text=>{setDraft(editDraft(text))},
   }
 }
@@ -821,7 +914,10 @@ export function DictationPanel({
         {modeToggle}
         {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={`${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
         {talkActive&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
+        {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
         <div class="dictation-actions">
+          {talkActive&&conversation.hold&&<button class="dictation-stop" title="Send the buffered brainstorm to the assistant now" onClick={()=>conversation.releaseHold()}>go ahead</button>}
+          {talkActive&&conversation.hold&&<button class="dictation-stop" title="Discard the buffered brainstorm and leave hold" onClick={()=>conversation.discardHold()}>discard</button>}
           {talkActive&&<button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop mic</button>}
           <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
           <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings" onClick={onOpenSettings}>⚙</button>
