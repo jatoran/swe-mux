@@ -20,6 +20,7 @@ from typing import Any
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
+from .leaf_names import validate_leaf_name
 
 PROJECT_CONFIG_VERSION = 1
 LEGACY_AUTOMATION_IDS = frozenset({"project_card"})
@@ -119,14 +120,6 @@ _IMAGE_EXTENSIONS = frozenset(
 )
 _DELIMITED_EXTENSIONS = {".csv": ",", ".tsv": "\t"}
 _RESERVED_PROJECT_RESOURCE_NAMES = frozenset({".git", ".swe-mux"})
-_WINDOWS_INVALID_RESOURCE_CHARS = frozenset('<>:"/\\|?*')
-_WINDOWS_RESERVED_RESOURCE_STEMS = frozenset(
-    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
-    | {f"COM{number}" for number in range(1, 10)}
-    | {f"LPT{number}" for number in range(1, 10)}
-    | {f"COM{number}" for number in "¹²³"}
-    | {f"LPT{number}" for number in "¹²³"}
-)
 
 
 class ProjectFileRevisionConflict(ValueError):
@@ -676,28 +669,11 @@ def project_path(root: str | Path, relative_path: str = "") -> Path:
 def _validate_project_resource_name(name: str) -> None:
     """Validate one Windows-safe leaf without normalizing what the user typed."""
 
-    if not name:
-        raise ValueError("project resource name must not be empty")
-    if name in {".", ".."}:
-        raise ValueError("project resource name must be a single file or folder name")
-    if name.casefold() in _RESERVED_PROJECT_RESOURCE_NAMES:
-        raise ValueError("project control directory names are reserved")
-    if name.endswith((" ", ".")):
-        raise ValueError("project resource names may not end with a space or dot")
-    if any(
-        character in _WINDOWS_INVALID_RESOURCE_CHARS or ord(character) < 32 or ord(character) == 127
-        for character in name
-    ):
-        raise ValueError("project resource name contains a Windows-invalid character")
-    try:
-        utf16_units = len(name.encode("utf-16-le")) // 2
-    except UnicodeEncodeError as exc:
-        raise ValueError("project resource name contains invalid Unicode") from exc
-    if utf16_units > 255:
-        raise ValueError("project resource name exceeds 255 UTF-16 code units")
-    device_stem = name.split(".", 1)[0].rstrip(" ").upper()
-    if device_stem in _WINDOWS_RESERVED_RESOURCE_STEMS:
-        raise ValueError("project resource name is reserved by Windows")
+    validate_leaf_name(
+        name,
+        label="project resource name",
+        reserved_names=_RESERVED_PROJECT_RESOURCE_NAMES,
+    )
 
 
 def create_project_resource(

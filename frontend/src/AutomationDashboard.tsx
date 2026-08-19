@@ -161,8 +161,8 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAle
 
   return <div class="usage-layer automation-layer" role="dialog" aria-modal="true" aria-label="Automation" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="usage-panel automation-panel" ref={panel}>
-      <header><div><span>AUTOMATION</span><strong>Observe sessions · surface attention · retain useful findings</strong></div><div class="usage-header-actions"><button class="automation-help-btn" aria-label="How automation works" title="How it works" onClick={()=>setShowHelp(true)}>?</button><button aria-pressed={view==='diagnostics'} title="Developer diagnostics" onClick={()=>setView(view==='diagnostics'?'automations':'diagnostics')}>diagnostics</button><button onClick={onConfigure}>settings</button><button aria-label="Close automation" onClick={onClose}>×</button></div></header>
-      <div class="usage-actions automation-tabs" role="tablist">{VIEWS.map(item=><button key={item.id} role="tab" aria-selected={view===item.id} class={view===item.id?'active':''} onClick={()=>setView(item.id)}>{item.label}</button>)}</div>
+      <header><div><span>AUTOMATION</span><strong>Observe sessions · surface attention · retain useful findings</strong></div><div class="usage-header-actions"><button class="automation-help-btn" aria-label="How automation works" title="How it works" onClick={()=>setShowHelp(true)}>?</button><button onClick={onConfigure}>settings</button><button aria-label="Close automation" onClick={onClose}>×</button></div></header>
+      <div class="segmented-tabs automation-tabs" role="tablist" aria-label="Automation view">{VIEWS.map(item=><button key={item.id} role="tab" aria-selected={view===item.id} class={view===item.id?'active':''} onClick={()=>setView(item.id)}>{item.label}</button>)}</div>
       {/* The way out to the two surfaces this dashboard used to duplicate. Kept as a
           permanent row rather than an empty-state hint, because "where did the attention
           inbox go" is asked by someone who is looking at a full one somewhere else. */}

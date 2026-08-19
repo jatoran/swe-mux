@@ -179,8 +179,14 @@ def make_service(
         }
     )
     project = ProjectRecord(id="p1", name="pixel lab", root=str(tmp_path), position=0)
+
+    async def removed_project_for_root(_root: str) -> Any:
+        return None
+
     projects = SimpleNamespace(
-        projects={"p1": project}, ordered_projects=lambda: [project]
+        projects={"p1": project},
+        ordered_projects=lambda: [project],
+        history=SimpleNamespace(removed_project_for_root=removed_project_for_root),
     )
     store = AssistantStore(config.database_path)
     queue = QueueStub()
@@ -394,6 +400,137 @@ async def test_action_classes_split_by_consequence(tmp_path: Path) -> None:
         assert classify("interrupt_session", {}) == ACTION_CLASS_CONSEQUENTIAL
         assert classify("end_session", {}) == ACTION_CLASS_CONSEQUENTIAL
         assert classify("spawn_session", {}) == ACTION_CLASS_REVERSIBLE
+        # Creating a project mints one empty folder inside the configured parent
+        # and a tombstoning removal undoes the registration; same class as spawn.
+        assert classify("create_project", {}) == ACTION_CLASS_REVERSIBLE
+    finally:
+        service.store.close()
+
+
+# --------------------------------------------------------------------------- #
+# create_project
+# --------------------------------------------------------------------------- #
+
+
+async def test_create_project_preflight_refuses_before_anything_pends(
+    tmp_path: Path,
+) -> None:
+    service, _events, _queue, _effects = make_service(tmp_path)
+    try:
+        # No configured parent: the refusal names the setting, never guesses.
+        refusal = await service._preflight_mutation("create_project", {"name": "scraper"})
+        assert refusal is not None and "New project location" in refusal["error"]
+
+        parent = tmp_path / "projects-home"
+        update_config(service.config, {"new_project_parent": str(parent)})
+        # Configured but missing on disk: honest failure pointing at the setting.
+        refusal = await service._preflight_mutation("create_project", {"name": "scraper"})
+        assert refusal is not None and "does not exist" in refusal["error"]
+
+        parent.mkdir()
+        assert await service._preflight_mutation("create_project", {"name": ""}) is not None
+        # A name that normalizes to nothing is a refusal, not an empty folder.
+        refusal = await service._preflight_mutation("create_project", {"name": "- - -"})
+        assert refusal is not None and "folder name" in refusal["error"]
+        # A Windows device name survives normalization and is refused loudly.
+        refusal = await service._preflight_mutation("create_project", {"name": "COM1"})
+        assert refusal is not None and "reserved by Windows" in refusal["error"]
+
+        # Existing non-empty folder: adoption belongs to the Add-project dialog.
+        crowded = parent / "occupied"
+        crowded.mkdir()
+        (crowded / "keep.txt").write_text("x", encoding="utf-8")
+        refusal = await service._preflight_mutation("create_project", {"name": "occupied"})
+        assert refusal is not None and "not empty" in refusal["error"]
+
+        # Already registered: named as the project it is, not a path error.
+        service.projects.projects["p1"].root = str((parent / "scraper").resolve())
+        refusal = await service._preflight_mutation("create_project", {"name": "scraper"})
+        assert refusal is not None and "pixel lab" in refusal["error"]
+        assert not (parent / "scraper").exists()
+    finally:
+        service.store.close()
+
+
+async def test_create_project_preflight_resolves_the_exact_path_for_the_card(
+    tmp_path: Path,
+) -> None:
+    service, _events, _queue, _effects = make_service(tmp_path)
+    try:
+        parent = tmp_path / "projects-home"
+        parent.mkdir()
+        update_config(service.config, {"new_project_parent": str(parent)})
+        arguments: dict[str, Any] = {"name": "  vault spaces ", "git": True}
+        assert await service._preflight_mutation("create_project", arguments) is None
+        # The spoken name normalizes deterministically and the absolute result is
+        # stamped into the arguments, so the restated card is fully informed.
+        assert arguments["name"] == "vault spaces"
+        assert arguments["root"] == str((parent / "vault-spaces").resolve())
+        restated = service._restate("create_project", arguments)
+        assert arguments["root"] in restated
+        assert "empty git repository" in restated
+        assert "restores" not in restated
+
+        async def removed(root: str) -> Any:
+            assert root == arguments["root"]
+            return SimpleNamespace(name="old vault")
+
+        service.projects.history.removed_project_for_root = removed
+        revived: dict[str, Any] = {"name": "vault spaces"}
+        assert await service._preflight_mutation("create_project", revived) is None
+        assert revived["restores"] == "old vault"
+        assert "old vault" in service._restate("create_project", revived)
+    finally:
+        service.store.close()
+
+
+async def test_create_project_executes_through_the_wired_operation(tmp_path: Path) -> None:
+    parent = tmp_path / "projects-home"
+    parent.mkdir()
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "create_project",
+            "arguments": json.dumps({"name": "vault spaces", "git": True}),
+        },
+    }
+    service, _events, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Created.")], trust="confirm"
+    )
+    created: list[dict[str, Any]] = []
+
+    async def create_project_op(arguments: dict[str, Any]) -> dict[str, Any]:
+        created.append(arguments)
+        return {"created": True, "project": arguments["name"], "root": arguments["root"]}
+
+    service.create_project_op = create_project_op
+    try:
+        update_config(service.config, {"new_project_parent": str(parent)})
+        dialog_id = await run_turn(service, "make a project called vault spaces")
+        actions = await service.store.actions(dialog_id)
+        assert actions[0]["status"] == "pending"  # confirm trust: nothing ran yet
+        assert created == []
+        assert str((parent / "vault-spaces").resolve()) in str(actions[0]["restatement"])
+        outcome = await service.confirm_action(str(actions[0]["id"]))
+        assert outcome["action"]["status"] == "executed"
+        assert created[0]["root"] == str((parent / "vault-spaces").resolve())
+        assert created[0]["git"] is True
+    finally:
+        service.store.close()
+
+
+async def test_create_project_without_a_wired_operation_fails_closed(tmp_path: Path) -> None:
+    parent = tmp_path / "projects-home"
+    parent.mkdir()
+    service, _events, _queue, _effects = make_service(tmp_path, trust="auto")
+    try:
+        update_config(service.config, {"new_project_parent": str(parent)})
+        dialog = await service.store.create_dialog()
+        result = await service._run_tool(
+            dialog["id"], "t1", "create_project", {"name": "scraper"}
+        )
+        assert "not wired" in result["error"]
     finally:
         service.store.close()
 

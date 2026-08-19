@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  defaultInitScriptSelection, emptyProjectCreateDraft, joinPath, projectCreateReady,
-  projectCreateRoot, suggestFolderName, toggleInitScript,
+  commonestParent, defaultInitScriptSelection, emptyProjectCreateDraft, joinPath, parentPath,
+  projectCreateReady, projectCreateRoot, suggestFolderName, toggleInitScript,
 } from '../src/projectCreate.ts'
 
 test('a parent and a folder name join with the separator the parent already uses', () => {
@@ -35,6 +35,24 @@ test('new-folder mode tracks the name until the folder field is edited', () => {
   // A name that slugifies to nothing leaves no root to submit.
   assert.equal(projectCreateReady({...draft, name:'...'}), false)
   assert.equal(projectCreateReady({...draft, parent:''}), false)
+})
+
+test('a root path names its parent, keeping a drive letter usable', () => {
+  assert.equal(parentPath('D:\\projects\\horizon'), 'D:\\projects')
+  assert.equal(parentPath('D:\\horizon'), 'D:\\')
+  assert.equal(parentPath('/home/j/code/horizon'), '/home/j/code')
+  assert.equal(parentPath('D:\\projects\\horizon\\'), 'D:\\projects')
+  assert.equal(parentPath('horizon'), '')
+  assert.equal(parentPath(''), '')
+})
+
+test('the commonest parent of the registered roots is the settings placeholder', () => {
+  assert.equal(commonestParent([
+    'D:\\projects\\a', 'D:\\projects\\b', 'd:\\PROJECTS\\c', 'D:\\other\\x',
+  ]), 'D:\\projects') // case-insensitive count; first-seen spelling wins
+  assert.equal(commonestParent(['/home/j/code/a', '/home/j/code/b']), '/home/j/code')
+  assert.equal(commonestParent([]), '')
+  assert.equal(commonestParent(['loose']), '')
 })
 
 test('init scripts start unchecked unless their definition opts in', () => {

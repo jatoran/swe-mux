@@ -5867,15 +5867,6 @@ export function App() {
   }
   const projectPreviewIds=dragProject?.previewIds||displayProjectIds
 
-  // What the folded Utilities group owes the closed menu. Two unrelated counts add up
-  // to one number deliberately — the header answers "is there anything in here" and the
-  // tooltip says which; two competing badges on one row would answer neither.
-  const utilityMenuAttention=queuePendingTotal+notificationUnread
-  const utilityMenuAttentionHint=[
-    queuePendingTotal?`${queuePendingTotal} queued message${queuePendingTotal===1?'':'s'}`:'',
-    notificationUnread?`${notificationUnread} unread notification${notificationUnread===1?'':'s'}`:'',
-  ].filter(Boolean).join(' · ')
-
   const mobileProjection=mobileWorkspaceProjection(activeLayout,focusedViewId,activeId)
   const activateMobileTab=(leaf:PaneLeaf)=>{
     setFocusedViewId(leaf.id)
@@ -6601,38 +6592,35 @@ export function App() {
 
     {mainMenuOpen && <div data-tutorial="main-menu" class="context-menu main-menu" role="menu" aria-label="swe-mux menu">
       <div class="context-title"><strong>swe-mux menu</strong></div>
-      {/* Ten app-wide viewers sat unfolded at the top and made this menu a wall: every
-          one is a place you *go*, none is a thing you *set*, and reading past them to
-          reach the settings half was the whole cost of opening the menu. They fold into
-          one row now, which is also why the `CONFIGURATION` heading that used to divide
-          the two halves is gone — with the viewers behind one row, everything below it
-          is configuration, and a heading over an already-obvious group is a row that
-          costs height and says nothing. Right-clicking a Project row still opens the
-          Project-scoped versions prefiltered to it; anything that acts on one Project
-          lives there, not here.
-          The Utilities header carries a badge because folding rows away folds their
-          counts away with them, and "something is queued" must survive the fold. */}
-      <MenuGroup id="utilities" label="Utilities" openId={menuGroup} onOpenChange={setMenuGroup} hint="History, notes, queues, and usage — the app-wide viewers" badge={utilityMenuAttention>0?<em class="menu-group-badge" title={utilityMenuAttentionHint}>{utilityMenuAttention}</em>:null}>
-        <button onClick={() => runNamedCommand('history.open')}>Session history</button>
-        <button onClick={() => runNamedCommand('notes.browse')}>Notes…</button>
-        <button onClick={() => runNamedCommand('queue.fleet')}>Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</button>
-        <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
-        <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
-        {/* One row for what used to be four — processes, bandwidth, storage, and token
-            spend are segments of one dialog now. The three named entry points survive as
-            palette commands and as the sidebar's resource chip, which lands on the
-            segment it was already showing. */}
-        <button onClick={() => runNamedCommand('resources.open')}>Resources…</button>
-        <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
-      </MenuGroup>
+      {/* The app-wide viewers, unfolded. They spent a while behind a `Utilities` row on
+          the argument that ten of them made the menu a wall — but the wall was ten, and
+          the consolidation that turned four resource modals into one Resources dialog took
+          it to seven. Seven rows is a menu; a fold over seven rows is a click that buys
+          back four rows of height and costs one on every visit, and it hid the counts on
+          Fleet queue and Notifications behind a summary badge that had to be invented to
+          replace them. Those counts are back where they belong, on the rows themselves.
+          Right-clicking a Project row still opens the Project-scoped versions prefiltered
+          to it; anything that acts on one Project lives there, not here. */}
+      <button onClick={() => runNamedCommand('history.open')}>Session history</button>
+      <button onClick={() => runNamedCommand('notes.browse')}>Notes</button>
+      <button onClick={() => runNamedCommand('queue.fleet')}>Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</button>
+      <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library</button>
+      <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history</button>
+      {/* One row for what used to be four — processes, bandwidth, storage, and token
+          spend are segments of one dialog now. The three named entry points survive as
+          palette commands and as the sidebar's resource chip, which lands on the
+          segment it was already showing. */}
+      <button onClick={() => runNamedCommand('resources.open')}>Resources</button>
+      <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
+      <div class="context-rule"/>
       {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
           beside the tree it edits. It is repeated here on purpose: the header button is
           discoverable only once the sidebar is open and the header is in view, and this
           menu is where every other app-wide surface is looked for. Two doors to one
           registry is the lesser cost. */}
-      <button onClick={() => runNamedCommand('project.create')}>Projects…</button>
-      <button onClick={() => runNamedCommand('actions.configure')}>Configure Actions…</button>
-      <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
+      <button onClick={() => runNamedCommand('project.create')}>Projects</button>
+      <button onClick={() => runNamedCommand('actions.configure')}>Configure Actions</button>
+      <button onClick={() => runNamedCommand('hooks.open')}>Automation Dashboard</button>
       <MenuGroup id="maintenance" label="Maintenance" openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
         <button onClick={() => runNamedCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
         <button onClick={() => runNamedCommand('app.redeploy')}>Rebuild + redeploy app (keep sessions)</button>
@@ -6644,7 +6632,7 @@ export function App() {
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcasting input' : 'Start broadcasting input'}</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}>Command palette <span class="menu-hint">ctrl alt p</span></button>
       <div class="context-rule"/>
-      <button onClick={() => runNamedCommand('settings.open')}>All Settings…</button>
+      <button onClick={() => runNamedCommand('settings.open')}>Settings</button>
     </div>}
 
     {sidebarOpen && <button class="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}

@@ -80,6 +80,24 @@ def test_init_script_spawns_one_shot_shell_at_the_project_root(tmp_path: Path) -
     assert any("git init" in str(item) for item in body["argv"])
 
 
+def test_canonical_root_create_mode_validates_the_new_leaf(tmp_path: Path) -> None:
+    # Server-side, because the dialog's Folder field is free text and the
+    # assistant path has no dialog at all. Nothing is created on refusal.
+    with pytest.raises(ValueError, match="reserved by Windows"):
+        canonical_project_root(tmp_path / "COM1", create=True)
+    with pytest.raises(ValueError, match="Windows-invalid character"):
+        canonical_project_root(tmp_path / "bad<name", create=True)
+    with pytest.raises(ValueError, match="control directory names are reserved"):
+        canonical_project_root(tmp_path / ".swe-mux", create=True)
+    assert not any(tmp_path.iterdir())
+    # Adopting a folder that already exists skips leaf validation: it is on disk
+    # under whatever name it has. (.git is creatable on every platform; COM1 is
+    # not even creatable on Windows, which is the point of the refusal above.)
+    existing = tmp_path / ".git"
+    existing.mkdir()
+    assert canonical_project_root(existing, create=True) == existing.resolve()
+
+
 def test_canonical_root_creates_one_folder_and_refuses_a_missing_parent(tmp_path: Path) -> None:
     created = canonical_project_root(tmp_path / "fresh", create=True)
     assert created.is_dir()

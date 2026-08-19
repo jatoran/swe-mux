@@ -72,7 +72,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -514,6 +514,14 @@ class Config:
     # Empty means the app-managed directory below data_dir. The public config exposes
     # the resolved absolute value so browser clients never infer the daemon's home.
     worktree_root: str = ""
+    # The one parent directory the assistant's create_project tool may create new
+    # project folders inside. Deliberately name-only at the tool: the model never
+    # supplies a path, so a chat message cannot create a folder anywhere else on
+    # disk. Empty disables assistant project creation (the tool refuses and points
+    # here); the Add-project dialog is unaffected and may name any parent. Shape is
+    # validated here, existence at use time - a directory deleted while the daemon
+    # is down must not stop the config from loading.
+    new_project_parent: str = ""
     process_poll_seconds: float = 5.0
     process_orphan_grace_seconds: float = 15.0
     # Windows-only sweep for headless-browser windows that DWM composites even
@@ -1160,6 +1168,14 @@ def _validate(config: Config) -> None:
             errors["worktree_root"] = "must be an absolute directory path or empty"
         elif worktree_root.parent == worktree_root:
             errors["worktree_root"] = "must not be a filesystem root"
+    if not isinstance(config.new_project_parent, str):
+        errors["new_project_parent"] = "must be an absolute directory path or empty"
+    elif config.new_project_parent.strip():
+        project_parent = Path(config.new_project_parent.strip()).expanduser()
+        if not project_parent.is_absolute():
+            errors["new_project_parent"] = "must be an absolute directory path or empty"
+        elif project_parent.parent == project_parent:
+            errors["new_project_parent"] = "must not be a filesystem root"
     if not 0.5 <= config.process_poll_seconds <= 60:
         errors["process_poll_seconds"] = "must be between 0.5 and 60 seconds"
     if not 1 <= config.process_orphan_grace_seconds <= 3600:

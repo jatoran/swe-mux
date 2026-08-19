@@ -21,7 +21,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
-  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — spawn a session, or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
+  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
   - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
   A pending or scheduled action is typed state (`assistant_actions` row) rendered as a card, and a daemon restart expires anything still pending — a confirmation minted by a dead daemon can never execute.
 - **Dialog state is daemon-owned** (`assistant_dialogs`/`assistant_messages`/`assistant_actions` in SQLite, one worker thread like `voice_clips`).
@@ -82,6 +82,16 @@ synthetic `dispatched` `assistant_action` event carries the work (with
 field the bus lifts out of the payload) and the device reports back through the same
 `ui-result` endpoint UI commands use.
 
+## Creating projects
+
+`create_project` mints a project that does not exist yet — the one assistant mutation that touches the filesystem — and its whole safety story is one constraint: **the model supplies a name, never a path.**
+The folder leaf is derived from the name by the same deterministic normalization the Add-project dialog suggests (`leaf_names.suggest_folder_name`, spaces → hyphens), validated under the shared Windows-safe leaf rules, and joined to the one configured parent (`new_project_parent`, Settings → Projects).
+Unset, missing, duplicate-root, and existing-non-empty targets are all answered at preflight — the refusal names the setting — so a card never pends for something that cannot execute; adopting populated folders stays the Add-project dialog's job.
+The restatement carries the exact absolute path (and, when the root matches a tombstoned registration, that the removed project's identity and history revive), so the operator confirms what lands on disk rather than a name to resolve.
+Execution is the ordinary registration path (`ProjectManager.register` with `create_missing`, emitting the same `project_created`/`project_restored` events as `POST /projects`); setup commands never run from the assistant — the result says so and points at the Run menu.
+An optional `git: true` chains the one-time repository initialization with its contract intact: nothing staged, no commit made, and an init failure reports without unwinding the registration.
+Reversal is the same as spawn's class implies: removal is a registration tombstone that deletes nothing on disk, and the minted folder is empty.
+
 ## Voice attachment
 
 The assistant is text-first and voice-attached, not voice-only:
@@ -119,6 +129,7 @@ The assistant is text-first and voice-attached, not voice-only:
 `assistant_enabled` (off by default, like every model-cost feature), `assistant_model`,
 `assistant_daily_budget_usd`, `assistant_max_output_tokens`, `assistant_context_messages`,
 `assistant_trust_reversible`.
+`create_project` additionally reads `new_project_parent` (Settings → Projects, not an assistant knob): shape-validated at save, existence-checked at use, and empty disables assistant project creation.
 
 ## Key files
 

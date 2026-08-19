@@ -204,6 +204,10 @@ uncommitted work together.
 - The branch is named `main` unless the host sets `init.defaultBranch`, in which case Git's own configured answer stands.
 - The daemon re-resolves the folder's repository state inside the request rather than trusting what the client last read, and refuses an already-tracked folder with `already_initialized`.
 - Success emits `git_changed` for the Project, so every other client re-reads rather than holding the pre-init view.
+- The no-commit contract leaves HEAD unborn, and `git worktree add` cannot branch from an unborn HEAD.
+  Worktree creation refuses that state before mutating, with a typed `repository_has_no_commits` error naming the fix (make a first commit) - a deliberate consequence, not a reason to auto-commit.
+  An explicit `start_point` skips the check, because Git resolves that ref without HEAD.
+- The assistant's `create_project` tool may chain this initialization for a brand-new project folder (`assistant.md`); the contract is unchanged there - nothing staged, no commit.
 
 ### Reaching a session from the repository
 

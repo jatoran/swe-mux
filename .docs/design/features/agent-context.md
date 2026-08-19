@@ -13,7 +13,7 @@ scheduled, or startup sync.
 
 ## Surface
 
-The utility drawer's **Context** tab is titled **Instructions & Memory** in its body and follows Notes in
+The utility drawer's **Agent → Instructions** segment is titled **Instructions & Memory** in its body and follows Notes in
 the project-scoped block. It contains:
 
 - an initially expanded **Project instructions** disclosure for every distinct Project-root

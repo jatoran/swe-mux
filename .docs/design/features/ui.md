@@ -202,12 +202,12 @@ responsive controls.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
   It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
-  tree it edits, and `menu → Projects…` between Utilities and Configure Actions. The header
+  tree it edits, and `menu → Projects`, between the viewers and Configure Actions. The header
   button is discoverable only once the sidebar is open and its header is in view, while the
   app menu is where every other app-wide surface is looked for.
 - The sidebar footer is two controls: `menu` at the left edge and the alerts bell at the right.
   It held four. `projects` moved into the `PROJECTS` header, beside the tree it edits, and the
-  settings cog was removed: `menu → All Settings…` sits one row away from the button next to it,
+  settings cog was removed: `menu → Settings` sits one row away from the button next to it,
   and a second permanent door to the same panel cost a footer slot for a saving of nothing.
   A named menu row is also searchable and keyboard-reachable, which an icon is not.
   The remaining pair still uses the left item's own `margin-right:auto` rather than
@@ -272,21 +272,24 @@ responsive controls.
 
 ## Menus and overlays
 
-- Scope follows the menu that opened a surface, never a hidden mode. The app menu's `Utilities`
-  group opens History, Notes, the fleet queue, prompt library, clipboard history,
-  Resources, and notifications across every Project; right-clicking a Project row opens the same
-  surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
-  the no-Project case and matches the app menu.
-- **The app menu is two halves: `Utilities` (places you go) and, below it, the things you set.**
-  Those ten viewers used to sit unfolded at the top and made the menu a wall — reading
-  past them to reach the settings half was the whole cost of opening it. The `CONFIGURATION`
-  heading that used to divide the halves went with them: once the viewers are behind one row,
-  everything below it is configuration, and a heading over an already-obvious group is a row
-  that costs height and says nothing. `Utilities` carries a
-  count badge summing the pending queue and unread notifications, because folding rows away folds
-  their counts away with them and "something is queued" has to survive the fold. The two counts
-  add to one number deliberately: the header answers *is there anything in here*, and the tooltip
-  says which.
+- Scope follows the menu that opened a surface, never a hidden mode. The app menu opens
+  History, Notes, the fleet queue, prompt library, clipboard history, Resources, and
+  notifications across every Project; right-clicking a Project row opens the same surfaces
+  under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is the
+  no-Project case and matches the app menu.
+- **The app menu is two halves: the places you go, and below a rule, the things you set.**
+  The viewers spent a while behind one folding `Utilities` row, on the argument that ten of
+  them made the menu a wall. The wall was ten. Consolidating four resource modals into one
+  Resources dialog took it to seven, and a fold over seven rows is a click that buys back
+  four rows of height and costs one on every visit. It also had to invent a summary badge on
+  the header to carry the pending-queue and unread counts that folding hid — two unrelated
+  numbers added into one, answering *is there anything in here* and leaving the tooltip to
+  say which. Unfolded, those counts are back on the rows that own them, where one number
+  means one thing. What divides the halves now is a plain rule, not a `CONFIGURATION`
+  heading over an already-obvious group.
+- **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
+  the menu is — so a mark that means "this opens something" appeared on nearly all of them
+  and therefore distinguished none.
 - The app menu holds **nothing that acts on a single Project**, and no longer holds the Project
   registry either — adding and managing Projects are the two buttons in the sidebar's `PROJECTS`
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
@@ -1597,6 +1600,10 @@ responsive controls.
   what already happened is how a stray tap
   becomes a message nobody wrote. Copy is the only verb: per message, or the whole conversation
   with speakers.
+  Its head row carries the message count and not the session name: the pane heading directly
+  above already says which session this is, and printing it twice in twenty pixels of chrome
+  made the count - the one thing this row knows that the heading does not - read as a
+  subtitle of the name rather than as the state of the transcript.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
@@ -1767,11 +1774,27 @@ responsive controls.
   When the text landed in the note the panel is hosting, it stays open and returns to the note
   instead — closing would hide the result that was just asked for. Desktop does not move at all,
   because the column sits beside the workspace and a second insert is the common next action.
-- **Context** is titled **Instructions & Memory** and remains the Agent Context surface (`agent-context.md`). It shows descriptor-declared Project-root
+- **Agent → Instructions** is titled **Instructions & Memory** and is the Agent Context
+  surface (`agent-context.md`). It shows descriptor-declared Project-root
   instruction sources in an initially expanded disclosure, descriptor-declared global
   instruction sources in an initially collapsed disclosure, and one
   initially collapsed **Memories** disclosure badged with the provider file count. All three
   share the same high-contrast file-row surface; bodies are read-only.
+- **Nothing is opened for you, and the viewer exists whether or not anything is.** The
+  segment used to select whichever readable file sorted first — in practice the focused
+  harness's own `CLAUDE.md` or `AGENTS.md` — which read as a decision the tab had made on
+  your behalf, and left the body ambiguous at a glance: a file pinned directly under the
+  memory list, with a background change and no rule or label between them, is more list.
+  The viewer is a permanently drawn, labelled region now, divided from the disclosures above
+  it by a rule heavier than the ones between them, and it says `No file selected` when that
+  is the truth. Selecting is a choice you make and can undo — the header carries a close
+  control, so empty is a place you can go back to rather than only the state you arrived in.
+  What you pick is remembered **per Project**, device-local, because it is a reading position
+  rather than a setting; a stored id whose file has since gone resolves to the empty state
+  rather than to something else's body.
+  The tab's own `Agent Context` title is gone for the reason the Actions session line is: the
+  pane heading above already carries it. The line under it stays, because which harness and
+  which working directory the inventory resolved against is a fact the heading has not got.
   Fine-pointer desktop rows backed by real files expose **Open in default explorer** on
   right-click, using the Files browser's native reveal behavior; mobile keeps its native
   context-menu behavior.
@@ -1871,6 +1894,26 @@ responsive controls.
   two homes and two filters is a record you can see in one place and miss in the other. Both
   dashboard views are links now (`automation.md`), and Findings grew a source filter
   (deterministic / observer / all) to cover what the dashboard's copy showed.
+- **A Group is drawn as a container, not as a run with a gap above it.** Groups and
+  ungrouped Projects are sibling sections in one flat list, and for a long time the only
+  thing between them was an 8px margin — so a Group holding two Projects with ungrouped
+  Projects beneath it read as one list of four. The gap is real; a gap between two runs of
+  identical rows is simply not a statement about which run is inside anything.
+  Three cues carry it now, and the load-bearing one is the **indent**: a grouped Project row
+  starts further right than an ungrouped one, which is the fact being communicated, and it is
+  the only cue that does not wash out at sidebar contrast. A left rail and a ground a shade
+  off the sidebar's make the indent read as containment rather than as ragged alignment, and
+  the heading cancels the indent so it sits as the box's lid rather than as its first
+  indented child. A folded Group drops the indent and the rule under its heading, because it
+  has no body left to contain. None of it costs vertical space.
+- **The Actions tab's four sections are separated by their headers, not by a line between
+  them.** A 1px rule between sections is the same rule every row *inside* a section already
+  carries, so the boundary read as one more row. Each header is a full-bleed bar with its own
+  darker ground and a leading edge, and a rule above it twice the weight of any row rule; the
+  bodies sit on the panel ground beneath, so a header reads as a lid over its section. The
+  edge is deliberately muted rather than accent: every green edge in this app means *this one
+  is active* — the selected Project, the active pane tab, the live segment — and four
+  permanent green bars on four permanent headers would spend that meaning on decoration.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed

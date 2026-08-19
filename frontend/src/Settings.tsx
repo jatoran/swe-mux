@@ -9,6 +9,7 @@ import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
 import { SessionRowSettings } from './SessionRowSettings'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
+import { commonestParent } from './projectCreate'
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
@@ -55,7 +56,7 @@ type Config = {
   harness_enabled:Record<string,boolean>
   harness_mcp_enabled:Record<string,boolean>
   harness_instrument_enabled:Record<string,boolean>
-  git_poll_seconds:number;worktree_root:string;reconcile_external_history:boolean;theme:ThemeName
+  git_poll_seconds:number;worktree_root:string;new_project_parent:string;reconcile_external_history:boolean;theme:ThemeName
   drawer_tab_display:'icon'|'title'
   utility_rail_display:'icon'|'title'
   process_poll_seconds:number;process_orphan_grace_seconds:number;process_evidence_retention_days:number
@@ -268,6 +269,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [diagnosticsText,setDiagnosticsText]=useState('')
   const [connectPhoneOpen,setConnectPhoneOpen]=useState(false)
   const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
+  // Placeholder for the assistant's new-project location: the parent directory most
+  // of the registered projects already live in. A hint only - never written back.
+  const [projectParentHint,setProjectParentHint]=useState('')
+  useEffect(()=>{void api<{root?:string}[]>('GET','/api/projects')
+    .then(rows=>setProjectParentHint(commonestParent(rows.map(row=>row.root||''))))
+    .catch(()=>{})},[])
   const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
@@ -1101,6 +1108,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             Project settings…). This tab is the global half only, and each section
             names the per-Project field it composes with. */}
         {activeTab==='projects'&&<Fragment>
+          {/* Where the assistant may create new project folders. Name-only at the tool:
+              the model never supplies a path, so this one directory is the whole surface
+              a chat message can create a folder in. The Add-project dialog is unaffected. */}
+          <section><h3>New project location</h3>
+            <label data-setting="new_project_parent">Default parent folder<input value={draft.new_project_parent} placeholder={projectParentHint||'e.g. D:\\PROJECTS'} onInput={e=>change('new_project_parent',e.currentTarget.value)}/></label>
+            <p>The one directory the Mux assistant's <em>create project</em> can make new project folders inside. The assistant is given a name, never a path, and refuses to create anything until this is set. The Add project dialog is unaffected and can use any parent.{projectParentHint&&<Fragment> Most of your projects live in <code>{projectParentHint}</code>.</Fragment>}</p>
+          </section>
+
           {/* Setup commands offered when a Project is registered. They are yours, typed
               here, stored on this machine — nothing is ever read out of a repository, so
               there is no trust prompt and no fingerprint to approve. */}

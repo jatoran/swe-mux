@@ -15,7 +15,6 @@ import { PromptsTab, type PromptsTabProps } from './PromptsTab'
 import { ClipboardTab } from './ClipboardPanel'
 import { drawerSectionTarget } from './drawerSegments'
 import type { PromptTemplate } from './promptTemplates'
-import { sessionDisplayName } from './sessionNames'
 
 // The Actions drawer combines four catalogs that can act on the focused session:
 // the configured Drawer half of the action layout, the live skill inventory,
@@ -308,8 +307,10 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   const groups = groupSkills(matched)
   const disclosure = inventoryNote(inventory)
 
+  // No session line. The pane heading above this tab already names the focused session
+  // and says so in more words ("Session: <name>"), and the harness this tab is resolved
+  // against is stated where it decides anything - the Skills section's own header.
   return <div class="actions-tab">
-    <p class="drawer-status">{session ? `${sessionDisplayName(session) || session.id} · ${backend}` : 'no terminal focused'}</p>
     <ActionSection
       id="quick"
       title="Quick actions"

@@ -164,6 +164,10 @@ Project creation rejects duplicate active canonical roots and an empty root, and
 `.swe-mux/`. `create_missing` makes exactly one folder: the parent must already exist, an
 already-present folder is accepted, and the duplicate/group checks run first so a rejected
 request leaves no stray directory.
+The new folder's leaf is validated server-side under the same Windows-safe rules as
+`POST /resources` (invalid/reserved names and the `.git`/`.swe-mux` control directories
+refused), because the dialog's folder field is free text and the assistant's create_project
+tool has no dialog at all; adopting a folder that already exists skips the leaf check.
 When the canonical root belongs to a removed Project, creation restores the original Project ID and responds with HTTP 200 plus `restored=true`; a new identity responds with HTTP 201 and `restored=false`.
 Project removal tombstones the registration, preserves History and disk contents, and returns the number of preserved history rows.
 Only live sessions block removal; the HTTP 409 response carries `code=project_has_live_sessions` and a bounded identity list.
@@ -1516,6 +1520,7 @@ Git review failures use typed JSON `{error, code}` with status 400, 404, 409, 41
 Success and error logs contain metadata only and never patch bodies or file contents.
 
 `POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`.
+A repository whose HEAD is unborn (freshly initialized, no commits) is refused before any Git mutation with `400 {code: repository_has_no_commits}` and a message naming the fix, unless an explicit `start_point` is given - Git resolves that ref without HEAD.
 With `spawn` present as an ordinary spawn body with required `project_id`, it creates the worktree and then starts a session whose cwd is forced to the new tree.
 Before spawn it runs `[worktree].setup_command` from the Project config, or an executable `.worktree-setup` convention when no override exists.
 `POST /git/worktrees/session` takes `{path, spawn}` and applies the same setup and forced-cwd spawn contract to an existing exact Git-listed Project worktree.

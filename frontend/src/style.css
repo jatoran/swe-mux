@@ -1134,7 +1134,7 @@ body {
 .automation-panel{display:flex;flex-direction:column}
 .automation-panel>header,.automation-panel>.usage-actions,.automation-panel>.usage-progress,.automation-panel>footer{flex:none}
 .automation-panel>main{flex:1 1 auto;min-height:0}
-.automation-subtabs{padding:5px 9px;background:var(--panel2)}.automation-subtabs [role=tab]{color:var(--muted)}
+
 .usage-header-actions button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 .observations-layer>.usage-panel>main{grid-row:6}.observations-layer>.usage-panel>footer{grid-row:7}
 .observations-compose{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
@@ -1170,9 +1170,7 @@ body {
 .resources-panel{width:min(1100px,100%);height:min(780px,100%);display:flex;flex-direction:column}
 .resources-panel>*{flex:none}
 .resources-panel>main,.resources-panel>.process-fleet-view{flex:1 1 auto;min-height:0}
-.resources-segmented{display:flex;border-bottom:1px solid var(--line);background:var(--panel2)}
-.resources-panel .resources-segmented button{flex:1;min-width:0;min-height:32px;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted)}
-.resources-panel .resources-segmented button.active{color:var(--text);border-bottom-color:var(--accent)}
+.resources-panel .segmented-tabs button{min-height:32px}
 .resources-panel>header .process-back{width:max-content;min-height:20px;padding:0;border:0;background:transparent;color:var(--muted)}
 /* Each view's own toolbar controls, right-aligned where the dialog header's used to be. */
 .resource-view-actions{display:flex;align-items:center;gap:5px}
@@ -1185,7 +1183,7 @@ body {
 .attention-away>p{margin:0;padding:0 9px 6px;color:var(--muted)}
 .attention-away>button{margin:0 9px 9px;min-height:25px;padding:0 7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
 .attention-away>pre{max-height:40vh;overflow:auto;margin:0;padding:8px 9px;border-top:1px solid var(--line);white-space:pre-wrap;word-break:break-word;font:inherit;color:var(--muted)}
-@media(max-width:760px){.resources-panel .resources-segmented button{min-height:44px}}
+@media(max-width:760px){.resources-panel .segmented-tabs button{min-height:44px}}
 .storage-usage-filter{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:var(--muted)}.storage-usage-filter select{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 6px;background:var(--panel2);color:var(--text);font:inherit;max-width:230px}
 .storage-usage-drill{border:0;padding:0;background:transparent;color:var(--accent);font:inherit;text-align:left;cursor:pointer}.storage-usage-drill:hover{text-decoration:underline}
 .storage-usage-path{margin:0;padding:8px 9px;border-top:1px solid var(--line);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.network-usage-actions{min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border-bottom:1px solid var(--line)}.network-usage-actions>div{min-width:0;display:grid;gap:3px}.network-usage-actions>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.network-usage-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);margin-bottom:10px}.network-usage-summary article{min-width:0;display:grid;gap:4px;padding:10px;background:var(--panel2)}.network-usage-summary article+article{border-left:1px solid var(--line)}.network-usage-summary span,.network-usage-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.network-usage-summary strong{font-size:15px}.network-usage-table{min-width:0;border:1px solid var(--line);margin-top:10px}.network-usage-table h3{margin:0;padding:8px 9px;border-bottom:1px solid var(--line);font:inherit;color:var(--accent);text-transform:uppercase}.network-usage-table>p{margin:0;padding:12px;color:var(--muted)}.network-usage-table table{width:100%;border-collapse:collapse;white-space:nowrap}.network-usage-table th,.network-usage-table td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font:inherit}.network-usage-table th:first-child,.network-usage-table td:first-child,.network-usage-table th:nth-child(2),.network-usage-table td:nth-child(2){text-align:left}.network-usage-table th{color:var(--muted);font-weight:inherit}.network-usage-table td:nth-child(2){max-width:430px;overflow:hidden;text-overflow:ellipsis}.network-usage-panel>footer{height:auto;min-height:29px;padding:6px 9px;line-height:1.4}
@@ -1619,7 +1617,12 @@ body {
 .quota-controls label:first-child{flex:1 1 260px}.quota-controls label:first-child select{min-width:180px;max-width:100%}.quota-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.quota-chart{min-width:0;border:1px solid var(--line);padding:8px;background:var(--bg)}.quota-chart h3{margin:0 0 7px;color:var(--accent);font:inherit;text-transform:uppercase}.quota-chart svg{display:block;width:100%;min-width:0;overflow:visible}.quota-chart svg text{fill:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}.quota-chart svg polyline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}.quota-grid-line{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}.quota-reset-marker{stroke:#94a3b8;stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}.quota-reset-marker.unexpected{stroke:#f472b6;stroke-width:2}.quota-reset-marker.scheduled{stroke:#a3e635}.quota-chart>p{margin:8px 0;color:var(--muted)}
 @media(max-width:760px){.usage-view-tabs{overflow-x:auto}.usage-view-tabs button{flex:none}.usage-view-controls{gap:6px}.usage-series-row{grid-template-columns:76px minmax(32px,1fr) 76px}.usage-series-row>strong{overflow:hidden;text-overflow:ellipsis}.model-stack-row{grid-template-columns:72px minmax(40px,1fr) 76px}.model-stack-row>strong{overflow:hidden;text-overflow:ellipsis}.quota-chart-grid{grid-template-columns:1fr}.quota-controls label:first-child{flex-basis:100%}.quota-controls label:first-child select{min-width:0}}
 
-.automation-tabs{overflow-x:auto}.automation-tabs button{flex:none}
+/* Views, not buttons. `usage-actions` gave each one a border and a background, which
+   is the vocabulary of an action; the shared segmented control is the vocabulary of a
+   choice, and this is a choice. */
+.automation-tabs{overflow-x:auto}
+.automation-panel .automation-tabs button{min-height:32px;flex:1 1 auto}
+@media(max-width:760px){.automation-panel .automation-tabs button{min-height:44px}}
 .automation-panel .usage-table{margin-top:10px}.automation-panel .usage-tables .usage-table{margin-top:0}
 /* The summary strip is a header for the two columns beneath it, not a cell in them. Left as
    an ordinary grid item it took one half-width column, which truncated four of its six labels
@@ -2595,7 +2598,7 @@ body {
    beside the label (`margin-right:auto` on it, not `flex:1` on the label) because it
    acts on the list under this heading; rename/remove act on the Group and stay at the
    far edge where destructive controls live everywhere else in the app. */
-.sidebar-project-bucket{position:relative;display:flex;flex-direction:column;margin:0 0 8px}.sidebar-project-bucket>header{order:-1;min-height:24px;display:flex;align-items:center;gap:3px;padding:0 7px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:grab;user-select:none}.sidebar-project-bucket>header:active{cursor:grabbing}.sidebar-project-bucket>header>span{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-project-bucket>header button{flex:0 0 auto;width:20px;height:calc(20px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.sidebar-project-bucket>header button:hover{color:var(--text);background:var(--panel2)}.sidebar-project-bucket>header .bucket-rename{margin-left:auto;font-size:10px;line-height:1}.sidebar-project-bucket>header .bucket-chevron{flex:0 0 auto;width:9px;font-size:9px;line-height:1}
+.sidebar-project-bucket{position:relative;display:flex;flex-direction:column;margin:0 0 10px;padding-left:7px;border-left:2px solid color-mix(in srgb,var(--muted) 55%,transparent);border-radius:0 3px 3px 0;background:color-mix(in srgb,var(--panel2) 96%,transparent)}.sidebar-project-bucket>header{order:-1;min-height:24px;display:flex;align-items:center;gap:3px;margin:0 0 3px -7px;padding:0 7px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 72%,var(--panel2));color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:grab;user-select:none}.sidebar-project-bucket>header:active{cursor:grabbing}.sidebar-project-bucket>header>span{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-project-bucket>header button{flex:0 0 auto;width:20px;height:calc(20px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.sidebar-project-bucket>header button:hover{color:var(--text);background:var(--panel2)}.sidebar-project-bucket>header .bucket-rename{margin-left:auto;font-size:10px;line-height:1}.sidebar-project-bucket>header .bucket-chevron{flex:0 0 auto;width:9px;font-size:9px;line-height:1}
 /* Rename is a per-Group action, not part of the heading, so it stays out of the tree's
    resting state and appears on hover over its own header. `opacity` rather than
    `display:none` keeps the button in the tab order (it also shows on keyboard focus,
@@ -2634,7 +2637,7 @@ body {
      a highlighted empty box is not something a first-run user knows to hover. */
   body:has(.tutorial-layer) .sidebar-projects-header .sidebar-tool{opacity:1}
 }
-.sidebar-ungrouped-projects{position:relative;display:flex;flex-direction:column;margin:0 0 8px}
+.sidebar-ungrouped-projects{position:relative;display:flex;flex-direction:column;margin:0 0 10px}
 /* An empty list — a Group nobody has filled yet, or the root with every Project grouped
    — says what to do with it and is the drop target for doing it. Without a body the
    section would be a header alone, too thin a strip to aim a dragged row at. */
@@ -2658,7 +2661,10 @@ body {
 .bucket-collapsed-badge.unread{box-shadow:0 0 0 1px currentColor}
 /* Folded sections sit tighter together: the 8px tail exists to separate a section's
    Projects from the next heading, and with no Projects showing it reads as a gap. */
-.sidebar-project-bucket.collapsed{margin-bottom:2px}
+/* Folded sections sit tighter together, and lose the rule under a heading that now
+   has nothing beneath it to divide from. */
+.sidebar-project-bucket.collapsed{margin-bottom:6px;padding-left:0}
+.sidebar-project-bucket.collapsed>header{margin:0;border-bottom-color:transparent}
 /* Scoped to the two insertion values, not to the attribute: a Project dropping *into*
    this Group sets `drop-into` on the same element, and an unanchored bar would render
    at the section's static position rather than at either edge. */
@@ -3073,10 +3079,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-body{position:relative}
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
-.drawer-body-actions>.actions-tab>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-files>.project-resource.file-browser>header,.drawer-body-agent .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-.drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
-.drawer-body-agent .agent-context-header>div>strong{display:none}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
 
 /* The dock owns one persistent layout tree. Each leaf is a tab stack and every internal
@@ -3107,20 +3111,23 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 @media(max-width:760px){.drawer-collapse{width:34px;height:34px;border-color:var(--line);background:var(--panel2);font-size:15px}}
 .drawer-pane-heading+.drawer-status,.drawer-pane-heading+.clipboard-disabled{padding-left:9px}
 
-/* The drawer's one segmented control (`DrawerSegmentControl.tsx`), under the pane heading
-   and above whichever segment body is selected. One rule for every segmented tab —
-   Activity, Agent, Git — because the alternative was one bespoke toggle per tab, which is
-   what this replaced. */
-.drawer-segmented{flex:none;display:flex;border-bottom:1px solid var(--line);background:var(--panel2)}
-.drawer-segmented button{flex:1;min-width:0;min-height:28px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
-.drawer-segmented button.active{color:var(--text);border-bottom-color:var(--accent)}
+/* One segmented control, wherever a surface shows more than one view of itself.
+   `DrawerSegmentControl.tsx` draws it in the drawer, the Resources dialog draws it over its
+   four meters, and the Automation dashboard draws it over its four views. They were three
+   different toggles with three different highlights until they were one: a shared shape is
+   what makes "these are views of this surface" read as the same statement everywhere, and a
+   button that merely looks pressed does not make it. */
+.segmented-tabs{flex:none;display:flex;border-bottom:1px solid var(--line);background:var(--panel2)}
+.segmented-tabs button{flex:1;min-width:0;min-height:28px;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.segmented-tabs button:hover{color:var(--text);background:color-mix(in srgb,var(--text) 5%,transparent)}
+.segmented-tabs button.active{color:var(--text);border-bottom-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}
 /* Each segment body is the pane's scrolling region, exactly as an unsegmented tab's body is.
    `[hidden]` needs the explicit `display:none` because the rule above sets `display:flex`,
    which beats the user-agent default - the same trap `.drawer-note-host[hidden]` documents. */
 .drawer-segment-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
 .drawer-segment-body[hidden]{display:none}
 .drawer-segment-body>.scan-timeline-panel,.drawer-segment-body>.findings-pane,.drawer-segment-body>.change-map-pane,.drawer-segment-body>.agent-environment,.drawer-segment-body>.agent-context{flex:1;min-height:0}
-@media(max-width:760px){.drawer-segmented button{min-height:38px}}
+@media(max-width:760px){.segmented-tabs button{min-height:38px}}
 .drawer-pane[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 13%,transparent)}
 .drawer-pane[data-pointer-drop-indicator="join"]:after{inset:34px 0 0}
 .drawer-pane[data-pointer-drop-indicator="split-left"]:after{inset:34px 76% 0 0}
@@ -3255,7 +3262,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}
 .agent-context-header{position:sticky;z-index:5;top:0;display:flex;align-items:center;gap:8px;padding:8px 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 94%,transparent);backdrop-filter:blur(6px)}
 .agent-context-header>div{flex:1;min-width:0;display:grid;gap:2px}
-.agent-context-header strong{font-size:10px}
 .agent-context-header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
 .agent-context-header button,.agent-context-disclosure button,.agent-context-confirm button,.agent-context-sync-card button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
 .agent-context-header button:hover:not(:disabled),.agent-context-disclosure button:hover:not(:disabled),.agent-context-confirm button:hover:not(:disabled),.agent-context-sync-card button:hover:not(:disabled){border-color:var(--accent)}
@@ -3306,11 +3312,24 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-confirm pre,.agent-context-viewer pre{min-width:0;max-height:290px;margin:0;padding:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:9px/1.45 'Cascadia Mono',Consolas,monospace;overflow:auto;white-space:pre}
 .agent-context-confirm>footer{display:flex;justify-content:flex-end;gap:5px}
 .agent-context-confirm button.danger,.agent-context-backup-confirm button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
-.agent-context-viewer{display:grid;gap:7px;padding:9px;border-bottom:1px solid var(--line);background:var(--panel2)}
+/* The bottom half of the tab, and it has to look like a half. Above it is a list of
+   files on `--bg`; a body pinned directly under that list, sharing its column and with
+   only a background change between them, read as more list. It gets a rule thick enough
+   to be a boundary rather than a row separator, its own ground, and a kicker that names
+   what the region *is* before it names what is in it. */
+.agent-context-viewer{display:grid;gap:7px;padding:9px;border-top:2px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel2)}
 .agent-context-viewer>header{display:flex;align-items:baseline;gap:6px}
+.agent-context-viewer-kicker{flex:none;padding:1px 5px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:2px;background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent);font-size:7px;text-transform:uppercase;letter-spacing:.06em}
 .agent-context-viewer>header strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:9px;white-space:nowrap}
-.agent-context-viewer>header small{color:var(--muted);font-size:7px}
-.agent-context-viewer>p{margin:0;color:var(--muted);font-size:8px}
+.agent-context-viewer>header small{flex:none;color:var(--muted);font-size:7px}
+.agent-context-viewer-clear{flex:none;min-height:0!important;width:17px;padding:0!important;line-height:1;font-size:11px!important}
+.agent-context-viewer>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
+/* Empty is a resting state, not a failure: no accent, and a dashed well so the region
+   still has a visible floor to say "a file would appear here". */
+.agent-context-viewer.empty{background:var(--panel)}
+.agent-context-viewer.empty .agent-context-viewer-kicker{border-color:var(--line);background:transparent;color:var(--muted)}
+.agent-context-viewer.empty>header strong{color:var(--muted);font-weight:400}
+.agent-context-viewer.empty>p{padding:14px 10px;border:1px dashed var(--line);border-radius:4px;text-align:center}
 .agent-context-viewer pre{max-height:420px;user-select:text}
 .agent-context-backup{display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px solid var(--line)}
 .agent-context-backup>span:first-child{flex:1;min-width:0;display:grid;gap:2px}
@@ -3366,7 +3385,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .skill-flag{padding:0 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-weight:600;text-transform:uppercase}
 .skill-flag.warn{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
 .drawer-skill-note{margin:0;padding:8px 9px;color:var(--muted);font-size:8px;line-height:1.45}
-.actions-tab{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}.actions-section{border-bottom:1px solid var(--line)}.actions-section-header{position:sticky;top:24px;z-index:5;display:flex;align-items:stretch;min-height:34px;background:var(--panel2);border-bottom:1px solid transparent}.actions-section.expanded>.actions-section-header{border-bottom-color:var(--line)}.actions-section-toggle{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-areas:'caret title' 'caret detail';align-items:center;gap:0 4px;padding:5px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.actions-section-toggle>span{grid-area:caret;color:var(--muted)}.actions-section-toggle>strong{grid-area:title;font-size:9px;text-transform:uppercase;letter-spacing:.06em}.actions-section-toggle>small{grid-area:detail;color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions-section-action{flex:none;margin:5px 7px 5px 0;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}.actions-section-action:hover,.actions-section-action:focus-visible{border-color:var(--accent);color:var(--text)}.actions-section-body{min-width:0}.actions-section-body>.drawer-skills{border-top:0}.actions-section-body .drawer-skill-list,.actions-section-body>.clipboard-entries{overflow:visible}.actions-section-prompts .drawer-status{padding-left:9px}.actions-section-prompts .clipboard-entry-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:2px;padding:8px 9px}.actions-section-prompts .clipboard-entry-body>span,.actions-section-prompts .clipboard-entry-body>small{grid-area:auto}.actions-section-prompts .prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
+.actions-tab{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.actions-section+.actions-section{border-top:2px solid var(--line)}
+.actions-section-header{position:sticky;top:0;z-index:5;display:flex;align-items:stretch;min-height:34px;background:linear-gradient(var(--bg),var(--bg));box-shadow:inset 3px 0 color-mix(in srgb,var(--muted) 60%,transparent);border-bottom:1px solid var(--line)}
+.actions-section:not(.expanded)>.actions-section-header{border-bottom-color:transparent}
+.actions-section.expanded>.actions-section-header>.actions-section-toggle>strong{color:var(--text)}
+.actions-section:not(.expanded)>.actions-section-header>.actions-section-toggle>strong{color:var(--muted)}
+.actions-section-body{background:var(--panel)}
+.actions-section-toggle{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-areas:'caret title' 'caret detail';align-items:center;gap:0 4px;padding:5px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.actions-section-toggle>span{grid-area:caret;color:var(--muted)}.actions-section-toggle>strong{grid-area:title;font-size:9px;text-transform:uppercase;letter-spacing:.06em}.actions-section-toggle>small{grid-area:detail;color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions-section-action{flex:none;margin:5px 7px 5px 0;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}.actions-section-action:hover,.actions-section-action:focus-visible{border-color:var(--accent);color:var(--text)}.actions-section-body{min-width:0;padding-bottom:4px}.actions-section-body>.drawer-skills{border-top:0}.actions-section-body .drawer-skill-list,.actions-section-body>.clipboard-entries{overflow:visible}.actions-section-prompts .drawer-status{padding-left:9px}.actions-section-prompts .clipboard-entry-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:2px;padding:8px 9px}.actions-section-prompts .clipboard-entry-body>span,.actions-section-prompts .clipboard-entry-body>small{grid-area:auto}.actions-section-prompts .prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
 .agent-environment{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .agent-environment-header{flex:0 0 auto;min-height:28px;padding:4px 7px 4px calc(var(--drawer-panel-title-width) + 13px);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--panel2)}
 .agent-environment-header>div{min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}
