@@ -40,7 +40,7 @@ import {
   type SettingsRailSection, type SettingsTab,
 } from './settingsTabs'
 import type { InitScript } from './projectCreate'
-import type { PromptTemplate } from './PromptLibrary'
+import type { PromptTemplate } from './promptTemplates'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
 import { formatCommandLine, launchPreview, parseCommandLine } from './commandLine'
 import { ModelPicker } from './ModelPicker'

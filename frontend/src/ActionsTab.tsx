@@ -12,7 +12,7 @@ import {
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
-import type { PromptTemplate } from './PromptLibrary'
+import type { PromptTemplate } from './promptTemplates'
 import { sessionDisplayName } from './sessionNames'
 
 // The Actions drawer combines three catalogs that can act on the focused session:

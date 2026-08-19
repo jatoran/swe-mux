@@ -450,7 +450,7 @@ created by sync. Successful writes emit `agent_context_changed`; see
 ## Prompt templates
 
 ```text
-GET    /prompts[?project_id=]
+GET    /prompts[?project_id=][&all_projects=1]
 POST   /prompts
 PUT    /prompts/{scope}/{template_id}
 DELETE /prompts/{scope}/{template_id}
@@ -459,7 +459,11 @@ PATCH  /prompts/{scope}/{template_id}/favorite
 ```
 
 Scopes are `global | project`. Writes are revision checked; same-ID global/Project conflicts
-are returned explicitly. Template bodies are bounded inert UTF-8 text and terminal control
+are returned explicitly. Each item names its owning Project (`project_id`, `project_name`;
+null for global) and the response lists the Projects it read a library for. `all_projects=1`
+widens the read to every registered Project that admits Project templates - a management view
+only, because the unwidened listing is what an Action layout pins from and must stay confined
+to the focused Project. Template bodies are bounded inert UTF-8 text and terminal control
 characters are rejected. The browser's Insert action uses terminal paste semantics and never
 adds Enter or submits.
 

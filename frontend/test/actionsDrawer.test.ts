@@ -101,3 +101,40 @@ test('prompt templates render excerpts inside Actions while the full editor stay
   assert.ok(actions.includes('<PromptsTab'))
   assert.ok(app.includes('<PromptLibrary project='))
 })
+
+test('templates are authored where they are used, through one shared form', () => {
+  const prompts = source('PromptsTab.tsx')
+  const library = source('PromptLibrary.tsx')
+  const editor = source('PromptTemplateEditor.tsx')
+
+  // Both hosts drive the same hook and render the same fields; neither owns a
+  // second copy of the form that could drift from the other.
+  for (const host of [prompts, library]) {
+    assert.ok(host.includes('usePromptDraft('), 'both hosts must drive the shared draft state')
+    assert.ok(host.includes('<PromptDraftFields'), 'both hosts must render the shared fields')
+    assert.ok(host.includes('<PromptDraftActions'), 'both hosts must render the shared save bar')
+  }
+  assert.doesNotMatch(prompts, /<textarea[^>]*value=\{draft\.body/, 'the drawer must not re-implement the form')
+
+  // The drawer creates and edits in place.
+  assert.ok(prompts.includes('openEditor(null)'), 'the drawer needs a New control')
+  assert.ok(prompts.includes('openEditor(item)'), 'each row must be editable in place')
+  // Its dismissals cannot be intercepted, so an open draft is mirrored.
+  assert.ok(prompts.includes('persistKey:'))
+  assert.ok(editor.includes('sessionStorage.setItem(stashKey'))
+  assert.ok(editor.includes('stash.revision !== stashRevision'), 'a stale stash must be dropped, not replayed')
+})
+
+test('the full library selects straight into an editable form and can widen past one Project', () => {
+  const library = source('PromptLibrary.tsx')
+
+  // No Edit mode to enter: selecting a template is editing it.
+  assert.doesNotMatch(library, /beginEdit|>Edit</)
+  assert.ok(library.includes('all_projects=1'), 'the wide view is the library’s reason to exist')
+  assert.ok(library.includes('prompt-scope-filter'))
+  // Widening must not leak into the pinning path, which reads the default listing.
+  const prompts = source('PromptsTab.tsx')
+  assert.doesNotMatch(prompts, /all_projects/)
+  // A template is written back to its own Project, not to whichever is focused.
+  assert.ok(source('PromptTemplateEditor.tsx').includes('draft.projectId || project?.id'))
+})

@@ -4,21 +4,24 @@ import { api } from './api'
 import { agentTargetName, agentTargets } from './agentTargets'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
-import { promptTemplateExcerpt, renderPromptTemplate } from './promptTemplates'
+import { promptTemplateExcerpt, promptTemplateRef, renderPromptTemplate, type PromptTemplate } from './promptTemplates'
+import { PromptDraftActions, PromptDraftFields, usePromptDraft } from './PromptTemplateEditor'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
-import type { PromptTemplate } from './PromptLibrary'
 import type { SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
 import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
 
-// Prompt templates, browse-and-insert only.
+// Prompt templates: browse, insert, and author.
 //
-// Authoring stays in the full-screen library: a 380px column is the wrong place to
-// write a multi-variable template, and splitting the editor across two hosts would
-// mean maintaining two layouts of the same form. Inserting, which is the frequent
-// action, belongs here next to clipboard history — both are "text into the focused
-// session", and both should be one swipe away rather than three menu levels deep.
+// Inserting, which is the frequent action, belongs here next to clipboard history —
+// both are "text into the focused session", and both should be one swipe away
+// rather than three menu levels deep. Authoring is here for the same reason: the
+// common edit is a wording fix on the template you are already looking at, and
+// routing that through a modal is three surfaces of ceremony for a typo. The form
+// itself is `PromptTemplateEditor`, shared verbatim with the full library, so the
+// two hosts differ in arrangement and never in what a template *is*. The library
+// keeps the one thing a 380px column cannot do: the wide, cross-Project view.
 //
 // Two ways out of a row, deliberately different:
 //
@@ -56,8 +59,16 @@ export type PromptsTabProps = {
   }
 }
 
-type Library = { items: PromptTemplate[] }
+type PromptOwner = { id: string; name: string }
+/** `projects` names the Projects the daemon actually read a Project library for,
+ *  which is the authority on whether this Project accepts one: its
+ *  `prompt_library_scope` may be `global`, and offering an owner the daemon will
+ *  refuse turns a create into an error the user cannot act on. */
+type Library = { items: PromptTemplate[]; projects?: PromptOwner[] }
 type TargetMenu = { item: PromptTemplate; x: number; y: number }
+/** Open inline editor. `nonce` restarts the draft when "New" is pressed twice,
+ *  since both times the template being edited is `null`. */
+type InlineEdit = { template: PromptTemplate | null; nonce: number }
 /** A target chosen before its template's placeholders were filled: the expanded
  *  field block sends there instead of inserting once the fields are complete. */
 type PendingSend = { key: string; target: SendToAgentTarget }
@@ -67,6 +78,7 @@ const LONG_PRESS_MS = 550
 export function PromptsTab({ project, backend, onInsert, onDone, onManage, showManage = true, sessions, onSend, preselect, pin }: PromptsTabProps) {
   const rowConfig = useSessionRowConfig()
   const [items, setItems] = useState<PromptTemplate[] | null>(null)
+  const [owners, setOwners] = useState<PromptOwner[]>([])
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
   const [variables, setVariables] = useState<Record<string, string>>({})
@@ -75,6 +87,8 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
   const [pending, setPending] = useState<PendingSend | null>(null)
   const [submit, setSubmit] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [edit, setEdit] = useState<InlineEdit | null>(null)
+  const editNonce = useRef(0)
   const menuPanel = useRef<HTMLDivElement>(null)
   const longPress = useRef<number | null>(null)
   const pressOrigin = useRef<{ x: number; y: number } | null>(null)
@@ -91,7 +105,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     const load = () => {
       const scope = project ? `?project_id=${encodeURIComponent(project.id)}` : ''
       return api<Library>('GET', `/api/prompts${scope}`)
-        .then(library => { setItems(library.items); setNote('') })
+        .then(library => { setItems(library.items); setOwners(library.projects || []); setNote('') })
         .catch(cause => setNote(cause instanceof Error ? cause.message : String(cause)))
     }
     void load()
@@ -251,13 +265,51 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
 
   const armed = pending && active && pending.key === active.key ? pending : null
 
+  // The inline editor is the same form the full library uses. It replaces the list
+  // rather than expanding under a row: the fields need the whole column, and a
+  // half-scrolled row above an open form is how the row you meant to edit gets lost.
+  const draft = usePromptDraft({
+    template: edit?.template || null,
+    project,
+    owners,
+    resetKey: edit ? edit.nonce : 'closed',
+    // The drawer has no dismissal it can intercept, so an open draft is mirrored
+    // and comes back when the tab does.
+    persistKey: edit ? (edit.template ? promptTemplateRef(edit.template) : 'new') : undefined,
+    // The write already invalidated every prompt view, and this tab subscribes to
+    // that, so the list behind the editor is current by the time it reappears.
+    onSaved: () => setEdit(null),
+    onDeleted: () => setEdit(null),
+  })
+  const openEditor = (template: PromptTemplate | null) => {
+    setNote('')
+    setMenu(null)
+    setEdit({ template, nonce: ++editNonce.current })
+  }
+  const closeEditor = () => {
+    if (draft.dirty) { draft.setMessage('Save or revert this template before closing.'); return }
+    setEdit(null)
+  }
+
+  if (edit) return <div class="prompt-inline-editor">
+    <header class="prompt-inline-head">
+      <button onClick={closeEditor} title="Back to the template list">‹ Templates</button>
+      <strong>{edit.template ? 'Edit template' : 'New template'}</strong>
+    </header>
+    <PromptDraftFields state={draft} owners={owners} compact />
+    <PromptDraftActions state={draft} onCancel={closeEditor} cancelLabel="Close" />
+    {draft.message && <p class="clipboard-note" aria-live="polite">{draft.message}</p>}
+    <footer class="drawer-actions"><button onClick={onManage}>Open full library…</button></footer>
+  </div>
+
   return <>
     <p class="drawer-status">{project ? project.name : 'global templates'}{backend ? ` · ${backend}` : ''} · tap inserts · long-press to send</p>
-    <div class="clipboard-search">
+    <div class="clipboard-search prompt-drawer-search">
       <input value={query} onInput={event => setQuery(event.currentTarget.value)} placeholder="Filter templates…" aria-label="Filter prompt templates" />
+      <button title="Write a new prompt template here" onClick={() => openEditor(null)}>New</button>
     </div>
     <div class="clipboard-entries" role="group" aria-label="Prompt templates">
-      {filtered.map(item => <div key={item.key} class={`clipboard-entry ${selected === item.key ? 'active' : ''}${pin ? ' has-pin' : ''}`}>
+      {filtered.map(item => <div key={item.key} class={`clipboard-entry ${selected === item.key ? 'active' : ''} has-pin`}>
         <button
           class="clipboard-entry-body"
           title={`${item.variables.length ? 'Fill placeholders, then insert' : 'Insert into the focused session'} · right-click or long-press to send to a session`}
@@ -280,6 +332,12 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
           <small>{item.scope}{item.tags.length ? ` · ${item.tags.join(', ')}` : ''}{item.variables.length ? ` · ${item.variables.length} field${item.variables.length === 1 ? '' : 's'}` : ''}</small>
           <small class="prompt-template-excerpt">{promptTemplateExcerpt(item.body)}</small>
         </button>
+        <button
+          class="skill-pin edit"
+          title={`Edit “${item.title}” here`}
+          aria-label={`Edit ${item.title}`}
+          onClick={() => openEditor(item)}
+        >Edit</button>
         {pin && <button
           class={`skill-pin${pin.isPinned(item) ? ' on' : ''}`}
           aria-pressed={pin.isPinned(item)}
@@ -318,6 +376,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
       <button role="menuitem" onClick={() => { const item = menu.item; setMenu(null); choose(item) }}>
         {menu.item.variables.length ? 'Fill fields, then insert' : 'Insert into focused session'}
       </button>
+      <button role="menuitem" onClick={() => openEditor(menu.item)}>Edit template</button>
       <div class="context-subtitle">SEND TO SESSION</div>
       {targets.map(session => <button
         key={session.id}

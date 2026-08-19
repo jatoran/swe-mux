@@ -101,6 +101,65 @@ def test_prompt_library_round_trip_conflicts_usage_and_revision_safety(tmp_path:
     assert len(library.list(project)["items"]) == 1
 
 
+def test_prompt_library_widens_to_other_projects_without_widening_conflicts(
+    tmp_path: Path,
+) -> None:
+    """The management view reads Projects the caller is not focused on.
+
+    Editing a template must stay routed at its *own* Project, and a Project that
+    switched Project templates off must stay unread, because a listing is also
+    what an Action pin resolves against.
+    """
+
+    def make(name: str, scope: str) -> ProjectRecord:
+        root = tmp_path / name
+        (root / ".swe-mux").mkdir(parents=True)
+        (root / ".swe-mux" / "config.toml").write_bytes(
+            serialize_project_config({"prompt_library_scope": scope})
+        )
+        return ProjectRecord(name, name.title(), str(root), 0)
+
+    focused = make("alpha", "both")
+    other = make("beta", "both")
+    silent = make("gamma", "global")
+    library = PromptLibrary(tmp_path / "data")
+    here = library.create("project", {"title": "Alpha review", "body": "look at alpha"}, focused)
+    there = library.create("project", {"title": "Beta review", "body": "look at beta"}, other)
+    library.create("global", {"title": "Anywhere", "body": "global text"})
+
+    narrow = library.list(focused)
+    assert {item["title"] for item in narrow["items"]} == {"Alpha review", "Anywhere"}
+    assert narrow["projects"] == [{"id": "alpha", "name": "Alpha"}]
+
+    wide = library.list(focused, other_projects=[focused, other, silent])
+    assert {item["title"] for item in wide["items"]} == {"Alpha review", "Beta review", "Anywhere"}
+    # The focused Project is listed once, and a Project that excludes Project
+    # templates is not offered as somewhere a new one could be written.
+    assert wide["projects"] == [{"id": "alpha", "name": "Alpha"}, {"id": "beta", "name": "Beta"}]
+    owners = {item["title"]: (item["project_id"], item["project_name"]) for item in wide["items"]}
+    assert owners["Alpha review"] == ("alpha", "Alpha")
+    assert owners["Beta review"] == ("beta", "Beta")
+    assert owners["Anywhere"] == (None, None)
+
+    # A foreign template is edited against its own Project, never the focused one.
+    renamed = library.update(
+        "project", there["id"], {"title": "Beta rework", "body": "look at beta"},
+        there["revision"], other,
+    )
+    assert renamed["project_id"] == "beta"
+    assert (Path(other.root) / ".swe-mux" / "prompts" / f"{there['id']}.md").is_file()
+    assert not (Path(focused.root) / ".swe-mux" / "prompts" / f"{there['id']}.md").exists()
+
+    # Two Projects holding a copy of one template file is not the ambiguity the
+    # `scope:id` key cannot resolve, so widening must not invent a conflict.
+    library.create("project", {"title": "Copy", "body": "copied", "id": here["id"]}, other)
+    widened = library.list(focused, other_projects=[other])
+    assert not any(item["conflict"] for item in widened["items"])
+    library.create("global", {"title": "Shadow", "body": "shadow", "id": here["id"]})
+    shadowed = library.list(focused, other_projects=[other])["items"]
+    assert sum(item["conflict"] for item in shadowed) == 2
+
+
 def test_prompt_body_has_no_trailing_newline_after_round_trip(tmp_path: Path) -> None:
     library = PromptLibrary(tmp_path / "data")
     created = library.create("global", {"title": "Insert me", "body": "just text"})
@@ -148,6 +207,49 @@ def test_phase3_routes_are_registered(tmp_path: Path) -> None:
     assert ("GET", "/api/diagnostics/network") in routes
     assert ("DELETE", "/api/diagnostics/network") in routes
     assert any(canonical == "/notification-sounds" for _, canonical in routes)
+
+
+@pytest.mark.asyncio
+async def test_prompt_route_widens_to_every_project_only_when_asked(tmp_path: Path) -> None:
+    roots = {}
+    for name in ("alpha", "beta"):
+        root = tmp_path / name
+        (root / ".swe-mux").mkdir(parents=True)
+        (root / ".swe-mux" / "config.toml").write_bytes(
+            serialize_project_config({"prompt_library_scope": "both"})
+        )
+        roots[name] = root
+    client = TestClient(TestServer(create_app(Config(data_dir=tmp_path / "data"))))
+    await client.start_server()
+    try:
+        manager = client.app["projects"]
+        alpha = await manager.create("alpha", str(roots["alpha"]))
+        beta = await manager.create("beta", str(roots["beta"]))
+        for project, title in ((alpha, "Alpha only"), (beta, "Beta only")):
+            created = await client.post(
+                "/api/prompts",
+                json={
+                    "project_id": project.id,
+                    "scope": "project",
+                    "title": title,
+                    "body": f"body for {title}",
+                },
+            )
+            assert created.status == 201
+
+        narrow = await (await client.get(f"/api/prompts?project_id={alpha.id}")).json()
+        # The default listing is what an Action layout pins from, so it stays
+        # confined to the focused Project no matter how many others exist.
+        assert [item["title"] for item in narrow["items"]] == ["Alpha only"]
+
+        wide = await (
+            await client.get(f"/api/prompts?project_id={alpha.id}&all_projects=1")
+        ).json()
+        assert sorted(item["title"] for item in wide["items"]) == ["Alpha only", "Beta only"]
+        assert {item["project_name"] for item in wide["items"]} == {"alpha", "beta"}
+        assert [item["id"] for item in wide["projects"]] == [alpha.id, beta.id]
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
