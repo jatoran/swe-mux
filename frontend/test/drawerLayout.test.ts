@@ -84,10 +84,13 @@ test('the collapse host is the stack in the drawer top-right corner', () => {
 })
 
 test('missing shipped tabs join their canonical predecessor without moving existing tabs', () => {
+  // `clipboard` is a retired id that migrates to `actions`, which is also the exercise:
+  // a stored arrangement naming a tab that no longer exists must land the survivor where
+  // the retired one sat, not append it.
   const layout = normalizeDrawerLayout({ type: 'stack', id: 'one', tabs: ['notifications', 'files', 'clipboard'] })
   assert.deepEqual(drawerTabs(layout), [
-    'notifications', 'files', 'notes', 'context', 'git', 'processes', 'schedule',
-    'clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent',
+    'notifications', 'files', 'notes', 'git', 'processes', 'schedule',
+    'actions', 'queue', 'transcript', 'activity', 'agent',
   ])
 })
 
@@ -97,7 +100,7 @@ test('legacy Commands and Prompts tabs migrate to one Actions singleton', () => 
     root: {
       type: 'split', id: 'legacy', direction: 'horizontal', ratio: 0.5,
       first: { type: 'stack', id: 'left', tabs: ['files', 'prompts'] },
-      second: { type: 'stack', id: 'right', tabs: ['commands', 'clipboard'] },
+      second: { type: 'stack', id: 'right', tabs: ['commands', 'transcript'] },
     },
   })
   assertSingletons(layout)
@@ -139,10 +142,10 @@ test('same-stack and cross-stack moves preserve exact singleton ownership', () =
   const split = moveDrawerTabToSplit(last, 'notes', stack.id, 'right')
   assert.equal(drawerStacks(split).length, 2)
   const notesStack = drawerStackForTab(split, 'notes')!
-  const clipboardStack = drawerStackForTab(split, 'clipboard')!
+  const actionsStack = drawerStackForTab(split, 'actions')!
   const moved = moveDrawerTabToStack(split, 'files', notesStack.id, 0)
   assert.deepEqual(drawerStackForTab(moved, 'files')?.id, notesStack.id)
-  assert.deepEqual(drawerStackForTab(moved, 'clipboard')?.id, clipboardStack.id)
+  assert.deepEqual(drawerStackForTab(moved, 'actions')?.id, actionsStack.id)
   assertSingletons(moved)
 })
 
@@ -220,7 +223,7 @@ test('v1 Project state migrates to v2 without duplicating the global layout', ()
   }), layout)
   assert.equal(map.p1.focused_tab, 'git')
   assert.equal(map.p1.desktop_expanded, true)
-  assert.equal(map.p2.focused_tab, 'clipboard')
+  assert.equal(map.p2.focused_tab, 'actions')
   assert.equal(map.p3.focused_tab, 'actions')
   const serialized = serializeDrawerProjectPresentations(map, layout)
   assert.deepEqual(parseDrawerProjectPresentations(serialized, layout), map)
@@ -265,10 +268,10 @@ test('a deterministic mixed sequence preserves every registered tab after every 
   const assertStep = (next: DrawerLayout) => { layout = normalizeDrawerLayout(next); assertSingletons(layout) }
   const first = drawerStacks(layout)[0]
   assertStep(moveDrawerTabToSplit(layout, 'notes', first.id, 'right'))
-  assertStep(moveDrawerTabToSplit(layout, 'git', drawerStackForTab(layout, 'clipboard')!.id, 'bottom'))
+  assertStep(moveDrawerTabToSplit(layout, 'git', drawerStackForTab(layout, 'actions')!.id, 'bottom'))
   assertStep(moveDrawerTabToStack(layout, 'files', drawerStackForTab(layout, 'notes')!.id, 0))
   assertStep(moveDrawerTabDirection(layout, 'actions', 'bottom'))
-  const stack = drawerStackForTab(layout, 'clipboard')!
+  const stack = drawerStackForTab(layout, 'actions')!
   assertStep(reorderDrawerStack(layout, stack.id, [...stack.tabs].reverse()))
   if (layout.root.type === 'split') assertStep(setDrawerSplitRatio(layout, layout.root.id, 0.73))
 })

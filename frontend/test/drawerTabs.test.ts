@@ -33,21 +33,24 @@ test('navigation sidebar commands target the active responsive presentation',()=
 })
 
 test('session surfaces lead, then Project surfaces, then application surfaces', () => {
-  // Order is the argument for the drawer existing: clipboard, Actions, and the prompt
-  // queue are all "text into the focused terminal" and belong together.
+  // Order is the argument for the drawer existing: Actions and the prompt queue are both
+  // "text into the focused terminal" and belong together.
   // Files and Notes are the second group - project-scoped indexes that open a document
   // into a pane instead of typing into one. Notifications is neither, and stays last.
   // Git closes the Project-scoped block: it reports on the repository behind the Project
   // rather than opening anything into a pane, so it sits with them without being a navigator.
-  // Transcript closes the session block: session-scoped like the four before it, but it
-  // reads that session back instead of writing into it. Processes closes the Project block
-  // for the same shape of reason as Git: Project-scoped, reports rather than opens, and is
-  // the watch half of a surface whose acting half stays modal.
+  // Transcript, Activity, and Agent close the session block: session-scoped like the two
+  // before them, but they read that session back instead of writing into it. Processes
+  // closes the Project block for the same shape of reason as Git: Project-scoped, reports
+  // rather than opens, and is the watch half of a surface whose acting half stays modal.
   // Schedule follows Processes and closes the Project block: what is running now, then
   // what will run later.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'schedule', 'notifications'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git', 'processes', 'schedule'])
+  //
+  // Three former tabs are segments or a section of their neighbours now; the retirement
+  // table lives in `drawerLayout.ts` and is covered by `drawerLayout.test.ts`.
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['actions', 'queue', 'transcript', 'activity', 'agent', 'files', 'notes', 'git', 'processes', 'schedule', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['actions', 'queue', 'transcript', 'activity', 'agent'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'git', 'processes', 'schedule'])
   // Alerts is the only app-scoped tab. The fleet queue is app-scoped too but is a modal:
   // it has no send button, so it needs no terminal beside it, and a second queue-shaped
   // tab in the same rail reads as a duplicate of the first.
@@ -62,8 +65,8 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   const labels = DRAWER_TABS.map(tab => tab.label)
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
   assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
-    'Clipboard History', 'Actions', 'Prompt Queue', 'Transcript', 'Insight', 'Change Map', 'Agent Environment',
-    'File Explorer', 'Notes', 'Instructions & Memory', 'Git', 'Processes', 'Scheduled Runs', 'Alerts',
+    'Actions', 'Prompt Queue', 'Transcript', 'Activity', 'Agent',
+    'File Explorer', 'Notes', 'Git', 'Processes', 'Scheduled Runs', 'Alerts',
   ])
   for (const tab of DRAWER_TABS) {
     assert.ok(tab.label.length <= 10, `${tab.id} label is too long to also serve as a name`)
@@ -76,7 +79,7 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
 
 test('registry lookup falls back safely for an unknown tab', () => {
   assert.equal(drawerTab('actions').label, 'Actions')
-  assert.equal(drawerTab('nope' as never).id, 'clipboard')
+  assert.equal(drawerTab('nope' as never).id, 'actions')
 })
 
 test('App restores desktop state per Project without persisting mobile visibility', () => {
@@ -96,7 +99,10 @@ test('each drawer body shows a compact heading with the rail tooltip description
   const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
   const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
   assert.ok(host.includes('class={`drawer-body drawer-body-${selected}`}'))
-  assert.ok(host.includes('<h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>'))
+  // The *segment's* heading when a tab has one, falling back to the tab's own: "Change Map"
+  // is what that pane is, and "Activity" is only where it lives.
+  assert.ok(host.includes('<h2 class="drawer-panel-title" title={active.title}>{heading}</h2>'))
+  assert.ok(host.includes("const heading = (segment && drawerSegment(selected, segment)?.heading) || active.heading"))
   assert.match(css, /\.drawer-panel-title\{[^}]*border:[^}]*background:/)
   assert.ok(css.includes('padding-left:calc(var(--drawer-panel-title-width) + 13px)'), 'existing top chrome must make room for the heading')
 })

@@ -51,11 +51,25 @@
 - Changing device presence (what counts as "in use", the heartbeat, the leading device):
   `design/features/device-presence.md`, `design/interfaces.md`,
   `design/features/notifications.md`, `design/features/terminal-input.md`
-- Changing the utility drawer (tabs, which of them are drawn, recursive desktop dock/launcher), Action rail placement, or where
+- Changing the utility drawer (tabs, their segments and sections, which of them are drawn,
+  recursive desktop dock/launcher), Action rail placement, or where
   inserted text lands: `design/features/ui.md`, `design/features/workspace-layout.md`,
   `technical/frontend/workspace-state.md`, `technical/frontend/packages.md`;
   completed custom drawer layout implementation record:
-  `development/archive/UTILITY_DRAWER_LAYOUT_IMPLEMENTATION.md`
+  `development/archive/UTILITY_DRAWER_LAYOUT_IMPLEMENTATION.md`.
+  The rule the segment registry exists to enforce: a surface folded into another tab keeps its
+  own palette command and voice phrase, because a segment reached only by clicking has neither -
+  so segments and sections are registered in `drawerSegments.ts` rather than held in a tab's
+  local state, their selection persists per Project beside the tab's, and every retired command
+  and tab id migrates forward (`keybindings.py`, `drawerLayout.ts`) rather than being dropped.
+- Changing the Resources dialog (its four segments - processes, bandwidth, storage, tokens - or
+  what any of them measures): `design/features/ui.md`,
+  `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
+  `design/features/usage.md`, `technical/frontend/packages.md`.
+  The rule it turns on: the drawer's Processes *tab* is not made redundant by the dialog's
+  Processes segment - a modal covers the terminal, and the tab exists to answer "what is this
+  session running" beside it - which is the same watch-here/act-there split the prompt Queue
+  has with the Fleet Queue.
 - Changing agent-skill discovery (which CLI directories are scanned, the metadata read from
   them, or how the Actions tab lists them): `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
@@ -113,7 +127,12 @@
   `technical/backend/sqlite.md`, `technical/frontend/packages.md`
 - Changing automation, observers, attention, or legacy hooks:
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
-  `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`
+  `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`.
+  The rule the presentation turns on: the pipeline produces exactly two things - an attention
+  item or a run note - and each has exactly one home (the Alerts drawer tab, and Activity →
+  Findings). The Automation dashboard configures and accounts for the pipeline and links to
+  those two rather than drawing second copies of them, which is what it used to do with two
+  different filters.
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`

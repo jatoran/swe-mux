@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { copyPreparedText } from './terminalClipboard'
-import type { Preview } from './ProcessPanel'
+import type { Preview } from './processFleet'
 
 type CaptureResult = { available: boolean; path?: string; region?: boolean; reason?: string; install?: string; error?: string }
 type Rect = { x: number; y: number; w: number; h: number }

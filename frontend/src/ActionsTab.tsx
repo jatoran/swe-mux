@@ -12,13 +12,22 @@ import {
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
+import { ClipboardTab } from './ClipboardPanel'
+import { drawerSectionTarget } from './drawerSegments'
 import type { PromptTemplate } from './promptTemplates'
 import { sessionDisplayName } from './sessionNames'
 
-// The Actions drawer combines three catalogs that can act on the focused session:
-// the configured Drawer half of the action layout, the live skill inventory, and
-// reusable prompt templates. They share a destination, not an identity, so each
-// remains an independently collapsible section.
+// The Actions drawer combines four catalogs that can act on the focused session:
+// the configured Drawer half of the action layout, the live skill inventory,
+// reusable prompt templates, and clipboard history. They share a destination, not an
+// identity, so each remains an independently collapsible section.
+//
+// Clipboard was its own tab until the drawer consolidation. It belongs here by verb —
+// every section on this tab ends in text reaching the focused agent, and Clipboard used
+// the same `onInsert`/`onDone` contract before it moved. It is a *section* rather than a
+// segment for the one reason that decides between the two: sections are co-visible, so
+// folding in the surface people reach for fastest cost no extra click. A segment would
+// have made "insert the thing I just copied" a three-step navigation.
 //
 // The strip under a terminal holds what you hammer (Esc, Enter, arrows, ^C); it is
 // horizontally scarce, which is why several built-ins used to ship switched off.
@@ -45,18 +54,27 @@ type Props = Pick<PromptsTabProps, 'project' | 'backend' | 'onInsert' | 'onManag
   session: Session | null
   onDone: () => void
   onConfigureActions: () => void
+  /** Clipboard's own insert path. Distinct from `onInsert` (prompt templates are
+   *  terminals-only) because a copied line may legitimately land in the note the drawer
+   *  is hosting, and the host needs to know which happened. */
+  onClipboardInsert: (text: string) => 'terminal' | 'editor' | 'none'
+  onClipboardDone: () => void
+  onOpenSettings: (section: string) => void
+  /** One-shot arrival from a palette entry, voice phrase, or Action button that named a
+   *  section. Expands it; the host does the scrolling and the flash. */
+  reveal?: { section: string; token: number }
 }
 
-type ActionSectionId = 'quick' | 'skills' | 'prompts'
+/** The tab's sections, in draw order. Mirrored by the `actions` rows in `drawerSegments.ts`. */
+const ACTION_SECTION_IDS = ['quick', 'skills', 'prompts', 'clipboard'] as const
+type ActionSectionId = typeof ACTION_SECTION_IDS[number]
 const ACTION_SECTION_KEY = 'mux.actions.sections.v1'
 
 function initialSectionState(): Record<ActionSectionId, boolean> {
-  try {
-    const stored = JSON.parse(localStorage.getItem(ACTION_SECTION_KEY) || '{}') as Record<string, unknown>
-    return { quick: stored.quick !== false, skills: stored.skills !== false, prompts: stored.prompts !== false }
-  } catch {
-    return { quick: true, skills: true, prompts: true }
-  }
+  let stored: Record<string, unknown> = {}
+  try { stored = JSON.parse(localStorage.getItem(ACTION_SECTION_KEY) || '{}') as Record<string, unknown> }
+  catch { stored = {} }
+  return Object.fromEntries(ACTION_SECTION_IDS.map(id => [id, stored[id] !== false])) as Record<ActionSectionId, boolean>
 }
 
 function ActionSection({ id, title, detail, expanded, onExpanded, action, children }: {
@@ -69,7 +87,13 @@ function ActionSection({ id, title, detail, expanded, onExpanded, action, childr
   children: ComponentChildren
 }) {
   const bodyId = `actions-section-${id}`
-  return <section class={`actions-section actions-section-${id}${expanded ? ' expanded' : ''}`}>
+  // `data-setting` on the section itself rather than on its body: the body is unmounted
+  // while collapsed, and the reveal has to have something to scroll to and flash even
+  // in the frame before the expansion lands.
+  return <section
+    class={`actions-section actions-section-${id}${expanded ? ' expanded' : ''}`}
+    data-setting={drawerSectionTarget('actions', id)}
+  >
     <header class="actions-section-header">
       <button type="button" class="actions-section-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={() => onExpanded(id, !expanded)}>
         <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
@@ -99,7 +123,7 @@ const ACTION_LABELS: Record<string, string> = {
   endSession: 'End session',
 }
 
-export function ActionsTab({ session, onDone, onConfigureActions, project, backend: promptBackend, onInsert, onManage, sessions, onSend, preselect }: Props) {
+export function ActionsTab({ session, onDone, onConfigureActions, project, backend: promptBackend, onInsert, onManage, sessions, onSend, preselect, onClipboardInsert, onClipboardDone, onOpenSettings, reveal }: Props) {
   const [note, setNote] = useState('')
   // End session is the one item here that arms a confirm rather than acting, so this
   // tab mirrors the workspace's armed id (broadcast by App) to label the second click.
@@ -163,6 +187,22 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     if (!preselect?.key) return
     setSections(current => current.prompts ? current : { ...current, prompts: true })
   }, [preselect])
+  // Arriving at a named section expands it if it was collapsed. Expanding is all this does;
+  // the drawer host owns the scroll and the flash (`settingReveal.ts`), so a section reached
+  // from the palette behaves exactly like a setting reached from a deep link.
+  const revealSection = reveal?.section
+  const revealToken = reveal?.token
+  const [clipboardAutoFocus, setClipboardAutoFocus] = useState(0)
+  useEffect(() => {
+    if (!revealSection) return
+    const id = ACTION_SECTION_IDS.find(item => item === revealSection)
+    if (!id) return
+    setSections(current => current[id] ? current : { ...current, [id]: true })
+    // Only the clipboard filter is autofocused, and only on a deliberate arrival: it is the
+    // one section whose first action is typing. Doing it on every render of the tab would
+    // steal focus from the terminal the drawer opened beside.
+    setClipboardAutoFocus(id === 'clipboard' ? (revealToken ?? 0) : 0)
+  }, [revealToken, revealSection])
 
   const setSectionExpanded = (id: ActionSectionId, expanded: boolean) => {
     setSections(current => {
@@ -187,8 +227,11 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     }
     if (item.type === 'key') dispatch(session.id, 'sendKey', { text: item.bytes || '' })
     else if (item.type === 'action') {
-      // `clipboardHistory` is the drawer itself; running it from inside the drawer
-      // would be a no-op, so it is filtered out of this grid entirely.
+      // `clipboardHistory` now names the Clipboard *section of this tab*, so a button
+      // for it here would scroll the surface it is already on. It stays filtered out of
+      // the grid below for that reason. Outside the drawer it is still a real action:
+      // the terminal strip's Clip key runs `clipboard.open`, which opens this tab and
+      // reveals that section.
       dispatch(session.id, item.action || '', {})
       // End session only *arms* a confirm on the first click; closing the drawer here
       // would leave nowhere to make the second one before the window lapses.
@@ -376,6 +419,24 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
         onSend={onSend}
         preselect={preselect}
         pin={promptPin}
+      />
+    </ActionSection>
+    {/* Last, and the only section that is not a *catalog*: the others are things you keep,
+        this is things that happened. Its actions are the same verb as everything above it,
+        which is why it lives on this tab at all. */}
+    <ActionSection
+      id="clipboard"
+      title="Clipboard"
+      detail="recent copies"
+      expanded={sections.clipboard}
+      onExpanded={setSectionExpanded}
+      action={{ label: 'Settings', title: 'Clipboard history capture and retention settings', run: () => onOpenSettings('Input') }}
+    >
+      <ClipboardTab
+        onInsert={onClipboardInsert}
+        onDone={onClipboardDone}
+        onOpenSettings={() => onOpenSettings('Input')}
+        autoFocusToken={clipboardAutoFocus}
       />
     </ActionSection>
   </div>

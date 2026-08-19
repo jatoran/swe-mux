@@ -54,4 +54,7 @@ def test_automation_diagnostics_are_separated_from_primary_workflows() -> None:
     assert "delivery_state" in dashboard
     assert "Parser coverage" in dashboard
     assert "diagnostics" in dashboard
-    assert "What happened while I was away?" in dashboard
+    # The away report is a *reading of the attention inbox*, not a fact about the pipeline
+    # that fills it, so it lives with the inbox in the Alerts drawer tab.
+    assert "What happened while I was away?" not in dashboard
+    assert "What happened while I was away?" in source("Notifications.tsx")

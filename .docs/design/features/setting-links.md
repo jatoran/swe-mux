@@ -62,7 +62,7 @@ Every surface that goes inert behind a switch, and what it offers.
 
 | Surface | Switch | Level | Link |
 |---|---|---|---|
-| Clipboard tab | `clipboard_history_enabled` | install | `clipboard.history` |
+| Clipboard section (Actions tab) | `clipboard_history_enabled` | install | `clipboard.history` |
 | Queue pane | `auto_delivery_enabled` | install | `queue.autoDelivery` |
 | Fleet Queue | `auto_delivery_enabled` | install | `queue.autoDelivery` |
 | Approval chip menu | `approval_auto_enabled` | install | `approvals.autoAnswer` |

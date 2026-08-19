@@ -6,10 +6,15 @@ from pathlib import Path
 def test_usage_dashboard_and_palette_autofocus_are_wired() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
-    usage = (root / "UsageDashboard.tsx").read_text(encoding="utf-8")
+    usage = (root / "UsageDashboardView.tsx").read_text(encoding="utf-8")
+    resources = (root / "ResourcesModal.tsx").read_text(encoding="utf-8")
     assert "paletteInput.current?.focus()" in app
-    assert "UsageDashboard" in app
-    assert "Refreshing ${provider} usage" in usage
+    # Token spend is the Resources dialog's fourth segment. It sits beside processes,
+    # bandwidth, and disk because all four answer one question - what is this consuming -
+    # even though only this one is metered in money. `usage.open` still lands on it.
+    assert "openResources('tokens')" in app
+    assert "<UsageTokensView" in resources
+    assert "Refreshing historical sources" in usage
     assert "time series" in usage
     assert "model breakdown" in usage
     assert "UsageSeries" in usage

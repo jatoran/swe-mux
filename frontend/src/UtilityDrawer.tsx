@@ -1,15 +1,15 @@
 import type { JSX } from 'preact'
 import { useEffect, useRef } from 'preact/hooks'
 import { AgentContextTab } from './AgentContextTab'
-import { AgentEnvironmentTab } from './AgentEnvironmentTab'
-import { ClipboardTab } from './ClipboardPanel'
+import { AgentConfigTab, AgentToolsTab } from './AgentEnvironmentTab'
 import { ActionsTab } from './ActionsTab'
 import { NotesTab } from './NotesTab'
 import { QueuePane } from './QueuePane'
 import { TranscriptTab } from './TranscriptTab'
-import { InsightTab } from './InsightTab'
+import { ScanTimelineTab } from './ScanTimelineTab'
+import { FindingsPane } from './FindingsPane'
 import { ChangeMapPane } from './ChangeMapPane'
-import { GitTab } from './GitTab'
+import { GitTab, type GitView } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, type DrawerTabId } from './drawerTabs'
@@ -17,6 +17,12 @@ import {
   drawerCollapseHostStack, drawerTabs, setDrawerSplitRatio,
   type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
 } from './drawerLayout'
+import {
+  availableDrawerSegments, drawerSectionTarget, drawerSegment, hasDrawerSegments,
+  resolveDrawerSegment, type DrawerSegmentContext,
+} from './drawerSegments'
+import { DrawerSegmentControl } from './DrawerSegmentControl'
+import { revealSetting } from './settingReveal'
 import { drawerTabVisible, visibleDrawerTabs } from './drawerVisibility'
 import { ProcessesTab } from './ProcessesTab'
 import { ScheduleTab } from './ScheduleTab'
@@ -27,7 +33,7 @@ import { DRAWER_TAB_ICONS } from './railIcons'
 import { OverflowRail } from './RailScroller'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { LaunchProfile, Project, ProjectBackend, Session } from './types'
-import { hasHarnessTranscript } from './harnessRegistry'
+import { hasHarnessTranscript, isAgentBackend } from './harnessRegistry'
 import { sessionDisplayName } from './sessionNames'
 
 // Host for the right-edge utility drawer. Two renderings, one component:
@@ -57,6 +63,12 @@ type Props = {
   /** Select a tab. A direct click on the pane's already-selected tab asks the
    *  caller to collapse the entire drawer; focus and keyboard navigation do not. */
   onTab: (tab: DrawerTabId, collapseIfSelected?: boolean) => void
+  /** Select a segment of a tab. Persisted per Project beside the tab selection itself. */
+  onSegment: (tab: DrawerTabId, segment: string) => void
+  /** One-shot request to scroll a *section* into view and flash it, from a palette entry,
+   *  a voice phrase, or an Action button that names one. Sections are co-visible regions
+   *  rather than modes, so arriving at one is a scroll, not a selection. */
+  sectionReveal?: { tab: DrawerTabId; section: string; token: number }
   onLayout: (layout: DrawerLayout) => void
   onClose: () => void
   mobile: boolean
@@ -301,14 +313,33 @@ export function UtilityDrawer(props: Props) {
       />
     </div>
 
-  // One body per tab. A flat dispatch rather than the nested ternary this grew out of:
-  // several branches deep, every added surface used to reindent the ones below it.
-  const renderBody = (tab: DrawerTabId) => {
+  // One body per tab *and segment*. A flat dispatch rather than the nested ternary this
+  // grew out of: several branches deep, every added surface used to reindent the ones below
+  // it. `segment` is null for a tab with no segments, and otherwise already resolved to
+  // something available for the focused session (`resolveDrawerSegment`).
+  const renderBody = (tab: DrawerTabId, segment: string | null) => {
     switch (tab) {
-      case 'clipboard':
-        return <ClipboardTab onInsert={insertText} onDone={onInsertDone} onOpenSettings={() => props.onOpenSettings('Input')} />
       case 'actions':
-        return <ActionsTab session={session} project={project} backend={props.backend} onDone={onDone} onConfigureActions={props.onConfigureActions} onInsert={props.onInsertPrompt} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
+        return <ActionsTab
+          session={session}
+          project={project}
+          backend={props.backend}
+          onDone={onDone}
+          onConfigureActions={props.onConfigureActions}
+          onInsert={props.onInsertPrompt}
+          onManage={props.onManagePrompts}
+          preselect={props.promptPreselect}
+          sessions={props.sessions}
+          onSend={props.onSendPrompt}
+          // Clipboard is a section here rather than the tab it used to be. It keeps its own
+          // insert path — `insertText` records where the text landed so `onInsertDone` can
+          // keep the panel open when it went into the note this drawer is hosting — because
+          // that is a different question from a prompt template's insert.
+          onClipboardInsert={insertText}
+          onClipboardDone={onInsertDone}
+          onOpenSettings={props.onOpenSettings}
+          reveal={props.sectionReveal?.tab === 'actions' ? props.sectionReveal : undefined}
+        />
       case 'queue':
         // Follows the focused session, like every other session-scoped tab.
         return <QueuePane
@@ -325,27 +356,39 @@ export function UtilityDrawer(props: Props) {
         // it has acted, because it acted on the terminal underneath; this one is
         // read there, and closing it after each copy would end the reading.
         return <TranscriptTab session={session} />
-      case 'insight':
-        return <InsightTab session={session} project={project} onOpenProjectSettings={props.onOpenProjectSettings} onOpenAutomationDashboard={props.onOpenAutomationDashboard} />
-      case 'changemap':
-        // No `onDone`. Like Transcript and Insight, this is read beside the terminal
-        // rather than acted on, so popping the drawer shut after a node click would end
-        // the reading it exists for.
-        return <ChangeMapPane
-          session={session}
-          project={project}
-          onPopOut={session ? () => props.onChangeMapOpenAsTab(session.id) : undefined}
-          // `onDone` on purpose: opening a file *is* acting on something other than
-          // the terminal underneath, so on mobile the drawer should get out of the
-          // way and show the pane it just opened.
-          onOpenFile={(path, worktree) => {
-            if (worktree) props.onOpenWorktreeFile(worktree, path)
-            else props.onOpenFile(path)
-            onDone()
-          }}
-        />
+      case 'activity':
+        // Three readings of one run. None takes `onDone`: like Transcript, these are read
+        // beside the terminal rather than acted on, and popping the drawer shut after each
+        // click would end the reading they exist for.
+        if (segment === 'timeline') {
+          return <ScanTimelineTab session={session} onOpenProjectSettings={props.onOpenProjectSettings} />
+        }
+        if (segment === 'changes') {
+          return <ChangeMapPane
+            session={session}
+            project={project}
+            // The pop-out survived the merge, and matters more now: a force-directed graph
+            // wants more width than a 380px column, and this is the way out of it.
+            onPopOut={session ? () => props.onChangeMapOpenAsTab(session.id) : undefined}
+            // `onOpenFile` closes the drawer on mobile on purpose: opening a file *is*
+            // acting on something other than the terminal underneath, so the drawer gets
+            // out of the way and shows the pane it just opened.
+            onOpenFile={(path, worktree) => {
+              if (worktree) props.onOpenWorktreeFile(worktree, path)
+              else props.onOpenFile(path)
+              onDone()
+            }}
+          />
+        }
+        return <FindingsPane session={session} project={project} onOpenAutomationDashboard={props.onOpenAutomationDashboard} />
       case 'agent':
-        return <AgentEnvironmentTab session={session} />
+        // Config and Tools read a live harness inventory; Instructions reads files on disk.
+        // That is why `drawerSegments.ts` gates the first two on an agent session and not
+        // the third — a shell session focused here still reaches its Project's instruction
+        // files, which is what the separate Context tab used to be for.
+        if (segment === 'config') return <AgentConfigTab session={session} />
+        if (segment === 'tools') return <AgentToolsTab session={session} />
+        return <AgentContextTab project={project} session={session} />
       case 'files':
         return project
           ? <ProjectResource
@@ -361,10 +404,8 @@ export function UtilityDrawer(props: Props) {
         // The persistent Notes workspace is rendered outside this switch so its editor,
         // cursor, and undo history survive visits to other utility tabs.
         return null
-      case 'context':
-        return <AgentContextTab project={project} session={session} />
       case 'git':
-        return <GitTab project={project} sessions={props.sessions} onOpenFile={props.onOpenFile} onOpenWorktreeFile={props.onOpenWorktreeFile} onSendToAgent={props.onSendToAgent} onProjectUpdated={props.onProjectUpdated} onOpenSession={sessionId=>{props.onOpenSession(sessionId);onDone()}} onOpenHistory={props.onOpenHistoryEntry} />
+        return <GitTab view={(segment || 'map') as GitView} onView={view => props.onSegment('git', view)} project={project} sessions={props.sessions} onOpenFile={props.onOpenFile} onOpenWorktreeFile={props.onOpenWorktreeFile} onSendToAgent={props.onSendToAgent} onProjectUpdated={props.onProjectUpdated} onOpenSession={sessionId=>{props.onOpenSession(sessionId);onDone()}} onOpenHistory={props.onOpenHistoryEntry} />
       case 'processes':
         return <ProcessesTab
           sessions={props.sessions}
@@ -397,6 +438,70 @@ export function UtilityDrawer(props: Props) {
         return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} project={project} />
     }
   }
+  // What a segment's `available` predicate is answered against. Booleans rather than the
+  // session itself, so `drawerSegments.ts` stays JSX-free and unit-testable.
+  const segmentContext: DrawerSegmentContext = {
+    hasTranscript: visibility.hasTranscript,
+    isAgentSession: isAgentBackend(session?.backend),
+  }
+  const segmentFor = (tab: DrawerTabId): string | null =>
+    resolveDrawerSegment(tab, presentation.selected_segments[tab], segmentContext)
+
+  /**
+   * Which segment bodies have ever been on screen, per pane.
+   *
+   * A `keepMounted` segment is mounted lazily and then never unmounted: mounting all of
+   * them up front would run Change Map's layout worker for a reader who never opened it,
+   * and unmounting on every switch would re-run the force simulation on every return —
+   * which is the cost the standalone tab did not have and the merge must not introduce.
+   *
+   * A ref rather than state because it only ever grows and never needs to *cause* a
+   * render: a segment enters the set in the same pass that first renders it.
+   */
+  const mountedSegments = useRef(new Set<string>())
+
+  /**
+   * Arriving at a *section*.
+   *
+   * Sections are co-visible, so a palette entry or voice phrase that names one cannot
+   * "select" it — it has to scroll to it and say so. `settingReveal.ts` already does
+   * exactly that job for Settings, including the two things a bare `scrollIntoView` gets
+   * wrong here: the target is routinely not in the DOM yet (Actions expands the section in
+   * response to the same token), and a target inside a subtree with no layout box cannot be
+   * scrolled to. So this reuses it rather than growing a second mechanism; only the
+   * namespace differs (`drawerSectionTarget`).
+   */
+  const drawerRoot = useRef<HTMLElement>(null)
+  const revealToken = props.sectionReveal?.token
+  useEffect(() => {
+    const request = props.sectionReveal
+    const container = drawerRoot.current
+    if (!request || !container) return
+    return revealSetting(container, drawerSectionTarget(request.tab, request.section))
+  }, [revealToken])
+
+  /**
+   * One pane body, with its segments.
+   *
+   * The active segment always renders. An inactive one renders only if it is
+   * `keepMounted` *and* has been visited, and then behind `hidden` rather than a class, so
+   * a stylesheet rule can never accidentally reveal a stale body (the same rule the Notes
+   * host follows for the same reason).
+   */
+  const renderSegmentedBody = (stackId: string, tab: DrawerTabId, active: string | null) => {
+    if (!hasDrawerSegments(tab)) return renderBody(tab, null)
+    const segments = availableDrawerSegments(tab, segmentContext)
+    return segments.map(segment => {
+      const on = segment.id === active
+      const key = `${stackId}:${tab}:${segment.id}`
+      if (on) mountedSegments.current.add(key)
+      else if (!segment.keepMounted || !mountedSegments.current.has(key)) return null
+      return <div key={segment.id} class={`drawer-segment-body drawer-segment-${segment.id}`} hidden={!on}>
+        {renderBody(tab, segment.id)}
+      </div>
+    })
+  }
+
   const scopeContext = (tab: DrawerTabId) => {
     const scope = drawerTab(tab).scope
     // The display name, not the raw one: this heading names the same session the sidebar
@@ -487,6 +592,11 @@ export function UtilityDrawer(props: Props) {
     const requested = selectedOverride || presentation.selected_tabs[stack.id] || visibleTabs[0]
     const selected = visibleTabs.includes(requested) ? requested : visibleTabs[0]
     const active = drawerTab(selected)
+    const segment = segmentFor(selected)
+    // The segment names the surface once a tab holds more than one. "Change Map" is what
+    // that pane is; "Activity" is only where it lives, and a heading that never changed
+    // while the body did would be the tab strip repeated rather than a label.
+    const heading = (segment && drawerSegment(selected, segment)?.heading) || active.heading
     const notesHere = stack.tabs.includes('notes')
     return <section
       key={stack.id}
@@ -500,10 +610,10 @@ export function UtilityDrawer(props: Props) {
         role="tabpanel"
         aria-labelledby={tabDomId(stack.id, selected)}
         class={`drawer-body drawer-body-${selected}`}
-        style={{ '--drawer-panel-title-width': `${Math.min(22, active.heading.length + 2.5)}ch` } as JSX.CSSProperties}
+        style={{ '--drawer-panel-title-width': `${Math.min(22, heading.length + 2.5)}ch` } as JSX.CSSProperties}
       >
         <div class="drawer-pane-heading">
-          <h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>
+          <h2 class="drawer-panel-title" title={active.title}>{heading}</h2>
           <span class="drawer-scope-context">{scopeContext(selected)}</span>
           {stack.id === collapseHostId && <button
             class="drawer-collapse"
@@ -512,8 +622,14 @@ export function UtilityDrawer(props: Props) {
             onClick={onClose}
           >×</button>}
         </div>
+        <DrawerSegmentControl
+          tab={selected}
+          active={segment}
+          context={segmentContext}
+          onSelect={id => props.onSegment(selected, id)}
+        />
         {notesHere && renderNoteHost(selected === 'notes')}
-        {selected !== 'notes' && renderBody(selected)}
+        {selected !== 'notes' && renderSegmentedBody(stack.id, selected, segment)}
       </div>
     </section>
   }
@@ -661,6 +777,7 @@ export function UtilityDrawer(props: Props) {
       }}
     />}
     <aside
+      ref={drawerRoot}
       class={`utility-drawer ${mobile ? 'overlay' : 'docked'}`}
       role={mobile ? 'dialog' : 'complementary'}
       aria-modal={mobile || undefined}

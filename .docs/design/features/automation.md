@@ -56,15 +56,36 @@ and the declared minimum observation capability.
 
 ## Control-plane presentation
 
-- The modal groups its views into four top-level tabs — **Configure** (rules & observers),
-  **Attend** (attention · all-session health), **Spend** (cost breakdown), **Review** (run notes ·
-  learned fixes) — with a
-  secondary sub-tab row shown only when a group has more than one view. A `?` in the header
-  opens a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer
-  to it while open.
-  Because that sub-tab row exists for some views and not others, the panel's own frame is a
-  column flex rather than a fixed grid template: hard-coded row numbers fitted exactly one of
-  those cases and drew the status line over the first heading in the other.
+- The modal draws four flat views — **rules & observers**, **cost breakdown**, **learned
+  fixes**, **diagnostics** — with no group rail above them. A `?` in the header opens a nested
+  help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer to it while
+  open.
+  The panel's own frame is a column flex rather than a fixed grid template, because its child
+  count varies by view: hard-coded row numbers fitted exactly one case and drew the status line
+  over the first heading in the others.
+- **Three views left, on one rule: the pipeline produces exactly two things, and each gets
+  exactly one home.** An event becomes an attention item or a run note (the help panel says so
+  in as many words), and this dashboard was drawing a second copy of both.
+  Its `attention` view drew the same ranked inbox and the same records as the drawer's Alerts
+  tab; its `notes` view drew the same `/api/annotations` table as Activity → Findings with a
+  different filter, so a run note visible in one could be missing from the other. Both are
+  **links** now, in a permanent `Read elsewhere` row rather than an empty-state hint — "where
+  did the attention inbox go" is asked by someone looking at a full one somewhere else. Findings
+  grew a source filter (deterministic / observer / all) to cover what this dashboard's copy
+  showed.
+  Its `health` view was three unrelated things under one name and was split three ways: the
+  explainer of what the deterministic checks watch folded into the help panel, where every other
+  explanation of this pipeline already lived; the observed-workload telemetry moved to
+  Resources → Tokens, following the cost column that had already left it on that reasoning; and
+  the away report moved to Alerts, which is the inbox it summarizes (`ui.md`).
+  What is left is what only this dashboard can do: configure the pipeline, account for what it
+  spent, run bounded knowledge batches, and show its own diagnostics.
+- **The spend view is mirrored into Resources → Tokens as the same component**, not as a second
+  view over one endpoint (`AutomationSpendView`). Both readings are legitimate and neither is
+  the real one: from here you ask which rule burned this, and the rules are beside it; from
+  Resources you ask what you are burning in total, and the other three meters are beside it.
+  Re-implementing the markup to serve both would have reproduced exactly the drift removed
+  above. It fetches `/api/automation/dashboard` itself, since a shared component owns its data.
 - **Spend answers which automation costs what, not only what automation cost.** A single daily
   total cannot be acted on, because turning something off requires knowing which something.
   `GET /api/automation/dashboard` carries `spend_breakdown`, grouped from the same
@@ -99,8 +120,8 @@ and the declared minimum observation capability.
   context observers share the `phase7_observers_enabled` attention setting.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
-- Attention records are **dismissible from every surface that lists them** — the drawer's
-  Alerts tab as well as the dashboard inbox — individually (`PATCH
+- Attention records are **dismissible from the surface that lists them** — the drawer's
+  Alerts tab, which is now the only one — individually (`PATCH
   /api/automation/notifications/{id}`) or all at once (`PATCH /api/automation/notifications`,
   which returns how many open records it closed). Dismissing sets `read_at`; it deletes
   nothing, so the history stays readable and retention still owns removal. Records survive
