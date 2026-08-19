@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,9 +15,17 @@ from .harness import conversation_store_path, transcript_dialect
 from .opencode_store import TAIL_MESSAGE_LIMIT, conversation_record_page, conversation_records
 from .opencode_store import conversation_watermark as store_watermark
 
-TRANSCRIPT_PARSER_VERSION = 3
+log = logging.getLogger(__name__)
+
+# Bumped to 4 when abandoned-branch records stopped being indexed as conversation
+# (`_mark_abandoned_records`). Every indexed transcript reparses once on the next
+# touch, because the watermark carries this number.
+TRANSCRIPT_PARSER_VERSION = 4
 _SOURCE_OFFSET_KEY = "__swe_mux_source_offset"
 _SOURCE_END_KEY = "__swe_mux_source_end"
+# Set on a record the conversation's own linkage proves is off the live branch.
+# Private to this module: readers see the public `abandoned` flag on a message.
+_ABANDONED_KEY = "__swe_mux_abandoned"
 
 
 def _blocks(content: Any) -> list[dict[str, Any]]:
@@ -272,6 +281,138 @@ def transcript_time_summary(
     }
 
 
+def _claude_tool_use_ids(event: dict[str, Any]) -> set[str]:
+    return {
+        str(block["id"])
+        for block in _blocks((event.get("message") or {}).get("content"))
+        if block.get("type") == "tool_use" and block.get("id")
+    }
+
+
+def _claude_tool_result_ids(event: dict[str, Any]) -> set[str]:
+    return {
+        str(block["tool_use_id"])
+        for block in _blocks((event.get("message") or {}).get("content"))
+        if block.get("type") == "tool_result" and block.get("tool_use_id")
+    }
+
+
+def _claude_live_uuids(events: list[dict[str, Any]]) -> set[str] | None:
+    """The record uuids still on this conversation's live branch, or ``None``.
+
+    A Claude transcript is an append-only **DAG**, not a list. ``parentUuid`` names
+    the record a record answers, and every retry, every ``/rewind``, and every
+    resend after a failed turn appends a *new sibling* under the same parent rather
+    than replacing anything. The abandoned attempt stays in the file forever. Read
+    in file order - which is what every reader here did before this function
+    existed - a session that was resent eight times through an outage shows the
+    same prompt eight times, and history indexes eight copies of it.
+
+    The live branch is the ancestry of the newest record: the file is append-only,
+    so the last record is by construction on the branch that is still being
+    written, and the ancestors of that record are exactly the nodes whose subtree
+    contains it.
+
+    Ancestry alone is not the whole live set, and assuming it was would be the
+    worse bug. A parallel tool batch is written as assistant TU₁ → TU₂ → … and each
+    ``tool_result`` is parented to *the record whose call it answers*, so every
+    result but the last is a sibling hanging off an ancestor rather than a link in
+    the chain. Subagent (``isSidechain``) turns hang off their spawning record the
+    same way. Both are live conversation, so both are walked back in below -
+    matched by tool-use id for results, so an abandoned branch's own results can
+    never be adopted by a live parent.
+
+    ``None`` when no record carries a uuid, which is how a dialect or a transcript
+    old enough to predate the field says it cannot answer the question. Callers
+    treat that as "every record is live", which is the behaviour that predates this.
+
+    Bounded reads are supported without a special case, and degrade in the safe
+    direction. Whatever window it is handed, the newest record *in that window* is
+    its leaf: for a whole file or a trailing slice that is the real leaf, and for a
+    head slice it resolves every branch that closes inside the window and simply
+    fails to notice one that does not. Failing to mark is a record shown that could
+    have been folded; the opposite would be conversation hidden from its reader.
+    """
+    nodes: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for event in events:
+        identifier = event.get("uuid")
+        if isinstance(identifier, str) and identifier:
+            nodes[identifier] = event
+            order.append(identifier)
+    if not order:
+        return None
+    live: set[str] = set()
+    cursor: Any = order[-1]
+    while isinstance(cursor, str) and cursor in nodes and cursor not in live:
+        live.add(cursor)
+        cursor = nodes[cursor].get("parentUuid")
+    # Every tool call the live branch actually made. A parallel batch writes each
+    # call in its own record, and all but the last of those records are ancestors
+    # of the one that continues the chain, so the ids are all known by now.
+    live_calls: set[str] = set()
+    for identifier in live:
+        live_calls |= _claude_tool_use_ids(nodes[identifier])
+    children: dict[str, list[str]] = defaultdict(list)
+    for identifier in order:
+        parent = nodes[identifier].get("parentUuid")
+        if isinstance(parent, str):
+            children[parent].append(identifier)
+
+    def continues_live(event: dict[str, Any]) -> bool:
+        if event.get("isSidechain") is True:
+            return True
+        if event.get("type") == "attachment":
+            return True
+        return bool(_claude_tool_result_ids(event) & live_calls)
+
+    queue = list(live)
+    while queue:
+        for child in children.get(queue.pop(), ()):
+            if child in live or not continues_live(nodes[child]):
+                continue
+            live.add(child)
+            queue.append(child)
+    return live
+
+
+# Per dialect, because "what links one record to another" is the harness's own
+# record shape. A dialect absent here has no linkage this reader knows how to
+# follow, so its records are all live - the behaviour that predates branch
+# awareness - rather than classified by a rule nobody measured on it.
+_LIVE_BRANCH_READERS: dict[str, Callable[[list[dict[str, Any]]], set[str] | None]] = {
+    "claude": _claude_live_uuids,
+}
+
+
+def _mark_abandoned_records(events: list[dict[str, Any]], backend: str) -> int:
+    """Stamp every off-live-branch record in ``events`` and return how many.
+
+    Mutates the records in place, which is safe because they are decoded fresh by
+    the reader that produced them and never shared with the native file.
+    """
+    reader = _LIVE_BRANCH_READERS.get(transcript_dialect(backend) or "")
+    if reader is None:
+        return 0
+    live = reader(events)
+    if live is None:
+        return 0
+    abandoned = 0
+    for event in events:
+        identifier = event.get("uuid")
+        if isinstance(identifier, str) and identifier and identifier not in live:
+            event[_ABANDONED_KEY] = True
+            abandoned += 1
+    if abandoned:
+        log.debug(
+            "transcript branch records off live path backend=%s records=%d of %d",
+            backend,
+            abandoned,
+            len(events),
+        )
+    return abandoned
+
+
 def read_transcript_events(path: Path, max_bytes: int | None = None) -> list[dict[str, Any]]:
     """Every JSON object record in the file, or in its trailing ``max_bytes``.
 
@@ -367,6 +508,27 @@ def _file_event_page(
     return events, has_more, next_boundary
 
 
+def _page_events(
+    path: Path,
+    backend: str,
+    *,
+    direction: str,
+    anchor: int | None,
+    max_bytes: int,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """``_file_event_page`` with this window's off-live-branch records marked.
+
+    The branch test runs per window rather than per file on purpose: a paging
+    reader must answer from the bytes it read, and reading the whole conversation
+    to classify one page would defeat the paging.
+    """
+    events, has_more, boundary = _file_event_page(
+        path, direction=direction, anchor=anchor, max_bytes=max_bytes
+    )
+    _mark_abandoned_records(events, backend)
+    return events, has_more, boundary
+
+
 def _raw_message_text(content: Any) -> str:
     return "\n".join(
         str(block.get("text") or "")
@@ -435,11 +597,18 @@ def _meta_record(event: dict[str, Any], backend: str) -> dict[str, Any] | None:
 
 def _page_records(
     events: list[dict[str, Any]], backend: str, *, include_system: bool
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
+    """``(records, abandoned_count)`` for one page window.
+
+    The paged reader serves machines - the MCP transcript surface and the
+    assistant - so it projects the live branch and reports the size of what it
+    left out, rather than marking records the way the human reader does.
+    """
     records: list[dict[str, Any]] = []
+    abandoned = 0
     dialect = transcript_dialect(backend)
     if dialect is None:
-        return records
+        return records, abandoned
     codex_response_messages = dialect == "codex" and any(
         event.get("type") == "response_item"
         and (event.get("payload") or {}).get("type") == "message"
@@ -449,6 +618,13 @@ def _page_records(
     for event in events:
         message = _native_conversation_message(event, backend)
         text = _message_text(message.get("content")) if message is not None else ""
+        if event.get(_ABANDONED_KEY):
+            # Counted as messages rather than records: the caller is told how much
+            # conversation it is not seeing, not how many attachments and tool
+            # results the abandoned branch happened to carry with it.
+            if text:
+                abandoned += 1
+            continue
         machinery = False
         if message is not None and message.get("role") == "user":
             if dialect == "claude":
@@ -492,7 +668,7 @@ def _page_records(
             meta = _meta_record(event, backend)
             if meta is not None:
                 records.append(meta)
-    return records
+    return records, abandoned
 
 
 def transcript_message_page(
@@ -506,7 +682,14 @@ def transcript_message_page(
     include_system: bool = False,
     native_id: str | None = None,
 ) -> dict[str, Any]:
-    """A bounded, stable page of readable records from one native conversation."""
+    """A bounded, stable page of readable records from one native conversation.
+
+    ``abandoned_messages`` is how many messages in this window belonged to a
+    branch the conversation left and are therefore not in ``messages``. Reported
+    rather than merely omitted: a page whose count is nine when it holds two
+    messages is the reader's evidence that the conversation was retried, not that
+    the page is broken.
+    """
     if direction not in {"head", "tail"}:
         raise ValueError("transcript direction must be head or tail")
     store = conversation_store_path(backend)
@@ -526,21 +709,27 @@ def transcript_message_page(
         boundary: dict[str, Any] | None = None
     else:
         if path is None:
-            return {"messages": [], "next_anchor": None, "has_more": False}
+            return {
+                "messages": [],
+                "next_anchor": None,
+                "has_more": False,
+                "abandoned_messages": 0,
+            }
         file_anchor = None
         if anchor is not None:
             if anchor.get("kind") != "file":
                 raise ValueError("transcript cursor does not match this conversation file")
             file_anchor = int(anchor["offset"])
-        events, has_more, offset = _file_event_page(
+        events, has_more, offset = _page_events(
             path,
+            backend,
             direction=direction,
             anchor=file_anchor,
             max_bytes=max_bytes,
         )
         boundary = {"kind": "file", "offset": offset}
 
-    records = _page_records(events, backend, include_system=include_system)
+    records, abandoned = _page_records(events, backend, include_system=include_system)
     selected = records[:max_messages] if direction == "head" else records[-max_messages:]
     trimmed = len(selected) < len(records)
     if store is not None:
@@ -581,6 +770,7 @@ def transcript_message_page(
         ],
         "next_anchor": boundary if more else None,
         "has_more": more,
+        "abandoned_messages": abandoned,
     }
 
 
@@ -631,7 +821,9 @@ def conversation_events(
         return conversation_records(store, native_id or "", max_messages=limit)
     if path is None:
         return []
-    return read_transcript_events(path, max_bytes)
+    events = read_transcript_events(path, max_bytes)
+    _mark_abandoned_records(events, backend)
+    return events
 
 
 def parse_transcript(
@@ -641,7 +833,40 @@ def parse_transcript(
     max_bytes: int | None = None,
     native_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    """The conversation this transcript *is*, as a flat message list.
+
+    The indexing and machine-reading projection: everything downstream of this
+    treats what it gets as things that were said. Records the conversation
+    abandoned were never said to anybody - the provider was never sent them, and
+    the CLI stops showing them the moment they are branched away from - so they
+    are dropped here rather than annotated. Keeping them is what put eight copies
+    of one outage-retried prompt into history search
+    (see :func:`_claude_live_uuids`). The human-facing reader
+    (:func:`conversation_view`) keeps and marks them instead, because a person
+    looking at a conversation is entitled to see that a branch happened.
+    """
+    return _parse_transcript_counted(
+        path, backend, max_bytes=max_bytes, native_id=native_id
+    )[0]
+
+
+def _parse_transcript_counted(
+    path: Path | None,
+    backend: str,
+    *,
+    max_bytes: int | None = None,
+    native_id: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """``parse_transcript`` plus how many messages it dropped as abandoned.
+
+    The count exists because the drop is otherwise unobservable downstream: a
+    reader handed the live conversation cannot tell a session that ran once from
+    one that was retried eight times through an outage, and a surface that says
+    "nine messages are not shown" is the difference between a fix and a
+    disappearance.
+    """
     messages: list[dict[str, Any]] = []
+    abandoned = 0
     events = conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id)
     codex_response_messages = backend == "codex" and any(
         event.get("type") == "response_item"
@@ -651,6 +876,10 @@ def parse_transcript(
     )
     dialect = transcript_dialect(backend)
     for event in events:
+        if event.get(_ABANDONED_KEY):
+            if _native_conversation_message(event, backend) is not None:
+                abandoned += 1
+            continue
         if dialect == "claude" or dialect == "pi":
             # Both dialects put the whole message in one record, so the shared
             # extractor is the entire parse. Only codex splits tool calls out.
@@ -692,11 +921,29 @@ def parse_transcript(
             break
         else:
             assert_never(dialect)
-    return messages
+    return messages, abandoned
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedConversation:
+    """One parse of a conversation, and what that parse is valid for.
+
+    ``abandoned`` is how many conversational messages the parse dropped because
+    the conversation had branched away from them. It travels with the messages
+    rather than being recoverable from them, since a dropped message leaves
+    nothing behind to count.
+    """
+
+    messages: list[dict[str, Any]]
+    abandoned: int
+    mtime_ns: int
+    size: int
 
 
 _CACHE_MAX = 32
-_cache: OrderedDict[tuple[str, int, int, str, int | None], list[dict[str, Any]]] = OrderedDict()
+_cache: OrderedDict[tuple[str, int, int, str, int | None], tuple[list[dict[str, Any]], int]] = (
+    OrderedDict()
+)
 _cache_lock = threading.Lock()
 
 
@@ -726,7 +973,7 @@ def parse_transcript_cached(
     """
     return parse_transcript_with_watermark(
         path, backend, max_bytes=max_bytes, native_id=native_id
-    )[0]
+    ).messages
 
 
 def conversation_watermark(
@@ -764,7 +1011,7 @@ def parse_transcript_with_watermark(
     *,
     max_bytes: int | None = None,
     native_id: str | None = None,
-) -> tuple[list[dict[str, Any]], int, int]:
+) -> ParsedConversation:
     """``parse_transcript_cached`` plus the watermark it is valid for.
 
     The watermark is stamped *before* the parse, so it can only describe the same
@@ -780,14 +1027,16 @@ def parse_transcript_with_watermark(
         hit = _cache.get(key)
         if hit is not None:
             _cache.move_to_end(key)
-            return hit, first, second
-    result = parse_transcript(path, backend, max_bytes=max_bytes, native_id=native_id)
+            return ParsedConversation(hit[0], hit[1], first, second)
+    messages, abandoned = _parse_transcript_counted(
+        path, backend, max_bytes=max_bytes, native_id=native_id
+    )
     with _cache_lock:
-        _cache[key] = result
+        _cache[key] = (messages, abandoned)
         _cache.move_to_end(key)
         while len(_cache) > _CACHE_MAX:
             _cache.popitem(last=False)
-    return result, first, second
+    return ParsedConversation(messages, abandoned, first, second)
 
 
 # --------------------------------------------------------------------------
@@ -966,10 +1215,21 @@ def _conversation_records(
     Tool activity inside a record counts as coming *after* its text, which is the
     order OMP writes it: one record holds the narration and the calls that
     narration introduces. Calls after the last message are returned separately.
+
+    A record the conversation branched away from is kept and marked ``abandoned``
+    rather than dropped. This is the one projection a person reads directly, and a
+    branch is something that happened to their conversation: silently deleting the
+    seven identical prompts an outage produced would leave them unable to tell a
+    retry storm from a transcript the reader is mangling. The indexing projection
+    (:func:`parse_transcript`) drops them, because nothing downstream of it is a
+    reader. Tool calls never cross the boundary in either direction: an abandoned
+    turn's calls belong to the branch that made them, so they are discarded rather
+    than credited to whichever live message happens to follow.
     """
     kept: list[dict[str, Any]] = []
     hidden = 0
     pending_tools: list[dict[str, Any]] = []
+    pending_abandoned = False
     dialect = transcript_dialect(backend)
     # Same precedence rule the indexing parse uses: when a Codex rollout carries
     # current `response_item/message` records, its legacy `event_msg` copies are
@@ -981,6 +1241,10 @@ def _conversation_records(
         for event in events
     )
     for event in events:
+        abandoned = bool(event.get(_ABANDONED_KEY))
+        if abandoned != pending_abandoned:
+            pending_tools = []
+            pending_abandoned = abandoned
         tools = _tool_call_details(event, backend)
         message = _native_conversation_message(event, backend)
         if message is None:
@@ -1016,24 +1280,26 @@ def _conversation_records(
             hidden += 1
             pending_tools.extend(tools)
             continue
-        kept.append(
-            {
-                "message_id": _record_identity(event),
-                "role": message["role"],
-                "ts": message.get("ts"),
-                "text": text,
-                "preceding_tool_calls": len(pending_tools),
-                "preceding_tools": pending_tools,
-                # The byte span this message occupies in a file-backed transcript,
-                # `None` for a store-backed one. Only `conversation_cut_points`
-                # keeps them; the reader payload strips them, because a span is a
-                # writer's coordinate rather than something to render.
-                _SOURCE_OFFSET_KEY: event.get(_SOURCE_OFFSET_KEY),
-                _SOURCE_END_KEY: event.get(_SOURCE_END_KEY),
-            }
-        )
+        record = {
+            "message_id": _record_identity(event),
+            "role": message["role"],
+            "ts": message.get("ts"),
+            "text": text,
+            "preceding_tool_calls": len(pending_tools),
+            "preceding_tools": pending_tools,
+            # The byte span this message occupies in a file-backed transcript,
+            # `None` for a store-backed one. Only `conversation_cut_points`
+            # keeps them; the reader payload strips them, because a span is a
+            # writer's coordinate rather than something to render.
+            _SOURCE_OFFSET_KEY: event.get(_SOURCE_OFFSET_KEY),
+            _SOURCE_END_KEY: event.get(_SOURCE_END_KEY),
+        }
+        if abandoned:
+            record["abandoned"] = True
+        kept.append(record)
         pending_tools = tools
-    return kept, hidden, pending_tools
+    # Calls left over from an abandoned branch trail nothing a reader is shown.
+    return kept, hidden, [] if pending_abandoned else pending_tools
 
 
 def _record_identity(event: dict[str, Any]) -> str:
@@ -1066,6 +1332,11 @@ def _merge_assistant_segments(records: list[dict[str, Any]]) -> list[dict[str, A
     So records merge only across the first kind of split, which is exactly the
     records with no tool calls in front of them. The timestamp kept is the
     fragment that started the segment.
+
+    A branch boundary is a third kind of split and never merges: an abandoned
+    fragment and the live reply that replaced it are two different attempts at the
+    same turn, and gluing them together would read as one self-contradicting
+    message with no way to see the seam.
     """
     merged: list[dict[str, Any]] = []
     for record in records:
@@ -1075,6 +1346,7 @@ def _merge_assistant_segments(records: list[dict[str, Any]]) -> list[dict[str, A
             and previous["role"] == "assistant"
             and record["role"] == "assistant"
             and not record["preceding_tool_calls"]
+            and bool(previous.get("abandoned")) == bool(record.get("abandoned"))
         ):
             previous["text"] = f"{previous['text']}\n\n{record['text']}"
             # The span grows with the text. A fork cutting "after this reply" has to
@@ -1106,6 +1378,11 @@ def conversation_view(
     a turn; non-zero wherever a reply resumed after tool use. It is the count of
     what is *not* shown, in the same spirit as ``hidden``: a reader is never left
     to infer that two paragraphs written twenty tool calls apart were one thought.
+
+    ``abandoned`` marks a message the conversation branched away from, and
+    ``abandoned_messages`` counts them in the returned window. They are ordinary
+    messages in every other respect, including their ordinals, because the reader
+    folds them rather than removing them.
     """
     # The byte cap applies to a file; a store-backed conversation is bounded by the
     # message limit the reader already applies, so it asks for the whole record set
@@ -1127,6 +1404,7 @@ def conversation_view(
         ],
         "trailing_tool_calls": trailing_tools,
         "hidden": hidden,
+        "abandoned_messages": sum(1 for message in messages if message.get("abandoned")),
         "truncated": truncated,
     }
 
@@ -1182,6 +1460,12 @@ def conversation_cut_points(
     The window bounds only which cuts can be *named*, never what a fork contains.
     Offsets are absolute, so a fork cut inside a bounded tail still carries the
     whole conversation from its first byte.
+
+    Messages on an abandoned branch are not offered. Cutting at one would in fact
+    write a loadable fork - the prefix simply ends on that branch - but the picker
+    exists to name a moment in the conversation, and a session resent eight times
+    through an outage would name the same moment eight identical times. A reader
+    who wants an abandoned branch back is asking the CLI's own resume, not mux's.
     """
     scanner = _OPEN_TOOL_SCANNERS.get(transcript_dialect(backend) or "")
     if scanner is None or path is None:
@@ -1191,7 +1475,8 @@ def conversation_cut_points(
     events = conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id)
     open_calls = scanner(events)
     records, _hidden, _trailing = _conversation_records(events, backend)
-    messages = _merge_assistant_segments(records)[-limit:]
+    live = [record for record in records if not record.get("abandoned")]
+    messages = _merge_assistant_segments(live)[-limit:]
     points: list[CutPoint] = []
     for ordinal, message in enumerate(messages):
         start = message.get(_SOURCE_OFFSET_KEY)
@@ -1224,15 +1509,24 @@ def _claude_open_tool_calls(events: list[dict[str, Any]]) -> dict[int, int]:
     A ``tool_result`` whose ``tool_use`` predates a bounded read closes nothing and
     is ignored, which is why discarding an unknown id is silent rather than an
     error.
+
+    A call made on a branch the conversation abandoned is not counted, because
+    nothing will ever answer it: an outage or an interrupt that lands between a
+    ``tool_use`` and its result leaves that id open for the rest of the file, and
+    counting it would mark *every* later boundary dirty and quietly retire
+    branching for the life of the conversation. Results are still read from
+    abandoned records, so a call this reader did see in a bounded window still
+    closes, and the discard stays silent for the ones it did not.
     """
     open_ids: set[str] = set()
     by_offset: dict[int, int] = {}
     for event in events:
+        abandoned = bool(event.get(_ABANDONED_KEY))
         for block in _blocks((event.get("message") or {}).get("content")):
             kind = block.get("type")
             if kind == "tool_result":
                 open_ids.discard(str(block.get("tool_use_id") or ""))
-            elif kind == "tool_use" and block.get("id"):
+            elif kind == "tool_use" and block.get("id") and not abandoned:
                 open_ids.add(str(block["id"]))
         end = event.get(_SOURCE_END_KEY)
         if end is not None:

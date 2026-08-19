@@ -136,6 +136,7 @@ async def test_a_shell_pane_is_an_empty_reason_not_an_error(tmp_path: Path) -> N
         "messages": [],
         "trailing_tool_calls": [],
         "hidden": 0,
+        "abandoned_messages": 0,
         "truncated": False,
         "reason": "not_agent",
     }

@@ -1,4 +1,4 @@
-import { Fragment } from 'preact'
+import { Fragment, type VNode } from 'preact'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { agentTargetName } from './agentTargets'
 import { api } from './api'
@@ -8,15 +8,18 @@ import { copyPreparedText } from './terminalClipboard'
 import { TranscriptToolCalls } from './TranscriptToolCalls'
 import {
   expandedTranscriptMessageIds,
+  groupTranscriptMessages,
   isPinnedToBottom,
   parseTranscriptExpansions,
   recallTranscriptScroll,
   rememberTranscriptScroll,
   serializeTranscriptExpansions,
   setTranscriptMessageExpanded,
+  transcriptAbandonedLabel,
   transcriptClamped,
   transcriptConversationText,
   transcriptEmptyMessage,
+  transcriptLiveMessages,
   transcriptMatchesQuery,
   transcriptSearchParts,
   transcriptSelectedSlice,
@@ -29,6 +32,7 @@ import {
   TRANSCRIPT_EXPANSION_KEY,
   TURN_ENDED_EVENT,
   type SessionTranscript,
+  type TranscriptGroup,
   type TranscriptMessage,
 } from './transcriptView'
 import type { Session } from './types'
@@ -156,6 +160,36 @@ function Message({ message, copied, expanded, query, onCopy, onExpand, onSelectT
   </article>
 }
 
+/**
+ * One run of abandoned messages, folded to a line the reader can open.
+ *
+ * Folded rather than removed, and named rather than left implicit. A conversation
+ * retried through an outage holds the same prompt eight times, and a reader shown
+ * eight of them cannot tell their transcript from a broken one - but a reader shown
+ * none of them, after having watched themselves resend it, cannot either. The fold
+ * says which of the two happened, and opens if they want to see it.
+ *
+ * Collapsed by default and not remembered between mounts: an abandoned branch is
+ * something to check once, not a preference.
+ */
+function AbandonedRun({ messages, open, onToggle, renderMessage }: {
+  messages: TranscriptMessage[]
+  open: boolean
+  onToggle: () => void
+  renderMessage: (message: TranscriptMessage) => VNode
+}) {
+  const label = transcriptAbandonedLabel(messages.length)
+  return <section class={open ? 'transcript-abandoned open' : 'transcript-abandoned'}>
+    <button type="button" aria-expanded={open} onClick={onToggle}>
+      <span class="transcript-abandoned-mark" aria-hidden="true">{open ? '▾' : '▸'}</span>
+      {label}
+    </button>
+    {open && <div class="transcript-abandoned-body">
+      {messages.map(message => <Fragment key={message.message_id}>{renderMessage(message)}</Fragment>)}
+    </div>}
+  </section>
+}
+
 export function TranscriptTab({ session }: { session: Session | null }) {
   const sessionId = session?.id || ''
   const runId = session?.agent_run_id || ''
@@ -169,6 +203,7 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const [selectionLive, setSelectionLive] = useState(false)
   const [sheet, setSheet] = useState<{ title: string; text: string } | null>(null)
   const [showToolCalls, setShowToolCalls] = useState(false)
+  const [openBranches, setOpenBranches] = useState<string[]>([])
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
   const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
@@ -206,6 +241,7 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   // showing the retired conversation until something else forced a reload.
   useEffect(() => {
     setData(null); setUnseen(0); setError('')
+    setOpenBranches([])
     placedFor.current = ''
     shown.current = 0
     selecting.current = false
@@ -376,6 +412,10 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     })
   }
 
+  const toggleBranch = (key: string) => setOpenBranches(keys =>
+    keys.includes(key) ? keys.filter(entry => entry !== key) : [...keys, key],
+  )
+
   const updateSearch = (value: string) => {
     // Capture before filtering shortens the DOM and the browser clamps scrollTop.
     // A layout effect is already too late to recover the original offset.
@@ -388,6 +428,8 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   if (!session) return <p class="drawer-empty">Focus a session to read its conversation.</p>
 
   const messages = data?.messages || []
+  const liveMessages = transcriptLiveMessages(messages)
+  const abandonedCount = messages.length - liveMessages.length
   const trailingToolCalls = data?.trailing_tool_calls || []
   const availableToolCalls = messages.reduce(
     (total, message) => total + (message.preceding_tools?.length || 0),
@@ -396,7 +438,24 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const visibleMessages = normalizedQuery
     ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery))
     : messages
+  // Under a search the reader asked for every match, so abandoned messages stand
+  // on their own rather than inside a fold nothing would reveal them through.
+  const groups: TranscriptGroup[] = normalizedQuery
+    ? visibleMessages.map(message => ({ kind: 'message', message }) as const)
+    : groupTranscriptMessages(visibleMessages)
   const stale = data?.observation_stale_since
+  const renderMessage = (message: TranscriptMessage) => <Message
+    message={message}
+    copied={copied === message.ordinal}
+    expanded={expanded.includes(message.message_id)}
+    query={normalizedQuery}
+    onCopy={item => void copy(item.text, item.ordinal)}
+    onExpand={toggleExpand}
+    onSelectText={item => setSheet({
+      title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
+      text: item.text,
+    })}
+  />
   return <div class={selectionLive ? 'transcript-tab transcript-selecting' : 'transcript-tab'}>
     <div class="transcript-tab-head">
       <div class="transcript-tab-meta">
@@ -406,7 +465,8 @@ export function TranscriptTab({ session }: { session: Session | null }) {
             ? 'Reading transcript…'
             : normalizedQuery
               ? `${visibleMessages.length} of ${messages.length} messages`
-              : `${messages.length} message${messages.length === 1 ? '' : 's'}`}
+              : `${liveMessages.length} message${liveMessages.length === 1 ? '' : 's'}`}
+          {!normalizedQuery && abandonedCount > 0 ? ` · ${abandonedCount} abandoned` : ''}
           {data && data.hidden > 0 ? ` · ${data.hidden} CLI record${data.hidden === 1 ? '' : 's'} hidden` : ''}
         </span>
       </div>
@@ -414,15 +474,15 @@ export function TranscriptTab({ session }: { session: Session | null }) {
           is what makes a span *across* messages copyable at all: in the sheet it is one
           flat buffer, so there is no scroller for a handle drag to lose its anchor in. */}
       <button
-        disabled={!messages.length}
+        disabled={!liveMessages.length}
         title="Select part of the conversation"
-        onClick={() => setSheet({ title: agentTargetName(session), text: transcriptConversationText(messages) })}
+        onClick={() => setSheet({ title: agentTargetName(session), text: transcriptConversationText(liveMessages) })}
       >Select</button>
       <button
         class={copied === COPY_ALL ? 'copied' : ''}
-        disabled={!messages.length}
+        disabled={!liveMessages.length}
         title="Copy the whole conversation, with speakers"
-        onClick={() => void copy(transcriptConversationText(messages), COPY_ALL)}
+        onClick={() => void copy(transcriptConversationText(liveMessages), COPY_ALL)}
       >{copied === COPY_ALL ? 'Copied' : 'Copy all'}</button>
       <label class="transcript-tool-toggle">
         <input
@@ -468,28 +528,25 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     <div class="transcript-tab-body" ref={body} onScroll={onScroll}>
       {messages.length
         ? visibleMessages.length
-          ? visibleMessages.map((message, index) => <Fragment key={message.message_id}>
-            {/* Only in the unfiltered column. Under a search the neighbours are
-                whatever matched, so "12 tool calls" between them would describe
-                a gap the reader is not looking at. */}
-            {!normalizedQuery && index > 0 && message.preceding_tool_calls > 0 && (
-              showToolCalls && message.preceding_tools?.length
-                ? <TranscriptToolCalls calls={message.preceding_tools} />
-                : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(message.preceding_tool_calls)}</p>
-            )}
-            <Message
-              message={message}
-              copied={copied === message.ordinal}
-              expanded={expanded.includes(message.message_id)}
-              query={normalizedQuery}
-              onCopy={item => void copy(item.text, item.ordinal)}
-              onExpand={toggleExpand}
-              onSelectText={item => setSheet({
-                title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
-                text: item.text,
-              })}
+          ? groups.map((group, index) => group.kind === 'abandoned'
+            ? <AbandonedRun
+              key={group.key}
+              messages={group.messages}
+              open={openBranches.includes(group.key)}
+              onToggle={() => toggleBranch(group.key)}
+              renderMessage={renderMessage}
             />
-          </Fragment>)
+            : <Fragment key={group.message.message_id}>
+              {/* Only in the unfiltered column. Under a search the neighbours are
+                  whatever matched, so "12 tool calls" between them would describe
+                  a gap the reader is not looking at. */}
+              {!normalizedQuery && index > 0 && group.message.preceding_tool_calls > 0 && (
+                showToolCalls && group.message.preceding_tools?.length
+                  ? <TranscriptToolCalls calls={group.message.preceding_tools} />
+                  : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(group.message.preceding_tool_calls)}</p>
+              )}
+              {renderMessage(group.message)}
+            </Fragment>)
           : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
         : !loading && !(showToolCalls && trailingToolCalls.length) && <p class="drawer-empty">{transcriptEmptyMessage(data?.reason ?? null, session.backend)}</p>}
       {!normalizedQuery && trailingToolCalls.length > 0 && (showToolCalls

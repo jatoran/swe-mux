@@ -162,6 +162,10 @@
   Both parse the same native files through `transcript_view.py` and neither mutates them.
   History indexes everything text-shaped because search wants recall.
   The reader keeps conversational prose as its default projection.
+  Neither indexes a turn the conversation branched away from: a Claude transcript is an
+  append-only DAG, and a prompt resent through an outage would otherwise be indexed once per
+  attempt (`transcript-branches.md`). The drawer's reader shows those turns folded and marked;
+  history reports only how many there were.
   Both transcript views can additionally disclose native tool names and input arguments behind a default-off toggle.
   Tool results, operational telemetry, and extra transcript persistence are excluded from that disclosure.
 - **Phase 7.7 scan-timeline surfaces.** The history transcript payload carries the run's
@@ -241,7 +245,7 @@
 - `src/swe_mux/reconcile.py`
 - `src/swe_mux/history_backfill.py`
 - `src/swe_mux/history_scan.py`
-- `src/swe_mux/transcript_view.py`
+- `src/swe_mux/transcript_view.py` (branch linearization: `transcript-branches.md`)
 - `src/swe_mux/transcript_fork.py`
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`

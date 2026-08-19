@@ -2987,6 +2987,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    seam and not as a message: it is the only row in the column nobody said. */
 .transcript-tool-boundary{display:flex;align-items:center;gap:8px;margin:0;padding:4px 9px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-tool-boundary::before,.transcript-tool-boundary::after{content:"";flex:1;height:1px;background:var(--line)}
+/* A branch the conversation left: a retried turn, a rewind. Folded to one muted row
+   because it is not what was said, and kept in the column because a reader who
+   watched themselves resend a prompt eight times has to be able to find those eight
+   somewhere. Opened, its messages are dimmed and rule-marked so no scroll position
+   can make one look like part of the conversation. */
+.transcript-abandoned{margin:0;padding:0;border-top:1px dashed var(--line);border-bottom:1px dashed var(--line);background:color-mix(in srgb,var(--panel) 45%,transparent)}
+.transcript-abandoned>button{display:flex;align-items:center;gap:6px;width:100%;padding:5px 9px;border:0;background:none;color:var(--muted);font:inherit;font-size:8px;text-align:left;text-transform:uppercase;letter-spacing:.08em;cursor:pointer;-webkit-user-select:none;user-select:none}
+.transcript-abandoned>button:hover{color:var(--text)}
+.transcript-abandoned-mark{font-size:9px;line-height:1}
+.transcript-abandoned-body{border-top:1px dashed var(--line);opacity:.62}
+.transcript-abandoned-body .transcript-message{background:transparent}
 .transcript-tool-calls{display:grid;gap:4px;padding:6px 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 72%,transparent)}
 .messages article .transcript-tool-calls{margin-top:8px;padding:8px 0 0;border:0;border-top:1px solid var(--line);background:transparent}
 .transcript-tool-call{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--muted);font-size:9px}

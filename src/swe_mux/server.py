@@ -301,6 +301,7 @@ from .transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
     CutPoint,
+    ParsedConversation,
     conversation_cut_points,
     conversation_is_readable,
     conversation_view_cached,
@@ -5791,14 +5792,14 @@ async def _bundle_transcript_slices(
             slices.append({"agent_run_id": run_id, "error": "native transcript is unavailable"})
             continue
         try:
-            messages, _mtime_ns, _size = await asyncio.to_thread(
+            parsed = await asyncio.to_thread(
                 _parse_conversation, path, str(row["backend"]), native_id
             )
         except (OSError, ValueError):
             slices.append({"agent_run_id": run_id, "error": "native transcript is unreadable"})
             continue
         in_window: list[dict[str, Any]] = []
-        for message in messages:
+        for message in parsed.messages:
             ts = _message_timestamp(message.get("ts"))
             if ts is None or ts < from_ts or ts > to_ts:
                 continue
@@ -5809,6 +5810,7 @@ async def _bundle_transcript_slices(
                 "agent_run_id": run_id,
                 "transcript_path": str(transcript),
                 "messages": in_window[:DIAGNOSTIC_BUNDLE_MAX_MESSAGES_PER_RUN],
+                "abandoned_messages": parsed.abandoned,
                 "truncated": truncated,
             }
         )
@@ -9196,7 +9198,7 @@ async def cancel_history_scan(request: web.Request) -> web.Response:
 
 def _parse_conversation(
     path: Path | None, backend: str, native_id: str | None
-) -> tuple[list[dict[str, Any]], int, int]:
+) -> ParsedConversation:
     """`parse_transcript_with_watermark` with the conversation reference spelled out.
 
     A one-line wrapper so the two `asyncio.to_thread` call sites pass the same three
@@ -9222,11 +9224,10 @@ async def history_transcript(request: web.Request) -> web.Response:
     # conversations otherwise block the loop on every open. The watermark comes back
     # from the same call, so it can never claim to cover content this parse did not
     # read.
-    messages, mtime_ns, size = await asyncio.to_thread(
-        _parse_conversation, path, backend, native_id
-    )
+    parsed = await asyncio.to_thread(_parse_conversation, path, backend, native_id)
+    messages = parsed.messages
     await request.app["history"].replace_history_messages(
-        str(row["id"]), messages, mtime_ns=mtime_ns, size=size
+        str(row["id"]), messages, mtime_ns=parsed.mtime_ns, size=parsed.size
     )
     row = await request.app["history"].history_entry(str(row["id"])) or row
     matches = await request.app["history"].history_message_matches(
@@ -9247,6 +9248,10 @@ async def history_transcript(request: web.Request) -> web.Response:
         {
             "entry": row,
             "messages": messages,
+            # How many messages this conversation branched away from and the
+            # reader is therefore not being shown. Reported so a retried run does
+            # not read as a transcript with pieces missing.
+            "abandoned_messages": parsed.abandoned,
             "annotations": annotations,
             "matches": matches,
             "scan_records": scan_records,
@@ -10839,6 +10844,7 @@ async def session_transcript(request: web.Request) -> web.Response:
         "messages": [],
         "trailing_tool_calls": [],
         "hidden": 0,
+        "abandoned_messages": 0,
         "truncated": False,
         "reason": None,
     }

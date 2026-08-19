@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   expandedTranscriptMessageIds,
   forgetTranscriptScroll,
+  groupTranscriptMessages,
   isPinnedToBottom,
   recallTranscriptScroll,
   rememberTranscriptScroll,
@@ -13,8 +14,10 @@ import {
   transcriptClamped,
   TRANSCRIPT_CLAMP_CHARS,
   TRANSCRIPT_EXPANSION_MAX_ENTRIES,
+  transcriptAbandonedLabel,
   transcriptConversationText,
   transcriptEmptyMessage,
+  transcriptLiveMessages,
   transcriptMatchesQuery,
   transcriptSearchParts,
   transcriptSelectedSlice,
@@ -71,6 +74,57 @@ test('a copied message is the message, a copied conversation names its speakers'
     message({ ordinal: 1, text: 'built' }),
   ]), 'you: build it\n\nagent: built')
   assert.equal(transcriptConversationText([]), '')
+})
+
+test('copying the conversation copies what it says, not what it abandoned', () => {
+  // A retried prompt is in the column so the reader can see the retry happened.
+  // Pasting all eight copies into a bug report is the opposite of showing it.
+  const messages = [
+    message({ ordinal: 0, role: 'user', text: 'review it', abandoned: true }),
+    message({ ordinal: 1, role: 'user', text: 'review it' }),
+    message({ ordinal: 2, text: 'reviewed' }),
+  ]
+  assert.deepEqual(transcriptLiveMessages(messages).map(item => item.ordinal), [1, 2])
+  assert.equal(transcriptConversationText(transcriptLiveMessages(messages)), 'you: review it\n\nagent: reviewed')
+})
+
+test('one abandoned branch folds into one row, however many attempts it holds', () => {
+  const groups = groupTranscriptMessages([
+    message({ ordinal: 0, role: 'user', text: 'set it up' }),
+    message({ ordinal: 1, message_id: 'offset:10', role: 'user', text: 'review it', abandoned: true }),
+    message({ ordinal: 2, message_id: 'offset:20', role: 'user', text: 'review it', abandoned: true }),
+    message({ ordinal: 3, message_id: 'offset:30', role: 'user', text: 'review it' }),
+    message({ ordinal: 4, message_id: 'offset:40', text: 'reviewed' }),
+  ])
+  assert.deepEqual(groups.map(group => group.kind), ['message', 'abandoned', 'message', 'message'])
+  const fold = groups[1]
+  assert.equal(fold.kind, 'abandoned')
+  if (fold.kind !== 'abandoned') return
+  // Keyed by the run's first member, which survives the appends that move the window.
+  assert.equal(fold.key, 'offset:10')
+  assert.deepEqual(fold.messages.map(item => item.ordinal), [1, 2])
+  assert.equal(transcriptAbandonedLabel(fold.messages.length), '2 messages from a branch this conversation left')
+  assert.equal(transcriptAbandonedLabel(1), '1 message from a branch this conversation left')
+})
+
+test('two separate branches stay two folds', () => {
+  // Adjacency is the whole grouping rule, so a live message between two abandoned
+  // runs must not let them collapse into one thing that never happened together.
+  const groups = groupTranscriptMessages([
+    message({ ordinal: 0, message_id: 'offset:0', role: 'user', text: 'first try', abandoned: true }),
+    message({ ordinal: 1, message_id: 'offset:10', role: 'user', text: 'first try' }),
+    message({ ordinal: 2, message_id: 'offset:20', text: 'wrong turn', abandoned: true }),
+    message({ ordinal: 3, message_id: 'offset:30', text: 'right turn' }),
+  ])
+  assert.deepEqual(groups.map(group => group.kind), ['abandoned', 'message', 'abandoned', 'message'])
+})
+
+test('a conversation with no branches produces no folds', () => {
+  const groups = groupTranscriptMessages([
+    message({ ordinal: 0, role: 'user', text: 'build it' }),
+    message({ ordinal: 1, text: 'built' }),
+  ])
+  assert.deepEqual(groups.map(group => group.kind), ['message', 'message'])
 })
 
 test('the seam between two agent messages names how much work is in it', () => {

@@ -92,6 +92,15 @@
   `design/features/provider-accounts.md`, `design/features/backends.md`
 - Changing history, transcripts, or cross-vendor review: `design/features/history.md`,
   `design/interfaces.md`
+- Changing how a transcript is linearized - which records count as the conversation, what a
+  retry or `/rewind` leaves behind, or anything reading `parentUuid`:
+  `design/features/transcript-branches.md`, `design/features/history.md`,
+  `design/interfaces.md`, `technical/backend/packages.md`.
+  The rule the split exists to enforce: a Claude transcript is an append-only DAG, so the
+  indexing projection drops the branches the conversation left and the human reader marks
+  them - and neither may reconstruct the live branch from the parent chain alone, because a
+  parallel tool batch parents each result to its own call and a chain walk would drop every
+  result but the last.
 - Changing Git status, comparison, diff review, first-time repository initialization, or worktree tooling:
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,

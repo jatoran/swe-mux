@@ -1608,6 +1608,18 @@ responsive controls.
   have to guess whether the gap between them is nothing or twenty minutes of tool work.
   With the toggle enabled, the seam becomes one collapsed disclosure per useful tool call.
   The seam and disclosures are not drawn under a search, where the neighbours are whatever matched rather than what followed.
+- **A branch the conversation left is folded, not deleted.** A retry, a `/rewind`, or a resend
+  after a failed request appends a new branch and leaves the previous attempt in the transcript
+  forever (`transcript-branches.md`). Those turns were never sent to the model, so they are not
+  read as conversation - but this is the one surface that still shows them, because a reader who
+  watched themselves resend a prompt eight times through an outage cannot tell a transcript with
+  the eight removed from one the reader is mangling. Each contiguous run collapses to one muted
+  row naming its size, opening on click, dimmed and rule-marked so no scroll position makes a
+  member look like part of the conversation. The fold is not remembered between mounts: an
+  abandoned branch is something to check once, not a preference. Under a search it is dropped and
+  the members stand on their own, on the same rule as the tool seam - the reader asked for every
+  match, and a fold nothing reveals them through would hide one. Copy-all, Select, and the header
+  count take the live messages only, with the abandoned total named beside them.
 - **The rail's Copy reply is the last agent message in this tab**, by construction rather than by
   agreement: `/sessions/{id}/last-reply` reads this same reduction (`final_reply_text`), as does
   read-aloud. The reader is where a doubt about what was copied or spoken gets settled.

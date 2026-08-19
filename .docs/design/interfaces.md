@@ -946,13 +946,20 @@ narration the agent wrote before it. Provider control acknowledgements are skipp
 does not type `/copy` into the PTY.
 
 `GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
-Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls,preceding_tools:[{id,name,input}]}], trailing_tool_calls:[{id,name,input}], hidden, truncated, observation_stale_since, reason}`.
+Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls,preceding_tools:[{id,name,input}],abandoned?}], trailing_tool_calls:[{id,name,input}], hidden, abandoned_messages, truncated, observation_stale_since, reason}`.
 Tool calls stay outside conversational prose but carry their native names and input arguments for the default-off disclosure.
 Tool results and operational telemetry are never included.
 An agent's turn is merged into one message per *segment*, a segment being a run of records with no tool call
 between them (`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld
 and `preceding_tool_calls` counts the tool calls between a message and the one before it, so
 neither the filtering nor the gap is ever invisible.
+`abandoned` marks a message on a branch the conversation left and `abandoned_messages` counts them
+in the returned window (`features/transcript-branches.md`).
+This is the one route that returns them at all: they are marked rather than dropped because a
+reader is entitled to see that their conversation branched, and folded rather than inlined
+because they are not what it says.
+A branch boundary never merges into an adjacent segment, and an abandoned turn's tool calls are
+never counted as `preceding_tool_calls` for the live message that follows it.
 `trailing_tool_calls` preserves calls made after the newest prose message without inventing another message.
 `ordinal` numbers the returned window rather
 than the conversation, making it a display key and not an identity. Deliberately **not**
@@ -968,6 +975,9 @@ the reader is the machine's owner and needs the literal text to copy.
 `GET /history/{id}/transcript` returns the same tool-use block subset inside native message content: `{type:"tool_use",id,name,input}`.
 Pure tool-call records remain reviewable even when they contain no prose.
 Tool results and other output-bearing blocks are removed before the response and are not persisted in the History message index.
+Its `messages` are the indexing projection, so turns on an abandoned branch are absent rather than
+marked; `abandoned_messages` reports how many, so a retried run does not read as one with pieces
+cut out (`features/transcript-branches.md`).
 
 `GET /sessions/{id}/skills` lists the skills that session's CLI can see, read off disk from the
 directories the CLI itself reads (`agent_skills.py`). Agent backends only; `409` on a shell

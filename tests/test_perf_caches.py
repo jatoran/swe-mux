@@ -24,6 +24,11 @@ def _bump_mtime(path: Path) -> None:
 
 # --------------------------------------------------------------------------- #
 # transcript_view.parse_transcript_cached
+#
+# The counter patches `_parse_transcript_counted` rather than `parse_transcript`:
+# that is what the cache calls, because a cached entry has to carry the abandoned
+# count alongside the messages (a dropped message leaves nothing to count later).
+# Patching the public wrapper would count zero parses and pass for the wrong reason.
 # --------------------------------------------------------------------------- #
 def test_transcript_cache_hits_and_invalidates_on_change(tmp_path: Path, monkeypatch) -> None:
     tv._cache.clear()
@@ -32,13 +37,13 @@ def test_transcript_cache_hits_and_invalidates_on_change(tmp_path: Path, monkeyp
         json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n", encoding="utf-8"
     )
     calls = {"n": 0}
-    real = tv.parse_transcript
+    real = tv._parse_transcript_counted
 
     def counting(*args, **kwargs):
         calls["n"] += 1
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(tv, "parse_transcript", counting)
+    monkeypatch.setattr(tv, "_parse_transcript_counted", counting)
 
     first = tv.parse_transcript_cached(path, "claude")
     second = tv.parse_transcript_cached(path, "claude")
@@ -69,13 +74,13 @@ def test_transcript_cache_invalidates_on_size_at_an_unchanged_mtime(
     )
     stamp = path.stat()
     calls = {"n": 0}
-    real = tv.parse_transcript
+    real = tv._parse_transcript_counted
 
     def counting(*args, **kwargs):
         calls["n"] += 1
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(tv, "parse_transcript", counting)
+    monkeypatch.setattr(tv, "_parse_transcript_counted", counting)
     assert len(tv.parse_transcript_cached(path, "claude")) == 1
 
     with path.open("a", encoding="utf-8") as handle:
@@ -129,13 +134,13 @@ def test_transcript_cache_keys_on_backend_and_max_bytes(tmp_path: Path, monkeypa
         json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n", encoding="utf-8"
     )
     calls = {"n": 0}
-    real = tv.parse_transcript
+    real = tv._parse_transcript_counted
 
     def counting(*args, **kwargs):
         calls["n"] += 1
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(tv, "parse_transcript", counting)
+    monkeypatch.setattr(tv, "_parse_transcript_counted", counting)
     tv.parse_transcript_cached(path, "claude")
     tv.parse_transcript_cached(path, "claude", max_bytes=1024)
     tv.parse_transcript_cached(path, "codex")

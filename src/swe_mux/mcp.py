@@ -522,7 +522,9 @@ TOOLS: list[dict[str, Any]] = [
             "to read one of the caller's superseded runs unambiguously. "
             "Every message names its agent_run_id and sequence; cursors cannot "
             "cross a conversation rollover. System/meta records are excluded "
-            "unless explicitly requested. "
+            "unless explicitly requested. Turns the conversation branched away "
+            "from - a retry, a rewind - are excluded too and counted in "
+            "abandoned_messages. "
             'Pass project:"fleet" or a Project name to read a conversation outside '
             "your Project, including one a widened search_history found."
         ),
@@ -2183,6 +2185,11 @@ class McpService:
             "message_count": len(bounded),
             "returned_text_bytes": returned_bytes,
             "content_truncated": truncated,
+            # Messages in this window that belong to a branch the conversation
+            # left - a retried turn, a `/rewind`. They are not in `messages`
+            # because they are not what the conversation says, and the count is
+            # here so a reader can tell a retried run from a short one.
+            "abandoned_messages": int(page.get("abandoned_messages") or 0),
             "next_cursor": next_cursor,
             "messages": bounded,
             **self._scope_envelope(scope),

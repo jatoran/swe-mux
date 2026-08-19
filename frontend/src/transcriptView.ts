@@ -35,7 +35,21 @@ export type TranscriptMessage = {
   preceding_tool_calls: number
   /** Useful native call details at that boundary. Results are never included. */
   preceding_tools?: TranscriptToolCall[]
+  /** True when the conversation branched away from this message.
+   *
+   * A Claude transcript is an append-only DAG: a retried turn, a `/rewind`, or a
+   * resend after a failed request appends a new sibling and leaves the previous
+   * attempt in the file forever. Those attempts were never sent to the model and
+   * the CLI stops showing them, so they are not read as conversation - but they
+   * are shown folded rather than dropped, because a reader is entitled to see
+   * that their conversation branched. */
+  abandoned?: boolean
 }
+
+/** The reading column's items: a message, or one run of abandoned ones folded together. */
+export type TranscriptGroup =
+  | Readonly<{ kind: 'message'; message: TranscriptMessage }>
+  | Readonly<{ kind: 'abandoned'; key: string; messages: TranscriptMessage[] }>
 
 /** Why there is nothing to read. `null` means the transcript loaded. */
 export type TranscriptReason = 'not_agent' | 'no_transcript' | 'unreadable' | 'agent_bridge_unavailable' | null
@@ -50,6 +64,8 @@ export type SessionTranscript = {
   trailing_tool_calls?: TranscriptToolCall[]
   /** Records the daemon classified as CLI machinery rather than conversation. */
   hidden: number
+  /** Messages in `messages` that belong to a branch the conversation left. */
+  abandoned_messages?: number
   truncated: boolean
   reason: TranscriptReason
 }
@@ -320,6 +336,43 @@ export function transcriptToolCallsFromBlocks(
 
 export function transcriptConversationText(messages: TranscriptMessage[]): string {
   return messages.map(message => `${transcriptSpeaker(message.role)}: ${message.text}`).join('\n\n')
+}
+
+/** Everything the conversation still says, with abandoned attempts left out.
+ *
+ * What "copy the conversation" has to mean. A branch the conversation left is
+ * shown so the reader knows it happened; pasting it into a bug report as though
+ * it were said is the opposite of that. */
+export const transcriptLiveMessages = (messages: readonly TranscriptMessage[]): TranscriptMessage[] =>
+  messages.filter(message => !message.abandoned)
+
+/**
+ * Fold each *run* of abandoned messages into one group, in reading order.
+ *
+ * A run rather than a message: an abandoned branch is contiguous in the file, so
+ * nine retries of one prompt are one thing that happened, and nine separate folds
+ * would be the noise this exists to remove. The group's key is the first member's
+ * `message_id`, which is stable across the appends that move the window.
+ */
+export function groupTranscriptMessages(messages: readonly TranscriptMessage[]): TranscriptGroup[] {
+  const groups: TranscriptGroup[] = []
+  for (const message of messages) {
+    if (!message.abandoned) {
+      groups.push({ kind: 'message', message })
+      continue
+    }
+    const previous = groups[groups.length - 1]
+    if (previous && previous.kind === 'abandoned') previous.messages.push(message)
+    else groups.push({ kind: 'abandoned', key: message.message_id, messages: [message] })
+  }
+  return groups
+}
+
+/** What a fold says about itself, in messages rather than records. */
+export function transcriptAbandonedLabel(count: number): string {
+  return count === 1
+    ? '1 message from a branch this conversation left'
+    : `${count} messages from a branch this conversation left`
 }
 
 /** The sentence shown in place of a conversation, per daemon-reported reason. */
