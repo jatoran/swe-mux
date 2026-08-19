@@ -550,10 +550,13 @@ def acknowledge_turns(
     browsers and a phone converge instead of fighting. Returns True when the
     mark actually moved.
 
-    `explicit` distinguishes the user clicking "mark as read" from the dwell
+    `explicit` distinguishes a read the user is responsible for from the dwell
     timer catching up an on-screen pane. Only the former clears a hand-set
     unread pin; the implicit path is refused outright while one is set, which is
-    what lets a pane you are still looking at stay unread.
+    what lets a pane you are still looking at stay unread. The client also uses
+    the explicit shape when the user comes *back* to a pane they marked, since
+    the pin is meant to outlive the dwell of the marking visit and nothing more;
+    only the client knows which panes are on screen, so that call is made there.
     """
     pinned = bool(getattr(record, "unread_pin", False))
     if pinned and not explicit:

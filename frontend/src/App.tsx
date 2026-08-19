@@ -191,7 +191,7 @@ import {
 } from './projectSort'
 import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseReason } from './projectRecency'
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
-import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
+import { pendingAcks, pruneAcks, trackPinVisits, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type PinVisits, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
@@ -543,6 +543,9 @@ export function App() {
   // Acknowledgements in flight for sidebar rows. The durable mark lives on the
   // session record; this is only the optimistic overlay. See sessionAttention.ts.
   const [ackedTurns,setAckedTurns]=useState<AckMap>({})
+  // Which hand-set unread marks are still owned by the visit that set them, so a
+  // return to the pane reads it rather than the mark outliving the reason for it.
+  const [pinVisits,setPinVisits]=useState<PinVisits>({})
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
@@ -2450,18 +2453,31 @@ export function App() {
   // fleet re-renders constantly, and keying the timer on that would restart it
   // forever and never acknowledge anything. `turn_seq` only moves when an agent
   // settles, so this key is stable for exactly as long as the dwell needs.
-  const pending=humanPresent?pendingAcks(sessions,visibleSessionIds,ackedTurns):[]
-  const pendingKey=pending.map(([id,seq])=>`${id}:${seq}`).join('\n')
+  // A hand-set unread mark outranks the dwell only for the visit it was made in
+  // (sessionAttention.ts). Tracked here rather than on the record because which
+  // panes are on screen is this client's own state, and it is what separates
+  // "I am marking the pane I am looking at" from "I am back to read it".
+  useEffect(()=>{
+    setPinVisits(prev=>trackPinVisits(prev,sessions,visibleSessionIds))
+  },[sessions,visibleSessionKey])
+  const pending=humanPresent?pendingAcks(sessions,visibleSessionIds,ackedTurns,pinVisits):[]
+  const pendingKey=pending.map(({id,turnSeq,explicit})=>`${id}:${turnSeq}:${explicit?'x':''}`).join('\n')
   useEffect(()=>{
     if(!pendingKey)return
     const timer=window.setTimeout(()=>{
-      for(const [id,seq] of pending){
+      for(const {id,turnSeq,explicit} of pending){
         // Optimistic first: the row must clear now, not a round-trip later. A
         // failed POST is left alone rather than rolled back - the next snapshot
         // carries the daemon's own answer, and re-lighting a row the user just
         // looked at is worse than acknowledging it slightly early.
-        setAckedTurns(current=>current[id]>=seq?current:{...current,[id]:seq})
-        void api('POST',`/api/sessions/${id}/read`,{turn_seq:seq}).catch(()=>{})
+        //
+        // A released pin is the exception and stays pessimistic: the pin is what
+        // `isUnread` reads first, so clearing it locally and having the write
+        // fail would leave the row reading as caught up against a daemon that
+        // still holds the mark. It clears on the daemon's own snapshot instead,
+        // one round trip after a dwell that already took seconds.
+        if(!explicit)setAckedTurns(current=>current[id]>=turnSeq?current:{...current,[id]:turnSeq})
+        void api('POST',`/api/sessions/${id}/read`,explicit?{read:true}:{turn_seq:turnSeq}).catch(()=>{})
       }
     },READ_ACK_DWELL_MS)
     return()=>window.clearTimeout(timer)
@@ -3386,6 +3402,8 @@ export function App() {
   // to flip on the click, and the daemon's own snapshot follows over the socket.
   // `unread_pin` is what makes marking the pane you are looking at stick - the
   // dwell timer would otherwise re-read it a second later (sessionAttention.ts).
+  // It sticks for that visit and no longer: leaving the pane releases the pin,
+  // so coming back to read the marked session clears it like any other pane.
   const toggleSessionRead = async (session: Session) => {
     setContextMenu(null)
     const unread = isUnread(session, ackedTurns)

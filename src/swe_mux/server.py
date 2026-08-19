@@ -6575,7 +6575,9 @@ async def mark_session_read(request: web.Request) -> web.Response:
       explicit unread pin is set, which is what keeps a pane the user marked
       unread from being re-read out from under them by the timer.
     - `{"read": true}` - explicit read. Clears the pin and acknowledges every
-      counted turn.
+      counted turn. Written both by the menu item and by a client whose user has
+      returned to a pane they had marked unread, which is the pin's designed end:
+      it exists to survive the dwell of the visit that set it.
     - `{"read": false}` - explicit unread. Sets the pin and rolls the mark back.
     """
     session = request.app["sessions"].resolve(request.match_info["sid"])
