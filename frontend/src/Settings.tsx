@@ -1494,7 +1494,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             />
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
             <h4>Pronunciation</h4>
-            <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Words it recently had to spell appear below with a one-tap fix.</p>
+            <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). A respelling must itself be pronounceable — real dictionary words, or the exact-phoneme form <code>{'[word](/phonemes/)'}</code> (e.g. <code>{'[swe](/swˈi/)'}</code> says “swee”). Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix.</p>
             <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
           </>}
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
@@ -1866,12 +1866,22 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   </div>
 }
 
+type LexiconVerdict={ok:boolean;phonemes?:string|null;spoken_as?:string|null;unspeakable?:string[]}
+type LexiconCheck={available:boolean;diagnostic?:string|null;results:Record<string,LexiconVerdict>}
+
 /**
  * The user half of the Kokoro repair ladder: a word→respelling map merged over
  * the built-in project lexicon, plus the telemetry list of words the ladder had
  * to spell out letter by letter. Respelling one of those writes a lexicon entry
  * into the draft; Save commits it and the daemon hot-applies (the engine's
  * per-word cache and the audition previews are invalidated server-side).
+ *
+ * Each row carries a live verdict from `/api/voice/lexicon/check` — the ladder
+ * re-verifies every respelling, so a value that is not itself pronounceable
+ * (e.g. an invented word like "swee") would be silently rejected in speech and
+ * the word spelled anyway; the ✗ makes that visible before Save. The ♪ button
+ * auditions the value through the real pipeline via a same-origin GET (the CSP
+ * has no media-src, so blob: audio is refused).
  */
 function TtsLexiconEditor({lexicon,spelled,onChange}:{
   lexicon:Record<string,string>
@@ -1881,6 +1891,26 @@ function TtsLexiconEditor({lexicon,spelled,onChange}:{
   const [newWord,setNewWord]=useState('')
   const [newSpoken,setNewSpoken]=useState('')
   const [respell,setRespell]=useState<Record<string,string>>({})
+  const [check,setCheck]=useState<LexiconCheck|null>(null)
+  const audioRef=useRef<HTMLAudioElement|null>(null)
+  useEffect(()=>()=>{audioRef.current?.pause()},[])
+  const lexiconJson=JSON.stringify(lexicon)
+  useEffect(()=>{
+    if(!Object.keys(lexicon).length){setCheck(null);return}
+    const timer=setTimeout(()=>{
+      void api<LexiconCheck>('POST','/api/voice/lexicon/check',{entries:lexicon}).then(setCheck).catch(()=>setCheck(null))
+    },600)
+    return()=>clearTimeout(timer)
+  // Keyed by content, not object identity: every keystroke makes a new map.
+  },[lexiconJson])
+  const hear=(value:string)=>{
+    if(!value.trim())return
+    audioRef.current?.pause()
+    const audio=new Audio(`/api/voice/lexicon/preview?text=${encodeURIComponent(value.trim())}`)
+    audioRef.current=audio
+    void audio.play().catch(()=>{})
+  }
+  const verdict=(word:string):LexiconVerdict|null=>check?.available?check.results[word]??null:null
   const add=(word:string,spoken:string)=>{
     const key=word.trim().toLowerCase();const value=spoken.trim()
     if(!key||!value)return
@@ -1889,21 +1919,32 @@ function TtsLexiconEditor({lexicon,spelled,onChange}:{
   const entries=Object.entries(lexicon).sort(([a],[b])=>a.localeCompare(b))
   const pending=spelled.filter(item=>!(item.word in lexicon))
   return <div class="tts-lexicon">
-    {entries.map(([word,spoken])=><div class="tts-lexicon-row" key={word}>
-      <code>{word}</code>
-      <input aria-label={`Pronunciation for ${word}`} value={spoken} onInput={e=>onChange({...lexicon,[word]:e.currentTarget.value})}/>
-      <button type="button" title={`Remove ${word}`} onClick={()=>{const next={...lexicon};delete next[word];onChange(next)}}>✕</button>
-    </div>)}
+    {entries.map(([word,spoken])=>{
+      const state=verdict(word)
+      return <Fragment key={word}>
+        <div class="tts-lexicon-row">
+          <code>{word}</code>
+          <input aria-label={`Pronunciation for ${word}`} value={spoken} onInput={e=>onChange({...lexicon,[word]:e.currentTarget.value})}/>
+          {state&&<span class={`tts-lexicon-verdict ${state.ok?'ok':'bad'}`} title={state.ok?(state.phonemes?`Speaks as written · ${state.phonemes}`:'Speaks as written'):'This respelling would be rejected and the word spelled out'}>{state.ok?'✓':'✗'}</span>}
+          <button type="button" title="Hear this pronunciation" onClick={()=>hear(spoken)}>♪</button>
+          <button type="button" title={`Remove ${word}`} onClick={()=>{const next={...lexicon};delete next[word];onChange(next)}}>✕</button>
+        </div>
+        {state&&!state.ok&&<p class="tts-lexicon-hint">{state.unspeakable?.length?<>Not pronounceable: {state.unspeakable.map(piece=><code key={piece}>{piece}</code>)} — use dictionary words, or the exact-phoneme form <code>{'[word](/phonemes/)'}</code>.</>:<>This respelling cannot be pronounced as written.</>}</p>}
+      </Fragment>
+    })}
     <div class="tts-lexicon-row">
       <input placeholder="word" aria-label="New lexicon word" value={newWord} onInput={e=>setNewWord(e.currentTarget.value)}/>
       <input placeholder="spoken as… e.g. vault spaces" aria-label="New lexicon pronunciation" value={newSpoken} onInput={e=>setNewSpoken(e.currentTarget.value)}/>
+      <button type="button" title="Hear this pronunciation" disabled={!newSpoken.trim()} onClick={()=>hear(newSpoken)}>♪</button>
       <button type="button" disabled={!newWord.trim()||!newSpoken.trim()} onClick={()=>{add(newWord,newSpoken);setNewWord('');setNewSpoken('')}}>Add</button>
     </div>
+    {check&&!check.available&&<p class="tts-lexicon-hint">{check.diagnostic||'Pronunciation checking needs the Kokoro model.'}</p>}
     {!!pending.length&&<div class="tts-lexicon-spelled">
       <h5>Words the voice had to spell out</h5>
       {pending.map(item=><div class="tts-lexicon-row" key={item.word}>
         <code>{item.word}</code><small>×{item.count}</small>
         <input placeholder="spoken as…" aria-label={`Respell ${item.word}`} value={respell[item.word]??''} onInput={e=>{const value=e.currentTarget.value;setRespell(current=>({...current,[item.word]:value}))}}/>
+        <button type="button" title="Hear this pronunciation" disabled={!(respell[item.word]||'').trim()} onClick={()=>hear(respell[item.word]||'')}>♪</button>
         <button type="button" disabled={!(respell[item.word]||'').trim()} onClick={()=>add(item.word,respell[item.word]||'')}>Respell</button>
       </div>)}
     </div>}

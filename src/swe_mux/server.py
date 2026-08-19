@@ -965,6 +965,8 @@ def create_app(
             web.get("/api/voice/models/kokoro", kokoro_model_status),
             web.post("/api/voice/models/kokoro/download", kokoro_model_download),
             web.get("/api/voice/models/kokoro/preview", kokoro_voice_preview),
+            web.post("/api/voice/lexicon/check", voice_lexicon_check),
+            web.get("/api/voice/lexicon/preview", voice_lexicon_preview),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
             web.post("/api/voice/transcribe", voice_transcribe),
             web.get("/api/voice/stt-latency", voice_latency),
@@ -9780,6 +9782,42 @@ async def kokoro_voice_preview(request: web.Request) -> web.Response:
         body=data,
         content_type="audio/wav",
         headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+async def voice_lexicon_check(request: web.Request) -> web.Response:
+    """Advisory pronunciation verdicts for lexicon entries being edited.
+
+    The Settings editor sends the draft entries and shows ✓/✗ per row, so a
+    respelling that would be rejected by the ladder's re-verification (and end
+    up spelled out anyway) is visible before Save instead of failing silently.
+    """
+    voice: VoiceService = request.app["voice"]
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("lexicon check body must be an object")
+    try:
+        return json_response(await voice.check_lexicon(body.get("entries")))
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+
+
+async def voice_lexicon_preview(request: web.Request) -> web.Response:
+    """Audition one respelling value: WAV bytes straight back.
+
+    A GET a media element can point at directly, for the same CSP reason as
+    the voice picker preview (no `media-src`, so `blob:` sources are refused).
+    Uncached: the value under audition changes as the user types.
+    """
+    voice: VoiceService = request.app["voice"]
+    try:
+        data = await voice.lexicon_preview(str(request.query.get("text") or ""))
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return web.Response(
+        body=data,
+        content_type="audio/wav",
+        headers={"Cache-Control": "no-store"},
     )
 
 

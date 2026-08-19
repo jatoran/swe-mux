@@ -77,6 +77,26 @@ LETTER_NAMES: dict[str, str] = {
 
 UNKNOWN_TOKEN = "❓"
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'_.-]*")
+# misaki's Markdown-link phoneme override: [word](/phonemes/) speaks the exact
+# phonemes. A lexicon value in this form is atomic — splitting it on whitespace
+# (multi-word phonemes contain spaces) or re-running word repair over its inside
+# would corrupt it, so replacement handling treats a link as one piece.
+PHONEME_LINK = re.compile(r"\[[^\[\]]*\]\(/[^()]*/\)")
+# The trailing characters _WORD can absorb from adjacent punctuation. A token
+# like "vaultspaces." must not defeat the whole-word lexicon lookup.
+_WORD_EDGE = "'_.-"
+
+
+def replacement_pieces(replacement: str) -> list[str]:
+    """Split a respelling on whitespace, keeping phoneme links whole."""
+    pieces: list[str] = []
+    position = 0
+    for match in PHONEME_LINK.finditer(replacement):
+        pieces.extend(replacement[position : match.start()].split())
+        pieces.append(match.group(0))
+        position = match.end()
+    pieces.extend(replacement[position:].split())
+    return pieces
 
 
 class KokoroError(RuntimeError):
@@ -352,17 +372,26 @@ class KokoroEngine:
         phonemes, _tokens = self._ensure_g2p()(word)
         return UNKNOWN_TOKEN not in phonemes
 
-    def _resolve_word(self, word: str) -> str:
+    def _resolve_word(self, word: str, report: bool = True) -> str:
         # Snapshot order matters against set_lexicon's rebind order; see there.
         cache = self._word_cache
         lexicon = self._lexicon
+        # Trailing punctuation _WORD absorbs ("vaultspaces.") must not defeat
+        # the whole-word lexicon lookup: resolve the core, keep the tail so a
+        # sentence-final repair does not lose its prosody pause. Only when the
+        # full token is unresolvable — a token misaki handles natively as-is
+        # stays untouched.
+        suffix = ""
+        stripped = word.rstrip(_WORD_EDGE)
+        if stripped and stripped != word and not self._word_resolves(word):
+            word, suffix = stripped, word[len(stripped) :]
         result, spelled = self._resolve_word_inner(word, 0, cache, lexicon)
-        if spelled and self._on_spell_out is not None:
+        if spelled and report and self._on_spell_out is not None:
             try:
                 self._on_spell_out(word)
             except Exception:  # noqa: BLE001 - telemetry must never break speech
                 log.warning("spell-out reporter failed for %r", word, exc_info=True)
-        return result
+        return result + suffix
 
     def _resolve_word_inner(
         self,
@@ -394,18 +423,9 @@ class KokoroEngine:
                     pieces = split_compound(word)
                     replacement = " ".join(pieces) if len(pieces) > 1 else None
                 if replacement is not None:
-                    resolved: list[str] = []
-                    for piece in replacement.split():
-                        if piece == word:
-                            resolved.append(spell_out(piece))
-                            spelled = True
-                        else:
-                            piece_result, piece_spelled = self._resolve_word_inner(
-                                piece, depth + 1, cache, lexicon
-                            )
-                            resolved.append(piece_result)
-                            spelled = spelled or piece_spelled
-                    result = " ".join(resolved)
+                    result, spelled = self._resolve_replacement(
+                        replacement, word, depth, cache, lexicon
+                    )
                 else:
                     result, spelled = spell_out(word), True
                 if not self._word_resolves(result):
@@ -415,19 +435,92 @@ class KokoroEngine:
         cache[word] = (result, spelled)
         return result, spelled
 
-    def prepare_text(self, text: str) -> str:
+    def _resolve_replacement(
+        self,
+        replacement: str,
+        word: str,
+        depth: int,
+        cache: dict[str, tuple[str, bool]],
+        lexicon: dict[str, str],
+    ) -> tuple[str, bool]:
+        """Resolve a respelling's pieces the way the ladder speaks them.
+
+        Phoneme links are atomic: verified whole against the G2P, never split
+        on their internal spaces or repaired from the inside. A piece equal to
+        the word being repaired would recurse forever, so it goes straight to
+        the spelling floor.
+        """
+        resolved: list[str] = []
+        spelled = False
+        for piece in replacement_pieces(replacement):
+            if piece == word:
+                resolved.append(spell_out(piece))
+                spelled = True
+            elif PHONEME_LINK.fullmatch(piece):
+                if self._word_resolves(piece):
+                    resolved.append(piece)
+                else:
+                    resolved.append(spell_out(word))
+                    spelled = True
+            else:
+                piece_result, piece_spelled = self._resolve_word_inner(
+                    piece, depth + 1, cache, lexicon
+                )
+                resolved.append(piece_result)
+                spelled = spelled or piece_spelled
+        return " ".join(resolved), spelled
+
+    def check_respelling(self, word: str, value: str) -> dict[str, Any]:
+        """Advisory verdict for one lexicon entry: does its value speak as
+        written, or would the ladder reject it and fall to the spelling floor?
+
+        Runs exactly the resolution the ladder runs when the entry is used, so
+        a value that legitimately repairs through the lexicon or the splitter
+        passes, and reports nothing to spell-out telemetry.
+        """
+        with self._lock:
+            cache = self._word_cache
+            lexicon = self._lexicon
+            resolved, spelled = self._resolve_replacement(value, word, 0, cache, lexicon)
+            # Name the pieces that end on the floor, not every OOV piece: a piece
+            # that repairs through the lexicon or the splitter is not the
+            # entry's problem and would make the hint cry wolf.
+            unspeakable: list[str] = []
+            for piece in replacement_pieces(value):
+                if PHONEME_LINK.fullmatch(piece):
+                    if not self._word_resolves(piece):
+                        unspeakable.append(piece)
+                elif piece == word:
+                    unspeakable.append(piece)
+                else:
+                    _piece_result, piece_spelled = self._resolve_word_inner(
+                        piece, 1, cache, lexicon
+                    )
+                    if piece_spelled:
+                        unspeakable.append(piece)
+            phonemes, _tokens = self._ensure_g2p()(resolved)
+        ok = not spelled and UNKNOWN_TOKEN not in phonemes
+        return {
+            "ok": ok,
+            "phonemes": str(phonemes).replace(UNKNOWN_TOKEN, "").strip() or None,
+            "spoken_as": resolved if resolved != value else None,
+            "unspeakable": unspeakable,
+        }
+
+    def prepare_text(self, text: str, report: bool = True) -> str:
         """Rewrite any word the lexicon-only G2P cannot resolve.
 
         Cheap in the common case: one full-text pass decides whether any repair
         is needed at all, and only an unknown token triggers per-word work.
+        `report=False` keeps an audition out of spell-out telemetry.
         """
         phonemes, _tokens = self._ensure_g2p()(text)
         if UNKNOWN_TOKEN not in phonemes:
             return text
-        return _WORD.sub(lambda match: self._resolve_word(match.group(0)), text)
+        return _WORD.sub(lambda match: self._resolve_word(match.group(0), report), text)
 
-    def phonemize(self, text: str) -> str:
-        prepared = self.prepare_text(text)
+    def phonemize(self, text: str, report: bool = True) -> str:
+        prepared = self.prepare_text(text, report)
         phonemes, _tokens = self._ensure_g2p()(prepared)
         # The repair ladder above makes this unreachable for English words; a
         # non-Latin glyph can still produce one, and dropping it is explicit.
@@ -461,14 +554,20 @@ class KokoroEngine:
     # ---- synthesis ---------------------------------------------------------
 
     def synthesize_wav(
-        self, text: str, destination: Path, *, voice_id: str, speed: float
+        self,
+        text: str,
+        destination: Path,
+        *,
+        voice_id: str,
+        speed: float,
+        report_unknown: bool = True,
     ) -> None:
         """Synthesize `text` into a 16-bit mono WAV at `destination`."""
         import numpy
 
         with self._lock:
             self._ensure_loaded()
-            phonemes = self.phonemize(text)
+            phonemes = self.phonemize(text, report_unknown)
             chunks = self._token_chunks(phonemes)
             if not chunks:
                 raise KokoroError("nothing speakable remained after phonemization")

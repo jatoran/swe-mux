@@ -83,6 +83,23 @@ affect the PTY, session state, transcripts, history, or projects.
   `spelled_words`; Settings → Voice lists them under the lexicon editor with a one-tap
   respell input that writes the lexicon entry. Telemetry is fail-safe: a reporter error is
   logged and speech proceeds.
+- **A respelling must itself be pronounceable, and the editor tells the user before Save.**
+  The ladder re-verifies every replacement, so a value made of invented words (the measured
+  live failure: `swe → "swee"` — "swee" is not in misaki's dictionary) is silently rejected
+  and the word spelled anyway. Two mechanisms close that loop:
+  `POST /api/voice/lexicon/check` runs each draft entry through the *real* resolution
+  machinery (`KokoroEngine.check_respelling`, advisory — model absence is a reported
+  condition, telemetry untouched) and the editor shows ✓/✗ per row naming the unpronounceable
+  pieces; `GET /api/voice/lexicon/preview?text=` auditions a value through the full pipeline
+  with the configured voice (same-origin GET for the no-`media-src` CSP; spell-out reporting
+  suppressed via `synthesize_wav(report_unknown=False)` so auditions never pollute telemetry).
+- **Exact pronunciations use misaki's phoneme-link form `[word](/phonemes/)`** (e.g.
+  `[swe](/swˈi/)` says "swee"). A link is atomic in the ladder (`replacement_pieces`):
+  it is verified whole against the G2P and never whitespace-split (multi-word phonemes
+  contain spaces) or repaired from the inside. And **trailing punctuation cannot defeat the
+  lexicon**: `_WORD` absorbs `'_.-` tails, so a sentence-final `vaultspaces.` resolves its
+  core against the `vaultspaces` entry and keeps the tail for prosody; the floor reports
+  the core, not the punctuated token.
 
 ### Storage and playback
 
@@ -504,6 +521,11 @@ and never touches the daemon or an LLM.
   `default-src 'self'` governs media, so a `blob:` source is refused while this URL plays.
   Settings → Voice renders the voices as a tap-to-audition picker (theme-picker style: a tap
   plays the sample and sets the draft selection; nothing commits until Save).
+- `POST /api/voice/lexicon/check` — advisory per-entry pronunciation verdicts for the
+  lexicon editor (`{entries: {word: respelling}}` → per-word `ok`/`phonemes`/`spoken_as`/
+  `unspeakable`); `GET /api/voice/lexicon/preview?text=` — audition one respelling value
+  (bounded to 200 chars) through the full pipeline with the configured Kokoro voice,
+  uncached, spell-out telemetry suppressed.
 - `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`.
   Whisper decodes from memory; the optional legacy SAPI engine uses bounded temporary files.
   Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and

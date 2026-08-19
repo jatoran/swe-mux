@@ -251,6 +251,23 @@ def test_tts_lexicon_validates_and_hot_applies(tmp_path: Path) -> None:
         update_config(config, {"tts_lexicon": "vaultspaces"})
 
 
+async def test_lexicon_check_and_preview_guard_their_inputs(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    # Advisory: no downloaded model is a reported condition, not an error.
+    verdicts = await service.check_lexicon({"swe": "swee"})
+    assert verdicts["available"] is False and verdicts["results"] == {}
+    with pytest.raises(VoiceError, match="entries"):
+        await service.check_lexicon("swe")
+    with pytest.raises(VoiceError, match="entries"):
+        await service.check_lexicon({str(index): "x" for index in range(501)})
+    with pytest.raises(VoiceError, match="1–200"):
+        await service.lexicon_preview("   ")
+    with pytest.raises(VoiceError, match="1–200"):
+        await service.lexicon_preview("x" * 201)
+    with pytest.raises(VoiceError, match="not downloaded"):
+        await service.lexicon_preview("vault spaces")
+
+
 def test_apply_lexicon_invalidates_every_kokoro_cache(tmp_path: Path) -> None:
     """A lexicon change must reach a loaded engine, the audition previews, and
     the spelled-word telemetry — or it silently waits for a daemon restart."""

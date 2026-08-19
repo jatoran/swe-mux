@@ -996,6 +996,84 @@ class VoiceService:
         log.info("kokoro preview synthesized voice=%s bytes=%d", voice_id, len(data))
         return data
 
+    async def check_lexicon(self, entries: Any) -> dict[str, Any]:
+        """Advisory per-entry verdicts for the Settings lexicon editor.
+
+        Each value is resolved exactly the way the repair ladder would resolve
+        it in speech, so "would this respelling actually be spoken as written,
+        or rejected to the spelling floor" is answered by the real machinery —
+        without touching spell-out telemetry. Absence of the Kokoro model is a
+        reported condition, not an error: the check is advisory.
+        """
+        if not isinstance(entries, dict) or len(entries) > 500:
+            raise VoiceError("entries must be a map of at most 500 respellings")
+        if not self.kokoro_models.ready():
+            return {
+                "available": False,
+                "diagnostic": "the Kokoro voice model is not downloaded",
+                "results": {},
+            }
+        try:
+            engine = self._ensure_kokoro()
+        except VoiceError as exc:
+            return {"available": False, "diagnostic": str(exc), "results": {}}
+        results: dict[str, Any] = {}
+        for word, value in entries.items():
+            if not isinstance(word, str) or not isinstance(value, str):
+                raise VoiceError("entries must map words to respelling strings")
+            if not value.strip() or len(value) > 200:
+                results[word] = {
+                    "ok": False,
+                    "phonemes": None,
+                    "spoken_as": None,
+                    "unspeakable": [],
+                }
+                continue
+            results[word] = await asyncio.to_thread(
+                engine.check_respelling, word.strip().casefold(), value.strip()
+            )
+        return {"available": True, "diagnostic": None, "results": results}
+
+    async def lexicon_preview(self, text: str) -> bytes:
+        """Audition one respelling with the configured Kokoro voice.
+
+        Synthesizes the bounded value text through the full pipeline (so what
+        plays is exactly what speech would do with it) with spell-out telemetry
+        suppressed — a bad candidate under audition is not fleet speech debt.
+        Nothing is cached and no clip row is written; a unique temporary name
+        keeps two concurrent auditions off each other's file.
+        """
+        text = text.strip()
+        if not text or len(text) > 200:
+            raise VoiceError("preview text must be 1–200 characters")
+        if not self.kokoro_models.ready():
+            raise VoiceError(
+                "the Kokoro voice model is not downloaded; download it in "
+                "Settings → Voice first"
+            )
+        engine = self._ensure_kokoro()
+        destination = self.clip_directory / f"lexicon-preview-{uuid.uuid4().hex}.wav"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            async with self._engine_semaphore:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        engine.synthesize_wav,
+                        text,
+                        destination,
+                        voice_id=self.config.tts_kokoro_voice,
+                        speed=max(0.5, min(2.0, self.config.tts_kokoro_speed)),
+                        report_unknown=False,
+                    ),
+                    timeout=ENGINE_TIMEOUT_SECONDS,
+                )
+            return destination.read_bytes()
+        except KokoroError as exc:
+            raise VoiceError(f"Kokoro preview failed: {str(exc)[:300]}") from exc
+        finally:
+            with suppress(OSError):
+                destination.unlink(missing_ok=True)
+
     @staticmethod
     def _stream_id(requested: str | None) -> str:
         if requested is None:

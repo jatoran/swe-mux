@@ -42,15 +42,20 @@ def make_engine(tmp_path: Path, **kwargs: Any) -> KokoroEngine:
 
 
 class FakeG2P:
-    """Lexicon-only G2P double: known words phonemize, everything else is ❓."""
+    """Lexicon-only G2P double: known words phonemize, everything else is ❓.
+
+    Phoneme links resolve like the real misaki: `[word](/phonemes/)` speaks its
+    phonemes whatever the word is, so the double substitutes a known token.
+    """
 
     KNOWN = {
         "the", "pie", "project", "health", "check", "work", "tree", "passed",
         "and", "is", "clean", "s", "w", "e", "mux", "on", "a", "b", "c",
-        "ess", "double", "you", "ee", "why", "pee", "con",
+        "ess", "double", "you", "ee", "why", "pee", "con", "cue",
     }
 
     def __call__(self, text: str) -> tuple[str, Any]:
+        text = kokoro_tts.PHONEME_LINK.sub("pie", text)
         words = [word.strip(".,!?:;").casefold() for word in text.split()]
         phonemes = " ".join(
             "x" if (not word or word in self.KNOWN or word.isdigit()) else "❓"
@@ -126,6 +131,79 @@ def test_spell_out_telemetry_reports_the_word_an_operator_would_respell(
     reported.clear()
     engine.prepare_text("qqq and qqq")
     assert reported == ["qqq", "qqq"]
+
+
+def test_replacement_pieces_keep_phoneme_links_whole() -> None:
+    from swe_mux.kokoro_tts import replacement_pieces
+
+    assert replacement_pieces("vault spaces") == ["vault", "spaces"]
+    # A multi-word phoneme link contains spaces; splitting it would corrupt it.
+    assert replacement_pieces("[swe-mux](/swˈi mˈʌks/) tool") == [
+        "[swe-mux](/swˈi mˈʌks/)",
+        "tool",
+    ]
+
+
+def test_phoneme_link_respellings_pass_the_ladder_atomically(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._g2p = FakeG2P()
+    engine.set_lexicon(
+        {
+            "swemux": "[swemux](/swˈimˈʌks/)",
+            # The internal space is the regression: whitespace-splitting this
+            # value produced two broken halves and the ladder spelled the word.
+            "swe-mux": "[swe-mux](/swˈi mˈʌks/)",
+        }
+    )
+    assert engine.prepare_text("swemux") == "[swemux](/swˈimˈʌks/)"
+    assert engine.prepare_text("swe-mux") == "[swe-mux](/swˈi mˈʌks/)"
+
+
+def test_trailing_punctuation_does_not_defeat_the_lexicon(tmp_path: Path) -> None:
+    """A sentence-final unknown token carries its punctuation into the match;
+    the lookup must resolve the core and keep the tail for prosody."""
+    reported: list[str] = []
+    engine = make_engine(tmp_path, on_spell_out=reported.append)
+    engine._g2p = FakeG2P()
+    assert engine.prepare_text("The pyproject. passed.") == "The pie project. passed."
+    assert reported == []
+    # The spelling floor reports the core, the word an operator would respell.
+    engine.prepare_text("qqq.")
+    assert reported == ["qqq"]
+
+
+def test_check_respelling_mirrors_what_the_ladder_would_speak(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine._g2p = FakeG2P()
+    good = engine.check_respelling("vaultspaces", "work tree")
+    assert good["ok"] is True and good["unspeakable"] == []
+    # The user's actual failure: an invented respelling is itself OOV, so the
+    # ladder rejects it and spells the word — the check names the bad piece.
+    bad = engine.check_respelling("swe", "qqq tree")
+    assert bad["ok"] is False and bad["unspeakable"] == ["qqq"]
+    # A value that legitimately repairs through the lexicon is not a failure.
+    repairs = engine.check_respelling("tool", "pyproject")
+    assert repairs["ok"] is True and repairs["unspeakable"] == []
+    assert repairs["spoken_as"] == "pie project"
+    # Self-reference can only spell.
+    circular = engine.check_respelling("qqq", "qqq")
+    assert circular["ok"] is False and circular["unspeakable"] == ["qqq"]
+    # A phoneme link is verified whole and passes.
+    link = engine.check_respelling("swe", "[swe](/swˈi/)")
+    assert link["ok"] is True and link["unspeakable"] == []
+
+
+def test_audition_report_suppression_keeps_telemetry_clean(tmp_path: Path) -> None:
+    reported: list[str] = []
+    engine = make_engine(tmp_path, on_spell_out=reported.append)
+    engine._g2p = FakeG2P()
+    engine.prepare_text("qqq", report=False)
+    assert reported == []
+    # check_respelling never reports either — it is an audition, not speech.
+    engine.check_respelling("swe", "zzz")
+    assert reported == []
+    engine.prepare_text("qqq")
+    assert reported == ["qqq"]
 
 
 def test_spell_out_reporter_failure_never_breaks_speech(tmp_path: Path) -> None:
@@ -292,5 +370,27 @@ def test_project_g2p_measurement_holds() -> None:
     prepared = engine.prepare_text(
         "The pyproject healthcheck passed on ConPTY, and the swe-mux worktree is clean."
     )
+    phonemes, _tokens = engine._ensure_g2p()(prepared)
+    assert kokoro_tts.UNKNOWN_TOKEN not in phonemes
+
+
+def test_real_g2p_phoneme_links_and_punctuated_lexicon_hits() -> None:
+    """The 2026-08-18 live failures against the real misaki G2P.
+
+    "swee" is not in misaki's dictionary, so the plain respelling the user
+    tried was rejected by re-verification and the word spelled anyway; the
+    phoneme-link form must pass. And a sentence-final "vaultspaces." must hit
+    the "vaultspaces" lexicon entry despite its attached punctuation.
+    """
+    pytest.importorskip("misaki")
+    assert_espeak_free()
+    engine = make_engine(Path("."))
+    assert engine.check_respelling("swe", "swee")["ok"] is False
+    assert engine.check_respelling("swe", "swee")["unspeakable"] == ["swee"]
+    assert engine.check_respelling("swe", "[swe](/swˈi/)")["ok"] is True
+    engine.set_lexicon({"swe": "[swe](/swˈi/)", "vaultspaces": "vault spaces"})
+    prepared = engine.prepare_text("Opened vaultspaces. Then swe-mux ran.")
+    assert "vault spaces." in prepared
+    assert "[swe](/swˈi/)" in prepared
     phonemes, _tokens = engine._ensure_g2p()(prepared)
     assert kokoro_tts.UNKNOWN_TOKEN not in phonemes

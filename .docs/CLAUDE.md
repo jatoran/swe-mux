@@ -228,6 +228,9 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   Words the Kokoro repair ladder can only spell out letter by letter are fixable with a
   `tts_lexicon` respelling (Settings → Voice; hot-applied), and each spell-out is recorded
   durably (`spelled_words.json`, surfaced by `GET /api/voice`) with a one-tap respell there.
+  A respelling must itself be pronounceable (the editor checks each row via
+  `POST /api/voice/lexicon/check` and auditions via `GET /api/voice/lexicon/preview`);
+  exact sounds use misaki's `[word](/phonemes/)` form, atomic in the ladder.
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
