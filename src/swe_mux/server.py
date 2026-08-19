@@ -1475,7 +1475,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 else "more than one note matches",
                 "candidates": [str(item.get("title") or "") for item in matches[:6]],
             }
-        return {"note_id": str(matches[0]["id"])}
+        return {"note_id": str(matches[0]["note_id"])}
 
     async def _assistant_note_read(
         project_id: str, note_reference: str | None = None
