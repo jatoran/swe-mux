@@ -19,12 +19,30 @@ deletes require the last file revision so external or concurrent changes fail ra
 overwrite. Favorites, recent-use time, and counts are bounded state in the mux data directory;
 they do not modify portable files.
 
+A listing may be widened past the focused Project (`all_projects=1`), which adds the Project
+libraries of every registered Project whose own scope admits them.
+That is a management read and is opt-in for a structural reason: the default listing is also
+what an Action layout resolves a pin against, so widening it by default would let a global
+layout pin a Project template.
+Every returned template names its owning Project, and a write is routed at that owner rather
+than at whichever Project is focused.
+Widening does not widen conflicts either: a conflict is two templates the *focused* listing
+returns under one stable ID, because that is the pair a `scope:id` key cannot choose between.
+Two unfocused Projects holding copies of one file are not ambiguous, and are not flagged.
+
 ## Browser flow
 
-The Actions drawer contains a Prompt templates section for browsing and inserting templates beside Quick actions and Skills.
-Each row shows a bounded two-line excerpt of the body so templates remain distinguishable without turning the drawer into the full editor.
+The Actions drawer contains a Prompt templates section for browsing, inserting, and authoring templates beside Quick actions and Skills.
+Each row shows a bounded two-line excerpt of the body so templates remain distinguishable at a glance.
 The section is expanded by default, remembers its disclosure state on the device, and its Manage button opens the full responsive library.
-The command palette, main menu, session context menu, and that Manage button all open the same editor modal.
+The command palette, main menu, session context menu, and that Manage button all open that same library.
+
+Templates are created and edited where they are used.
+The drawer's New control and each row's Edit control open the form in place of the list, and the full library selects straight into the same form with no Edit mode to enter first.
+Both surfaces render one shared editor (`PromptTemplateEditor.tsx`), so the two hosts differ in arrangement and never in what a template is; the library keeps the one thing a drawer column cannot do, which is the wide, cross-Project view.
+Placeholder fields are derived from the body being typed, before any save, so a new `{{variable}}` gets a field immediately.
+Saving stays explicit rather than automatic, because the revision contract means a write can be refused and an autosaving field would have nowhere to report that without discarding what was typed.
+The drawer is dismissed by Escape, by a back gesture, and by a tap outside, none of which it can intercept the way a modal's close button can, so an open draft is mirrored on the device and restored when the editor reopens; a mirror whose revision no longer matches the file is dropped rather than replayed over someone else's save.
 A template can also be pinned to the Action rail or Quick actions (`ui.md`).
 A `prompt` action item stores only the template's `scope:id` key and resolves the body from the library at click time, so editing a template updates every button that points at it and a button can never inject a stale copy.
 A template with no `{{variables}}` inserts directly and never submits.
@@ -57,6 +75,7 @@ The fields' button then reads `Send to <target>` until dismissed with `Insert in
 ## Key files
 
 - `src/swe_mux/prompt_library.py`
+- `frontend/src/PromptTemplateEditor.tsx`
 - `frontend/src/PromptLibrary.tsx`
 - `frontend/src/PromptsTab.tsx`
 - `frontend/src/ActionsTab.tsx`

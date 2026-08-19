@@ -22,7 +22,7 @@ import {
 import { clearProjectRail, currentProfile, currentRailBlob, loadResolvedRail, saveRailBlob } from './deviceSettings'
 import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
 import { fetchPromptTemplates, promptItemSummary } from './promptRail'
-import type { PromptTemplate } from './PromptLibrary'
+import type { PromptTemplate } from './promptTemplates'
 import type { Project } from './types'
 
 // The Configure Actions surface.

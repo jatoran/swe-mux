@@ -22,7 +22,7 @@
 // by the node type-stripping test runner, which does not resolve extensionless paths.
 import { api } from './api.ts'
 import type { RailItem } from './commandRail'
-import type { PromptTemplate } from './PromptLibrary'
+import type { PromptTemplate } from './promptTemplates'
 
 /** Asks the app to open Prompt templates in Actions (variable filling). */
 export const PROMPT_RAIL_EVENT = 'mux:open-prompt-template'

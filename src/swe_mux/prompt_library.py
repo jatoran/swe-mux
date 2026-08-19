@@ -7,6 +7,7 @@ import re
 import time
 import tomllib
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -196,7 +197,20 @@ class PromptLibrary:
                 errors.append({"path": path.name, "error": str(exc)[:500]})
         return items, errors
 
-    def list(self, project: ProjectRecord | None = None) -> dict[str, Any]:
+    def list(
+        self,
+        project: ProjectRecord | None = None,
+        *,
+        other_projects: Sequence[ProjectRecord] = (),
+    ) -> dict[str, Any]:
+        """List templates visible from `project`.
+
+        `other_projects` widens the read to the Project libraries of Projects the
+        caller is *not* focused on. That is a management view only: pinning a
+        template to an Action layout resolves it back through the focused-Project
+        listing, so a widened list must never be the source a pin is taken from
+        (`design/features/prompt-library.md`).
+        """
         configured_scope = project_prompt_scope(project)
         scopes: list[PromptScope] = []
         if configured_scope in {"global", "both"}:
@@ -207,11 +221,39 @@ class PromptLibrary:
         errors: list[dict[str, str]] = []
         for scope in scopes:
             found, diagnostics = self._read_directory(scope, project)
+            for item in found:
+                item.update(
+                    project_id=project.id if scope == "project" and project else None,
+                    project_name=project.name if scope == "project" and project else None,
+                )
             items.extend(found)
             errors.extend(diagnostics)
+        sources: list[dict[str, str]] = []
+        if project is not None and "project" in scopes:
+            sources.append({"id": project.id, "name": project.name})
+        for other in other_projects:
+            if project is not None and other.id == project.id:
+                continue
+            if project_prompt_scope(other) not in {"project", "both"}:
+                continue
+            sources.append({"id": other.id, "name": other.name})
+            found, diagnostics = self._read_directory("project", other)
+            for item in found:
+                item.update(project_id=other.id, project_name=other.name)
+            items.extend(found)
+            errors.extend(
+                {"path": f"{other.name}/{item['path']}", "error": item["error"]}
+                for item in diagnostics
+            )
+        # A conflict is two templates the *focused* listing would return under one
+        # stable ID, because that is the pair a `scope:id` key cannot choose between.
+        # Two unfocused Projects reusing an ID (a copied repository) is not ambiguous:
+        # neither is reachable from a key, so flagging them would be noise.
+        focused_id = project.id if project else None
         id_counts: dict[str, int] = {}
         for item in items:
-            id_counts[item["id"]] = id_counts.get(item["id"], 0) + 1
+            if item["project_id"] in (None, focused_id):
+                id_counts[item["id"]] = id_counts.get(item["id"], 0) + 1
         state = self._state()
         for item in items:
             usage = state.get(item["key"], {})
@@ -219,13 +261,15 @@ class PromptLibrary:
                 favorite=bool(usage.get("favorite")),
                 last_used_at=usage.get("last_used_at"),
                 use_count=int(usage.get("use_count") or 0),
-                conflict=id_counts[item["id"]] > 1,
+                conflict=item["project_id"] in (None, focused_id)
+                and id_counts.get(item["id"], 0) > 1,
             )
         items.sort(
             key=lambda item: (
                 not item["favorite"],
                 -float(item["last_used_at"] or 0),
                 item["title"].casefold(),
+                item["project_id"] or "",
                 item["key"],
             )
         )
@@ -234,6 +278,7 @@ class PromptLibrary:
             "project_id": project.id if project else None,
             "configured_scope": configured_scope,
             "items": items,
+            "projects": sources,
             "diagnostics": errors,
         }
 
@@ -256,6 +301,8 @@ class PromptLibrary:
             "scope": scope,
             "key": f"{scope}:{template['id']}",
             "revision": _revision(data),
+            "project_id": project.id if scope == "project" and project else None,
+            "project_name": project.name if scope == "project" and project else None,
         }
 
     def update(
@@ -281,6 +328,8 @@ class PromptLibrary:
             "scope": scope,
             "key": f"{scope}:{template_id}",
             "revision": _revision(data),
+            "project_id": project.id if scope == "project" and project else None,
+            "project_name": project.name if scope == "project" and project else None,
         }
 
     def delete(
