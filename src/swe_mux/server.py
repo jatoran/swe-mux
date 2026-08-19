@@ -964,7 +964,7 @@ def create_app(
             web.get("/api/voice", voice_status),
             web.get("/api/voice/models/kokoro", kokoro_model_status),
             web.post("/api/voice/models/kokoro/download", kokoro_model_download),
-            web.post("/api/voice/models/kokoro/preview", kokoro_voice_preview),
+            web.get("/api/voice/models/kokoro/preview", kokoro_voice_preview),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
             web.post("/api/voice/transcribe", voice_transcribe),
             web.get("/api/voice/stt-latency", voice_latency),
@@ -9754,13 +9754,16 @@ async def kokoro_voice_preview(request: web.Request) -> web.Response:
     The settings picker taps through voices before any of them is configured,
     so this must work whatever `tts_engine` currently is. Samples are cached
     per voice on the service for the daemon's lifetime.
+
+    A GET a media element can point at directly, not a POST the client turns
+    into a blob: the document CSP has no `media-src`, so `default-src 'self'`
+    governs media and a `blob:` URL is refused ("no supported source") while a
+    same-origin URL plays — the same reason clip playback streams from
+    `/api/voice/clips/{id}/audio` rather than from fetched bytes.
     """
     voice: VoiceService = request.app["voice"]
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise ValueError("preview body must be an object")
     try:
-        data = await voice.kokoro_preview(str(body.get("voice") or ""))
+        data = await voice.kokoro_preview(str(request.query.get("voice") or ""))
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 400)
     return web.Response(

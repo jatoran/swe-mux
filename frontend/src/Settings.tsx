@@ -1771,33 +1771,23 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
   const [playing,setPlaying]=useState<string|null>(null)
   const [error,setError]=useState<string|null>(null)
   const audioRef=useRef<HTMLAudioElement|null>(null)
-  const urlRef=useRef<string|null>(null)
-  useEffect(()=>()=>{
-    audioRef.current?.pause()
-    if(urlRef.current)URL.revokeObjectURL(urlRef.current)
-  },[])
+  useEffect(()=>()=>{audioRef.current?.pause()},[])
   const audition=async(voice:string)=>{
     onSelect(voice)
     if(!ready)return
     setError(null);setPlaying(voice)
     try{
-      const response=await fetch('/api/voice/models/kokoro/preview',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({voice}),
-      })
-      if(!response.ok){
-        const detail=await response.json().catch(()=>({error:`preview failed (${response.status})`}))
-        throw new Error(String(detail.error||`preview failed (${response.status})`))
-      }
-      const blob=await response.blob()
+      // A same-origin URL, never a blob: the document CSP has no media-src, so
+      // default-src 'self' governs media and refuses blob: sources outright —
+      // the same reason read-aloud clips stream from their /audio URL.
       audioRef.current?.pause()
-      if(urlRef.current)URL.revokeObjectURL(urlRef.current)
-      const url=URL.createObjectURL(blob)
-      urlRef.current=url
-      const audio=new Audio(url)
+      const audio=new Audio(`/api/voice/models/kokoro/preview?voice=${encodeURIComponent(voice)}`)
       audioRef.current=audio
       audio.onended=()=>setPlaying(current=>current===voice?null:current)
+      audio.onerror=()=>{
+        setPlaying(current=>current===voice?null:current)
+        setError('The sample could not be played; is the Kokoro model downloaded?')
+      }
       await audio.play()
     }catch(cause){
       setPlaying(current=>current===voice?null:current)
