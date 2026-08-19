@@ -403,6 +403,14 @@ class SessionRecord:
     # acknowledgement is suppressed until the user reads it explicitly or the
     # agent completes another turn (which supersedes the pin - see
     # `note_turn_completion`).
+    #
+    # "Explicitly" is not only the menu item: a client also writes an explicit
+    # read when the user returns to the pane the mark was set on, because the pin
+    # is meant to survive that one visit rather than to become a flag only a
+    # second menu click can clear (`sessionAttention.ts`, `trackPinVisits`).
+    # Which panes are on screen is client state, so the daemon cannot make that
+    # call itself - it only refuses the implicit shape, which is what keeps the
+    # dwell timer of the marking visit from undoing the mark.
     unread_pin: bool = False
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False

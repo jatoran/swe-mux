@@ -173,8 +173,24 @@ responsive controls.
   by the client (`pendingAcks` skips it), and the pin forces the unread tier regardless of the
   counters or the session's state - it is a statement, not a measurement, so marking a *working*
   agent unread lights the row now rather than whenever it happens to settle.
-  Two things clear it: the user marking it read, or the agent completing another turn, which
-  supersedes the pin and leaves the row unread on the ordinary counter comparison anyway.
+- **The pin lasts for the visit that set it, not forever.** Its whole job is to survive the dwell
+  of the pane it was applied to; going back to that pane later is the user reading the very thing
+  they marked, so it retires there.
+  The client tracks that (`trackPinVisits`): a pin first seen on a session that is **on screen**
+  is *held* until that session leaves the screen, and *released* from then on, while a pin set on
+  a session that is not on screen - from the sidebar, on a pane you are not looking at - is
+  released immediately, so the first visit reads it.
+  A released pin's dwell is written as an explicit `{"read": true}`, because that is the shape the
+  daemon lets clear a pin. Release is sticky: a released pin that scrolls back into view does not
+  re-arm, or the row would relight on every switch away and back.
+  Only the client can make this call, since which panes are on screen is client state and nothing
+  the daemon can see. A fresh tab is deliberately generous - with no prior state a visible pin
+  reads as newly set, so a reload keeps the mark.
+  Three things clear it, then: the user marking it read, the user returning to the pane, or the
+  agent completing another turn, which supersedes the pin and leaves the row unread on the
+  ordinary counter comparison anyway.
+  Before this, a hand-set mark could only be undone by a second trip to the menu, which made a
+  read-state toggle behave like a permanent flag.
   Being server-held, the mark converges across devices exactly like the acknowledgement does.
 - The row's kill control appears on hover, and on keyboard focus via `:focus-visible`; selecting
   a row does not reveal it.

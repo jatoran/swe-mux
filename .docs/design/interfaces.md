@@ -690,11 +690,18 @@ impersonate each other:
   that has not happened and silently swallow the next real one. Refused outright while
   `unread_pin` is set.
 - `{read: true}` is an **explicit** read: it clears `unread_pin` and acknowledges every counted
-  turn.
+  turn. Written by the menu item, and also by a client whose user has returned to a pane they
+  marked unread - see below.
 - `{read: false}` is an **explicit** unread: it sets `unread_pin` and rolls `read_turn_seq` back
   to just before the latest counted turn. This is the only write in the system that moves the mark
   backwards, and the pin is what keeps the dwell timer from undoing it on a pane that is still on
   screen. The daemon retires the pin when the session next completes a turn.
+
+The pin's other end is **the client's** call, because only a client knows which panes are on
+screen. It holds the pin for the visit it was set in and releases it once that session goes off
+screen; the next dwell on a released pin is written as `{read: true}` rather than as a cursor
+(`sessionAttention.ts`, `trackPinVisits`). The daemon's refusal of the implicit shape is therefore
+narrower than it looks: it stops the marking visit's own timer, not every timer thereafter.
 
 The mark is acknowledged for the **user**, not for one browser: it lives on the session record, so
 it follows every device and survives a reload.

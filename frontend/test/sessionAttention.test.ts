@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Session } from '../src/types.ts'
-import { ackedSeq, isUnread, pendingAcks, projectRailStatus, projectSetRailStatus, pruneAcks, turnSeq, type AckMap } from '../src/sessionAttention.ts'
+import { ackedSeq, isUnread, pendingAcks, projectRailStatus, projectSetRailStatus, pruneAcks, trackPinVisits, turnSeq, type AckMap, type PinVisits } from '../src/sessionAttention.ts'
 
 const session = (
   id: string,
@@ -72,12 +72,68 @@ test('a hand-marked session is unread whatever the counters and the state say', 
   assert.equal(isUnread(session('d', 'claude', 5, { state: 'exited', unread_pin: true }), {}), false)
 })
 
-test('a hand-marked session is never acknowledged by the dwell timer', () => {
+test('a hand-marked session is never acknowledged by the dwell timer of the visit that marked it', () => {
   // The case the pin exists for: the pane the menu was opened on is on screen,
   // so without this it would be re-read a dwell later and the mark would appear
   // to have done nothing.
   const pinned = [session('here', 'claude', 3, { state: 'idle', unread_pin: true })]
+  assert.deepEqual(pendingAcks(pinned, ['here'], {}, { here: 'held' }), [])
+  // No visit state at all is the same answer, so a caller that does not track
+  // visits cannot start acknowledging pins by omission.
   assert.deepEqual(pendingAcks(pinned, ['here'], {}), [])
+})
+
+test('coming back to a hand-marked pane acknowledges it, explicitly', () => {
+  // The complaint this exists for: a pin the dwell could never touch left the row
+  // unread until somebody hand-marked it read, so the mark behaved like a flag
+  // rather than like "I have not read this yet".
+  const pinned = [session('here', 'claude', 3, { state: 'idle', unread_pin: true })]
+  assert.deepEqual(pendingAcks(pinned, ['here'], {}, { here: 'released' }), [
+    { id: 'here', turnSeq: 3, explicit: true },
+  ])
+  // `mark_unread` rolls the mark back only one turn, and a pin can sit on a
+  // session with no counted turn at all, so a released pin is acknowledged even
+  // when the counters already read as caught up - that is the stranded row.
+  const caughtUp = [session('here', 'claude', 3, { state: 'idle', read_turn_seq: 3, unread_pin: true })]
+  assert.deepEqual(pendingAcks(caughtUp, ['here'], { here: 3 }, { here: 'released' }), [
+    { id: 'here', turnSeq: 3, explicit: true },
+  ])
+  // Off screen is still off screen: a released pin is not acknowledged from afar.
+  assert.deepEqual(pendingAcks(pinned, [], {}, { here: 'released' }), [])
+})
+
+test('a pin is held by the visit that set it and released when the pane leaves', () => {
+  const pinned = [session('here', 'claude', 3, { state: 'idle', unread_pin: true })]
+  // Marked while on screen: held, and it stays held for as long as the visit lasts.
+  const held = trackPinVisits({}, pinned, ['here'])
+  assert.deepEqual(held, { here: 'held' })
+  assert.equal(trackPinVisits(held, pinned, ['here']), held)
+  // The pane goes away: the visit is over.
+  const released = trackPinVisits(held, pinned, [])
+  assert.deepEqual(released, { here: 'released' })
+  // ...and coming back does not re-arm it, or the row would light again every
+  // time it scrolled out of view and back.
+  assert.deepEqual(trackPinVisits(released, pinned, ['here']), { here: 'released' })
+})
+
+test('a pin set on a pane nobody is looking at is released at once', () => {
+  // Marking a row unread from the sidebar of a session that is not on screen has
+  // no visit to protect, so the first visit reads it.
+  const pinned = [session('elsewhere', 'claude', 3, { state: 'idle', unread_pin: true })]
+  const visits = trackPinVisits({}, pinned, ['other'])
+  assert.deepEqual(visits, { elsewhere: 'released' })
+  assert.deepEqual(trackPinVisits(visits, pinned, ['elsewhere']), { elsewhere: 'released' })
+})
+
+test('pin visits forget sessions that lost their pin, and hold their reference otherwise', () => {
+  const unpinned = [session('here', 'claude', 4, { state: 'idle' })]
+  // The daemon retires the pin on the next completed turn, and marking read
+  // clears it; either way the entry goes with it.
+  assert.deepEqual(trackPinVisits({ here: 'released' }, unpinned, ['here']), {})
+  assert.deepEqual(trackPinVisits({ gone: 'held' }, [], []), {})
+  const prev: PinVisits = { here: 'held' }
+  const pinned = [session('here', 'claude', 3, { state: 'idle', unread_pin: true })]
+  assert.equal(trackPinVisits(prev, pinned, ['here']), prev)
 })
 
 test('marking unread discards the overlay that would report the row read', () => {
@@ -94,11 +150,13 @@ test('pending acknowledgements cover on-screen agents that are behind', () => {
     session('offscreen', 'claude', 3, { state: 'idle' }),
     session('shell', 'shell', 3, { state: 'running' }),
   ]
-  assert.deepEqual(pendingAcks(sessions, ['seen', 'behind', 'shell'], {}), [['behind', 3]])
+  assert.deepEqual(pendingAcks(sessions, ['seen', 'behind', 'shell'], {}), [
+    { id: 'behind', turnSeq: 3, explicit: false },
+  ])
   // A mid-turn agent on screen is acknowledged too: watching it work is what
   // keeps the row from lighting up the moment it settles.
   const working = [session('busy', 'claude', 1, { state: 'working' })]
-  assert.deepEqual(pendingAcks(working, ['busy'], {}), [['busy', 1]])
+  assert.deepEqual(pendingAcks(working, ['busy'], {}), [{ id: 'busy', turnSeq: 1, explicit: false }])
   // Already covered by the overlay, so no repeat POST while the write is in flight.
   assert.deepEqual(pendingAcks(sessions, ['behind'], { behind: 3 }), [])
 })
