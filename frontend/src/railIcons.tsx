@@ -246,18 +246,19 @@ export const PlusIcon = () => <svg {...stroke}>
 
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
-  clipboard: ClipboardHistoryIcon,
   actions: ActionsIcon,
   queue: QueueIcon,
   transcript: TranscriptIcon,
-  insight: InsightIcon,
-  changemap: ChangeMapIcon,
+  activity: InsightIcon,
   agent: AgentIcon,
   files: FilesIcon,
   notes: NotesIcon,
-  context: ContextIcon,
   git: GitIcon,
   processes: ProcessesIcon,
   schedule: ScheduleIcon,
   notifications: AlertsIcon,
 }
+
+// `ClipboardHistoryIcon`, `ChangeMapIcon`, and `ContextIcon` are no longer drawer marks —
+// their surfaces are segments and a section now — but they stay exported: Change Map keeps
+// its own workspace-tab glyph, and the other two label their segment and section controls.

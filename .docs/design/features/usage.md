@@ -15,6 +15,10 @@
 - Historical totals and model rows must never be presented as belonging to a saved provider account slot.
 - Provider subscription windows and account switching belong to `provider-accounts.md`.
 - Durable quota, reset, correlation, tool, skill, and compaction telemetry belongs to `operational-telemetry.md`.
+- The surface is the **Tokens** segment of the Resources dialog, not a modal of its own.
+  It sits beside Processes, Network, and Storage because all four answer one question - what is this consuming - even though only this one is metered in money rather than bytes (`ui.md`).
+  Its domains are historical cost + tokens, quota + resets, automation spend, runs + workload, tools + skills, and context + compaction.
+  `automation spend` is the Automation dashboard's spend view drawn from the same component rather than a second copy of it, so the two surfaces can never disagree (`automation.md`).
 
 ## Operations and invariants
 

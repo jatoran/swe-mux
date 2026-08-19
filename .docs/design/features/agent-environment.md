@@ -7,7 +7,7 @@ It answers which runtime options, tools, skills, MCP servers, plugins, hooks, ag
 It is not an execution surface and is not proof that a configured extension connected successfully.
 
 The utility drawer owns a separate **Agent** tab titled **Agent Environment** immediately after Transcript.
-The Project-scoped Context tab remains the instruction and memory surface and is titled **Instructions & Memory** in its body.
+Instructions and memory are the Agent tab's third segment, **Instructions**, titled **Instructions & Memory** in its body; it was a separate Project-scoped Context tab until the drawer consolidation. It carries no availability gate, so a shell session focused on the Agent tab still reaches it while Config and Tools — which read a live harness inventory — drop out.
 Commands remains the action surface for inserting a skill or command into the focused terminal.
 
 ## What mux injects

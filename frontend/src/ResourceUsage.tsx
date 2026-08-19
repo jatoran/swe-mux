@@ -1,7 +1,7 @@
 import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import type { FleetSnapshot } from './ProcessPanel'
+import type { FleetSnapshot } from './processFleet'
 import { memoryLabel } from './processRows'
 import type { Project, Session } from './types'
 import { anchoredPopoverStyle } from './providerAccountDisplay'

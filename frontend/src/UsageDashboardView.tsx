@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { WorkloadTelemetry } from './WorkloadTelemetry'
+import { AutomationSpendView } from './AutomationSpendView'
 import { harnesses } from './harnessRegistry'
 import { ModelName } from './ModelName'
-import { useModalFocus } from './modalFocus'
 import { QuotaAnalytics } from './QuotaAnalytics'
 import { UsageModelBreakdown } from './UsageModelBreakdown'
 import { sumUsageRows, type UsageRow, type UsageSource } from './usageAnalytics'
@@ -123,10 +124,15 @@ function ContextView({status}:{status:OperationalStatus|null}) {
   </div>
 }
 
-export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigure:()=>void}) {
+// The Tokens segment of the Resources modal: historical model spend, subscription
+// windows, resets, tools, and context evidence. Tokens sit beside processes, bandwidth,
+// and disk because all four answer one question - what is this thing consuming - even
+// though only this one is metered in money rather than bytes. `ResourcesModal.tsx` owns
+// the dialog, the focus trap, and the close control that used to live here.
+export function UsageTokensView({onConfigure}:{onConfigure:()=>void}) {
   const [usage,setUsage]=useState<UsageStatus|null>(null)
   const [operational,setOperational]=useState<OperationalStatus|null>(null)
-  const [domain,setDomain]=useState<'historical'|'quota'|'tools'|'context'>('historical')
+  const [domain,setDomain]=useState<'historical'|'quota'|'spend'|'workloads'|'tools'|'context'>('historical')
   const [hiddenSources,setHiddenSources]=useState<string[]>([])
   const [quotaProvider,setQuotaProvider]=useState<'all'|string>('all')
   const [view,setView]=useState<'overview'|'timeline'|'models'>('overview')
@@ -137,8 +143,6 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
   const [message,setMessage]=useState('Loading usage cache...')
   const [error,setError]=useState('')
   const [confirmClear,setConfirmClear]=useState(false)
-  const panel=useRef<HTMLElement>(null)
-  useModalFocus(panel,onClose)
 
   const load=async()=>{
     try{
@@ -233,13 +237,9 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
     {view==='models'&&<UsageModelBreakdown sources={visibleSources} visibleDates={visibleDates} resolution={resolution} metric={metric}/>}
   </>
 
-  return <div class="usage-layer" role="dialog" aria-modal="true" aria-label="Usage analytics" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section class="usage-panel" ref={panel}>
-      <header><div><span>USAGE::TELEMETRY</span><strong>Historical model usage and account-specific quota evidence</strong></div>
-        <div class="usage-header-actions"><button aria-label="Close usage analytics" onClick={onClose}>×</button></div>
-      </header>
+  return <>
       <div class="usage-domain-tabs" role="tablist" aria-label="Telemetry category">
-        {([['historical','historical cost + tokens'],['quota','quota + resets'],['tools','tools + skills'],['context','context + compaction']] as const).map(([item,label])=><button role="tab" key={item} aria-selected={domain===item} class={domain===item?'active':''} onClick={()=>setDomain(item)}>{label}</button>)}
+        {([['historical','historical cost + tokens'],['quota','quota + resets'],['spend','automation spend'],['workloads','runs + workload'],['tools','tools + skills'],['context','context + compaction']] as const).map(([item,label])=><button role="tab" key={item} aria-selected={domain===item} class={domain===item?'active':''} onClick={()=>setDomain(item)}>{label}</button>)}
       </div>
       <div class="usage-actions">
         {domain==='historical'?<details class="usage-source-picker"><summary>{hiddenSources.length?`${visibleSources.length}/${sourceList.length} sources`:sourceList.length?`all ${sourceList.length} sources`:'sources'}</summary>
@@ -256,8 +256,7 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
       <div class="usage-status-stack"><div class={`usage-progress ${refreshing?'running':''}`} role="status" aria-live="polite"><span>{refreshing?'◌':'·'}</span><strong>{domain==='historical'?message:'Filters below apply only to this telemetry category.'}</strong></div>
         {error&&<div class="usage-error" role="alert">{error}</div>}
       </div>
-      <main>{domain==='quota'?<QuotaAnalytics provider={quotaProvider} attribution={operational?.quota.attributions||[]}/>:domain==='tools'?<ToolsView status={operational}/>:domain==='context'?<ContextView status={operational}/>:historical}</main>
+      <main>{domain==='quota'?<QuotaAnalytics provider={quotaProvider} attribution={operational?.quota.attributions||[]}/>:domain==='spend'?<AutomationSpendView/>:domain==='workloads'?<WorkloadTelemetry/>:domain==='tools'?<ToolsView status={operational}/>:domain==='context'?<ContextView status={operational}/>:historical}</main>
       <footer><span>Durable local telemetry · bounded retention · historical model data is not account-specific</span></footer>
-    </section>
-  </div>
+  </>
 }

@@ -28,6 +28,16 @@ export type DrawerLayout = {
 
 export type DrawerProjectPresentation = {
   selected_tabs: Record<string, DrawerTabId>
+  /**
+   * Which segment each segmented tab is showing, per Project.
+   *
+   * Keyed by tab rather than by stack: a tab lives in exactly one stack, and keying by
+   * stack would lose the choice the moment the tab were dragged to another pane. Stored
+   * loosely as `string` rather than validated against `drawerSegments.ts` on purpose —
+   * this module stays the layout's own vocabulary, and an unknown id costs nothing
+   * because `resolveDrawerSegment` falls back to the first available segment anyway.
+   */
+  selected_segments: Record<string, string>
   focused_tab: DrawerTabId
   desktop_expanded: boolean
 }
@@ -35,7 +45,13 @@ export type DrawerProjectPresentation = {
 export type DrawerProjectPresentationMap = Readonly<Record<string, DrawerProjectPresentation>>
 
 export const DRAWER_LAYOUT_KEY = 'mux.drawer.layout.v1'
-export const DRAWER_PROJECT_PRESENTATIONS_KEY = 'mux.drawer.projects.v2'
+// v3 adds `selected_segments`. The key is versioned rather than the payload because a v2
+// reader handed a v3 record would drop the segment silently, and a v3 reader handed a v2
+// record is exactly the migration below — which is also where a retired tab id becomes the
+// tab *and* segment that replaced it, so a saved `context` selection lands on
+// Agent → Instructions rather than on Agent's first segment.
+export const DRAWER_PROJECT_PRESENTATIONS_KEY = 'mux.drawer.projects.v3'
+export const DRAWER_PROJECT_PRESENTATIONS_KEY_V2 = 'mux.drawer.projects.v2'
 export const DRAWER_MAX_DEPTH = 24
 export const DRAWER_MIN_RATIO = 0.1
 export const DRAWER_MAX_RATIO = 0.9
@@ -44,15 +60,37 @@ const registeredIds = (): DrawerTabId[] => DRAWER_TABS.map(tab => tab.id)
 const nodeId = (kind: 'stack' | 'split'): string => `drawer-${kind}-${browserUuid().slice(0, 12)}`
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-const migratedTabId = (value: unknown): DrawerTabId | null => {
-  if (value === 'commands' || value === 'prompts') return 'actions'
-  // Phase 7.10 folded the standalone Timeline tab into the Insight tab (Timeline
-  // is now a segment of it), so a persisted `timeline` selection maps forward.
-  if (value === 'timeline') return 'insight'
+/**
+ * Where a stored tab id lands now, tab *and* segment.
+ *
+ * Every consolidation the drawer has been through is one row here, and each must stay
+ * forever: a saved arrangement is device-local and can be arbitrarily old, and an
+ * unrecognised id is dropped rather than repaired, which silently loses whichever pane the
+ * user had dragged it into.
+ *
+ * The `segment` half is what makes a merge non-destructive. Folding Context into Agent
+ * without it would land every reader who had Context selected on Agent's *first* segment,
+ * which is a different surface than the one they chose.
+ */
+export function migratedTabTarget(value: unknown): { tab: DrawerTabId; segment?: string } | null {
+  // Phase 4 folded two catalogs into the Actions tab.
+  if (value === 'commands' || value === 'prompts') return { tab: 'actions' }
+  // Phase 7.10 folded the standalone Timeline tab into Insight as a segment.
+  if (value === 'timeline') return { tab: 'activity', segment: 'timeline' }
+  // The drawer consolidation: Insight was renamed, and three tabs became segments or a
+  // section of their neighbours.
+  if (value === 'insight') return { tab: 'activity' }
+  if (value === 'changemap') return { tab: 'activity', segment: 'changes' }
+  if (value === 'context') return { tab: 'agent', segment: 'instructions' }
+  // Clipboard became a *section* of Actions, not a segment, so there is no segment to
+  // restore — arriving on Actions is arriving, and the section is already on screen.
+  if (value === 'clipboard') return { tab: 'actions' }
   return typeof value === 'string' && DRAWER_TABS.some(tab => tab.id === value)
-    ? value as DrawerTabId
+    ? { tab: value as DrawerTabId }
     : null
 }
+
+const migratedTabId = (value: unknown): DrawerTabId | null => migratedTabTarget(value)?.tab ?? null
 
 export function clampDrawerRatio(value: number): number {
   if (!Number.isFinite(value)) return 0.5
@@ -238,20 +276,37 @@ export function normalizeDrawerProjectPresentation(
 ): DrawerProjectPresentation {
   const record = isRecord(value) ? value : {}
   const selectedValue = isRecord(record.selected_tabs) ? record.selected_tabs : {}
-  const focusedCandidate = migratedTabId(record.focused_tab) ?? fallbackFocused
+  const segmentValue = isRecord(record.selected_segments) ? record.selected_segments : {}
+  const focusedTarget = migratedTabTarget(record.focused_tab)
+  const focusedCandidate = focusedTarget?.tab ?? fallbackFocused
   const focused = focusedCandidate && drawerStackForTab(layout, focusedCandidate)
     ? focusedCandidate
     : drawerTabs(layout)[0]
   const focusedStack = drawerStackForTab(layout, focused)
   const selected: Record<string, DrawerTabId> = {}
+  // A retired tab id that migrated *with* a segment seeds that segment, so the reader who
+  // had Change Map selected lands on Activity → Changes rather than on Activity's first
+  // segment. An explicitly stored segment always wins over a migration hint: the hint is
+  // only reconstructing what the old flat id meant.
+  const segments: Record<string, string> = {}
+  const seed = (target: { tab: DrawerTabId; segment?: string } | null) => {
+    if (target?.segment && segments[target.tab] === undefined) segments[target.tab] = target.segment
+  }
+  for (const [tab, stored] of Object.entries(segmentValue)) {
+    if (typeof stored === 'string' && stored) segments[tab] = stored
+  }
   for (const stack of drawerStacks(layout)) {
-    const stored = migratedTabId(selectedValue[stack.id])
+    const target = migratedTabTarget(selectedValue[stack.id])
+    const stored = target?.tab
     selected[stack.id] = stack.id === focusedStack?.id
       ? focused
       : stored && stack.tabs.includes(stored) ? stored : stack.tabs[0]
+    if (stored && selected[stack.id] === stored) seed(target)
   }
+  seed(focusedTarget)
   return {
     selected_tabs: selected,
+    selected_segments: segments,
     focused_tab: focused,
     desktop_expanded: record.desktop_expanded === true || record.desktopExpanded === true,
   }
@@ -261,6 +316,8 @@ export function activateDrawerTab(
   presentation: DrawerProjectPresentation,
   layout: DrawerLayout,
   tab: DrawerTabId,
+  /** Also select a segment of that tab, for a palette entry or voice phrase that named one. */
+  segment?: string,
 ): DrawerProjectPresentation {
   const stack = drawerStackForTab(layout, tab)
   if (!stack) return normalizeDrawerProjectPresentation(presentation, layout)
@@ -269,7 +326,23 @@ export function activateDrawerTab(
     ...normalized,
     focused_tab: tab,
     selected_tabs: { ...normalized.selected_tabs, [stack.id]: tab },
+    selected_segments: segment
+      ? { ...normalized.selected_segments, [tab]: segment }
+      : normalized.selected_segments,
   }
+  return sameJson(next, presentation) ? presentation : next
+}
+
+/** Remember which segment a tab is showing, without moving the selection to that tab. */
+export function selectDrawerSegment(
+  presentation: DrawerProjectPresentation,
+  layout: DrawerLayout,
+  tab: DrawerTabId,
+  segment: string,
+): DrawerProjectPresentation {
+  const normalized = normalizeDrawerProjectPresentation(presentation, layout)
+  if (normalized.selected_segments[tab] === segment) return presentation
+  const next = { ...normalized, selected_segments: { ...normalized.selected_segments, [tab]: segment } }
   return sameJson(next, presentation) ? presentation : next
 }
 
@@ -298,14 +371,25 @@ export function parseDrawerProjectPresentations(
   return result
 }
 
+/**
+ * Read the newest stored presentation map, falling back through every older shape.
+ *
+ * Three tiers now, newest first: v3 (this shape), v2 (the same shape without
+ * `selected_segments`), and the original flat per-Project `{tab, desktopExpanded}` record.
+ * v2 needs no conversion beyond parsing — `normalizeDrawerProjectPresentation` fills the
+ * missing segment map, and the retired tab ids inside it migrate to tab *and* segment on
+ * the way through — so it is passed straight to the parser rather than hand-converted.
+ */
 export function migrateDrawerProjectPresentations(
   currentRaw: string | null,
   legacyRaw: string | null,
   layout: DrawerLayout,
   legacyGlobalTab: string | null = null,
   initiallyActiveProject = '',
+  v2Raw: string | null = null,
 ): DrawerProjectPresentationMap {
   if (currentRaw !== null) return parseDrawerProjectPresentations(currentRaw, layout)
+  if (v2Raw !== null) return parseDrawerProjectPresentations(v2Raw, layout)
   let legacy: unknown = {}
   try { legacy = legacyRaw ? JSON.parse(legacyRaw) : {} } catch { legacy = {} }
   const result: Record<string, DrawerProjectPresentation> = {}

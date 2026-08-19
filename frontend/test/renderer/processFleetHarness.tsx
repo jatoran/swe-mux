@@ -2,7 +2,8 @@
 // app draws. Row density and the collapsed/expanded split are pure CSS plus one class, which no
 // unit test can see: `processRows.test.ts` proves the strings, this proves they fit on a line.
 import { render } from 'preact'
-import { ProcessPanel, type ProcessItem } from '../../src/ProcessPanel'
+import { ResourcesModal } from '../../src/ResourcesModal'
+import type { ProcessItem } from '../../src/processFleet'
 import type { Project, Session } from '../../src/types'
 import '../../src/style.css'
 
@@ -82,6 +83,6 @@ const SESSIONS = [
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  <ProcessPanel sessions={SESSIONS} projects={PROJECTS} onClose={() => {}} onAttached={() => {}} />,
+  <ResourcesModal sessions={SESSIONS} projects={PROJECTS} onClose={() => {}} onAttached={() => {}} onConfigureUsage={() => {}} />,
   document.querySelector('#root')!,
 )

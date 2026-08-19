@@ -37,8 +37,26 @@ export type DrawerVisibility = {
 const known = (value: unknown): value is DrawerTabId =>
   typeof value === 'string' && DRAWER_TABS.some(tab => tab.id === value)
 
+/**
+ * What a browser that has never chosen hides.
+ *
+ * Distinct from the empty set on purpose: `parseHiddenDrawerTabs(null)` means "no stored
+ * choice", and that is the only moment this applies. Once the user touches the visibility
+ * menu at all, their set is stored — including the empty set — and this is never consulted
+ * again, so showing Processes and then never seeing it hidden again is a decision the user
+ * gets to keep.
+ *
+ * Processes is the one entry. It is not redundant with the Resources modal (a modal covers
+ * the terminal; this tab pins the focused session beside it), but it answers a question
+ * asked rarely enough not to spend a permanent rail slot on by default. Alerts is
+ * deliberately *not* here: it is the only tab that draws an unread badge, and hiding the
+ * one surface that says something needs you is the opposite of streamlining.
+ */
+export const DEFAULT_HIDDEN_DRAWER_TABS: readonly DrawerTabId[] = ['processes']
+
 /** Coerce anything stored (or written by an older build) into a usable hidden set. */
 export function parseHiddenDrawerTabs(raw: string | null): DrawerTabId[] {
+  if (raw === null) return [...DEFAULT_HIDDEN_DRAWER_TABS]
   if (!raw) return []
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { return [] }
@@ -80,8 +98,11 @@ export function withDrawerTabHidden(
 
 /** True where the tab has something to act on, regardless of what the user hid. */
 export function drawerTabStructurallyAvailable(id: DrawerTabId, hasTranscript: boolean): boolean {
-  // Insight is deliberately not here: its Timeline segment gates itself and its Findings
-  // segment is Project-aware, so a shell session still reaches its findings there.
+  // Activity and Agent are deliberately not here. Their per-segment `available` predicates
+  // in `drawerSegments.ts` gate the segments that need a transcript or an agent harness,
+  // and `resolveDrawerSegment` falls back to one that does not — so a shell session still
+  // reaches Activity's findings and Agent's instructions. Gating the whole tab would hide
+  // surfaces that work.
   return id !== 'transcript' || hasTranscript
 }
 

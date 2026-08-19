@@ -116,8 +116,11 @@ The payload also names the checkout those paths are relative to: `worktree` is t
 
 ### Reading the map
 
-The pane is a drawer tab and a poppable workspace pane, drawn two ways: Sigma over graphology on desktop, and the same three roles as lists on mobile, where a WebGL canvas strands on the pixel ratio and a force layout is unreadable at 380px anyway.
+The pane is the utility drawer's **Activity → Changes** segment and a poppable workspace pane, drawn two ways: Sigma over graphology on desktop, and the same three roles as lists on mobile, where a WebGL canvas strands on the pixel ratio and a force layout is unreadable at 380px anyway.
 
+- **Where it lives.** It was a Change Map tab of its own until the drawer consolidation, and folded into Activity because "what the session narrated" and "which files it actually wrote" were always two readings of one run rather than two questions.
+  It is the one drawer segment kept mounted while another is selected: the settled positions of its layout worker are the expensive part, and remounting would re-run the force simulation on every return — a cost the standalone tab did not have.
+  The pop-out survived the merge and matters more now, since a force-directed graph wants more width than a 380px column has (`ui.md`).
 - **Focus.** Hovering a node previews its neighbourhood; clicking pins it until the node is clicked again, the stage is clicked, or the detail card is cleared.
   A hover takes precedence while it lasts and falls back to the selection on leave, so the pinned highlight survives the pointer crossing the pane.
   Everything outside the focused node's undirected neighbour set is dimmed by mixing its colour toward the pane background and dropping its label; only edges *incident to the focused node* light up, because an edge between two of its neighbours is not a link the focused file has.

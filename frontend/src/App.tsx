@@ -31,16 +31,14 @@ import {
   projectCreateRoot, suggestFolderName, toggleInitScript,
   type InitScript, type ProjectCreateDraft,
 } from './projectCreate'
-import { ProcessPanel, type FleetSnapshot, type Preview } from './ProcessPanel'
+import { type FleetSnapshot, type Preview } from './processFleet'
 import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch } from './ProjectsManager'
 import { MenuGroup } from './MenuGroup'
 import { PreviewPane } from './PreviewPane'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
-import { UsageDashboard } from './UsageDashboardView'
-import { NetworkUsageModal } from './NetworkUsageModal'
-import { StorageUsageModal } from './StorageUsageModal'
+import { ResourcesModal, type ResourceSegment } from './ResourcesModal'
 import { HistoryBrowser } from './HistoryBrowser'
 import { resumeDraft, type ScheduleDraft, type ScheduleTargetKind } from './schedules'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
@@ -57,17 +55,19 @@ import {
   drawerTab, storedDrawerWidth, type DrawerTabId,
 } from './drawerTabs'
 import {
-  DRAWER_LAYOUT_KEY, DRAWER_PROJECT_PRESENTATIONS_KEY, activateDrawerTab,
+  DRAWER_LAYOUT_KEY, DRAWER_PROJECT_PRESENTATIONS_KEY, DRAWER_PROJECT_PRESENTATIONS_KEY_V2,
+  activateDrawerTab,
   defaultDrawerLayout, drawerProjectPresentationFor, drawerStackForTab, drawerStacks, drawerTabs,
   isDefaultDrawerLayout,
-  migrateDrawerProjectPresentations, moveDrawerTabDirection, moveDrawerTabToSplit,
+  migrateDrawerProjectPresentations, migratedTabTarget, moveDrawerTabDirection, moveDrawerTabToSplit,
   moveDrawerTabToStack, normalizeDrawerLayout, normalizeDrawerProjectPresentation,
   parseDrawerLayout, pruneDrawerProjectPresentations, reconcileDrawerProjectPresentations,
-  resetDrawerLayout, serializeDrawerLayout, serializeDrawerProjectPresentations,
+  resetDrawerLayout, selectDrawerSegment, serializeDrawerLayout, serializeDrawerProjectPresentations,
   setDrawerProjectPresentation, setDrawerSplitRatio, updateDrawerProjectPresentation,
   type DrawerEdge, type DrawerLayout, type DrawerProjectPresentation,
   type DrawerProjectPresentationMap,
 } from './drawerLayout'
+import { DRAWER_SEGMENTS } from './drawerSegments'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
@@ -100,8 +100,9 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationSurface, ConversationToggle, useConversation, type VoicePanelMode } from './ConversationControl'
 import { AssistantPanel } from './AssistantPanel'
 import {
-  assistantStatus, cancelAction, confirmAction, ensureDialog, latestOpenAction,
-  noteAssistantActionEvent, reportUiResult, sendTurn as sendAssistantTurnApi,
+  ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
+  latestOpenAction, noteAssistantActionEvent, reportUiResult,
+  sendTurn as sendAssistantTurnApi,
   spokenConfirmation, type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
@@ -138,7 +139,7 @@ import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalView
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
-import { requestTerminalAction } from './terminalActions.ts'
+import { insertIntoTerminal, requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -584,7 +585,6 @@ export function App() {
   const [menuGroup,setMenuGroup]=useState<string|null>(null)
   const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
   const [processSession, setProcessSession] = useState<Session | null>(null)
-  const [processViewerOpen,setProcessViewerOpen]=useState(false)
   const [processFleet,setProcessFleet]=useState<FleetSnapshot|null>(null)
   const [previews, setPreviews] = useState<Record<string, Preview>>({})
   const [notificationData, setNotificationData] = useState<NotificationData>({notifications:[],deliveries:[]})
@@ -595,9 +595,10 @@ export function App() {
   // through the `mux:settings-changed` event the device-settings cache emits.
   const [alertsEnabled, setAlertsEnabled] = useState(() => alertPreferences().enabled)
   const [railVoiceRevision,setRailVoiceRevision]=useState(0)
-  const [usageOpen, setUsageOpen] = useState(false)
-  const [networkUsageOpen,setNetworkUsageOpen]=useState(false)
-  const [storageUsageOpen,setStorageUsageOpen]=useState(false)
+  // Processes, bandwidth, storage, and token spend are one dialog now (`ResourcesModal`).
+  // `null` is closed; the value is the segment it opens on, so every entry point that
+  // named a resource still lands on that resource.
+  const [resourcesOpen,setResourcesOpen]=useState<ResourceSegment|null>(null)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
@@ -687,6 +688,7 @@ export function App() {
       localStorage.getItem(DRAWER_PROJECT_PRESENTATIONS_KEY),
       localStorage.getItem(DRAWER_PROJECT_STATE_KEY),drawerLayout,
       legacyDrawerTab.current,projectId,
+      localStorage.getItem(DRAWER_PROJECT_PRESENTATIONS_KEY_V2),
     ))
   const [unscopedDrawerPresentation,setUnscopedDrawerPresentation]=useState<DrawerProjectPresentation>(()=>
     normalizeDrawerProjectPresentation(null,drawerLayout))
@@ -817,12 +819,29 @@ export function App() {
     })
     setDrawerAnnouncement('All side panels shown')
   }
-  const selectDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
+  const selectDrawerTab=(tab:DrawerTabId,targetProject=projectId,segment?:string)=>{
     // A hidden tab reached by name — the palette, a voice command, a menu row that says
     // "Notes…" — is peeked for as long as it stays selected rather than unhidden. The
     // request was to see it now, not to change what the rail carries from here on.
     setTransientDrawer(hiddenDrawerTabs.includes(tab)?{projectId:targetProject,tab}:null)
-    updateDrawerPresentation(targetProject,current=>activateDrawerTab(current,drawerLayoutRef.current,tab))
+    updateDrawerPresentation(targetProject,current=>activateDrawerTab(current,drawerLayoutRef.current,tab,segment))
+  }
+  /** Remember a segment choice made inside the drawer, without moving the selection. */
+  const selectDrawerTabSegment=(tab:DrawerTabId,segment:string,targetProject=projectId)=>{
+    updateDrawerPresentation(targetProject,current=>selectDrawerSegment(current,drawerLayoutRef.current,tab,segment))
+  }
+  /**
+   * Ask the drawer to scroll a *section* into view and flash it.
+   *
+   * Sections are co-visible regions rather than modes, so "go to Clipboard" cannot be a
+   * selection — it is an arrival, and the token is what distinguishes a second request for
+   * the same section from no request at all.
+   */
+  const [drawerSectionReveal,setDrawerSectionReveal]=useState<{tab:DrawerTabId;section:string;token:number}|null>(null)
+  const drawerSectionSequence=useRef(0)
+  const revealDrawerSection=(tab:DrawerTabId,section:string,targetProject=projectId)=>{
+    openDrawerTab(tab,targetProject)
+    setDrawerSectionReveal({tab,section,token:++drawerSectionSequence.current})
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
   const showDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
@@ -845,8 +864,8 @@ export function App() {
    *  files…", "Notes…") has already said "show me this"; closing the drawer on
    *  it is perverse, and worse when the click also switched Project — the panel would
    *  vanish instead of retargeting. */
-  const openDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
-    selectDrawerTab(tab,targetProject)
+  const openDrawerTab=(tab:DrawerTabId,targetProject=projectId,segment?:string)=>{
+    selectDrawerTab(tab,targetProject,segment)
     setClipboardOpen(true,targetProject)
     setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
   }
@@ -893,19 +912,22 @@ export function App() {
       let updated=current
       if(projectId&&legacyDrawerTab.current&&!current[projectId]){
         const base=drawerProjectPresentationFor(current,projectId,drawerLayoutRef.current)
-        // Mirrors `migratedTabId` in drawerLayout: this legacy `mux.drawer.tab.v1`
-        // seed bypasses that helper, so the same forward-maps apply here — the
-        // retired `commands`/`prompts` (→ actions) and Phase 7.10's `timeline` (→ insight).
-        const legacyRaw=legacyDrawerTab.current
-        const legacyValue=legacyRaw==='commands'||legacyRaw==='prompts'?'actions':legacyRaw==='timeline'?'insight':legacyRaw
-        const legacy=DRAWER_TABS.some(tab=>tab.id===legacyValue)?legacyValue as DrawerTabId:null
-        if(legacy)updated=setDrawerProjectPresentation(current,projectId,activateDrawerTab(base,drawerLayoutRef.current,legacy),drawerLayoutRef.current)
+        // The retirement table lives in exactly one place (`migratedTabTarget`). This
+        // legacy `mux.drawer.tab.v1` seed used to re-spell it inline and drifted every
+        // time a tab was folded into another, so it now calls the same helper — segment
+        // and all, which is what puts an old `changemap` seed on Activity → Changes.
+        const legacy=migratedTabTarget(legacyDrawerTab.current)
+        if(legacy)updated=setDrawerProjectPresentation(current,projectId,activateDrawerTab(base,drawerLayoutRef.current,legacy.tab,legacy.segment),drawerLayoutRef.current)
       }
       try{
         localStorage.setItem(DRAWER_LAYOUT_KEY,serializeDrawerLayout(drawerLayoutRef.current))
         localStorage.setItem(DRAWER_PROJECT_PRESENTATIONS_KEY,serializeDrawerProjectPresentations(updated,drawerLayoutRef.current))
         localStorage.removeItem(DRAWER_PROJECT_STATE_KEY)
         localStorage.removeItem(DRAWER_TAB_KEY)
+        // v2 is dropped last, for the same reason the other two are: the v3 value is
+        // already written above, so an interruption anywhere before this line leaves the
+        // older record intact and the migration simply runs again.
+        localStorage.removeItem(DRAWER_PROJECT_PRESENTATIONS_KEY_V2)
         drawerMigrationPending.current=false
         legacyDrawerTab.current=null
       }catch(cause){setError(`Side panel migration could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)}
@@ -2166,9 +2188,13 @@ export function App() {
   assistantContextRef.current={
     focused_session_id:activeId||null,
     active_project_id:activeProject?.id||null,
+    client_id:ASSISTANT_CLIENT_ID,
     commands:commandRegistryRef.current.filter(item=>item.available).slice(0,400).map(item=>({id:item.id,label:item.label})),
   }
   const assistantClientContext=()=>assistantContextRef.current
+  // The dispatch executor below mounts once, so it reaches the launcher through
+  // a ref that every render re-points at the fresh closure.
+  const spawnTerminalRef=useRef<((targetProject?:string,split?:false|SplitDirection|'stack',profileId?:string,targetSessionId?:string,position?:'before'|'after',backend?:string,options?:{argv?:string[];seedText?:string})=>Promise<Session|false>)|null>(null)
   // Assistant replies speak through the same application-speech pipeline the
   // deterministic query answers use: client-claimed stream, segmented clips.
   const speakAssistantReply=async(text:string)=>{
@@ -2208,10 +2234,12 @@ export function App() {
     await sendAssistantTurnApi(dialogId,text,assistantClientContext())
     return `Asked the assistant: “${text.slice(0,80)}${text.length>80?'…':''}”`
   }
-  // The daemon dispatches UI commands (focus, drawer tabs, panels) to the
-  // device the dialog turn came from; this executor resolves the label against
-  // the live registry — the same authority spoken phrases compile to — runs it,
-  // and reports the outcome so the assistant's tool call can complete.
+  // The daemon dispatches client-executed actions (UI commands, composer
+  // typing, pane-placed spawns) to the device the dialog turn came from; these
+  // executors run them and report the outcome so the assistant's tool call can
+  // complete. Actions stamped with another tab's client id are ignored here —
+  // executing an untargeted broadcast would type into every mounted copy of a
+  // pane and spawn one session per open workspace.
   useEffect(()=>{
     const handler=(raw:Event)=>{
       const event=(raw as CustomEvent).detail as {type:string;payload:Record<string,unknown>;replay?:boolean}
@@ -2221,10 +2249,59 @@ export function App() {
       // spoken confirm/cancel path reads; replay never revives an old card.
       noteAssistantActionEvent(payload as never,event.replay===true)
       if(event.replay)return
-      if(String(payload.kind)!=='run_ui_command'||String(payload.status)!=='dispatched')return
+      if(String(payload.status)!=='dispatched')return
+      const kind=String(payload.kind)
+      const actionArguments=(payload.arguments||{}) as Record<string,unknown>
+      const actionClient=String(actionArguments.client_id||'')
+      if(actionClient&&actionClient!==ASSISTANT_CLIENT_ID)return
       const actionId=String(payload.id||'')
-      const commandText=String((payload.arguments as Record<string,unknown>|undefined)?.command||'')
-      if(!actionId||!commandText)return
+      if(!actionId)return
+      if(kind==='type_into_session'||kind==='submit_session_composer'){
+        // `target_session_id`: `session_id` is a first-class MuxEvent field the
+        // bus lifts out of the payload, so it cannot ride here.
+        const sessionTarget=String(payload.target_session_id||'')
+        if(!sessionTarget)return
+        void (async()=>{
+          try{
+            if(kind==='type_into_session'){
+              // The mounted pane types it with no carriage return: staged in
+              // the composer, visible, editable — and never delivered by us.
+              await insertIntoTerminal(sessionTarget,String(actionArguments.text||''),false)
+              await reportUiResult(actionId,{ok:true,detail:'typed into the composer without sending'}).catch(()=>{})
+            }else{
+              // The same Enter the mobile Send control and voice submit use.
+              await requestTerminalAction(sessionTarget,{action:'sendKey',text:'\r'})
+              await reportUiResult(actionId,{ok:true,detail:'pressed Enter on the composer'}).catch(()=>{})
+            }
+          }catch(cause){
+            await reportUiResult(actionId,{ok:false,detail:cause instanceof Error?cause.message.slice(0,380):'the terminal action failed'}).catch(()=>{})
+          }
+        })()
+        return
+      }
+      if(kind==='spawn_session'){
+        const projectTarget=String(payload.project_id||'')
+        // The daemon resolves the backend through its full default chain; the
+        // frontend never names a harness (test_harness_name_literals).
+        const spawnBackend=String(payload.backend||'')
+        void (async()=>{
+          try{
+            // The device's own launch path, so the new session opens as a tab
+            // in the currently active pane with the optimistic leaf and focus
+            // every other launch entry point gets.
+            const spawned=projectTarget&&spawnBackend?await spawnTerminalRef.current?.(projectTarget,false,undefined,undefined,'after',spawnBackend,payload.seed_text?{seedText:String(payload.seed_text)}:undefined):false
+            await reportUiResult(actionId,spawned
+              ?{ok:true,detail:`spawned ${typeof spawned==='object'?spawned.name:'a session'} into the active pane`}
+              :{ok:false,detail:'the device could not start the session'}).catch(()=>{})
+          }catch(cause){
+            await reportUiResult(actionId,{ok:false,detail:cause instanceof Error?cause.message.slice(0,380):'the spawn failed'}).catch(()=>{})
+          }
+        })()
+        return
+      }
+      if(kind!=='run_ui_command')return
+      const commandText=String(actionArguments.command||'')
+      if(!commandText)return
       void (async()=>{
         const registry=commandRegistryRef.current
         const plan=planUiCommand(registry,commandText)
@@ -2295,6 +2372,7 @@ export function App() {
     clientContext={assistantClientContext}
     speak={voiceStatus?.enabled?speakAssistantReply:null}
     voiceActive={conversation.phase!=='off'}
+    pendingSpeech={conversation.hold?conversation.holdBuffer:''}
   />
 
   // Sessions on screen right now (visible pane of the displayed project). Being
@@ -2903,7 +2981,7 @@ export function App() {
       emitTutorialAction({action:'session-launched',backend})
       // Protect against an event refresh that began with the pre-spawn layout.
       window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
-      return true
+      return next
     } catch (cause) {
       delete pendingSpawns.current[pendingId]
       setSessions(items=>items.filter(item=>item.id!==pendingId))
@@ -2919,6 +2997,7 @@ export function App() {
       spawning.current = false
     }
   }
+  spawnTerminalRef.current=spawnTerminal
 
   const openLauncher = (targetProject = projectId, split: false | SplitDirection = false) => {
     setLauncherProject(targetProject)
@@ -3068,16 +3147,16 @@ export function App() {
     if(target.surface==='project'){
       const owner=projects.find(project=>project.id===(requestedProject||projectId))
       if(!owner){setError('Select a Project first — that switch belongs to one Project.');return}
-      setSettingsOpen(false);setUsageOpen(false);setAutomationOpen(false)
+      setSettingsOpen(false);setResourcesOpen(null);setAutomationOpen(false)
       openProjectsManager({project:owner,setting:target.setting})
       return
     }
     if(target.surface==='automation'){
-      setSettingsOpen(false);setUsageOpen(false);setProjectsManagerOpen(false)
+      setSettingsOpen(false);setResourcesOpen(null);setProjectsManagerOpen(false)
       setSettingsSetting(target.setting);setRevealToken(token=>token+1);setAutomationOpen(true)
       return
     }
-    setUsageOpen(false);setAutomationOpen(false);setProjectsManagerOpen(false)
+    setResourcesOpen(null);setAutomationOpen(false);setProjectsManagerOpen(false)
     openSettings(target.section,target.setting)
   }
 
@@ -3647,7 +3726,12 @@ export function App() {
   }
 
   const openProcessViewer=(session:Session|null=null,scope:string|null=null)=>{
-    setProcessSession(session);setProcessScope(scope);setProcessViewerOpen(true)
+    setProcessSession(session);setProcessScope(scope);setResourcesOpen('processes')
+    setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null)
+  }
+  /** Open the Resources dialog on one of its other segments. */
+  const openResources=(segment:ResourceSegment)=>{
+    setResourcesOpen(segment)
     setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null)
   }
 
@@ -4514,9 +4598,12 @@ export function App() {
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
     { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
-    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
-    { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => {setNetworkUsageOpen(true);setMainMenuOpen(false)} },
-    { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => {setStorageUsageOpen(true);setMainMenuOpen(false)} },
+    // One dialog, four entry points. The ids are unchanged so keybindings and menu rows
+    // that already name a resource keep working and keep landing on that resource.
+    { id: 'resources.open', label: 'Open resources', category: 'view', available: true, run: () => openResources('processes') },
+    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => openResources('tokens') },
+    { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => openResources('network') },
+    { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
@@ -4601,6 +4688,28 @@ export function App() {
         },
       },
     })),
+    // One command per *segment and section*, not only per tab.
+    //
+    // This is what makes consolidating tabs non-destructive. Folding Clipboard into
+    // Actions and Change Map into Activity would otherwise have deleted "open Clipboard"
+    // and "open Change Map" as palette entries and as voice phrases, so the merge would
+    // have cost a click at the rail *and* a whole navigation path for anyone who works by
+    // name. Generated from the registry for the same reason the tab commands are: a
+    // segment added without a command is a segment nobody can ask for.
+    //
+    // A segment is selected; a section is revealed. Both open the drawer first, because
+    // both were asked for by name.
+    ...DRAWER_SEGMENTS.map((segment): Command => ({
+      id:`drawer.${segment.tab}.${segment.id}`,
+      label:`Open ${segment.label}`,
+      category:'view',
+      available:true,
+      run:()=>{
+        if(segment.kind==='section')revealDrawerSection(segment.tab,segment.id)
+        else openDrawerTab(segment.tab,projectId,segment.id)
+      },
+      voice:{phrases:[`open ${segment.label}`,`show ${segment.label}`,`go to ${segment.label}`]},
+    })),
     // Tab order is persistent state a drag can scramble, so it needs a way back that is not
     // "drag five tabs into place from memory".
     { id: 'drawer.resetLayout', label: 'Reset side panel layout', category: 'view', available: !isDefaultDrawerLayout(drawerLayout), disabledReason: 'Side panel layout is already at its default', run: resetDrawerArrangement },
@@ -4614,7 +4723,10 @@ export function App() {
       disabledReason:'The focused tab cannot move in that direction',
       run:()=>moveFocusedDrawerTab(edge),
     })),
-    { id: 'clipboard.open', label: 'Open clipboard history', category: 'clipboard', available: true, run: () => showDrawerTab('clipboard') },
+    // Kept under its own id as well as the generated `drawer.actions.clipboard`: this is
+    // the id keybindings and the Clipboard Action button already bind to, and its label is
+    // the phrase people search the palette for.
+    { id: 'clipboard.open', label: 'Open clipboard history', category: 'clipboard', available: true, run: () => revealDrawerSection('actions','clipboard') },
     { id: 'clipboard.clear', label: 'Clear unpinned clipboard history', category: 'clipboard', available: true, run: () => void clearClipboardHistory().then(removed => { window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT)); setError(`Cleared ${removed} clipboard entr${removed===1?'y':'ies'}.`) }).catch(cause => setError(cause instanceof Error?cause.message:String(cause))) },
     ...railVoiceEntries.map((entry):Command=>({
       id:`terminal.railVoice:${entry.item.id}`,
@@ -5966,6 +6078,8 @@ export function App() {
         layout={drawerLayout}
         presentation={renderedDrawerPresentation}
         transientTab={transientDrawerTab||undefined}
+        onSegment={selectDrawerTabSegment}
+        sectionReveal={drawerSectionReveal||undefined}
         onLayout={layout=>commitDrawerLayout(layout)}
         // The drag ghost's pointer-up also fires a click on the tab it started from, which
         // would switch to the tab the user was only moving.
@@ -6226,7 +6340,7 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);setGroupEdit({name:''})}}>Create group</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('history.open')}}>Session history</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}>Notes…</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>Process fleet…</button>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>Resources…</button>
       <div class="context-rule" />
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('daemon.reload')}}>Reload daemon (keep sessions)</button>
@@ -6379,13 +6493,14 @@ export function App() {
       <MenuGroup id="utilities" label="Utilities" openId={menuGroup} onOpenChange={setMenuGroup} hint="History, notes, queues, and usage — the app-wide viewers" badge={utilityMenuAttention>0?<em class="menu-group-badge" title={utilityMenuAttentionHint}>{utilityMenuAttention}</em>:null}>
         <button onClick={() => runNamedCommand('history.open')}>Session history</button>
         <button onClick={() => runNamedCommand('notes.browse')}>Notes…</button>
-        <button onClick={() => runNamedCommand('processes.all')}>Process fleet…</button>
         <button onClick={() => runNamedCommand('queue.fleet')}>Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</button>
         <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
         <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
-        <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
-        <button onClick={() => runNamedCommand('networkUsage.open')}>Bandwidth usage…</button>
-        <button onClick={() => runNamedCommand('storageUsage.open')}>Storage usage…</button>
+        {/* One row for what used to be four — processes, bandwidth, storage, and token
+            spend are segments of one dialog now. The three named entry points survive as
+            palette commands and as the sidebar's resource chip, which lands on the
+            segment it was already showing. */}
+        <button onClick={() => runNamedCommand('resources.open')}>Resources…</button>
         <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       </MenuGroup>
       {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
@@ -6468,7 +6583,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setResourcesOpen('tokens')}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
@@ -6480,13 +6595,25 @@ export function App() {
       return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 
-    {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
-    {networkUsageOpen&&<NetworkUsageModal onClose={()=>setNetworkUsageOpen(false)}/>}
-    {storageUsageOpen&&<StorageUsageModal onClose={()=>setStorageUsageOpen(false)}/>}
+    {resourcesOpen&&<ResourcesModal
+      initial={resourcesOpen}
+      initialSessionId={processSession?.id||null}
+      initialProjectId={processScope}
+      sessions={sessions}
+      projects={projects}
+      onAttached={attachPreview}
+      onConfigureUsage={()=>{setResourcesOpen(null);openSettings('Usage analytics')}}
+      onClose={()=>{setResourcesOpen(null);setProcessSession(null)}}
+    />}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
-    {automationOpen&&<AutomationDashboard initialSetting={settingsSetting} revealToken={revealToken} onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
+    {automationOpen&&<AutomationDashboard initialSetting={settingsSetting} revealToken={revealToken} onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}}
+      // The two surfaces this dashboard used to draw second copies of. Both close it on the
+      // way out: they are drawer tabs, and the dialog covers the drawer.
+      onOpenAlerts={()=>{setAutomationOpen(false);openDrawerTab('notifications')}}
+      onOpenFindings={()=>{setAutomationOpen(false);openDrawerTab('activity',projectId,'findings')}}
+      onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
-    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={attachPreview} />}
+
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 

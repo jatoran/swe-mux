@@ -72,7 +72,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -225,6 +225,8 @@ VOICE_COMMAND_ACTIONS = (
     "help",
     "standby",
     "resume",
+    "hold",
+    "proceed",
     "comms_on",
     "comms_off",
     "stop",
@@ -293,6 +295,11 @@ def default_voice_commands() -> list[dict[str, Any]]:
             ("help", ["help", "list commands", "what can i say"]),
             ("standby", ["sleep", "go to sleep", "stand by", "standby", "pause listening"]),
             ("resume", ["wake", "wake up", "resume", "start listening"]),
+            # Brainstorm hold: chat mode keeps transcribing but stops answering
+            # until a proceed cue. Bare exact phrases ("hold on", "go ahead")
+            # also work in chat mode; these are the wake-worded forms.
+            ("hold", ["listen", "just listen", "brainstorm", "hold that thought", "let me think"]),
+            ("proceed", ["go ahead", "your turn", "over to you", "proceed"]),
             (
                 "comms_on",
                 ["voice comms", "voice comms on", "start voice comms", "enter voice comms"],
@@ -893,6 +900,12 @@ class Config:
     stt_routing_model: str = "small.en"
     voice_wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_VOICE_WAKE_WORDS))
     voice_commands: list[dict[str, Any]] = field(default_factory=default_voice_commands)
+    # Extra trailing-silence patience before a plain chat-mode utterance becomes an
+    # assistant turn, so thinking out loud is not answered at every pause. Applied
+    # only while the assistant is the microphone's addressee; wake-worded commands
+    # keep their speed through the speculative short-circuit. 0 keeps the command
+    # tail (352 ms on Silero).
+    voice_chat_patience_ms: int = 1200
     # Resolved from the real home directory with no environment override, so every
     # process on this machine shares one data dir. Tests must inject an explicit path
     # (see load_config) rather than relying on isolation; two suites running at once
@@ -1343,6 +1356,8 @@ def _validate(config: Config) -> None:
         )
     ):
         errors["voice_wake_words"] = "must be 1–64 non-empty wake words of 40 characters or fewer"
+    if not 0 <= config.voice_chat_patience_ms <= 5000:
+        errors["voice_chat_patience_ms"] = "must be between 0 and 5000 milliseconds"
     if not isinstance(config.voice_commands, list) or len(config.voice_commands) > 64:
         errors["voice_commands"] = "must be an array of at most 64 command definitions"
     else:
@@ -1687,6 +1702,19 @@ def load_config(path: Path | None = None) -> Config:
                 if key not in raw or raw[key] == legacy:
                     setattr(cfg, key, Config.__dataclass_fields__[key].default)
                     migrated = True
+        if source_schema < 28:
+            # The brainstorm hold/proceed pair did not exist before schema 28.
+            # Add only the new actions, preserving every phrase and omission the
+            # user could have chosen for the older command set.
+            existing = {item.get("action") for item in cfg.voice_commands if isinstance(item, dict)}
+            additions = [
+                item
+                for item in default_voice_commands()
+                if item["action"] in {"hold", "proceed"} and item["action"] not in existing
+            ]
+            if additions:
+                cfg.voice_commands = [*cfg.voice_commands, *additions]
+                migrated = True
         if source_schema < 26 and raw.get("tts_engine") == "edge":
             # Phase 10.5 removed the network edge-tts engine (LGPL payload,
             # unauthorized Microsoft endpoint). The OS voice is the engine that

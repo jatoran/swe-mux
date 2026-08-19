@@ -220,6 +220,7 @@ export interface VoiceStatus {
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
+  chat_patience_ms?:number
 }
 
 export type ProjectBackend=string

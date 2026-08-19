@@ -621,6 +621,179 @@ async def test_ui_command_dispatch_waits_for_the_device_ack(tmp_path: Path) -> N
         service.store.close()
 
 
+async def wait_for_dispatched(emitted: list[MuxEvent], kind: str) -> MuxEvent:
+    for _ in range(200):
+        for event in emitted:
+            if (
+                event.type == "assistant_action"
+                and event.payload.get("status") == "dispatched"
+                and event.payload.get("kind") == kind
+            ):
+                return event
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"no dispatched {kind} action appeared")
+
+
+async def test_type_into_session_dispatches_composer_typing_to_the_device(
+    tmp_path: Path,
+) -> None:
+    """The Route A contract: the daemon never types into a PTY — the operator's
+    device stages the text in the mounted composer, without a carriage return."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "type_into_session",
+            "arguments": json.dumps({"session": "backend agent", "text": "one, two, three"}),
+        },
+    }
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Typed it.")], trust="auto"
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(
+            dialog["id"], "type one two three into the agent", {"client_id": "tab-1"}
+        )
+        event = await wait_for_dispatched(emitted, "type_into_session")
+        # The dispatch names the resolved session and the originating tab, so
+        # exactly one device types into exactly one pane. (`target_session_id`
+        # because `session_id` is a first-class MuxEvent field, not payload.)
+        assert event.payload["target_session_id"] == "s1"
+        arguments = event.payload["arguments"]
+        assert arguments["client_id"] == "tab-1"
+        assert arguments["text"] == "one, two, three"
+        assert "without sending" in str(event.payload["restatement"])
+        action_id = str(event.payload["id"])
+        assert service.report_ui_result(
+            action_id, {"ok": True, "detail": "typed into the composer without sending"}
+        )
+        task = service._turn_tasks.get(dialog["id"])
+        assert task is not None
+        await asyncio.wait_for(task, timeout=10)
+        row = await service.store.action(action_id)
+        assert row is not None and row["status"] == "executed"
+        assert "not sent" in str(row["result"])
+    finally:
+        service.store.close()
+
+
+async def test_type_into_session_reports_an_unmounted_terminal_as_failure(
+    tmp_path: Path,
+) -> None:
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "type_into_session",
+            "arguments": json.dumps({"session": "backend agent", "text": "hello"}),
+        },
+    }
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("It failed.")], trust="auto"
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "type hello", {"client_id": "tab-1"})
+        event = await wait_for_dispatched(emitted, "type_into_session")
+        action_id = str(event.payload["id"])
+        service.report_ui_result(
+            action_id, {"ok": False, "detail": "The target terminal is not mounted."}
+        )
+        task = service._turn_tasks.get(dialog["id"])
+        assert task is not None
+        await asyncio.wait_for(task, timeout=10)
+        row = await service.store.action(action_id)
+        assert row is not None and row["status"] == "failed"
+        assert "not mounted" in str(row["result"])
+    finally:
+        service.store.close()
+
+
+async def test_submit_composer_is_consequential_and_dispatches_on_confirm(
+    tmp_path: Path,
+) -> None:
+    """Pressing Enter is a send: the trust knob never applies, and the Enter
+    itself still runs on the operator's device through the mounted pane."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "submit_session_composer",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Awaiting your confirmation.")],
+        trust="auto",
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "send it", {"client_id": "tab-1"})
+        task = service._turn_tasks.get(dialog["id"])
+        assert task is not None
+        await asyncio.wait_for(task, timeout=10)
+        pending = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ]
+        assert pending and pending[0].payload["kind"] == "submit_session_composer"
+        action_id = str(pending[0].payload["id"])
+        confirm = asyncio.create_task(service.confirm_action(action_id))
+        event = await wait_for_dispatched(emitted, "submit_session_composer")
+        assert event.payload["target_session_id"] == "s1"
+        service.report_ui_result(action_id, {"ok": True, "detail": "pressed Enter"})
+        outcome = await asyncio.wait_for(confirm, timeout=10)
+        assert outcome["result"]["submitted"] is True
+        row = await service.store.action(action_id)
+        assert row is not None and row["status"] == "executed"
+    finally:
+        service.store.close()
+
+
+async def test_spawn_with_a_client_goes_through_the_device_pane(tmp_path: Path) -> None:
+    """A turn from a connected workspace spawns through that device's launch
+    path (tab in the active pane), never the daemon's layout-default spawn —
+    and never both, which is why there is no daemon fallback on failure."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps(
+                {"project": "pixel lab", "backend": "claude", "seed_text": "fix the tests"}
+            ),
+        },
+    }
+    service, emitted, _queue, effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Spawned.")], trust="auto"
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "spawn a claude", {"client_id": "tab-1"})
+        event = await wait_for_dispatched(emitted, "spawn_session")
+        assert event.payload["project_id"] == "p1"
+        assert event.payload["backend"] == "claude"
+        assert event.payload["seed_text"] == "fix the tests"
+        action_id = str(event.payload["id"])
+        service.report_ui_result(
+            action_id, {"ok": True, "detail": "spawned agent 2 into the active pane"}
+        )
+        task = service._turn_tasks.get(dialog["id"])
+        assert task is not None
+        await asyncio.wait_for(task, timeout=10)
+        assert effects["spawned"] == []  # the daemon spawn path must not also run
+        row = await service.store.action(action_id)
+        assert row is not None and row["status"] == "executed"
+    finally:
+        service.store.close()
+
+
+def test_new_kinds_classify_under_the_trust_policy() -> None:
+    assert AssistantService._classify("type_into_session", {}) == "reversible"
+    assert AssistantService._classify("submit_session_composer", {}) == "consequential"
+
+
 async def test_spawn_uses_the_ordinary_spawn_path(tmp_path: Path) -> None:
     call = {
         "id": "call-1",

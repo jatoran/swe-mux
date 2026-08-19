@@ -54,6 +54,25 @@ test('speech resuming voids the speculation exactly once', () => {
   assert.deepEqual(kinds(feed(gate, 0.05, 5)), ['speculate'])
 })
 
+test('extra tail patience delays the endpoint but never the speculation', () => {
+  // Chat patience: thinking out loud gets a longer window before it becomes an
+  // assistant turn, while the speculative decode still fires at its own
+  // threshold so a wake-worded command can short-circuit the longer tail.
+  let patience = 1200
+  const gate = new SpeechGate(SILERO_GATE, () => patience)
+  assert.deepEqual(kinds(feed(gate, 0.9, frames(SILERO_GATE.minSpeechMs) + 1)), ['speech-start'])
+  assert.deepEqual(kinds(feed(gate, 0.05, frames(SILERO_GATE.speculativeSilenceMs))), ['speculate'])
+  // The default endpoint passes with no event; the patient one fires on time.
+  assert.deepEqual(kinds(feed(gate, 0.05, frames(SILERO_GATE.endpointSilenceMs))), [])
+  assert.deepEqual(kinds(feed(gate, 0.05, frames(1200) + 1)), ['endpoint'])
+  // Consulted per frame: dropping the patience takes effect immediately.
+  patience = 0
+  const fast = new SpeechGate(SILERO_GATE, () => patience)
+  feed(fast, 0.9, frames(SILERO_GATE.minSpeechMs) + 1)
+  const events = kinds(feed(fast, 0.05, frames(SILERO_GATE.endpointSilenceMs) + 1))
+  assert.ok(events.includes('endpoint'))
+})
+
 test('hysteresis keeps a marginal frame from being read as a pause', () => {
   // Entry needs 0.5, but staying in speech only needs 0.35: without the gap, a
   // probability hovering at the threshold would flap the silence counter and end

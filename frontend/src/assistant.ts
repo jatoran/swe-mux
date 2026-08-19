@@ -85,9 +85,19 @@ export async function ensureDialog(): Promise<string> {
 export const dialogDetail = (dialogId: string) =>
   api<AssistantDialogDetail>('GET', `/api/assistant/dialogs/${dialogId}`)
 
+/**
+ * Per-tab identity for client-executed assistant actions. The daemon stamps
+ * dispatched actions with the id of the tab whose turn proposed them, and only
+ * that tab executes — an untargeted broadcast would type into every mounted
+ * copy of a pane and spawn one session per open workspace.
+ */
+export const ASSISTANT_CLIENT_ID: string =
+  globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
 export type AssistantClientContext = {
   focused_session_id?: string | null
   active_project_id?: string | null
+  client_id?: string
   commands?: { id: string; label: string }[]
 }
 

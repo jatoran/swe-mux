@@ -47,7 +47,12 @@ import type { ReviewLocator } from './gitReview'
 // which is the one reading here nobody can act on. It now offers the action that reading
 // implies, and the daemon re-checks the folder before touching it (`git_init.py`).
 
-type GitView = 'map' | 'log' | 'provenance'
+// The view is owned by the drawer, not by this component. It is a registered segment
+// (`drawerSegments.ts`), which is what gives "open Git Log" a palette entry and a voice
+// phrase, and what persists the choice per Project — neither of which a local `useState`
+// could do. The host draws the segmented control above this tab's toolbar; what is left
+// here is the toolbar's actions.
+export type GitView = 'map' | 'log' | 'provenance'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
 
@@ -75,6 +80,10 @@ function GraphGlyph({ value, commit=false }: { value: string; commit?: boolean }
 }
 
 type Props={
+  /** Which of the three readings to draw. Owned and persisted by the drawer host. */
+  view:GitView
+  /** Report an in-tab view change (the Log's own "provenance" links) back to the host. */
+  onView:(view:GitView)=>void
   project?:Project
   sessions:Session[]
   onOpenFile:(path:string)=>void
@@ -104,8 +113,7 @@ function ReviewGroup(props:{
   </section>
 }
 
-export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToAgent,onProjectUpdated,onOpenSession,onOpenHistory}:Props) {
-  const [view,setView]=useState<GitView>('map')
+export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFile,onSendToAgent,onProjectUpdated,onOpenSession,onOpenHistory}:Props) {
   const [links,setLinks]=useState<SessionLinkMenu|null>(null)
   const [overview,setOverview]=useState<GitWorktreeOverview|null>(null)
   const [graph,setGraph]=useState<GitGraph|null>(null)
@@ -320,10 +328,9 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
 
   return <div class="git-tab git-review-tab">
     <div class="git-toolbar">
-      <div class="git-view-toggle" role="tablist" aria-label="Git view"><button class={view==='map'?'active':''} onClick={()=>setView('map')}>Map</button><button class={view==='log'?'active':''} onClick={()=>setView('log')}>Log</button><button class={view==='provenance'?'active':''} onClick={()=>setView('provenance')}>Provenance</button></div>
-      {/* Right-aligned as a group: the view switch is what the eye returns to, and the
-          actions belong at the opposite edge rather than crowding it. The refresh control
-          is its glyph alone, so it keeps an explicit accessible name. */}
+      {/* Right-aligned as a group, under the host's segmented control rather than beside
+          a toggle of this tab's own. The refresh control is its glyph alone, so it keeps
+          an explicit accessible name. */}
       <div class="git-toolbar-actions">
         <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map')void refresh();else if(view==='log')void refreshGraph(graphLimit);void refreshProvenance()}}>↻</button>
         {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}

@@ -1,5 +1,7 @@
 import { render } from 'preact'
-import { GitTab } from '../../src/GitTab'
+import { useState } from 'preact/hooks'
+import { GitTab, type GitView } from '../../src/GitTab'
+import { DrawerSegmentControl } from '../../src/DrawerSegmentControl'
 import type { Project, Session } from '../../src/types'
 import '../../src/style.css'
 
@@ -66,14 +68,27 @@ const session={
   git:{branch:'sidebar-session-git-lines-fix',dirty:33,ahead:444,behind:555},
 } as Session
 
-render(
-  <aside class="utility-drawer" style="width:100%;height:100dvh">
+// Map/Log/Provenance is a registered drawer segment now, so the harness mounts the same
+// shared control the real drawer draws above the tab, driven by the same registry. Without
+// it the spec would have no way to reach Log or Provenance, and the geometry it measures
+// would not be the geometry the app renders.
+function GitHarness() {
+  const [view,setView]=useState<GitView>('map')
+  return <aside class="utility-drawer" style="width:100%;height:100dvh">
+    <DrawerSegmentControl
+      tab="git"
+      active={view}
+      context={{hasTranscript:true,isAgentSession:true}}
+      onSelect={id=>setView(id as GitView)}
+    />
     <GitTab
+      view={view} onView={setView}
       project={project} sessions={[session]}
       onOpenFile={()=>undefined} onOpenWorktreeFile={()=>undefined} onProjectUpdated={()=>undefined}
       onOpenSession={id=>followed.push(`session:${id}`)}
       onOpenHistory={id=>followed.push(`history:${id}`)}
     />
-  </aside>,
-  document.querySelector('#root')!,
-)
+  </aside>
+}
+
+render(<GitHarness/>, document.querySelector('#root')!)

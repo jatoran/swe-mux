@@ -231,6 +231,12 @@ def test_voice_config_fields_validate_and_hot_apply(tmp_path: Path) -> None:
         update_config(config, {"tts_default_mode": "always"})
     with pytest.raises(ValueError, match="tts_sapi_rate"):
         update_config(config, {"tts_sapi_rate": 25})
+    # Chat patience: hot, bounded, and defaulted for thinking out loud.
+    assert config.voice_chat_patience_ms == 1200
+    hot, restart = update_config(config, {"voice_chat_patience_ms": 2000})
+    assert "voice_chat_patience_ms" in hot and restart == set()
+    with pytest.raises(ValueError, match="voice_chat_patience_ms"):
+        update_config(config, {"voice_chat_patience_ms": 9000})
 
 
 def test_tts_lexicon_validates_and_hot_applies(tmp_path: Path) -> None:

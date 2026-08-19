@@ -17,7 +17,7 @@ responsive controls.
   The product wordmark is omitted because Project scope is the useful persistent identity in this compact row.
   Workspace tabs are not global top-rail state; every pane renders its own tab strip beside that rail.
   Scan timeline has no top-rail action or spend chip.
-  Its complete control and status surface lives in the Timeline segment of the utility drawer's Insight tab (the tab that replaced the standalone Timeline tab in Phase 7.10; the Findings pane is its other segment).
+  Its complete control and status surface lives in the Timeline segment of the utility drawer's Activity tab (which was called Insight until the drawer consolidation, and absorbed the standalone Timeline tab before that; Findings and Changes are its other segments).
 - The Timeline tab begins with Project-scoped controls: Project permission and the expandable `.swe-mux/project-context.md` editor with Save and **Copy setup prompt**.
   Session-scoped controls follow: current-run permission, current scan, full-session scan and progress, spend, records, rollover boundaries, and source expansion.
   Each record keeps its potentially long evidence-target list collapsed by default, exposes the target count in the disclosure label, and bounds the expanded list with its own scroll area.
@@ -273,8 +273,8 @@ responsive controls.
 ## Menus and overlays
 
 - Scope follows the menu that opened a surface, never a hidden mode. The app menu's `Utilities`
-  group opens History, Notes, Process fleet, the fleet queue, prompt library, clipboard history,
-  usage, bandwidth metrics, storage, and notifications across every Project; right-clicking a Project row opens the same
+  group opens History, Notes, the fleet queue, prompt library, clipboard history,
+  Resources, and notifications across every Project; right-clicking a Project row opens the same
   surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
   the no-Project case and matches the app menu.
 - **The app menu is two halves: `Utilities` (places you go) and, below it, the things you set.**
@@ -1485,19 +1485,42 @@ responsive controls.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Clipboard**, **Actions**, **Queue**, **Transcript**, **Timeline**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, **Schedule**, and **Alerts**.
+  The canonical default order is **Actions**, **Queue**, **Transcript**, **Activity**, **Agent**, **Files**, **Notes**, **Git**, **Processes**, **Schedule**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
-  Clipboard and Actions lead the session-scoped block because both can insert into the focused work surface, while Queue stages text for a focused agent and Transcript reads the same session back.
-  Timeline and Agent close the session-scoped block with passive views of the selected session and CLI environment.
+  Actions leads the session-scoped block because it inserts into the focused work surface, while Queue stages text for a focused agent and Transcript reads the same session back.
+  Activity and Agent close the session-scoped block with passive views of what the selected session did and what it is running with.
   Files and Notes are the **navigators**: Project-scoped indexes over documents rather than surfaces that type into one.
   Files opens what you select into a pane.
   Notes can do that too but opens *into the drawer* by default, because reading or adding to a note without leaving the session on screen is the whole point of it on a phone.
-  Context is the read-only inventory of root agent instructions and provider learned memory.
-  Like the drawer's note editor, it renders inside the drawer, and unlike it never opens a pane and never writes.
   Git closes the Project-scoped block without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
   See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
   **Processes** continues that block for the same reason: it is Project-scoped and acts on sessions rather than opening panes.
   **Schedule** closes it, immediately after Processes, because the two answer the same question at different times: Processes is what this Project's sessions are running now, Schedule is what it will start later (`scheduled-runs.md`).
+  **Processes is the one tab hidden by default** (`DEFAULT_HIDDEN_DRAWER_TABS`).
+  It is not made redundant by the Resources dialog that also draws its surface - a modal covers the terminal, and this tab exists to answer "what is *this* session running" beside it, with the focused session pinned first - but that is asked rarely enough not to spend a permanent rail slot on for someone who has not asked for it.
+  The default applies only to a browser with no stored visibility choice at all; an explicitly emptied set is a choice and stays empty.
+  **Alerts is deliberately not hidden**: it is the only tab that draws an unread badge, so hiding it would remove the one glanceable "something needs you" signal from the rail.
+
+### Segments and sections
+
+- Three former tabs are now **segments** or a **section** of the tab beside them, on one rule: a low-frequency *inspection* surface can afford one more click, and an *injection* surface cannot.
+  Clipboard is a **section of Actions** - same verb, same insert contract, and a section is co-visible, so the surface people reach for fastest cost no extra click.
+  Change Map is **Activity's third segment**, because "what the session narrated" and "which files it actually wrote" were always two readings of one run; its pop-out into a workspace tab survived the merge and matters more now, since a force-directed graph wants more width than this column has.
+  Agent Context is **Agent's Instructions segment**, because tools, policies, and instruction files are the halves of "what is this agent running with".
+- The two kinds are deliberately distinct rather than collapsed into one (`frontend/src/drawerSegments.ts`).
+  A **segment** is a mutually exclusive view of a tab, drawn by the drawer's single shared segmented control under the pane heading; the heading names the segment, not the tab, because "Change Map" is what that pane *is* while "Activity" is only where it lives.
+  A **section** is a co-visible region of one scroller, reached by scrolling to it and flashing it through the same `settingReveal.ts` arrival the Settings deep links use (`setting-links.md`).
+- Segments are **registered, not local state**, and that is the point rather than tidiness.
+  Every registered tab generates two palette commands and three voice phrases; a segment reached only by clicking would have none, so folding Clipboard into Actions and Change Map into Activity would have *deleted* "open Clipboard" and "open Change Map" as commands and as spoken navigation.
+  The registry generates a command and a voice phrase per segment and per section, and every retired command id migrates forward in `keybindings.py` so an existing binding keeps working.
+- Segment availability is a predicate, and a stored choice that cannot render falls back to the first that can rather than drawing an empty body.
+  Activity's Timeline needs a harness transcript; Findings and Changes do not.
+  Agent's Config and Tools read a live harness inventory and are unavailable on a shell; **Instructions is not**, which is what the separate Project-scoped Context tab used to buy and why neither tab is gated as a whole.
+  Unavailable segments are omitted from the control rather than disabled, because a greyed-out "Timeline" promises a surface that does not exist.
+- The selection is persisted **per Project beside the tab selection** (`selected_segments` in `mux.drawer.projects.v3`), keyed by tab rather than by stack so dragging a tab into another pane does not lose which view it was showing.
+- Only Change Map is kept mounted while another segment is selected.
+  Everything else unmounts, because a hidden body that polls or refetches costs network for a surface nobody is looking at; the map is the exception because its layout worker's settled positions are the expensive part and remounting re-runs the simulation on every return.
+- **Git** is registered the same way, so the drawer has one mechanism for this idea rather than two: Map, Log, and Provenance are segments, drawn by the shared control above the tab's toolbar rather than by a toggle of its own, and each has its own palette entry and voice phrase.
   It is a tab rather than a modal because the decisions it offers - pause this, run it now, is last night's session still open - are judgements about live sessions, which are legible in the workspace behind the drawer.
   Like Processes it carries its own Project/all-Projects scope instead of a companion modal, since "what fires tonight" spans Projects even though every schedule belongs to exactly one.
   Notifications is neither and sits last.
@@ -1735,12 +1758,15 @@ responsive controls.
   directions, normalized diff confirmation, and revision-guarded restore points. Global
   instructions and learned memory are never write targets; nothing watches or synchronizes in
   the background.
-- **Processes** is the process inspector, docked. It renders the same component as the modal
-  `Process fleet` (`ProcessFleetView`), so it has the same process trees, the same parent
+- **Processes** is the process inspector, docked. It renders the same component as the
+  Resources dialog's Processes segment (`ProcessFleetView`), so it has the same process trees, the same parent
   lineage, evidence state and confidence behind each row's expander, the same listener and
   Preview rows, the same ended toggle, and the same guarded
   interrupt/terminate/terminate-tree. `Open full width` in the footer reopens that view as the
   dialog, at whatever the tab is scoped to.
+  The tab is hidden by default and the dialog is one app-menu row, which is the shape the
+  watch-here/act-there split has everywhere: keep the rarely-asked question one command away,
+  and keep the surface that must sit beside a terminal available to anyone who shows it.
 - It shipped first as a *watch* surface that could terminate nothing, on the argument that a
   column narrow enough to sit beside a terminal is too narrow to hold a destructive
   confirm-on-second-click. That was an argument about **layout**, and layout answers it:
@@ -1812,6 +1838,18 @@ responsive controls.
   append-only from the one surface a human actually reads: a single detector firing on a
   normal workflow buried every record that mattered. Dismissing deletes nothing — see
   `automation.md`.
+  Below the records sits the collapsed **away report** ("what happened while I was away?"),
+  which summarizes attention items and run notes since the last terminal attach or input.
+  It came here from the Automation dashboard, where it sat in a view named for something else
+  and nobody found it: it is a *reading of this inbox*, not a fact about the pipeline that
+  fills the inbox. It is fetched only on request, because generating it is a server-side scan.
+- **Alerts is the only home for attention items**, and Activity → Findings is the only home for
+  run notes. The automation pipeline produces exactly those two things, and the Automation
+  dashboard used to draw a second copy of each: the same ranked inbox under its `attend` group
+  and the same `/api/annotations` table, differently filtered, under `review`. One record with
+  two homes and two filters is a record you can see in one place and miss in the other. Both
+  dashboard views are links now (`automation.md`), and Findings grew a source filter
+  (deterministic / observer / all) to cover what the dashboard's copy showed.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed
@@ -2143,7 +2181,7 @@ Detailed UI behavior belongs with the owning feature:
 - Notes, Files, ignores, and watches: `project-resources.md`
 - Agent runtime and extension inspection: `agent-environment.md`
 - Provider selection and reset review: `provider-accounts.md`
-- CPU/RSS and Process fleet: `processes-and-previews.md`
+- CPU/RSS and the Resources dialog's Processes segment: `processes-and-previews.md`
 - Quota/context/tool evidence: `operational-telemetry.md`
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`

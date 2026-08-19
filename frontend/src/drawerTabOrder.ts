@@ -23,7 +23,12 @@ export function normalizeDrawerTabOrder(raw: unknown): DrawerTabId[] {
   const result: DrawerTabId[] = []
   if (Array.isArray(raw)) {
     for (const value of raw) {
-      const migrated = value === 'commands' || value === 'prompts' ? 'actions' : value
+      // The same retirement table `drawerLayout.ts` carries, minus its segment half:
+      // an *order* has no room for "which view of the tab", only for the tab.
+      const migrated = value === 'commands' || value === 'prompts' || value === 'clipboard' ? 'actions'
+        : value === 'insight' || value === 'changemap' || value === 'timeline' ? 'activity'
+          : value === 'context' ? 'agent'
+            : value
       if (typeof migrated !== 'string' || !known.has(migrated)) continue
       const id = migrated as DrawerTabId
       if (!result.includes(id)) result.push(id)

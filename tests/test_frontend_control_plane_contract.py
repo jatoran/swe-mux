@@ -11,11 +11,9 @@ def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches(
     for surface in (
         "System observers",
         "Custom rules",
-        "Run notes",
-        "Attention inbox",
+        # The explainer of the deterministic checks stayed, in the help panel, where every
+        # other explanation of this pipeline already lived.
         "What all-session health watches",
-        "Observed workload telemetry",
-        "What happened while I was away?",
         "Learned fixes",
         "Recent knowledge batches",
         "Recent rule execution",
@@ -23,6 +21,22 @@ def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches(
         "Observer calls",
     ):
         assert surface in dashboard
+    # The pipeline produces exactly two things - an attention item or a run note - and each
+    # has exactly one home. This dashboard used to draw a second copy of both, with two
+    # different filters, so a record visible in one could be missing from the other. It
+    # links to them now.
+    # The *view* is gone; the words survive as the label on the link that replaced it.
+    assert "view==='attention'" not in dashboard
+    assert "view==='notes'" not in dashboard
+    assert "view==='health'" not in dashboard
+    assert "onOpenAlerts" in dashboard
+    assert "onOpenFindings" in dashboard
+    assert "Run notes" in dashboard  # the link's label
+    assert "Findings" in (ROOT / "FindingsPane.tsx").read_text(encoding="utf-8")
+    # The workload table went to Resources, following the cost column that had already left
+    # the same view for the same reason.
+    assert "Observed workload telemetry" not in dashboard
+    assert "Observed workload" in (ROOT / "WorkloadTelemetry.tsx").read_text(encoding="utf-8")
     assert "Select up to 25 ended runs" in dashboard
     assert "never modify a repository" in dashboard
     assert "start reviewed batch" in dashboard

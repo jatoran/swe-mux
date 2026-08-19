@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { useModalFocus } from './modalFocus'
 import {
   formatByteRate, formatBytes, formatElapsed, payloadKindLabel, snapshotTraffic, trafficDirections,
   type NetworkUsageSnapshot,
@@ -10,7 +9,11 @@ const REFRESH_MS=3000
 
 const integer=new Intl.NumberFormat()
 
-export function NetworkUsageModal({onClose}:{onClose:()=>void}) {
+// The Bandwidth segment of the Resources modal. It was a modal of its own until the
+// consolidation put the four metered things swe-mux reports - processes, bandwidth, disk,
+// tokens - behind one dialog instead of four app-menu rows. What is left here is the
+// surface; `ResourcesModal.tsx` owns the dialog, the focus trap, and the close control.
+export function NetworkUsageView() {
   const [snapshot,setSnapshot]=useState<NetworkUsageSnapshot|null>(null)
   const [refreshing,setRefreshing]=useState(true)
   const [resetting,setResetting]=useState(false)
@@ -18,8 +21,6 @@ export function NetworkUsageModal({onClose}:{onClose:()=>void}) {
   const [error,setError]=useState('')
   const [updatedAt,setUpdatedAt]=useState<number|null>(null)
   const sequence=useRef(0)
-  const panel=useRef<HTMLElement>(null)
-  useModalFocus(panel,onClose)
 
   const refresh=async(silent=false)=>{
     const request=++sequence.current
@@ -63,12 +64,13 @@ export function NetworkUsageModal({onClose}:{onClose:()=>void}) {
   const sentPayloads=[...(snapshot?.websocket_sent_payloads||[])].sort((left,right)=>right.bytes-left.bytes)
   const peers=[...(snapshot?.peers||[])].sort((left,right)=>trafficDirections(right.http,right.websocket).total-trafficDirections(left.http,left.websocket).total)
 
-  return <div class="usage-layer network-usage-layer" role="dialog" aria-modal="true" aria-label="Bandwidth usage" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section class="usage-panel network-usage-panel" ref={panel}>
-      <header><div><span>NETWORK::USAGE</span><strong>Bandwidth metrics for this daemon measurement window</strong></div><div class="usage-header-actions"><button disabled={refreshing||resetting} onClick={()=>void refresh()}>{refreshing?'refreshing…':'refresh'}</button><button aria-label="Close bandwidth usage" onClick={onClose}>×</button></div></header>
+  return <>
       <div class="network-usage-actions">
         <div><strong>{snapshot?`Window ${formatElapsed(snapshot.uptime_seconds)}`:'Loading measurement window…'}</strong><span>{snapshot?`started ${new Date(snapshot.started_at*1000).toLocaleString()}`:'Waiting for daemon counters'}{updatedAt?` · updated ${new Date(updatedAt).toLocaleTimeString()}`:''}</span></div>
-        <button class={confirmReset?'confirming':''} disabled={resetting||!snapshot} onClick={()=>void reset()}>{resetting?'resetting…':confirmReset?'✓ reset measurement window':'reset counters'}</button>
+        <div class="resource-view-actions">
+          <button disabled={refreshing||resetting} onClick={()=>void refresh()}>{refreshing?'refreshing…':'refresh'}</button>
+          <button class={confirmReset?'confirming':''} disabled={resetting||!snapshot} onClick={()=>void reset()}>{resetting?'resetting…':confirmReset?'✓ reset measurement window':'reset counters'}</button>
+        </div>
       </div>
       {error&&<div class="usage-error" role="alert">{error}</div>}
       <main>
@@ -103,6 +105,5 @@ export function NetworkUsageModal({onClose}:{onClose:()=>void}) {
         </>}
       </main>
       <footer><span>Application payload only. HTTP is counted after compression; WebSocket data is counted before per-message compression. Download detail classifies PTY binary frames; channel totals also include control frames. Headers, TLS, Tailscale, TCP/IP, retransmits, and radio overhead are excluded.</span></footer>
-    </section>
-  </div>
+  </>
 }
