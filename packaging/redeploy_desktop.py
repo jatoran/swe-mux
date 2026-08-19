@@ -32,6 +32,19 @@ or via ``POST /api/daemon/redeploy`` (the UI menu entry): the agent's own
 session survives step 3 because its PTY lives in the supervisor, and the
 relaunched daemon reattaches it.
 
+Whoever starts a run claims ``<data_dir>/redeploy.lock`` before any work: the
+endpoint does it and passes ``--lock-held``, and a terminal-launched run does it
+here. That makes single-flight and client visibility identical either way — a
+CLI redeploy used to take no lock at all, so two of them could race the same
+staging tree and the swap, and ``GET /api/daemon/redeploy`` reported nothing in
+flight while the UI was minutes from losing its daemon. A terminal-launched run
+also asks the daemon to broadcast the start, best-effort, so every client can
+show progress rather than discovering the redeploy as failed requests.
+
+Every run records ``<data_dir>/redeploy-result.json``, which the successor
+daemon serves back to the UI. A rollback is what that is for: the app comes back
+looking entirely normal, so without it nobody learns their change never shipped.
+
     uv run python packaging/redeploy_desktop.py [--hidden|--restore-visibility] [--no-launch]
 """
 
@@ -89,10 +102,165 @@ SWAP_RETRY_SECONDS = 20.0
 # outage, so give cold starts a realistic budget and fail early only when the
 # launched shell actually exits.
 APP_HEALTH_TIMEOUT_SECONDS = 300.0
+# Outcomes recorded in `<data_dir>/redeploy-result.json`. The successor daemon
+# serves this so the reconnecting UI can say what actually happened: a rollback
+# used to be visible only as English in redeploy.log, which meant the app came
+# back as the OLD build and nothing said so.
+OUTCOME_SUCCEEDED = "succeeded"
+OUTCOME_ROLLED_BACK = "rolled_back"
+OUTCOME_BUILD_FAILED = "build_failed"
+OUTCOME_SWAP_FAILED = "swap_failed"
+OUTCOME_UNHEALTHY = "unhealthy"
+OUTCOME_REFUSED = "refused"
+OUTCOME_FAILED = "failed"
 
 
 def log(message: str) -> None:
     print(f"[redeploy] {message}", flush=True)
+
+
+class Outcome:
+    """Records what a run did, for the UI that reconnects after the outage.
+
+    `record` is called at the terminal paths whose meaning the exit code cannot
+    carry (a rollback and a failed swap both exit 1, and "the app is back" means
+    something very different in each). It writes **at the moment of decision**,
+    not on the way out: the very next thing a rollback does is relaunch the old
+    app, and the browser starts asking for this file as soon as *a* daemon
+    answers, so a record written after that relaunch is one the reader can miss.
+
+    `finish` is the backstop for every other return. It writes a record derived
+    from the exit code when none was made, so a new early return can never leave
+    the previous run's result standing — a stale record would tell the UI that
+    *this* redeploy did whatever the last one did, which is worse than silence.
+    """
+
+    def __init__(self, config, started_at: float) -> None:  # noqa: ANN001 - Config
+        self._path = config.data_dir / "redeploy-result.json"
+        self._log_path = config.data_dir / "redeploy.log"
+        self._started_at = started_at
+        self._recorded = False
+
+    def record(self, kind: str, detail: str, *, code: int) -> None:
+        self._recorded = True
+        self._write(kind, detail, code)
+
+    def finish(self, code: int) -> int:
+        if not self._recorded:
+            if code == 0:
+                kind, detail = OUTCOME_SUCCEEDED, "The redeploy completed."
+            elif code == 2:
+                kind, detail = (
+                    OUTCOME_REFUSED,
+                    "The redeploy was refused before anything was changed.",
+                )
+            else:
+                kind, detail = OUTCOME_FAILED, "The redeploy failed. See redeploy.log."
+            self._write(kind, detail, code)
+        return code
+
+    def _write(self, kind: str, detail: str, code: int) -> None:
+        payload = {
+            "outcome": kind,
+            "detail": detail,
+            "exit_code": code,
+            "started_at": self._started_at,
+            "finished_at": time.time(),
+            "log_tail": self._tail(),
+        }
+        # Written whole via a temp file: the daemon that reads this is starting up
+        # concurrently, and a partially written file would parse as "no record".
+        temporary = self._path.with_suffix(".json.tmp")
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            os.replace(temporary, self._path)
+        except OSError as exc:
+            log(f"could not record the redeploy outcome: {exc}")
+
+    def _tail(self, lines: int = 12) -> list[str]:
+        try:
+            data = self._log_path.read_bytes()
+        except OSError:
+            return []
+        return data[-8192:].decode("utf-8", "replace").splitlines()[-lines:]
+
+
+def claim_lock(config, *, already_held: bool) -> bool:  # noqa: ANN001 - Config
+    """Claim `redeploy.lock` for this process. False means one is already live.
+
+    The daemon claims it before spawning this script (and passes --lock-held),
+    so this covers the terminal-launched case, which previously took no lock at
+    all: `GET /api/daemon/redeploy` reported nothing in flight, two concurrent
+    CLI redeploys could race the same staging tree and swap, and the UI had no
+    way to know it should stop trusting the daemon.
+
+    Never removed on exit. The lock names this process and every reader tests pid
+    liveness, so a crash releases it for free and a half-deleted file can never
+    make a live redeploy look finished.
+    """
+    if already_held:
+        return True
+    path = config.data_dir / "redeploy.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    live = live_lock_pid(config)
+    if live is not None:
+        log(f"ABORT: a redeploy is already running (pid {live})")
+        return False
+    # A lock naming a dead pid is stale by definition; only O_EXCL can decide the
+    # race between two scripts that both just found it stale.
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        log("ABORT: a redeploy is already starting")
+        return False
+    except OSError as exc:
+        log(f"WARNING: could not claim {path} ({exc}); continuing without single-flight")
+        return True
+    os.close(handle)
+    path.write_text(str(os.getpid()), encoding="ascii")
+    return True
+
+
+def live_lock_pid(config) -> int | None:  # noqa: ANN001 - Config
+    """PID named by a live `redeploy.lock`, or None (missing/stale/ours-to-take)."""
+    import psutil
+
+    try:
+        pid = int((config.data_dir / "redeploy.lock").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+    if pid == os.getpid():
+        return None
+    return pid if psutil.pid_exists(pid) else None
+
+
+def announce_start(config) -> None:  # noqa: ANN001 - Config
+    """Ask the daemon to tell its clients a redeploy just began.
+
+    Best-effort by design: this only buys the UI a progress chip during the
+    build, so a daemon that is not up, not desktop-managed, or too old to know
+    the route costs nothing but the old behaviour.
+    """
+    request = urllib.request.Request(
+        f"{base_url(config)}/api/daemon/redeploy/announce",
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if int(response.status) == 202:
+                log("announced the redeploy to connected clients")
+                return
+    except (OSError, urllib.error.URLError) as exc:
+        log(f"could not announce the redeploy to clients ({exc}); continuing")
+        return
+    log("daemon did not accept the redeploy announcement; continuing")
 
 
 def base_url(config) -> str:  # noqa: ANN001 - Config
@@ -292,7 +460,7 @@ def stop_app_processes(config) -> None:  # noqa: ANN001
         time.sleep(1.0)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Rebuild and relaunch the frozen desktop app while live sessions survive"
     )
@@ -316,11 +484,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="proceed even when live sessions would be killed (no usable supervisor)",
     )
-    args = parser.parse_args(argv)
-    config = load_config(args.config)
+    parser.add_argument(
+        "--lock-held",
+        action="store_true",
+        help=(
+            "redeploy.lock is already claimed for this process and clients have already "
+            "been told (set by the daemon's POST /api/daemon/redeploy)"
+        ),
+    )
+    return parser.parse_args(argv)
 
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    config = load_config(args.config)
+    started_at = time.time()
+    # Single-flight and client notification happen before any work, and cover the
+    # terminal-launched run too: the daemon's endpoint does both for a UI redeploy
+    # and passes --lock-held, but a redeploy started straight from a shell used to
+    # take no lock and tell nobody.
+    if not claim_lock(config, already_held=args.lock_held):
+        # Deliberately no outcome record: the redeploy that owns the lock is still
+        # running, and overwriting its result would misreport it as finished.
+        return 2
+    if not args.lock_held:
+        announce_start(config)
+    outcome = Outcome(config, started_at)
+    try:
+        code = _run(args, config, outcome)
+    except BaseException:
+        outcome.record(
+            OUTCOME_FAILED,
+            "The redeploy script exited unexpectedly. See redeploy.log.",
+            code=1,
+        )
+        raise
+    return outcome.finish(code)
+
+
+def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: ANN001 - Config
     # -- preflight ---------------------------------------------------------
-    supervisor = supervisor_process(config)
     supervisor = supervisor_process(config)
     if supervisor is None:
         message = (
@@ -391,9 +594,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_desktop.main(build_arguments)
         except (SystemExit, subprocess.CalledProcessError) as exc:
             log(f"ABORT: build failed; the running app was never touched ({exc})")
+            outcome.record(
+                OUTCOME_BUILD_FAILED,
+                "The build failed. The current app is untouched.",
+                code=1,
+            )
             return 1
         if not (STAGED_APP / "swe-mux.exe").is_file():
             log("ABORT: staged build produced no swe-mux.exe; the running app was never touched")
+            outcome.record(
+                OUTCOME_BUILD_FAILED,
+                "The build produced no executable. The current app is untouched.",
+                code=1,
+            )
             return 1
         # Free the rollback slot BEFORE the app is stopped. The swap renames
         # dist/swe-mux onto it, and a Windows rename cannot land on an existing
@@ -431,11 +644,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             force_stop_app_images()
             if not replace_dir(APP_DIST, PREV_APP):
                 log("ABORT: could not retire the old bundle; relaunching it unchanged")
+                outcome.record(
+                    OUTCOME_SWAP_FAILED,
+                    "The old app bundle could not be retired, so the previous build was "
+                    "restarted unchanged. Your change did NOT ship.",
+                    code=1,
+                )
                 return relaunch_and_report(config, args, note="old build (swap failed)")
         if not replace_dir(STAGED_APP, APP_DIST):
             log("ABORT: could not move the staged bundle into dist; restoring the old app")
             if PREV_APP.exists():
                 replace_dir(PREV_APP, APP_DIST)
+            outcome.record(
+                OUTCOME_SWAP_FAILED,
+                "The new bundle could not be moved into place, so the previous build was "
+                "restored. Your change did NOT ship.",
+                code=1,
+            )
             return relaunch_and_report(config, args, note="old build (swap failed)")
         shutil.rmtree(STAGING_ROOT, ignore_errors=True)
 
@@ -453,6 +678,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"daemon healthy: supervisor={payload.get('supervisor')} "
             f"live_sessions={payload.get('live_sessions')}"
         )
+        outcome.record(
+            OUTCOME_SUCCEEDED,
+            f"The rebuilt app is running with {payload.get('live_sessions', 0)} live session(s).",
+            code=0,
+        )
         return 0
     # -- rollback: the new build launched but never became healthy ----------
     if not args.skip_build and PREV_APP.is_dir():
@@ -465,11 +695,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         clear_slot(FAILED_APP)
         if not replace_dir(APP_DIST, FAILED_APP) or not replace_dir(PREV_APP, APP_DIST):
             log("ABORT: rollback swap failed; check dist/ by hand")
+            outcome.record(
+                OUTCOME_SWAP_FAILED,
+                "The new build was unhealthy and the rollback swap also failed. "
+                "dist/ needs checking by hand.",
+                code=1,
+            )
             return 1
+        # Written before the relaunch below, not after: the browser asks for this
+        # file as soon as any daemon answers health, which that relaunch causes.
+        outcome.record(
+            OUTCOME_ROLLED_BACK,
+            "The new build never became healthy, so the previous app was restored. "
+            "Your change did NOT ship; the failed bundle is kept at dist/swe-mux.failed.",
+            code=1,
+        )
         return relaunch_and_report(config, args, note="rolled-back previous build")
     log(
         f"daemon did not report healthy within {APP_HEALTH_TIMEOUT_SECONDS:.0f}s; "
         "check <data_dir>/desktop-daemon.log"
+    )
+    outcome.record(
+        OUTCOME_UNHEALTHY,
+        "The app did not report healthy and there was no previous build to roll back to. "
+        "Check desktop-daemon.log in the data directory.",
+        code=1,
     )
     return 1
 

@@ -143,6 +143,32 @@ continues to own every terminal.
   The endpoint validates source checkout + `uv`, requires the
   attached supervisor (or `force`), and is single-flight via `<data_dir>/redeploy.lock` with
   output in `<data_dir>/redeploy.log`.
+  The lock names the *script* process and every reader tests pid liveness, so a crash releases it
+  and nothing has to clean it up.
+  A run started straight from a terminal claims the same lock itself (`--lock-held` tells the
+  script the endpoint already did), which makes a CLI redeploy single-flight too and makes it
+  visible to `GET /api/daemon/redeploy` exactly like a UI one.
+  Every run records a machine-readable outcome in `<data_dir>/redeploy-result.json`
+  (`succeeded` / `rolled_back` / `build_failed` / `swap_failed` / `unhealthy` / `refused` /
+  `failed`, plus a detail sentence and a log tail), written whole via a temp file because the
+  successor daemon reads it while starting up.
+  The successor serves it as `last_result`, which is what lets the reconnecting UI say that a
+  rollback happened: the app comes back looking entirely normal, so otherwise nothing would tell
+  the operator their change never shipped.
+- Clients are told about a redeploy rather than discovering it as failed requests.
+  The daemon emits `daemon_redeploy_started` when it accepts one or is asked to announce a
+  terminal-launched one (`POST /api/daemon/redeploy/announce`, loopback-only and refused unless
+  `redeploy.lock` names a live process - it describes a real redeploy, it is not a way to put the
+  fleet's UI into a fake maintenance mode).
+  It emits `daemon_redeploy_stopping` from `POST /api/desktop/shutdown` when a redeploy is in
+  flight, then lingers briefly so the frame reaches the `/events` sockets the shutdown is about to
+  close.
+  That is the only authoritative "the outage starts now" a browser can get: the script stops the
+  daemon through that endpoint, so the daemon is still alive and still has its sockets when it
+  learns the build finished, whereas inferring the same thing from a dropped socket is
+  indistinguishable from an ordinary blip.
+  Nothing here is load-bearing for the redeploy itself - it only buys the UI a progress chip, so an
+  unreachable or older daemon costs nothing but the old behaviour.
 - Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode
   uses `python -m swe_mux`. Packaged `--supervisor-child` mirrors the same split for the PTY
   supervisor; source mode uses `python -m swe_mux.supervisor`. The daemon discovers-or-spawns

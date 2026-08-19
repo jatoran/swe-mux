@@ -64,8 +64,9 @@ restart is no more destructive than the existing kill-session surface.
 ## Frozen-app redeploy
 
 ```text
-POST /api/daemon/redeploy  {force?: bool}
+POST /api/daemon/redeploy           {force?: bool}
 GET  /api/daemon/redeploy
+POST /api/daemon/redeploy/announce
 ```
 
 The staged frozen-app rebuild trigger for the UI ("Rebuild + redeploy app
@@ -89,8 +90,28 @@ log}`. The script builds into `dist/.staging` while this daemon keeps serving,
 stops it only after a successful build, swaps the bundle (previous kept at
 `dist/swe-mux.prev`), and rolls back if the new build never reports healthy.
 The endpoint passes `--restore-visibility`; the script samples whether a desktop shell window is visible immediately before the stop and uses that presentation for success, swap-failure relaunch, and rollback relaunch.
-GET returns `{running, pid, log_tail, available}` so the UI can detect an
-early build failure while the old daemon is still alive.
+It also passes `--lock-held`, because the lock above is already claimed and
+already names the child; without it the script would refuse itself.
+
+GET returns `{running, pid, phase, log_tail, last_result, available}`.
+`phase` is `"building"` whenever a lock is live and `"idle"` otherwise -
+answering at all means the daemon is up, so a live lock is always the build
+stage; the stop/swap/relaunch stage has no daemon left to ask, which is why the
+UI infers that one from health probes rather than from here. `last_result` is
+the previous run's outcome, read from `<data_dir>/redeploy-result.json`, and is
+what lets a reconnecting client report a rollback: the app comes back looking
+normal, so otherwise nothing would say the change never shipped.
+
+POST `/api/daemon/redeploy/announce` (loopback-only) broadcasts
+`daemon_redeploy_started` for a redeploy this daemon did not spawn — one run
+straight from a terminal, which was previously invisible to every client until
+the daemon vanished underneath them. It is refused with
+`409 no_redeploy_in_flight` unless `redeploy.lock` names a live process: it
+exists to describe a redeploy that is really happening, not to let anything put
+the fleet's UI into a maintenance mode. The daemon separately emits
+`daemon_redeploy_stopping` from `POST /api/desktop/shutdown` while a redeploy is
+in flight, and lingers briefly afterwards so that frame reaches the `/events`
+sockets the shutdown is about to close.
 
 ## PTY supervisor IPC (local only)
 

@@ -384,6 +384,11 @@ EVENTS_CATCHUP_LIMIT = 64
 # does not consume their large payloads. User-visible state changes arrive as
 # separate, compact events.
 BROWSER_OMITTED_EVENT_TYPES = frozenset({"PreToolUse", "PostToolUse", "tool_use", "tool_result"})
+# How long the daemon lingers after broadcasting `daemon_redeploy_stopping` so the
+# frame reaches the `/events` sockets it is about to close. Long enough for a
+# loopback and a tailnet write; short enough that it is noise against a swap and
+# a cold PyInstaller start.
+REDEPLOY_STOPPING_DRAIN_SECONDS = 0.35
 _OSC_DEFAULT_COLOR_RESPONSE = re.compile(
     r"(?:\x1b\](?:10|11);"
     r"(?:rgb:[0-9a-f]{1,4}(?:/[0-9a-f]{1,4}){2}"
@@ -695,6 +700,7 @@ def create_app(
             web.post("/api/daemon/restart", daemon_restart),
             web.post("/api/daemon/redeploy", daemon_redeploy),
             web.get("/api/daemon/redeploy", daemon_redeploy_status),
+            web.post("/api/daemon/redeploy/announce", daemon_redeploy_announce),
             web.get("/api/remote/status", remote_status),
             web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
             web.get("/api/remote/firewall", firewall_status),
@@ -2267,10 +2273,37 @@ async def desktop_shutdown(request: web.Request) -> web.Response:
     if mode not in {"quit", "restart"}:
         raise web.HTTPBadRequest(text="mode must be quit or restart")
     request.app["shutdown_state"]["intent"] = "quit" if mode == "quit" else "detach"
+    # The one authoritative "the outage starts now" signal a client can get: the
+    # redeploy script stops the daemon through this endpoint, so the daemon is
+    # still alive and still has its sockets when it learns the build finished.
+    # Inferring it from a dropped socket instead would be indistinguishable from
+    # an ordinary network blip, which is why the client wants to be told.
+    await _announce_redeploy_stopping(request)
     shutdown_event.set()
     response = json_response({"status": "shutting_down", "mode": mode}, 202)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+async def _announce_redeploy_stopping(request: web.Request) -> None:
+    """Broadcast the start of a redeploy's daemon-down window, then let it drain.
+
+    Only for a shutdown that is part of a live redeploy: an ordinary desktop quit
+    is not an outage anyone reconnects from. The sleep is the point — `emit` only
+    puts the event on each subscriber's queue, and the shutdown that follows this
+    call closes those sockets, so without a turn of the loop to write them the
+    frame the client most needs would be the one it never receives.
+    """
+    # Everything here is looked up defensively. This runs on the daemon's way
+    # out, including an ordinary desktop quit, and a courtesy broadcast must
+    # never be the reason a shutdown request 500s instead of shutting down.
+    config: Config | None = request.app.get("config")
+    events: EventBus | None = request.app.get("events")
+    if config is None or events is None or _redeploy_lock_pid(config) is None:
+        return
+    with suppress(Exception):
+        await events.emit("daemon_redeploy_stopping", source="daemon", phase="stopping")
+    await asyncio.sleep(REDEPLOY_STOPPING_DRAIN_SECONDS)
 
 
 def _spawn_daemon_successor(command: list[str], log_path: Path) -> None:
@@ -2361,7 +2394,13 @@ def redeploy_source_root() -> Path | None:
 
 
 def _redeploy_lock_pid(config: Config) -> int | None:
-    """PID of a live in-flight redeploy, or None (missing/stale lock)."""
+    """PID of a live in-flight redeploy, or None (missing/stale lock).
+
+    The lock is claimed by whoever starts the redeploy — this daemon for a
+    UI/API trigger, the script itself when run straight from a terminal — and
+    always names the *script* process, so pid liveness is the authority and
+    nothing has to clean it up after a crash.
+    """
     import psutil
 
     try:
@@ -2369,6 +2408,37 @@ def _redeploy_lock_pid(config: Config) -> int | None:
     except (OSError, ValueError):
         return None
     return pid if psutil.pid_exists(pid) else None
+
+
+def _redeploy_last_result(config: Config) -> dict[str, Any] | None:
+    """The previous redeploy's machine-readable outcome, or None.
+
+    Written by the script at every terminal path. A rollback used to be visible
+    only as English in `redeploy.log`, so the successor daemon came back with the
+    OLD app and nothing told the operator: this is what lets the reconnecting UI
+    say so once.
+    """
+    try:
+        payload = json.loads((config.data_dir / "redeploy-result.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+async def _announce_redeploy_started(request: web.Request, *, pid: int) -> None:
+    """Tell every connected client a redeploy just began.
+
+    The build stage runs for minutes with this daemon still serving, so clients
+    learn about the redeploy long before it can affect them — which is the whole
+    point: a UI that knows can show a progress chip and stay usable, instead of
+    discovering the redeploy as a wall of failed requests when the daemon finally
+    goes down.
+    """
+    events: EventBus | None = request.app.get("events")
+    if events is None:
+        return
+    with suppress(Exception):
+        await events.emit("daemon_redeploy_started", source="daemon", pid=pid, phase="building")
 
 
 async def daemon_redeploy(request: web.Request) -> web.Response:
@@ -2478,6 +2548,9 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         "python",
         str(root / "packaging" / "redeploy_desktop.py"),
         "--restore-visibility",
+        # The lock above is already claimed and already names this child, and the
+        # start is broadcast below; without this the script would refuse itself.
+        "--lock-held",
     ]
     # Without this the script targets ~/.mux, so a daemon on an alternate config
     # reads the wrong supervisor discovery file and aborts — or worse,
@@ -2508,9 +2581,44 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
             lock_path.unlink(missing_ok=True)
         raise
     lock_path.write_text(str(process.pid), encoding="ascii")
+    # Told to every client now, minutes before the daemon can actually go away,
+    # which is what lets them show progress instead of discovering the redeploy
+    # as failed requests. The script does not announce a run spawned from here.
+    await _announce_redeploy_started(request, pid=process.pid)
     response = json_response(
         {"status": "redeploying", "pid": process.pid, "log": str(log_path)}, 202
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def daemon_redeploy_announce(request: web.Request) -> web.Response:
+    """Broadcast `daemon_redeploy_started` for a redeploy this daemon did not spawn.
+
+    A redeploy run straight from a terminal (`uv run python
+    packaging/redeploy_desktop.py`) is otherwise invisible to every client until
+    the daemon vanishes underneath them. The script claims the same
+    `redeploy.lock` and posts here, so a CLI redeploy and a UI redeploy look
+    identical to the UI.
+
+    Loopback-only, and refused unless the lock actually names a live process:
+    this exists to describe a redeploy that is really happening, not to let
+    anything put the fleet's UI into a fake maintenance mode.
+    """
+    config: Config = request.app["config"]
+    if not is_loopback_peer(request.remote or ""):
+        raise web.HTTPForbidden(text="redeploy announcements are loopback-only")
+    pid = _redeploy_lock_pid(config)
+    if pid is None:
+        return json_response(
+            {
+                "error": "no_redeploy_in_flight",
+                "message": "redeploy.lock names no live process, so there is nothing to announce",
+            },
+            409,
+        )
+    await _announce_redeploy_started(request, pid=pid)
+    response = json_response({"status": "announced", "pid": pid}, 202)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -2534,7 +2642,13 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
         {
             "running": pid is not None,
             "pid": pid,
+            # Answering this at all means the daemon is up, so a live lock is
+            # always the build stage: the stop/swap/relaunch stage has no daemon
+            # to ask. The UI keeps the app fully usable while `phase` is
+            # "building" and only blocks once it observes the daemon go away.
+            "phase": "building" if pid is not None else "idle",
             "log_tail": tail.splitlines()[-40:],
+            "last_result": _redeploy_last_result(config),
             "available": redeploy_source_root() is not None and shutil.which("uv") is not None,
         }
     )

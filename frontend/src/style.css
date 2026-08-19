@@ -80,7 +80,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
    chrome, or that chrome paints over and swallows taps on the dialog's own
    header: .mobile-toolbar(43), .mobile-nav-toggle(44), .app-topbar(48),
    .context-menu(49). Layers stacked over a dialog stay above 80. */
-.modal-layer { position:fixed;inset:0;background:#050608b8;backdrop-filter:blur(6px);display:grid;place-items:center;z-index:80 }.modal { width:min(560px,calc(100% - 30px));border:1px solid #343b44;border-radius:12px;background:#111419;box-shadow:0 30px 100px #000;padding:0;overflow:hidden }.modal-heading { display:flex;justify-content:space-between;padding:20px 22px 16px;border-bottom:1px solid var(--line) }.modal-heading span { color:#778271;font:600 9px 'JetBrains Mono';letter-spacing:.13em }.modal-heading h2 { font-size:18px;margin:5px 0 0 }.modal-heading>button { align-self:start;border:0;background:transparent;color:#858e9a;font-size:20px;cursor:pointer }.modal>label { display:block;margin:17px 22px;color:#929ca9;font-size:11px;font-weight:600 }.modal input:not([type=checkbox]):not([type=radio]) { display:block;width:100%;height:calc(37px*var(--ui-scale));margin-top:7px;padding:0 10px;border:1px solid #303741;border-radius:6px;background:#0b0e12;color:var(--text);font:11px 'JetBrains Mono' }.backend-picker { display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:7px }.backend-picker button { height:calc(70px*var(--ui-scale));border:1px solid #30363e;border-radius:7px;background:#0e1115;display:grid;grid-template-columns:31px 1fr;grid-template-rows:1fr 1fr;text-align:left;align-items:end;padding:10px;cursor:pointer }.backend-picker button>span { grid-row:1/3;width:24px;height:calc(24px*var(--ui-scale));display:grid;place-items:center;border-radius:5px;background:#20262d;color:#9da7b3;font:600 11px 'JetBrains Mono';align-self:center }.backend-picker strong { text-transform:capitalize;font-size:11px }.backend-picker small { color:#707986;font-size:9px;align-self:start }.backend-picker button.selected { border-color:#708c5f;background:#172016;box-shadow:inset 0 0 0 1px #3b4c31 }.backend-picker button.selected>span { background:#304527;color:var(--green) }.modal-footer { padding:13px 18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:flex-end;background:#0e1115 }.modal-footer>span { color:#6f7986;font-size:10px;margin-right:auto }.modal-footer>span strong { color:#a9b0ba }.toast { position:fixed;right:18px;bottom:18px;background:#2b1518;border:1px solid #72333a;color:#f1a5aa;border-radius:8px;padding:11px 13px;font-size:11px;z-index:30;box-shadow:0 10px 35px #000;cursor:pointer }.toast span { margin-left:15px }
+.modal-layer { position:fixed;inset:0;background:#050608b8;backdrop-filter:blur(6px);display:grid;place-items:center;z-index:80 }.modal { width:min(560px,calc(100% - 30px));border:1px solid #343b44;border-radius:12px;background:#111419;box-shadow:0 30px 100px #000;padding:0;overflow:hidden }.modal-heading { display:flex;justify-content:space-between;padding:20px 22px 16px;border-bottom:1px solid var(--line) }.modal-heading span { color:#778271;font:600 9px 'JetBrains Mono';letter-spacing:.13em }.modal-heading h2 { font-size:18px;margin:5px 0 0 }.modal-heading>button { align-self:start;border:0;background:transparent;color:#858e9a;font-size:20px;cursor:pointer }.modal>label { display:block;margin:17px 22px;color:#929ca9;font-size:11px;font-weight:600 }.modal input:not([type=checkbox]):not([type=radio]) { display:block;width:100%;height:calc(37px*var(--ui-scale));margin-top:7px;padding:0 10px;border:1px solid #303741;border-radius:6px;background:#0b0e12;color:var(--text);font:11px 'JetBrains Mono' }.backend-picker { display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:7px }.backend-picker button { height:calc(70px*var(--ui-scale));border:1px solid #30363e;border-radius:7px;background:#0e1115;display:grid;grid-template-columns:31px 1fr;grid-template-rows:1fr 1fr;text-align:left;align-items:end;padding:10px;cursor:pointer }.backend-picker button>span { grid-row:1/3;width:24px;height:calc(24px*var(--ui-scale));display:grid;place-items:center;border-radius:5px;background:#20262d;color:#9da7b3;font:600 11px 'JetBrains Mono';align-self:center }.backend-picker strong { text-transform:capitalize;font-size:11px }.backend-picker small { color:#707986;font-size:9px;align-self:start }.backend-picker button.selected { border-color:#708c5f;background:#172016;box-shadow:inset 0 0 0 1px #3b4c31 }.backend-picker button.selected>span { background:#304527;color:var(--green) }.modal-footer { padding:13px 18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:flex-end;background:#0e1115 }.modal-footer>span { color:#6f7986;font-size:10px;margin-right:auto }.modal-footer>span strong { color:#a9b0ba }.toast-stack { position:fixed;right:18px;bottom:18px;z-index:30;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:min(420px,calc(100vw - 36px));pointer-events:none }.toast { pointer-events:auto;background:#2b1518;border:1px solid #72333a;color:#f1a5aa;border-radius:8px;padding:11px 13px;font-size:11px;box-shadow:0 10px 35px #000;cursor:pointer }.toast span { margin-left:15px }
 .quick-launcher { position:fixed;left:264px;top:58px;width:410px;max-height:calc(100vh - 75px);overflow:auto;z-index:15;background:#11151a;border:1px solid #343c46;border-radius:10px;box-shadow:0 20px 70px #000 }.quick-heading { height:calc(37px*var(--ui-scale));display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 13px;border-bottom:1px solid var(--line);color:#74806d;font:600 9px 'JetBrains Mono';letter-spacing:.1em }.quick-heading button { border:0;background:transparent;color:#7e8895;font-size:17px;cursor:pointer }.quick-launcher form { display:flex;align-items:end;gap:7px;padding:13px }.quick-launcher label { flex:1;color:#89939f;font-size:10px;font-weight:600 }.quick-launcher input { display:block;width:100%;height:calc(35px*var(--ui-scale));margin-top:6px;padding:0 9px;border:1px solid #303741;border-radius:6px;background:#090c0f;color:var(--text);font:10px 'JetBrains Mono' }.quick-launcher form>button { height:calc(35px*var(--ui-scale));border-radius:6px;padding:0 11px }.recent-cwds { padding:0 8px 9px }.recent-cwds>span { display:block;padding:3px 5px 6px;color:#626d79;font:600 8px 'JetBrains Mono';letter-spacing:.1em }.recent-cwds button { width:100%;height:calc(43px*var(--ui-scale));display:flex;flex-direction:column;justify-content:center;gap:2px;border:0;border-radius:5px;background:transparent;text-align:left;padding:0 7px;cursor:pointer }.recent-cwds button:hover { background:#1a201c }.recent-cwds strong { color:#c6ccd3;font-size:10px }.recent-cwds small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#68727f;font:8px 'JetBrains Mono' }
 .palette-layer { position:fixed;inset:0;z-index:25;background:#0506089c;backdrop-filter:blur(3px);display:flex;justify-content:center;align-items:flex-start;padding-top:13vh }.palette { width:min(570px,calc(100% - 30px));overflow:hidden;border:1px solid #3b444f;border-radius:10px;background:#11151a;box-shadow:0 30px 100px #000 }.palette>input { width:100%;height:calc(48px*var(--ui-scale));border:0;border-bottom:1px solid var(--line);background:#0d1115;color:var(--text);padding:0 15px;font-size:13px }.palette>div { padding:6px;max-height:330px;overflow:auto }.palette button { width:100%;height:calc(37px*var(--ui-scale));border:0;border-radius:5px;background:transparent;display:flex;align-items:center;justify-content:space-between;padding:0 9px;color:#bdc4ce;cursor:pointer;text-align:left;font-size:11px }.palette button:hover { background:#202720;color:#e8eee5 }.palette button kbd { color:#7d8877 }
 @keyframes blink { 50% { opacity:0 } } @keyframes pulse { 50% { background:#332b10 } }
@@ -644,6 +644,107 @@ body {
 }
 .daemon-reload-modal h2 { margin:0 0 8px; font-size:15px }
 .daemon-reload-modal p { margin:0; color:var(--muted); font-size:12.5px }
+/* The confirm dialog's buttons. `.modal-actions` was written here with no rule
+   anywhere in the stylesheet, so the two buttons rendered as raw platform
+   controls in the middle of a themed dialog. Cancel comes first and the
+   affirmative one carries `.primary`, matching `.modal-footer` elsewhere. */
+.daemon-reload-modal .modal-actions {
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  margin-top:16px;
+}
+.daemon-reload-modal .modal-actions button {
+  min-height:calc(32px*var(--ui-scale));
+  padding:0 13px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  background:var(--panel2);
+  color:var(--text);
+  font-size:11px;
+  cursor:pointer;
+}
+.daemon-reload-modal .modal-actions button:hover { border-color:var(--muted) }
+@media(pointer:coarse) { .daemon-reload-modal .modal-actions button { min-height:44px;padding:0 16px } }
+
+/* The redeploy chip: a floating, persistent, expandable progress indicator that
+   every client shows for the whole redeploy, not just the tab that started it.
+   Fixed to the top-left and clear of both top bars (the desktop `.app-topbar`
+   and the phone's `.mobile-toolbar`, only one of which exists at a time), so it
+   never covers the brand or the Project switcher. z-index sits above the modal
+   layer on purpose: it stays legible through the daemon-down overlay, which is
+   exactly when there is nothing else to look at. */
+.redeploy-chip {
+  position:fixed;
+  z-index:520;
+  top:calc(34px*var(--ui-scale) + 8px);
+  left:max(10px,env(safe-area-inset-left));
+  max-width:min(86vw,360px);
+  border:1px solid var(--accent);
+  background:color-mix(in srgb,var(--panel) 94%,var(--accent));
+  box-shadow:0 6px 20px #000a;
+}
+.redeploy-chip.down { border-color:var(--amber);background:color-mix(in srgb,var(--panel) 92%,var(--amber)) }
+.redeploy-chip-summary {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  width:100%;
+  min-height:calc(30px*var(--ui-scale));
+  padding:5px 11px;
+  border:0;
+  background:transparent;
+  color:var(--text);
+  font:10px 'Cascadia Mono',Consolas,monospace;
+  text-align:left;
+  cursor:pointer;
+}
+.redeploy-chip-summary strong { font-weight:600;white-space:nowrap }
+.redeploy-chip-summary small { margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums }
+.redeploy-spinner {
+  flex:none;
+  width:11px;
+  height:11px;
+  border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:redeploy-spin .9s linear infinite;
+}
+.redeploy-chip.down .redeploy-spinner { border-color:color-mix(in srgb,var(--amber) 30%,transparent);border-top-color:var(--amber) }
+@keyframes redeploy-spin { to { transform:rotate(360deg) } }
+/* Reduced motion still needs to distinguish "working" from "wedged"; the
+   elapsed timer carries that, so the ring simply stops turning. */
+@media(prefers-reduced-motion:reduce) { .redeploy-spinner { animation:none } }
+.redeploy-chip-body {
+  padding:0 11px 9px;
+  border-top:1px solid var(--line);
+  color:var(--muted);
+  font-size:10px;
+  line-height:1.5;
+}
+.redeploy-chip-body p { margin:8px 0 0 }
+.redeploy-chip-body .redeploy-chip-note { color:var(--accent) }
+.redeploy-chip-body pre {
+  max-height:150px;
+  margin:8px 0 0;
+  padding:7px 8px;
+  overflow:auto;
+  border:1px solid var(--line);
+  background:var(--bg);
+  color:var(--muted);
+  font:9px/1.5 'Cascadia Mono',Consolas,monospace;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+/* A finished redeploy that did NOT ship what you built is the one outcome that
+   otherwise looks exactly like success, so its notice is not styled as an error. */
+.toast.redeploy-notice { background:#2a2410;border-color:#7a6522;color:#e7cf8d;line-height:1.5 }
+@media(max-width:760px) {
+  /* The desktop top bar is hidden at this width and the mobile toolbar takes its
+     place, so the chip re-anchors under that instead. */
+  .redeploy-chip { top:calc(max(5px,env(safe-area-inset-top)) + 54px);max-width:calc(100vw - 20px) }
+  .redeploy-chip-summary { min-height:38px }
+}
 .rename-modal .modal-heading {
   padding:14px 16px 12px;
 }

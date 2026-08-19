@@ -90,6 +90,13 @@ import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
 import { InteractionHud, showInteractionHud } from './InteractionHud'
+import { RedeployChip } from './RedeployChip'
+import {
+  applyProbe, beginRedeploy, enterOutage, IDLE_REDEPLOY, loadRedeploy, markResultPending,
+  outcomeIsFresh, outcomeNotice, REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS, saveRedeploy,
+  takeResultPending,
+  type ProbeResult, type RedeployState, type RedeployStatus,
+} from './redeployProgress'
 import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subscribeInsertTarget } from './insertTarget'
 import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
@@ -224,6 +231,13 @@ const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitD
   {id:'up',glyph:'↑',direction:'vertical',position:'before'},
   {id:'down',glyph:'↓',direction:'vertical',position:'after'},
 ]
+
+/** `sessionStorage` when it is usable, else null. Accessing it throws outright
+ *  under some privacy settings and in a sandboxed frame, and this backs the
+ *  redeploy sentinel, which must never be the reason the app fails to boot. */
+function sessionStorageOrNull(): Storage | null {
+  try { return window.sessionStorage } catch { return null }
+}
 
 const isAgent = (session: Session) => isAgentBackend(session.backend)
 
@@ -404,7 +418,23 @@ export function App() {
   // True while a session-preserving daemon restart is in flight; the page
   // reloads itself once the successor daemon answers /api/health.
   const [daemonReloading, setDaemonReloading] = useState(false)
-  const [redeploying, setRedeploying] = useState(false)
+  // Three-valued, not a boolean: see redeployProgress.ts. The multi-minute build
+  // stage keeps the whole app usable and only shows the corner chip; the overlay
+  // and the error suppression belong to the daemon-down stage alone. Restored
+  // from sessionStorage so a reload — or a tab opened after the redeploy started
+  // — comes up knowing, instead of rendering a broken app.
+  const [redeploy, setRedeploy] = useState<RedeployState>(() => loadRedeploy(sessionStorageOrNull(), Date.now()))
+  const redeployDown = redeploy.phase === 'down'
+  // Every request is expected to fail while the daemon is away, so the toast
+  // that reports them carries no information and buries the overlay that does.
+  // Reload has the same window and the same excuse.
+  const suppressTransientErrors = redeployDown || daemonReloading
+  // Read through a ref: the refresh loop and the timers that drive it are
+  // installed once, so a value captured from the render that created them would
+  // still say "false" for the whole outage.
+  const suppressErrorsRef = useRef(suppressTransientErrors)
+  suppressErrorsRef.current = suppressTransientErrors
+  const [redeployNotice, setRedeployNotice] = useState('')
   const loadedBuildId = useRef(loadedUiBuildId())
   const [uiUpdateAvailable, setUiUpdateAvailable] = useState(false)
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
@@ -1492,7 +1522,11 @@ export function App() {
       })
       setError('')
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        // While the daemon is deliberately away, every request failing is the
+        // expected state, not news. The reconnect that follows each dropped
+        // events socket schedules one of these, so without the gate the overlay
+        // explaining the outage sits under a stream of toasts reporting it.
+        if (!suppressErrorsRef.current) setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
         refreshInFlight.current = null
         if (refreshQueued.current) {
@@ -1953,6 +1987,18 @@ export function App() {
             if(!isReplay&&event.type==='voice_clip_ready'&&event.payload?.trigger!=='auto'&&clipId&&event.payload?.stream_id){
               enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
             }
+          }
+          // The redeploy broadcasts. Never on replay: these are durable events,
+          // so a reconnect weeks later would otherwise resurrect a finished
+          // redeploy's overlay off the event history. The live copy is what
+          // matters, and the wait loop's own health probes are the authority on
+          // when it ends regardless.
+          if (!isReplay && event.type === 'daemon_redeploy_started') enterRedeploy()
+          if (!isReplay && event.type === 'daemon_redeploy_stopping') {
+            // Sent by the daemon from its own shutdown handler, while it is still
+            // alive: the one authoritative "the outage starts now". Health probes
+            // would get there too, two strikes later; this skips the guessing.
+            setRedeploy(current => enterOutage(current.phase === 'idle' ? beginRedeploy(Date.now()) : current))
           }
           if (!isReplay && event.type === 'settings_changed') refreshSettings()
           // Another device (or another tab) changed the ring; an open picker refetches.
@@ -4147,40 +4193,17 @@ export function App() {
     } catch {
       setError('Redeploy request failed.')
     }
-    if (!accepted) return
-    setRedeploying(true)
-    // Phase 1: the build runs while this daemon still serves. Watch the
-    // status endpoint — the lock clearing without the daemon ever going down
-    // means the build failed and the old app is untouched. Phase 2: the
-    // daemon drops (stop/swap/relaunch); poll health until the successor (or
-    // the rolled-back previous build) answers, then reload the page.
-    const deadline = Date.now() + 8 * 60_000
-    let sawDown = false
-    while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      let healthy = false
-      try {
-        const health = await fetch('/api/health', { cache: 'no-store' })
-        healthy = health.ok
-      } catch { /* daemon down: stop/swap/relaunch in progress */ }
-      if (!healthy) { sawDown = true; continue }
-      if (sawDown) { location.reload(); return }
-      try {
-        const status = await fetch('/api/daemon/redeploy', { cache: 'no-store' })
-        if (status.ok) {
-          const detail = await status.json()
-          if (detail.running === false) {
-            setRedeploying(false)
-            const tail = Array.isArray(detail.log_tail) ? detail.log_tail.slice(-3).join(' · ') : ''
-            setError(`Redeploy failed before the app was stopped; the current app is untouched. ${tail || 'Check redeploy.log in the data directory.'}`)
-            return
-          }
-        }
-      } catch { /* transient; keep waiting */ }
-    }
-    setRedeploying(false)
-    setError('Redeploy did not complete within 8 minutes. Check redeploy.log in the data directory.')
+    // The daemon broadcasts the start to every client, this one included, so
+    // there is nothing to set here beyond covering the case where the broadcast
+    // is lost. Entering 'building' rather than blocking is the point: the build
+    // takes minutes during which this daemon keeps serving normally.
+    if (accepted) enterRedeploy()
   }
+
+  // Entering is idempotent so the local start, the daemon's broadcast, and the
+  // boot-time sentinel can all call it without racing each other into a second
+  // wait loop or resetting the elapsed clock mid-redeploy.
+  const enterRedeploy = () => setRedeploy(current => current.phase === 'idle' ? beginRedeploy(Date.now()) : current)
 
   const focusedDrawerStack=drawerStackForTab(drawerLayout,drawerTabId)
   const navigateDrawerTab=(offset:number)=>{
@@ -4991,13 +5014,103 @@ export function App() {
   // just the mobile workspace: a desktop browser's Back button and mouse-4 reach the same
   // handler, and a standalone PWA has no other route back at all.
   useEffect(() => installSystemBack(), [])
+
+  // -- redeploy tracking --------------------------------------------------
+  // Mirror every state change out to sessionStorage, so a reload or a second tab
+  // in this browser session comes up already knowing a redeploy is in flight.
+  useEffect(() => { saveRedeploy(sessionStorageOrNull(), redeploy) }, [redeploy])
+  // A request that failed in the moments before the daemon went away would
+  // otherwise leave its toast sitting on top of the overlay that explains why.
+  useEffect(() => { if (redeployDown) setError('') }, [redeployDown])
+  const redeployRef = useRef(redeploy)
+  redeployRef.current = redeploy
+  // One wait loop for every entry path — this tab started it, the daemon
+  // broadcast it, or the boot-time sentinel found it — so a client that did not
+  // click the button behaves exactly like the one that did. Keyed on whether a
+  // redeploy is in flight, never on the state itself: reading through a ref keeps
+  // each probe's own update from tearing down and restarting the timer.
+  const redeployActive = redeploy.phase !== 'idle'
+  useEffect(() => {
+    if (!redeployActive) return
+    let cancelled = false
+    let timer: number | undefined
+    const ask = async (path: string) => {
+      const controller = new AbortController()
+      const deadline = window.setTimeout(() => controller.abort(), REDEPLOY_PROBE_TIMEOUT_MS)
+      try { return await fetch(path, { cache: 'no-store', signal: controller.signal }) }
+      finally { window.clearTimeout(deadline) }
+    }
+    const probeOnce = async (): Promise<ProbeResult> => {
+      try {
+        const health = await ask('/api/health')
+        if (!health.ok) return { healthy: false }
+      } catch { return { healthy: false } }
+      // The daemon answered, so it is still serving the build stage and can also
+      // report where that build has got to. A failure on this second request is
+      // transient and must not be mistaken for the daemon going away.
+      try {
+        const response = await ask('/api/daemon/redeploy')
+        if (response.ok) return { healthy: true, status: await response.json() as RedeployStatus }
+      } catch { /* fall through with no status */ }
+      return { healthy: true, status: null }
+    }
+    // Self-rescheduling rather than an interval: a slow probe must not have the
+    // next one start on top of it, or a burst of piled-up failures would spend
+    // the entire two-strike budget at once and raise the overlay on one stall.
+    const schedule = () => { timer = window.setTimeout(() => { void tick() }, REDEPLOY_POLL_MS) }
+    const tick = async () => {
+      const probe = await probeOnce()
+      if (cancelled) return
+      const verdict = applyProbe(redeployRef.current, probe, Date.now())
+      if (verdict.action === 'wait') { setRedeploy(verdict.state); schedule(); return }
+      if (verdict.action === 'reload') {
+        // Drop the sentinel before navigating, or the reloaded page resumes a
+        // wait loop for a redeploy that has already finished, and hand the next
+        // load a one-shot request to report what the redeploy actually did.
+        markResultPending(sessionStorageOrNull())
+        location.reload()
+        return
+      }
+      setRedeploy(IDLE_REDEPLOY)
+      if (verdict.action === 'timeout') {
+        setError('The redeploy did not finish in time. Check redeploy.log in the data directory.')
+        return
+      }
+      // Ended without the daemon ever going away: a refused preflight or a
+      // failed build, so the running app was never touched.
+      const notice = outcomeNotice(probe.healthy ? probe.status?.last_result : null)
+      const tail = probe.healthy && Array.isArray(probe.status?.log_tail)
+        ? probe.status.log_tail.slice(-3).join(' · ') : ''
+      setError(notice || `Redeploy stopped before the app was replaced; the current app is untouched. ${tail || 'Check redeploy.log in the data directory.'}`)
+    }
+    void tick()
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer) }
+  }, [redeployActive])
+  // The reload at the end of a successful redeploy lands here. A rollback is the
+  // reason this exists: the app comes back looking entirely normal, so without
+  // being told, nobody would know the change never shipped.
+  useEffect(() => {
+    if (!takeResultPending(sessionStorageOrNull())) return
+    void (async () => {
+      try {
+        const response = await fetch('/api/daemon/redeploy', { cache: 'no-store' })
+        if (!response.ok) return
+        const status = await response.json() as RedeployStatus
+        if (!outcomeIsFresh(status.last_result, Date.now())) return
+        const notice = outcomeNotice(status.last_result)
+        if (notice) setRedeployNotice(notice)
+      } catch { /* the outcome is a courtesy; the app is up either way */ }
+    })()
+  }, [])
   // A dismissable level that refuses to be dismissed: back must not walk out of the app
   // while the daemon is mid-restart, and there is nothing behind these overlays to reach.
+  // The daemon-down stage only — during a redeploy's build stage there is a working app
+  // behind this, and swallowing back there would be wrong as well as useless.
   useEffect(() => {
-    if (!daemonReloading && !redeploying) return
+    if (!daemonReloading && !redeployDown) return
     const id = dismissStack.register({ label: 'daemon-reload', blocking: true, dismiss: () => undefined })
     return () => dismissStack.unregister(id)
-  }, [daemonReloading, redeploying])
+  }, [daemonReloading, redeployDown])
   // Field diagnostics for "back did the wrong thing" reports: the live level names and the
   // recent transition ring, readable from a phone's remote console with no build change.
   useEffect(() => {
@@ -5822,6 +5935,10 @@ export function App() {
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
+    {/* Pinned to the top-left corner for every client, whether or not it is the
+        one that started the redeploy. Non-blocking: during the build stage there
+        is a working app underneath it. */}
+    <RedeployChip state={redeploy} />
     {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus.commands} onOpenSettings={()=>openSettings('Voice')} mode={voicePanelMode} onMode={setVoicePanelMode} assistantView={assistantView} assistantOpen={assistantOpen} onCloseAssistant={()=>setAssistantOpen(false)}/>}
 
     <ContinuityBanner />
@@ -6426,8 +6543,10 @@ export function App() {
     </div>}
 
     {daemonReloading&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Daemon reloading"><div class="modal daemon-reload-modal"><h2>Reloading daemon…</h2><p>Live sessions are preserved by the PTY supervisor. This page reloads automatically once the daemon is back.</p></div></div>}
-    {redeploying&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App redeploying"><div class="modal daemon-reload-modal"><h2>Rebuilding + redeploying app…</h2><p>The new bundle builds while the current app keeps running, then the app restarts around your live sessions. This takes a few minutes; the page reloads automatically. A failed build leaves the current app untouched.</p></div></div>}
-    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions (a few minutes). A failed build leaves the current app running.</p><div class="modal-actions"><button onClick={()=>void startRedeploy()}>Rebuild + redeploy</button><button onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button></div></div></div>}
+    {/* Only the daemon-down stage blocks. While the build runs the app is fully
+        usable and the corner chip is the whole of the UI's report. */}
+    {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
+    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p><div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
@@ -6497,6 +6616,11 @@ export function App() {
 
     {tutorialOpen&&<GuidedTutorial hasProject={projects.length>0} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={closeTutorial}/>}
 
-    {error && <div class="toast" onClick={() => setError('')}>{error}<span>×</span></div>}
+    {/* One stack, not two independently anchored toasts: both used to be pinned
+        to the same corner and would render exactly on top of each other. */}
+    {(redeployNotice || error) && <div class="toast-stack">
+      {redeployNotice && <div class="toast redeploy-notice" role="alert" onClick={() => setRedeployNotice('')}>{redeployNotice}<span>×</span></div>}
+      {error && <div class="toast" onClick={() => setError('')}>{error}<span>×</span></div>}
+    </div>}
   </div>
 }

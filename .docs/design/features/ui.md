@@ -427,12 +427,31 @@ responsive controls.
   `/api/daemon/restart`, shows a blocking wait overlay while the daemon is down, and reloads
   the page when the successor answers health; the server refuses (409, surfaced as a toast)
   when no PTY supervisor is attached so the action can never silently kill sessions.
-  "Rebuild + redeploy app (keep sessions)" confirms, posts `/api/daemon/redeploy` (staged
-  frozen-app rebuild; the only reload that reaches the frozen bundle's own assets), and shows
-  a blocking overlay through the multi-minute build/swap/relaunch: while the old daemon still
-  serves it polls `GET /api/daemon/redeploy` so an early build failure surfaces as an error
-  toast with the log tail (the running app is untouched); after the daemon drops it polls
-  health for up to 8 minutes and reloads when the new (or rolled-back) app answers.
+  "Rebuild + redeploy app (keep sessions)" confirms, then posts `/api/daemon/redeploy` (staged
+  frozen-app rebuild; the only reload that reaches the frozen bundle's own assets).
+  A redeploy has two stages that the UI deliberately treats as unalike.
+  While the new bundle builds in `dist/.staging` the current daemon keeps serving, so the app stays
+  fully usable and the only sign of the redeploy is a persistent expandable spinner pinned to the
+  top-left corner, carrying the stage, an elapsed timer, and the build log tail.
+  Blocking here would lock the user out of a working app, and a failed build would have locked them
+  out for nothing.
+  Once the daemon actually goes away, the app is unusable in a way that loses work silently -
+  the PTY sockets are proxied by the daemon, so keystrokes typed into a terminal go nowhere -
+  so that stage does show a blocking overlay, and suppresses the request-failure toasts that would
+  otherwise bury it.
+  Every client shows both, not only the tab that started the redeploy: the daemon broadcasts
+  `daemon_redeploy_started` when it accepts one (minutes before it can affect anyone) and
+  `daemon_redeploy_stopping` from its own shutdown handler, which is the one authoritative
+  "the outage starts now"; a client that misses the second falls back to two consecutive failed
+  health probes, so a single blip cannot raise the overlay.
+  The state is mirrored into `sessionStorage`, so a reload or a second tab comes up already knowing;
+  restored state is clamped to the non-blocking stage, because a page that loaded at all was served
+  by a live daemon.
+  The page reloads when the daemon is seen to go away and come back; a daemon that never went away
+  and reports `running: false` is the failed-build case, which surfaces as an error toast with the
+  log tail and no reload (the running app is untouched).
+  After the reload, a redeploy that did not ship what was built - a rollback above all, which
+  otherwise looks exactly like success - is reported once from `last_result`.
   Every production build carries a deterministic `ui-build` identity derived from its content-addressed asset filenames.
   Every `/events` connection starts with that served identity, so clients that reconnect after a successful redeploy compare it with the identity in their loaded document.
   A hidden client reloads immediately, while a visible client keeps its current work and shows a persistent "UI update ready" banner with an explicit Reload now action.

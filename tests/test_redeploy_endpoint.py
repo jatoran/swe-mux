@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -25,9 +26,13 @@ def no_real_bundle_scan(monkeypatch: Any) -> None:
 
 
 class FakeRequest:
-    def __init__(self, app: dict[str, Any], body: Any = None) -> None:
+    def __init__(
+        self, app: dict[str, Any], body: Any = None, *, remote: str = "127.0.0.1"
+    ) -> None:
         self.app = app
         self._body = body
+        self.remote = remote
+        self.headers: dict[str, str] = {}
 
     async def json(self) -> Any:
         if self._body is None:
@@ -39,10 +44,24 @@ def _payload(response: Any) -> dict[str, Any]:
     return json.loads(response.body)
 
 
+class FakeEvents:
+    """Collects what the daemon broadcast, in order."""
+
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(self, event_type: str, **payload: Any) -> None:
+        self.emitted.append((event_type, payload))
+
+    def types(self) -> list[str]:
+        return [event_type for event_type, _ in self.emitted]
+
+
 def _app(tmp_path: Path, *, supervisor_connected: bool = True) -> dict[str, Any]:
     return {
         "config": SimpleNamespace(data_dir=tmp_path),
         "supervisor": SimpleNamespace(connected=supervisor_connected),
+        "events": FakeEvents(),
     }
 
 
@@ -338,3 +357,300 @@ async def test_redeploy_env_scrub_covers_session_markers(
     response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 202
     assert marker not in captured["env"]
+
+
+async def test_accepting_a_redeploy_broadcasts_the_build_stage(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Every client learns about the redeploy while the daemon is still serving.
+
+    This is what lets a phone (or a second window, or the desktop when the phone
+    started it) show a progress chip instead of discovering the redeploy minutes
+    later as a wall of failed requests.
+    """
+    monkeypatch.setattr(
+        server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=4242)
+    )
+    app = _app(tmp_path)
+    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 202
+    events: FakeEvents = app["events"]
+    assert events.types() == ["daemon_redeploy_started"]
+    assert events.emitted[0][1]["pid"] == 4242
+    assert events.emitted[0][1]["phase"] == "building"
+
+
+async def test_a_refused_redeploy_broadcasts_nothing(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(server, "redeploy_source_root", lambda: None)
+    app = _app(tmp_path)
+    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 409
+    assert app["events"].types() == []
+
+
+async def test_the_daemon_spawns_the_script_with_the_lock_already_claimed(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Without --lock-held the script would find the daemon's lock and refuse itself."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        server.subprocess,
+        "Popen",
+        lambda command, **kwargs: captured.update(command=command) or SimpleNamespace(pid=7),
+    )
+    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    assert response.status == 202
+    assert "--lock-held" in captured["command"]
+
+
+async def test_announce_broadcasts_a_cli_started_redeploy(tmp_path: Path) -> None:
+    """A redeploy run straight from a terminal reaches the UI the same way."""
+    app = _app(tmp_path)
+    (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
+    response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 202
+    assert app["events"].types() == ["daemon_redeploy_started"]
+
+
+async def test_announce_refuses_when_no_redeploy_is_running(tmp_path: Path) -> None:
+    """It describes a real redeploy; it is not a way to fake a maintenance mode."""
+    app = _app(tmp_path)
+    response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 409
+    assert _payload(response)["error"] == "no_redeploy_in_flight"
+    assert app["events"].types() == []
+    # A lock naming a dead process is not a redeploy either.
+    (tmp_path / "redeploy.lock").write_text("999999999", encoding="ascii")
+    response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
+    assert response.status == 409
+
+
+async def test_announce_is_loopback_only(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
+    with pytest.raises(server.web.HTTPForbidden):
+        await server.daemon_redeploy_announce(  # type: ignore[arg-type]
+            FakeRequest(app, remote="10.0.0.4")
+        )
+    assert app["events"].types() == []
+
+
+async def test_stopping_for_a_redeploy_is_broadcast_before_the_daemon_goes(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The one authoritative 'the outage starts now'.
+
+    The script stops the daemon through this endpoint, so the daemon is alive and
+    still has its sockets at the moment it learns the build finished. Inferring
+    the same thing from a dropped socket is indistinguishable from a blip.
+    """
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
+    shutdown = asyncio.Event()
+    app = _app(tmp_path)
+    app.update(
+        desktop_control_token="secret",
+        desktop_shutdown_event=shutdown,
+        shutdown_state={},
+    )
+    request = FakeRequest(app, {"mode": "restart"})
+    request.headers["Authorization"] = "Bearer secret"
+    response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
+    assert response.status == 202
+    assert app["events"].types() == ["daemon_redeploy_stopping"]
+    # The frame the client most needs is the one the shutdown would otherwise
+    # close the socket before writing.
+    assert slept == [server.REDEPLOY_STOPPING_DRAIN_SECONDS]
+    assert shutdown.is_set()
+
+
+async def test_an_ordinary_desktop_quit_broadcasts_no_redeploy(tmp_path: Path) -> None:
+    """No redeploy in flight means this is just a quit, not an outage to wait out."""
+    shutdown = asyncio.Event()
+    app = _app(tmp_path)
+    app.update(
+        desktop_control_token="secret",
+        desktop_shutdown_event=shutdown,
+        shutdown_state={},
+    )
+    request = FakeRequest(app, {"mode": "quit"})
+    request.headers["Authorization"] = "Bearer secret"
+    response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
+    assert response.status == 202
+    assert app["events"].types() == []
+
+
+async def test_a_shutdown_app_without_config_or_events_still_shuts_down() -> None:
+    """The broadcast is a courtesy and must never break the shutdown itself.
+
+    A minimal desktop-control app carries neither key, and looking them up
+    directly turned every quit on such an app into a 500 instead of a shutdown.
+    """
+    shutdown = asyncio.Event()
+    request = FakeRequest(
+        {
+            "desktop_control_token": "secret",
+            "desktop_shutdown_event": shutdown,
+            "shutdown_state": {},
+        }
+    )
+    request.headers["Authorization"] = "Bearer secret"
+    response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
+    assert response.status == 202
+    assert shutdown.is_set()
+
+
+async def test_status_reports_the_phase_and_the_last_outcome(tmp_path: Path) -> None:
+    """A rollback is the outcome that otherwise looks exactly like success."""
+    (tmp_path / "redeploy-result.json").write_text(
+        json.dumps({"outcome": "rolled_back", "detail": "Your change did NOT ship."}),
+        encoding="utf-8",
+    )
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    body = _payload(response)
+    assert body["phase"] == "idle"
+    assert body["last_result"]["outcome"] == "rolled_back"
+
+    (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    # Answering at all means the daemon is up, so a live lock is always the build.
+    assert _payload(response)["phase"] == "building"
+
+
+async def test_status_survives_an_unreadable_outcome_file(tmp_path: Path) -> None:
+    (tmp_path / "redeploy-result.json").write_text("{not json", encoding="utf-8")
+    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    assert _payload(response)["last_result"] is None
+
+
+def test_a_terminal_launched_redeploy_claims_the_same_lock(tmp_path: Path) -> None:
+    """It used to take no lock at all.
+
+    Two concurrent CLI redeploys could race the same staging tree and the swap,
+    and `GET /api/daemon/redeploy` reported nothing in flight — so the UI had no
+    way to know it should stop trusting the daemon.
+    """
+    module = _redeploy_module()
+    config = SimpleNamespace(data_dir=tmp_path)
+    assert module.claim_lock(config, already_held=False) is True
+    assert (tmp_path / "redeploy.lock").read_text(encoding="ascii") == str(os.getpid())
+    # The daemon-spawned path was handed a lock that already names it.
+    (tmp_path / "redeploy.lock").write_text("12345", encoding="ascii")
+    assert module.claim_lock(config, already_held=True) is True
+    assert (tmp_path / "redeploy.lock").read_text(encoding="ascii") == "12345"
+
+
+def test_a_second_redeploy_is_refused_while_one_is_live(tmp_path: Path) -> None:
+    module = _redeploy_module()
+    config = SimpleNamespace(data_dir=tmp_path)
+    # A live pid that is not ours: another redeploy owns the run.
+    lock = tmp_path / "redeploy.lock"
+    lock.write_text(str(_a_live_foreign_pid()), encoding="ascii")
+    assert module.claim_lock(config, already_held=False) is False
+    # A stale lock (dead pid) is taken over rather than blocking forever.
+    lock.write_text("999999999", encoding="ascii")
+    assert module.claim_lock(config, already_held=False) is True
+    assert lock.read_text(encoding="ascii") == str(os.getpid())
+
+
+def _a_live_foreign_pid() -> int:
+    """A pid that exists and is not this process (the OS's own, pid 4 on Windows)."""
+    import psutil
+
+    for pid in psutil.pids():
+        if pid != os.getpid() and pid > 0:
+            return pid
+    raise AssertionError("no other live process")
+
+
+def test_the_outcome_file_records_a_rollback_distinctly_from_a_plain_failure(
+    tmp_path: Path,
+) -> None:
+    """Both exit 1, and only one of them means "your change did not ship"."""
+    module = _redeploy_module()
+    config = SimpleNamespace(data_dir=tmp_path)
+    (tmp_path / "redeploy.log").write_text("[redeploy] rolling back\n", encoding="utf-8")
+
+    outcome = module.Outcome(config, 1000.0)
+    outcome.record(module.OUTCOME_ROLLED_BACK, "Your change did NOT ship.", code=1)
+    # Written at the moment of decision, not on the way out: a rollback relaunches
+    # the old app immediately afterwards, and the browser asks for this file as
+    # soon as any daemon answers health.
+    payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
+    assert payload["outcome"] == "rolled_back"
+    assert payload["exit_code"] == 1
+    assert payload["started_at"] == 1000.0
+    assert payload["finished_at"] >= payload["started_at"]
+    assert payload["log_tail"] == ["[redeploy] rolling back"]
+    # No leftover temp file to be mistaken for the record.
+    assert not (tmp_path / "redeploy-result.json.tmp").exists()
+    # A recorded outcome is not overwritten by the exit-code backstop.
+    assert outcome.finish(1) == 1
+    payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
+    assert payload["outcome"] == "rolled_back"
+
+
+def test_an_unclassified_exit_still_records_something(tmp_path: Path) -> None:
+    """A new early return can never leave the previous run's result standing."""
+    module = _redeploy_module()
+    config = SimpleNamespace(data_dir=tmp_path)
+    for code, expected in ((0, "succeeded"), (1, "failed"), (2, "refused")):
+        assert module.Outcome(config, 1.0).finish(code) == code
+        payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
+        assert payload["outcome"] == expected
+        assert payload["detail"]
+
+
+def test_the_lock_held_flag_is_understood(tmp_path: Path) -> None:
+    module = _redeploy_module()
+    assert module.parse_args(["--restore-visibility", "--lock-held"]).lock_held is True
+    assert module.parse_args([]).lock_held is False
+
+
+def test_a_refused_claim_leaves_the_running_redeploys_result_alone(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Recording "refused" here would misreport the redeploy that owns the lock."""
+    module = _redeploy_module()
+    result = tmp_path / "redeploy-result.json"
+    result.write_text(json.dumps({"outcome": "succeeded"}), encoding="utf-8")
+    (tmp_path / "redeploy.lock").write_text(str(_a_live_foreign_pid()), encoding="ascii")
+    monkeypatch.setattr(module, "load_config", lambda _path: SimpleNamespace(data_dir=tmp_path))
+    assert module.main([]) == 2
+    assert json.loads(result.read_text(encoding="utf-8"))["outcome"] == "succeeded"
+
+
+def test_only_a_terminal_launched_run_announces_itself(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The daemon already broadcast the start for the runs it spawned."""
+    module = _redeploy_module()
+    announced: list[int] = []
+    monkeypatch.setattr(module, "load_config", lambda _path: SimpleNamespace(data_dir=tmp_path))
+    monkeypatch.setattr(module, "announce_start", lambda _config: announced.append(1))
+    monkeypatch.setattr(module, "_run", lambda *_args, **_kwargs: 0)
+
+    assert module.main(["--lock-held"]) == 0
+    assert announced == []
+    # --lock-held also means "do not claim it", so there is nothing to clear here.
+    assert not (tmp_path / "redeploy.lock").exists()
+    assert module.main([]) == 0
+    assert announced == [1]
+
+
+def test_an_unreachable_daemon_does_not_stop_the_redeploy(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The announcement only buys the UI a progress chip; it is never load-bearing."""
+    module = _redeploy_module()
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", refuse)
+    module.announce_start(SimpleNamespace(data_dir=tmp_path, port=1))
