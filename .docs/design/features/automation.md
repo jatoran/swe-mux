@@ -127,9 +127,11 @@ and the declared minimum observation capability.
   nothing, so the history stays readable and retention still owns removal. Records survive
   90 days (`automation_retention_days`), which is far longer than a surface with no clear
   can stay useful.
-- Diagnostics is demoted out of the primary tab row to a header action: provider traces, event
-  dry-run, queue state, firings/observer-call traces, and research-only injection evidence are
-  developer-grade and sit beside daily surfaces no longer.
+- Diagnostics is the last of the four views, and only that: it carried a header toggle *as
+  well* while it was the one view outside the tab row, which left one of four choices with
+  two controls and no way to tell which was authoritative. Provider traces, event dry-run,
+  queue state, firings/observer-call traces, and research-only injection evidence are
+  developer-grade, so it sits last rather than first.
 - Injection diagnostics use the provider-neutral `safe|blocked|unknown` delivery-readiness
   contract, expose bounded reasons/parser coverage, and are permanently unauthorized in this
   phase. They never write the PTY; see `delivery-readiness.md`.

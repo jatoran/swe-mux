@@ -89,7 +89,7 @@ export function ResourcesModal({
         </div>
         <div class="usage-header-actions"><button aria-label="Close resources" onClick={onClose}>×</button></div>
       </header>
-      <div class="resources-segmented" role="tablist" aria-label="Resource">
+      <div class="segmented-tabs resources-segmented" role="tablist" aria-label="Resource">
         {SEGMENTS.map(item => <button
           key={item.id}
           role="tab"

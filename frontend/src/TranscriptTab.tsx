@@ -458,8 +458,11 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   />
   return <div class={selectionLive ? 'transcript-tab transcript-selecting' : 'transcript-tab'}>
     <div class="transcript-tab-head">
+      {/* The message count, and only the count. The session's name is the pane heading
+          immediately above this row, and printing it twice in twenty pixels of chrome made
+          the count - the one thing this row knows that the heading does not - read as a
+          subtitle of the name rather than as the state of the transcript. */}
       <div class="transcript-tab-meta">
-        <strong>{agentTargetName(session)}</strong>
         <span aria-live="polite">
           {loading && !data
             ? 'Reading transcript…'
