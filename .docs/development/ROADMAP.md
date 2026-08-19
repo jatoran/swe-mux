@@ -171,8 +171,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
-                                            -> Phase 10.5 Distribution licensing + voice-stack replacement [open]
-                                              -> Phase 10.6 Mux assistant: conversational fleet operation [open]
+                                            -> Phase 10.5 Distribution licensing + voice-stack replacement [voice stack done+deployed; license paperwork open]
+                                              -> Phase 10.6 Mux assistant: conversational fleet operation [done+deployed 2026-08-18]
                                                 -> Phase 11  Public packaging and release  [open]
 ```
 
@@ -3254,11 +3254,21 @@ Day-one rules that make the adaptation clean: dual-form responses, confirmation 
 
 ### Phase 10.6 exit criteria
 
-- [ ] A typed dialog can list the fleet, answer status questions with system-computed freshness, queue a reworded message, spawn a session, and walk a guarded approval, all through the registry bridge with the trust policy enforced daemon-side.
+Landed on master 2026-08-18 (2e9d97d through 95ef033) and redeployed the same day; live
+verification ran against the real fleet on the frozen app. Post-landing testing drove four
+follow-up rounds now part of the phase: display titles everywhere the assistant speaks or
+resolves a name, the deterministic UI-dispatch ladder, granular note edits, chat-mode
+microphone ownership with deterministic spoken confirm/cancel, and the voice audition picker.
+
+- [x] A typed dialog can list the fleet, answer status questions with system-computed freshness, queue a reworded message, spawn a session, and walk a guarded approval, all through the registry bridge with the trust policy enforced daemon-side.
+  (Live: fleet listings by display title, statuses with ages, spawns, note reads/edits under the cancel-window card, a genuinely stranded queue item surfaced. The guarded-approval walk itself is covered by the suite and the unchanged two-step flow, not yet demonstrated in anger.)
 - [ ] The same dialog continues across two devices against one daemon-owned state.
-- [ ] An unmatched wake-word utterance reaches the assistant instead of a refusal, and the reflex path's measured latency is unchanged.
-- [ ] Assistant replies play through the existing segmented TTS pipeline with barge-in working, and the assistant lane reports itself offline cleanly with tiers 1-2 unaffected.
-- [ ] Spend appears in the automation ledger under `builtin:assistant` and stops at the daily budget.
+  (Daemon-owned by construction and event-fanned to every client; the one remaining check is opening the same dialog from the phone once.)
+- [x] An unmatched wake-word utterance reaches the assistant instead of a refusal, and the reflex path's measured latency is unchanged.
+- [x] Assistant replies play through the existing segmented TTS pipeline with barge-in working, and the assistant lane reports itself offline cleanly with tiers 1-2 unaffected.
+  (Live hands-free use 2026-08-18/19: spoken turns, spoken confirmation cards, chat-mode mic routing.)
+- [x] Spend appears in the automation ledger under `builtin:assistant` and stops at the daily budget.
+  (Live spend recorded per turn; the budget refusal fails a turn closed in the suite.)
 
 ## Phase 11 — Public packaging and release
 
