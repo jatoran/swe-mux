@@ -1,16 +1,28 @@
 import assert from 'node:assert/strict'
 import {
   BARGE_IN_CONFIRM_FRAMES,
+  HOLD_ENTER_PHRASES,
+  HOLD_RELEASE_PHRASES,
   PLAYBACK_PROBE_CONFIRM_FRAMES,
   PLAYBACK_PROBE_REJECT_FRAMES,
   PLAYBACK_PROBE_SETTLE_FRAMES,
   PlaybackSpeechProbe,
   buildVoiceMatcher,
   isPlaybackControl,
+  matchesBarePhrase,
   nextBargeInFrameCount,
   parseMuxVoice,
   playbackProbeCandidate,
 } from '../src/conversation.ts'
+
+// Bare hold phrases match only when the utterance IS the phrase: a sentence
+// merely containing "go ahead" must never be eaten by the release check.
+assert.equal(matchesBarePhrase('Hold on.',HOLD_ENTER_PHRASES),true)
+assert.equal(matchesBarePhrase('  let me think  ',HOLD_ENTER_PHRASES),true)
+assert.equal(matchesBarePhrase('Hold on while I check the config',HOLD_ENTER_PHRASES),false)
+assert.equal(matchesBarePhrase('Go ahead!',HOLD_RELEASE_PHRASES),true)
+assert.equal(matchesBarePhrase('What do you think',HOLD_RELEASE_PHRASES),true)
+assert.equal(matchesBarePhrase('go ahead and spawn a session',HOLD_RELEASE_PHRASES),false)
 
 assert.deepEqual(parseMuxVoice('Please run the focused tests. Mux send that.'),{
   command:'send',text:'Please run the focused tests.',
@@ -37,6 +49,11 @@ assert.deepEqual(parseMuxVoice('Actually stop this run. Mux interrupt the agent'
 })
 assert.deepEqual(parseMuxVoice('Mux go to sleep'),{command:'standby',text:''})
 assert.deepEqual(parseMuxVoice('Mux resume'),{command:'resume',text:''})
+assert.deepEqual(parseMuxVoice('Mux, just listen'),{command:'hold',text:''})
+assert.deepEqual(parseMuxVoice('Mux brainstorm'),{command:'hold',text:''})
+assert.deepEqual(parseMuxVoice('And that is my last thought. Mux, go ahead'),{
+  command:'proceed',text:'And that is my last thought.',
+})
 assert.deepEqual(parseMuxVoice('Mux voice comms on'),{command:'comms_on',text:''})
 assert.deepEqual(parseMuxVoice('Mux exit voice comms'),{command:'comms_off',text:''})
 assert.deepEqual(parseMuxVoice('Explain what a mux is'),{command:null,text:'Explain what a mux is'})

@@ -1904,6 +1904,7 @@ class VoiceService:
             "stt_language": self.config.stt_language,
             "stt_whisper_model": self.config.stt_whisper_model,
             "stt_routing_model": self.decode_model(COMMAND_PROFILE),
+            "chat_patience_ms": self.config.voice_chat_patience_ms,
             "wake_words": list(self.config.voice_wake_words),
             "commands": [
                 {

@@ -138,7 +138,26 @@ def test_voice_command_migration_adds_only_new_schema_20_actions(tmp_path: Path)
 
     assert commands["send"] == ["ship this"]
     assert commands["cancel"] == []
-    assert set(commands) == {"send", "cancel", "append", "comms_on", "comms_off"}
+    # Schema 20 added append/comms; schema 28 added the brainstorm hold pair.
+    assert set(commands) == {
+        "send", "cancel", "append", "comms_on", "comms_off", "hold", "proceed",
+    }
+
+
+def test_voice_command_migration_adds_only_new_schema_28_actions(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'schema_version = 27\n'
+        '[[voice_commands]]\naction = "send"\nphrases = ["ship this"]\n'
+        '[[voice_commands]]\naction = "hold"\nphrases = ["shush"]\n',
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    commands = {item["action"]: item["phrases"] for item in config.voice_commands}
+    # A customized hold survives; only the genuinely missing proceed is added.
+    assert commands["send"] == ["ship this"]
+    assert commands["hold"] == ["shush"]
+    assert commands["proceed"] == ["go ahead", "your turn", "over to you", "proceed"]
 
 
 def test_voice_command_migration_adds_bare_stop_only_to_stock_mute_phrases(

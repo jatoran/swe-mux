@@ -284,8 +284,12 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
   `voice_commands` in config, editable in Settings → Voice; `buildVoiceMatcher` compiles them).
   Fixed action set: `send`/`append`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/
-  `help`/`standby`/`resume`/`comms_on`/`comms_off`/`stop`. `standby` keeps the mic on but ignores everything except a
-  `resume`/`stop` command; `stop` releases the mic. Hold `Ctrl+Alt+Space` for push-to-talk with
+  `help`/`standby`/`resume`/`hold`/`proceed`/`comms_on`/`comms_off`/`stop`. `standby` keeps the mic on but ignores everything except a
+  `resume`/`stop` command; `stop` releases the mic. `hold`/`proceed` are the chat-mode
+  brainstorm pair: plain speech buffers instead of becoming assistant turns until "go ahead"
+  releases it as one consolidated turn (bare exact phrases "hold on"/"go ahead" also work);
+  `voice_chat_patience_ms` separately lengthens the chat-addressee endpoint tail while
+  wake-worded commands keep short-circuiting it. Hold `Ctrl+Alt+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.

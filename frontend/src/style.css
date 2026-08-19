@@ -2416,6 +2416,10 @@ body {
 .assistant-message>header{color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.06em}
 .assistant-message p{margin:0;color:var(--text);font:10px/1.5 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere}
 .assistant-thinking{margin:0;color:var(--muted);font:9px/1.4 'JetBrains Mono';animation:voice-rec-pulse 1.4s ease-in-out infinite}
+/* The brainstorm-hold buffer: a live, not-yet-sent user bubble. Dashed to say
+   "draft", pulsing header to say "still listening". */
+.assistant-pending-speech{border-left-style:dashed;background:var(--bg)}
+.assistant-pending-speech>header{animation:voice-rec-pulse 1.4s ease-in-out infinite}
 /* Confirmation is typed state rendered as a card, never prose: the same object
    spoken confirm/cancel resolves. The countdown is the cancel window. */
 .assistant-action{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;padding:6px 7px;border:1px solid var(--amber);background:var(--panel)}

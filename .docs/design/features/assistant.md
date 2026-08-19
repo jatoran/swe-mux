@@ -21,8 +21,8 @@ Asked for something that is coding, it routes: queue a message to an existing se
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
-  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — or spawn a session): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
-  - *consequential* (armed send, interrupt, end session): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
+  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — spawn a session, or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
+  - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
   A pending or scheduled action is typed state (`assistant_actions` row) rendered as a card, and a daemon restart expires anything still pending — a confirmation minted by a dead daemon can never execute.
 - **Dialog state is daemon-owned** (`assistant_dialogs`/`assistant_messages`/`assistant_actions` in SQLite, one worker thread like `voice_clips`).
   Any device resumes the same conversation; a dropped tab cannot orphan a half-confirmed action.
@@ -49,12 +49,51 @@ The `{text}` catch-all is excluded from that ladder by construction: for a dispa
 The per-turn context also names the reliable command shapes ("open project <name>", "open the <tab> tab", …) so the model prefers them over free paraphrase.
 No connected client is an honest tool failure, not a silent success.
 
+## Client-executed terminal work
+
+Three more kinds execute on the operator's device, because the mounted pane owns PTY
+writes (bracketed paste, replay, ownership claims, acknowledged results) and pane
+placement is per-device layout state — the daemon never types into a PTY for the
+assistant and never picks a pane:
+
+- `type_into_session` stages text in a session's composer **without** a carriage
+  return, via the same `insertIntoTerminal(…, submit=false)` primitive voice "append"
+  uses; repeated calls accumulate, and nothing reaches the agent. The session's
+  terminal must be mounted on the device — an unmounted pane reports an honest failure
+  the assistant relays ("focus it first").
+- `submit_session_composer` presses the same Enter the mobile Send control uses
+  (`sendKey('\r')` through the pane), sending whatever is staged. It is a send, so it
+  sits on the consequential always-confirm floor.
+- `spawn_session` from a turn with a connected workspace dispatches to that device's
+  own launch path (`spawnTerminal`), so the new session opens as a **tab in the
+  currently active pane** with the optimistic leaf and focus every other launch entry
+  point gets — instead of the layout reconciler's default new pane. There is
+  deliberately no daemon fallback when the dispatch fails: a lost acknowledgement plus
+  a daemon retry would spawn twice. A turn with no `client_id` (old client, headless)
+  keeps the daemon `spawn_op` path.
+
+Every client-executed action is stamped with the originating tab's per-tab
+`client_id` (sent in the turn's `client_context`, persisted in the action's
+arguments so a later confirm still targets the same tab); executors on other devices
+ignore it — an untargeted broadcast would type into every mounted copy of a pane and
+spawn one session per open workspace. Mutation rows keep their persisted status; a
+synthetic `dispatched` `assistant_action` event carries the work (with
+`target_session_id`/`project_id` extras — `session_id` is a first-class MuxEvent
+field the bus lifts out of the payload) and the device reports back through the same
+`ui-result` endpoint UI commands use.
+
 ## Voice attachment
 
 The assistant is text-first and voice-attached, not voice-only:
 
 - In the voice overlay, a `talk`/`chat` mode toggle switches the same floating panel between the dictation draft and the conversation view (`AssistantPanel`); the chat is also reachable with the microphone off (`assistant.toggle`).
   Chat mode is bounded to roughly half the viewport — a dialog consulted beside the terminals, never a takeover — and collapses to its header (device-local, persisted); the collapsed body stays mounted so streaming, card speech, and earcons keep working while folded.
+- **Thinking out loud is not answered at every pause.** Two deterministic client mechanisms
+  (both in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
+  assistant is the addressee (commands keep short-circuiting it), and the `hold`/`proceed`
+  brainstorm pair buffers plain speech until a "go ahead" cue releases it as one consolidated
+  turn. Deliberately not an assistant tool: a wait tool runs *inside* a turn, so every pause
+  would still cost a model call — the same reason confirm/cancel keeps the model out of the loop.
 - **The mode toggle is the microphone's addressee switch.**
   While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
   A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.
