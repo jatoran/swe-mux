@@ -9759,7 +9759,10 @@ async def kokoro_voice_preview(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("preview body must be an object")
-    data = await voice.kokoro_preview(str(body.get("voice") or ""))
+    try:
+        data = await voice.kokoro_preview(str(body.get("voice") or ""))
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
     return web.Response(
         body=data,
         content_type="audio/wav",
