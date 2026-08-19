@@ -99,8 +99,9 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationSurface, ConversationToggle, useConversation, type VoicePanelMode } from './ConversationControl'
 import { AssistantPanel } from './AssistantPanel'
 import {
-  assistantStatus, cancelAction, confirmAction, ensureDialog, latestOpenAction,
-  noteAssistantActionEvent, reportUiResult, sendTurn as sendAssistantTurnApi,
+  ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
+  latestOpenAction, noteAssistantActionEvent, reportUiResult,
+  sendTurn as sendAssistantTurnApi,
   spokenConfirmation, type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
@@ -137,7 +138,7 @@ import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalView
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
-import { requestTerminalAction } from './terminalActions.ts'
+import { insertIntoTerminal, requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -2160,9 +2161,13 @@ export function App() {
   assistantContextRef.current={
     focused_session_id:activeId||null,
     active_project_id:activeProject?.id||null,
+    client_id:ASSISTANT_CLIENT_ID,
     commands:commandRegistryRef.current.filter(item=>item.available).slice(0,400).map(item=>({id:item.id,label:item.label})),
   }
   const assistantClientContext=()=>assistantContextRef.current
+  // The dispatch executor below mounts once, so it reaches the launcher through
+  // a ref that every render re-points at the fresh closure.
+  const spawnTerminalRef=useRef<((targetProject?:string,split?:false|SplitDirection|'stack',profileId?:string,targetSessionId?:string,position?:'before'|'after',backend?:string,options?:{argv?:string[];seedText?:string})=>Promise<Session|false>)|null>(null)
   // Assistant replies speak through the same application-speech pipeline the
   // deterministic query answers use: client-claimed stream, segmented clips.
   const speakAssistantReply=async(text:string)=>{
@@ -2202,10 +2207,12 @@ export function App() {
     await sendAssistantTurnApi(dialogId,text,assistantClientContext())
     return `Asked the assistant: “${text.slice(0,80)}${text.length>80?'…':''}”`
   }
-  // The daemon dispatches UI commands (focus, drawer tabs, panels) to the
-  // device the dialog turn came from; this executor resolves the label against
-  // the live registry — the same authority spoken phrases compile to — runs it,
-  // and reports the outcome so the assistant's tool call can complete.
+  // The daemon dispatches client-executed actions (UI commands, composer
+  // typing, pane-placed spawns) to the device the dialog turn came from; these
+  // executors run them and report the outcome so the assistant's tool call can
+  // complete. Actions stamped with another tab's client id are ignored here —
+  // executing an untargeted broadcast would type into every mounted copy of a
+  // pane and spawn one session per open workspace.
   useEffect(()=>{
     const handler=(raw:Event)=>{
       const event=(raw as CustomEvent).detail as {type:string;payload:Record<string,unknown>;replay?:boolean}
@@ -2215,10 +2222,59 @@ export function App() {
       // spoken confirm/cancel path reads; replay never revives an old card.
       noteAssistantActionEvent(payload as never,event.replay===true)
       if(event.replay)return
-      if(String(payload.kind)!=='run_ui_command'||String(payload.status)!=='dispatched')return
+      if(String(payload.status)!=='dispatched')return
+      const kind=String(payload.kind)
+      const actionArguments=(payload.arguments||{}) as Record<string,unknown>
+      const actionClient=String(actionArguments.client_id||'')
+      if(actionClient&&actionClient!==ASSISTANT_CLIENT_ID)return
       const actionId=String(payload.id||'')
-      const commandText=String((payload.arguments as Record<string,unknown>|undefined)?.command||'')
-      if(!actionId||!commandText)return
+      if(!actionId)return
+      if(kind==='type_into_session'||kind==='submit_session_composer'){
+        // `target_session_id`: `session_id` is a first-class MuxEvent field the
+        // bus lifts out of the payload, so it cannot ride here.
+        const sessionTarget=String(payload.target_session_id||'')
+        if(!sessionTarget)return
+        void (async()=>{
+          try{
+            if(kind==='type_into_session'){
+              // The mounted pane types it with no carriage return: staged in
+              // the composer, visible, editable — and never delivered by us.
+              await insertIntoTerminal(sessionTarget,String(actionArguments.text||''),false)
+              await reportUiResult(actionId,{ok:true,detail:'typed into the composer without sending'}).catch(()=>{})
+            }else{
+              // The same Enter the mobile Send control and voice submit use.
+              await requestTerminalAction(sessionTarget,{action:'sendKey',text:'\r'})
+              await reportUiResult(actionId,{ok:true,detail:'pressed Enter on the composer'}).catch(()=>{})
+            }
+          }catch(cause){
+            await reportUiResult(actionId,{ok:false,detail:cause instanceof Error?cause.message.slice(0,380):'the terminal action failed'}).catch(()=>{})
+          }
+        })()
+        return
+      }
+      if(kind==='spawn_session'){
+        const projectTarget=String(payload.project_id||'')
+        // The daemon resolves the backend through its full default chain; the
+        // frontend never names a harness (test_harness_name_literals).
+        const spawnBackend=String(payload.backend||'')
+        void (async()=>{
+          try{
+            // The device's own launch path, so the new session opens as a tab
+            // in the currently active pane with the optimistic leaf and focus
+            // every other launch entry point gets.
+            const spawned=projectTarget&&spawnBackend?await spawnTerminalRef.current?.(projectTarget,false,undefined,undefined,'after',spawnBackend,payload.seed_text?{seedText:String(payload.seed_text)}:undefined):false
+            await reportUiResult(actionId,spawned
+              ?{ok:true,detail:`spawned ${typeof spawned==='object'?spawned.name:'a session'} into the active pane`}
+              :{ok:false,detail:'the device could not start the session'}).catch(()=>{})
+          }catch(cause){
+            await reportUiResult(actionId,{ok:false,detail:cause instanceof Error?cause.message.slice(0,380):'the spawn failed'}).catch(()=>{})
+          }
+        })()
+        return
+      }
+      if(kind!=='run_ui_command')return
+      const commandText=String(actionArguments.command||'')
+      if(!commandText)return
       void (async()=>{
         const registry=commandRegistryRef.current
         const plan=planUiCommand(registry,commandText)
@@ -2897,7 +2953,7 @@ export function App() {
       emitTutorialAction({action:'session-launched',backend})
       // Protect against an event refresh that began with the pre-spawn layout.
       window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
-      return true
+      return next
     } catch (cause) {
       delete pendingSpawns.current[pendingId]
       setSessions(items=>items.filter(item=>item.id!==pendingId))
@@ -2913,6 +2969,7 @@ export function App() {
       spawning.current = false
     }
   }
+  spawnTerminalRef.current=spawnTerminal
 
   const openLauncher = (targetProject = projectId, split: false | SplitDirection = false) => {
     setLauncherProject(targetProject)

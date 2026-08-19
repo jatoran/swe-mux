@@ -81,6 +81,17 @@ ACTION_CLASS_NAVIGATION = "navigation"
 ACTION_CLASS_REVERSIBLE = "reversible"
 ACTION_CLASS_CONSEQUENTIAL = "consequential"
 
+# Kinds the operator's device executes (UI focus, terminal typing, pane-placed
+# spawns). Their action rows carry the originating client's id so exactly one
+# device acts — an untargeted broadcast would type into every mounted copy of
+# the pane and spawn once per open workspace.
+CLIENT_EXECUTED_KINDS = {
+    "run_ui_command",
+    "type_into_session",
+    "submit_session_composer",
+    "spawn_session",
+}
+
 SYSTEM_PRIMER = """You are Mux, the operator's assistant inside swe-mux, a fleet manager for \
 coding-agent terminal sessions (Claude Code, Codex, and others) organized into Projects.
 You operate the workspace; you never write code and never run shell commands. When the \
@@ -99,7 +110,12 @@ append, prepend, insert at a specific line, or replace a unique text span \
 return pending_confirmation: tell the operator what was proposed and how to confirm (say \
 confirm, or the card in the panel); never claim a pending action already happened. If a \
 tool reports ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on \
-the device the operator is speaking through; if none is connected the tool will say so."""
+the device the operator is speaking through; if none is connected the tool will say so.
+To stage text in a session's input without sending it, use type_into_session — repeated \
+calls append, nothing reaches the agent, and the session's terminal must be open on the \
+operator's device (focus it first with run_ui_command if needed). submit_session_composer \
+presses Enter on that staged text and always confirms. Prefer this pair over \
+send_to_session when the operator says "type", "enter", or "without sending"."""
 
 
 class AssistantError(RuntimeError):
@@ -903,6 +919,24 @@ class AssistantService:
                 },
                 ["command"],
             ),
+            tool(
+                "type_into_session",
+                "Type text into a session's input composer on the operator's device "
+                "WITHOUT sending it. Repeated calls append to what is already staged "
+                "(include your own joining space or newline); nothing reaches the "
+                "agent until the operator presses Enter or submit_session_composer "
+                "runs. The session's terminal must be open on the operator's device — "
+                "focus it with run_ui_command first if needed.",
+                {"session": session_property, "text": {"type": "string"}},
+                ["session", "text"],
+            ),
+            tool(
+                "submit_session_composer",
+                "Press Enter on a session's composer, sending whatever text is staged "
+                "there (e.g. by type_into_session). Always requires confirmation.",
+                {"session": session_property},
+                ["session"],
+            ),
         ]
 
     @staticmethod
@@ -918,7 +952,12 @@ class AssistantService:
             return ACTION_CLASS_READ
         if kind == "run_ui_command":
             return ACTION_CLASS_NAVIGATION
-        if kind in {"append_project_note", "edit_project_note", "spawn_session"}:
+        # Typing unsent text is reversible on its face (the operator can clear
+        # the composer, and nothing is delivered); submitting the composer is a
+        # send and falls through to the consequential floor below.
+        if kind in {
+            "append_project_note", "edit_project_note", "spawn_session", "type_into_session",
+        }:
             return ACTION_CLASS_REVERSIBLE
         if kind == "send_to_session":
             return (
@@ -956,6 +995,10 @@ class AssistantService:
             return f"end the session {target}"
         if kind == "run_ui_command":
             return f"run the UI command: {arguments.get('command')}"
+        if kind == "type_into_session":
+            return f"type into {target}'s composer without sending:{preview}"
+        if kind == "submit_session_composer":
+            return f"press Enter on {target}'s composer, sending its staged text"
         return kind
 
     # ----------------------------------------------------------- action ledger
@@ -1006,9 +1049,18 @@ class AssistantService:
     # ------------------------------------------------------------ tool running
 
     async def _run_tool(
-        self, dialog_id: str, turn_id: str, kind: str, arguments: dict[str, Any]
+        self,
+        dialog_id: str,
+        turn_id: str,
+        kind: str,
+        arguments: dict[str, Any],
+        client_id: str = "",
     ) -> dict[str, Any]:
         """Execute one tool call under the trust policy; returns the tool result."""
+        if client_id and kind in CLIENT_EXECUTED_KINDS:
+            # Persisted with the action so a later confirm still targets the
+            # device the turn came from, not every connected workspace.
+            arguments["client_id"] = client_id[:64]
         action_class = self._classify(kind, arguments)
         if action_class == ACTION_CLASS_READ:
             result = await self._execute_read(kind, arguments)
@@ -1128,7 +1180,10 @@ class AssistantService:
         self, kind: str, arguments: dict[str, Any]
     ) -> dict[str, Any] | None:
         """Resolve names now so ambiguity is answered before anything pends."""
-        if kind in {"send_to_session", "interrupt_session", "end_session"}:
+        if kind in {
+            "send_to_session", "interrupt_session", "end_session",
+            "type_into_session", "submit_session_composer",
+        }:
             session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 return {"error": "session did not resolve", "candidates": candidates}
@@ -1152,7 +1207,9 @@ class AssistantService:
             if action != "replace_text" and not str(arguments.get("text") or "").strip():
                 return {"error": "text must not be empty"}
         text = arguments.get("text") or arguments.get("seed_text")
-        if kind in {"send_to_session", "append_project_note"} and not str(text or "").strip():
+        if kind in {
+            "send_to_session", "append_project_note", "type_into_session",
+        } and not str(text or "").strip():
             return {"error": "text must not be empty"}
         return None
 
@@ -1162,7 +1219,7 @@ class AssistantService:
         except ValueError:
             arguments = {}
         try:
-            result = await self._execute_mutation(str(row["kind"]), arguments)
+            result = await self._execute_mutation(str(row["kind"]), arguments, row)
         except (AssistantError, OpenRouterError) as exc:
             await self._finish_action(str(row["id"]), status="failed", result=str(exc)[:500])
             return {"error": str(exc)[:500]}
@@ -1176,7 +1233,29 @@ class AssistantService:
         )
         return result
 
-    async def _execute_mutation(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _execute_mutation(
+        self, kind: str, arguments: dict[str, Any], row: dict[str, Any]
+    ) -> dict[str, Any]:
+        if kind in {"type_into_session", "submit_session_composer"}:
+            session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
+            if session is None:
+                raise AssistantError("the target session is no longer live")
+            # The mounted pane owns PTY writes (bracketed paste, replay,
+            # ownership claims), so the operator's device performs this and
+            # reports back — the daemon never types into a PTY directly.
+            # `target_session_id`, not `session_id`: the latter is a first-class
+            # MuxEvent field the bus lifts out of the payload.
+            outcome = await self._dispatch_client(
+                row, {"target_session_id": session.record.id}
+            )
+            if kind == "type_into_session":
+                return {
+                    "typed": True,
+                    "session": session.record.name,
+                    "note": "staged in the composer, not sent",
+                    "detail": outcome.get("detail"),
+                }
+            return {"submitted": True, "session": session.record.name}
         if kind == "send_to_session":
             session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
@@ -1198,13 +1277,29 @@ class AssistantService:
             project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 raise AssistantError("the target project no longer exists")
+            backend = str(arguments.get("backend") or "").strip() or (
+                project.default_backend or ""
+            )
+            seed = str(arguments.get("seed_text") or "").strip()
+            if str(arguments.get("client_id") or ""):
+                # The operator's device spawns through its own launch path, so
+                # the new session opens as a tab in the currently active pane
+                # instead of the layout reconciler's default new pane. No
+                # daemon fallback on failure: a lost acknowledgement plus a
+                # daemon retry would spawn the session twice. The backend is
+                # fully resolved here — the frontend may not name harnesses.
+                outcome = await self._dispatch_client(
+                    row,
+                    {
+                        "project_id": project.id,
+                        "backend": backend or self.config.default_backend,
+                        "seed_text": seed or None,
+                    },
+                )
+                return {"spawned": True, "detail": outcome.get("detail") or "spawned"}
             body: dict[str, Any] = {"project_id": project.id}
-            backend = str(arguments.get("backend") or "").strip()
             if backend:
                 body["backend"] = backend
-            elif project.default_backend:
-                body["backend"] = project.default_backend
-            seed = str(arguments.get("seed_text") or "").strip()
             if seed:
                 body["seed_text"] = seed
             session = await self.spawn_op(body)
@@ -1410,9 +1505,12 @@ class AssistantService:
         command = str(arguments.get("command") or "").strip()
         if not command:
             return {"error": "command must not be empty"}
+        recorded: dict[str, Any] = {"command": command}
+        if arguments.get("client_id"):
+            recorded["client_id"] = str(arguments["client_id"])
         row = await self._record_action(
             dialog_id, turn_id, "run_ui_command", ACTION_CLASS_NAVIGATION,
-            {"command": command}, "dispatched",
+            recorded, "dispatched",
             expires_at=time.time() + UI_ACK_TIMEOUT_SECONDS,
         )
         loop = asyncio.get_running_loop()
@@ -1435,6 +1533,37 @@ class AssistantService:
             str(row["id"]), status=status,
             result=json.dumps(outcome, ensure_ascii=False)[:1_000],
         )
+        return outcome
+
+    async def _dispatch_client(
+        self, row: dict[str, Any], extra: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Hand an already-claimed mutation to the originating device.
+
+        The action row keeps its persisted status ('executing'); only a
+        synthetic `dispatched` event carries the work to the client, stamped
+        with the row's client_id so exactly one device acts. Failure and
+        timeout raise, so `_execute_mutation_row` records the row as failed.
+        """
+        action_id = str(row["id"])
+        payload = {**action_snapshot(row), "status": "dispatched", **extra}
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._ui_acks[action_id] = future
+        try:
+            await self.events.emit("assistant_action", source="assistant", **payload)
+            outcome = await asyncio.wait_for(future, timeout=UI_ACK_TIMEOUT_SECONDS)
+        except TimeoutError:
+            raise AssistantError(
+                "no connected device acknowledged; the operator's workspace with the "
+                "session's terminal must be open"
+            ) from None
+        finally:
+            self._ui_acks.pop(action_id, None)
+        if not outcome.get("ok"):
+            raise AssistantError(
+                str(outcome.get("detail") or "the device could not run the action")[:400]
+            )
         return outcome
 
     def report_ui_result(self, action_id: str, outcome: dict[str, Any]) -> bool:
@@ -1568,6 +1697,7 @@ class AssistantService:
             if item["role"] in {"user", "assistant"} and str(item["display"]).strip():
                 messages.append({"role": item["role"], "content": str(item["display"])})
         messages.append({"role": "user", "content": text})
+        client_id = str(client_context.get("client_id") or "")[:64]
         tools = self._tool_definitions()
         totals = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "calls": 0}
         spoken_parts: list[str] = []
@@ -1617,10 +1747,13 @@ class AssistantService:
                     "read_project_note", "list_project_notes", "list_queue",
                     "append_project_note", "edit_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
+                    "type_into_session", "submit_session_composer",
                 }
                 if name in known:
                     try:
-                        result = await self._run_tool(dialog_id, turn_id, name, arguments)
+                        result = await self._run_tool(
+                            dialog_id, turn_id, name, arguments, client_id
+                        )
                     except AssistantError as exc:
                         result = {"error": str(exc)[:500]}
                 else:
