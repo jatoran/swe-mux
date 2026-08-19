@@ -103,8 +103,8 @@ a dead proxy minutes later. Nothing in it can refuse a redeploy.
 `log_tail` is served only when it belongs to the run being reported: the lock is
 created at run start, so while one is in flight a `redeploy.log` older than the
 lock is a previous run's and is withheld. Only a redeploy this daemon spawned
-writes that file at all — one launched from a terminal prints to its own stdout
-— so without the check the progress chip would render an earlier redeploy's
+writes that file at all - one launched from a terminal prints to its own stdout
+- so without the check the progress chip would render an earlier redeploy's
 build output for the whole of this one, which reads as real progress and is not.
 The same rule applies to the tail embedded in `redeploy-result.json`.
 `phase` is `"building"` whenever a lock is live and `"idle"` otherwise -
@@ -116,7 +116,7 @@ what lets a reconnecting client report a rollback: the app comes back looking
 normal, so otherwise nothing would say the change never shipped.
 
 POST `/api/daemon/redeploy/announce` (loopback-only) broadcasts
-`daemon_redeploy_started` for a redeploy this daemon did not spawn — one run
+`daemon_redeploy_started` for a redeploy this daemon did not spawn - one run
 straight from a terminal, which was previously invisible to every client until
 the daemon vanished underneath them. It is refused with
 `409 no_redeploy_in_flight` unless `redeploy.lock` names a live process: it

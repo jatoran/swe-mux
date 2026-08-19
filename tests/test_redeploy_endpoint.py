@@ -532,7 +532,7 @@ def test_a_terminal_launched_redeploy_claims_the_same_lock(tmp_path: Path) -> No
     """It used to take no lock at all.
 
     Two concurrent CLI redeploys could race the same staging tree and the swap,
-    and `GET /api/daemon/redeploy` reported nothing in flight — so the UI had no
+    and `GET /api/daemon/redeploy` reported nothing in flight - so the UI had no
     way to know it should stop trusting the daemon.
     """
     module = _redeploy_module()

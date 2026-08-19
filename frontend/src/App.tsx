@@ -422,8 +422,8 @@ export function App() {
   // Three-valued, not a boolean: see redeployProgress.ts. The multi-minute build
   // stage keeps the whole app usable and only shows the corner chip; the overlay
   // and the error suppression belong to the daemon-down stage alone. Restored
-  // from sessionStorage so a reload — or a tab opened after the redeploy started
-  // — comes up knowing, instead of rendering a broken app.
+  // from sessionStorage so a reload - or a tab opened after the redeploy started
+  // - comes up knowing, instead of rendering a broken app.
   const [redeploy, setRedeploy] = useState<RedeployState>(() => loadRedeploy(sessionStorageOrNull(), Date.now()))
   const redeployDown = redeploy.phase === 'down'
   // Every request is expected to fail while the daemon is away, so the toast
@@ -5150,8 +5150,8 @@ export function App() {
   useEffect(() => { if (redeployDown) setError('') }, [redeployDown])
   const redeployRef = useRef(redeploy)
   redeployRef.current = redeploy
-  // One wait loop for every entry path — this tab started it, the daemon
-  // broadcast it, or the boot-time sentinel found it — so a client that did not
+  // One wait loop for every entry path - this tab started it, the daemon
+  // broadcast it, or the boot-time sentinel found it - so a client that did not
   // click the button behaves exactly like the one that did. Keyed on whether a
   // redeploy is in flight, never on the state itself: reading through a ref keeps
   // each probe's own update from tearing down and restarting the timer.
@@ -5230,7 +5230,7 @@ export function App() {
   }, [])
   // A dismissable level that refuses to be dismissed: back must not walk out of the app
   // while the daemon is mid-restart, and there is nothing behind these overlays to reach.
-  // The daemon-down stage only — during a redeploy's build stage there is a working app
+  // The daemon-down stage only - during a redeploy's build stage there is a working app
   // behind this, and swallowing back there would be wrong as well as useless.
   useEffect(() => {
     if (!daemonReloading && !redeployDown) return

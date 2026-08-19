@@ -3,12 +3,12 @@
  *  A redeploy has two stages that feel nothing alike, and treating them as one
  *  is what made it read as an outage from the moment you clicked the button:
  *
- *  - **building** — several minutes of PyInstaller work that happens in
+ *  - **building** - several minutes of PyInstaller work that happens in
  *    `dist/.staging` while the current daemon keeps serving. Everything works:
  *    terminals, the fleet, settings. Blocking here (which the first version of
  *    this did, on the tab that started it) locks you out of a working app, and
  *    if the build then fails you were locked out for nothing.
- *  - **down** — the tail: the daemon is stopped, the bundle is swapped, and a
+ *  - **down** - the tail: the daemon is stopped, the bundle is swapped, and a
  *    cold PyInstaller start can take minutes before the successor answers. Here
  *    nothing works, and keystrokes typed into a terminal are *silently lost*,
  *    because the PTY sockets are proxied by the daemon rather than held open to
@@ -19,7 +19,7 @@
  *  two independent signals: the daemon broadcasts `daemon_redeploy_stopping`
  *  from its own shutdown handler (it is still alive when the script asks it to
  *  stop, so this is authoritative), and failing that, repeated health probes.
- *  A single failed probe is deliberately not enough — a phone waking or a blip
+ *  A single failed probe is deliberately not enough - a phone waking or a blip
  *  would otherwise slam a full-screen overlay over a working app.
  *
  *  None of this needs the daemon in order to *render*. What needs the daemon is
@@ -97,7 +97,7 @@ export const REDEPLOY_DOWN_PROBES = 2
 export const REDEPLOY_POLL_MS = 2000
 /** Deadline on a single probe. A `fetch` issued while a phone is waking can hang
  *  indefinitely rather than fail (see liveness.ts), and an outage is exactly when
- *  that happens — without a deadline the loop would stall silently instead of
+ *  that happens - without a deadline the loop would stall silently instead of
  *  concluding the daemon is away. */
 export const REDEPLOY_PROBE_TIMEOUT_MS = 5000
 
@@ -154,7 +154,7 @@ export type ProbeVerdict =
  * The ordering matters and is the part worth testing: `sawDown` is what
  * separates "the successor is up, reload into it" from "the build failed and
  * this is the same daemon that has been serving all along". Reloading in the
- * second case would be wrong twice over — there is no new UI to load, and the
+ * second case would be wrong twice over - there is no new UI to load, and the
  * failure message would be thrown away by the navigation.
  */
 export function applyProbe(state: RedeployState, probe: ProbeResult, now: number): ProbeVerdict {
@@ -185,8 +185,8 @@ export function elapsedLabel(startedAt: number, now: number): string {
 }
 
 /** What the chip says about where the redeploy is. There is no real progress to
- *  report during the outage — the only process that knows is the one that took
- *  the daemon away — so this says what stage it is in and lets the elapsed timer
+ *  report during the outage - the only process that knows is the one that took
+ *  the daemon away - so this says what stage it is in and lets the elapsed timer
  *  carry the rest, rather than inventing a percentage. */
 export function phaseLabel(phase: RedeployPhase): string {
   if (phase === 'building') return 'Rebuilding app'

@@ -4,7 +4,7 @@ import { elapsedLabel, phaseDetail, phaseLabel, type RedeployState } from './red
 /** The persistent redeploy indicator: a spinner pinned to the top-left corner.
  *
  *  It exists because a redeploy used to be invisible to every client except the
- *  tab that started it — a phone, a second window, or the desktop when the
+ *  tab that started it - a phone, a second window, or the desktop when the
  *  redeploy was triggered from the phone simply watched their requests start
  *  failing. It stays up for the whole redeploy, through the daemon-down window
  *  and until the page reloads into the successor.

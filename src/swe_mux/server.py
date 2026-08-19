@@ -2374,7 +2374,7 @@ async def _announce_redeploy_stopping(request: web.Request) -> None:
     """Broadcast the start of a redeploy's daemon-down window, then let it drain.
 
     Only for a shutdown that is part of a live redeploy: an ordinary desktop quit
-    is not an outage anyone reconnects from. The sleep is the point — `emit` only
+    is not an outage anyone reconnects from. The sleep is the point - `emit` only
     puts the event on each subscriber's queue, and the shutdown that follows this
     call closes those sockets, so without a turn of the loop to write them the
     frame the client most needs would be the one it never receives.
@@ -2481,8 +2481,8 @@ def redeploy_source_root() -> Path | None:
 def _redeploy_lock_pid(config: Config) -> int | None:
     """PID of a live in-flight redeploy, or None (missing/stale lock).
 
-    The lock is claimed by whoever starts the redeploy — this daemon for a
-    UI/API trigger, the script itself when run straight from a terminal — and
+    The lock is claimed by whoever starts the redeploy - this daemon for a
+    UI/API trigger, the script itself when run straight from a terminal - and
     always names the *script* process, so pid liveness is the authority and
     nothing has to clean it up after a crash.
     """
@@ -2566,7 +2566,7 @@ async def _announce_redeploy_started(request: web.Request, *, pid: int) -> None:
     """Tell every connected client a redeploy just began.
 
     The build stage runs for minutes with this daemon still serving, so clients
-    learn about the redeploy long before it can affect them — which is the whole
+    learn about the redeploy long before it can affect them - which is the whole
     point: a UI that knows can show a progress chip and stay usable, instead of
     discovering the redeploy as a wall of failed requests when the daemon finally
     goes down.
