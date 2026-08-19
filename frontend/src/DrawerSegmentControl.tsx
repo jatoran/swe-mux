@@ -27,7 +27,7 @@ export function DrawerSegmentControl({ tab, active, context, onSelect }: Props) 
   // One available segment is not a choice, so it is not drawn as one. This is the Agent tab
   // on a shell session (Instructions alone) rather than a hypothetical.
   if (segments.length < 2) return null
-  return <div class="drawer-segmented" role="tablist" aria-label={`${tab} view`}>
+  return <div class="segmented-tabs drawer-segmented" role="tablist" aria-label={`${tab} view`}>
     {segments.map((segment, index) => <button
       key={segment.id}
       role="tab"

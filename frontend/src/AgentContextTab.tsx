@@ -21,6 +21,42 @@ import type { Project, Session } from './types'
 
 const REQUEST_TIMEOUT_MS = 12_000
 
+/**
+ * Which source each Project was last reading, device-local.
+ *
+ * The tab used to open on whichever file happened to sort first - in practice the focused
+ * harness's own CLAUDE.md or AGENTS.md - which made every visit look like the tab had
+ * decided something for you, and made the viewer's contents ambiguous at a glance: a body
+ * with no obvious owner directly under a list of files reads as part of the list.
+ * Nothing is selected until you pick something, and what you picked is what you get back.
+ *
+ * Per Project because the choice is about a repository's files, and device-local (like the
+ * drawer's own arrangement) because it is a reading position rather than a setting.
+ */
+const SOURCE_SELECTION_KEY = 'mux.agentContext.source.v1'
+
+function readSourceSelections(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SOURCE_SELECTION_KEY) || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function rememberSourceSelection(projectId: string, sourceId: string) {
+  if (!projectId) return
+  const next = readSourceSelections()
+  if (sourceId) next[projectId] = sourceId
+  else delete next[projectId]
+  try { localStorage.setItem(SOURCE_SELECTION_KEY, JSON.stringify(next)) }
+  catch { /* a reading position is best effort */ }
+}
+
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`
   return `${Math.max(1, Math.round(value / 1024))} KiB`
@@ -82,7 +118,7 @@ function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen, onRev
 
 export function AgentContextTab({ project, session }: { project?: Project; session?: Session | null }) {
   const [inventory, setInventory] = useState<AgentContextInventory | null>(null)
-  const [selectedId, setSelectedId] = useState('')
+  const [selectedId, setSelectedIdState] = useState('')
   const [selected, setSelected] = useState<AgentContextRead | null>(null)
   const [sourceNonce, setSourceNonce] = useState(0)
   const [preview, setPreview] = useState<AgentContextSyncPreview | null>(null)
@@ -145,9 +181,13 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         ...next.global_instructions.items,
         ...next.providers.flatMap(provider => provider.items),
       ].filter(item => item.status === 'available')
-      setSelectedId(current => readable.some(item => item.id === current)
-        ? current
-        : readable[0]?.id || '')
+      // Restore, never choose. A stored id that no longer names a readable file is
+      // dropped; the empty state is a legitimate resting place, and falling back to
+      // `readable[0]` is what made the tab look like it had opened a file on your behalf.
+      setSelectedIdState(current => {
+        const remembered = current || readSourceSelections()[projectId] || ''
+        return readable.some(item => item.id === remembered) ? remembered : ''
+      })
       setSourceNonce(value => value + 1)
       setError('')
     } catch (cause) {
@@ -160,7 +200,10 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   useEffect(() => {
     generation.current += 1
     setInventory(null)
-    setSelectedId('')
+    // Seeded from storage rather than cleared: `refresh` below validates it against what
+    // is actually readable, so an id for a file that has since gone still resolves to the
+    // empty state without a flash of the wrong body.
+    setSelectedIdState(readSourceSelections()[projectId] || '')
     setSelected(null)
     setPreview(null)
     setRestoreConfirm(null)
@@ -206,6 +249,11 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       .catch(cause => { if (alive) setError(errorMessage(cause)) })
     return () => { alive = false }
   }, [projectId, selectedId, sourceNonce])
+
+  const setSelectedId = useCallback((value: string) => {
+    setSelectedIdState(value)
+    rememberSourceSelection(projectId, value)
+  }, [projectId])
 
   const currentRevision = useMemo(() => {
     const values = new Map<string, string>()
@@ -319,7 +367,6 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   return <div class="agent-context">
     <header class="agent-context-header">
       <div>
-        <strong>Agent Context</strong>
         <small title={focusCwd || project.root}>
           {focusedAgent
             ? `${focusedAgent.backend} focused · ${focusCwd || project.root}`
@@ -418,13 +465,22 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       </div>
     </details>
 
-    {selectedId && <section class="agent-context-viewer">
+    {/* Always drawn, even with nothing selected. The viewer used to appear only once a
+        file was open, so the tab's bottom edge moved as you clicked around and, worse, an
+        open file's body butted straight against the memory list above it with no rule and
+        no label between them - two different things sharing one continuous column. It is
+        a labelled region now, with its own heading rule, whether or not it holds anything. */}
+    <section class={`agent-context-viewer ${selectedId ? '' : 'empty'}`}>
       <header>
-        <strong>{selected?.source.label || 'Loading…'}</strong>
-        {selected && <small>{selected.source.provider} · read-only · {formatBytes(selected.source.size)}</small>}
+        <span class="agent-context-viewer-kicker">Preview</span>
+        <strong>{selectedId ? (selected?.source.label || 'Loading…') : 'No file selected'}</strong>
+        {selectedId && selected && <small>{selected.source.provider} · read-only · {formatBytes(selected.source.size)}</small>}
+        {selectedId && <button class="agent-context-viewer-clear" title="Close this file" onClick={() => setSelectedId('')}>×</button>}
       </header>
-      {selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>}
-    </section>}
+      {!selectedId
+        ? <p>Pick an instruction or memory file above to read it here. Nothing is opened for you, and what you pick is remembered for this Project.</p>
+        : selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>}
+    </section>
 
     {sourceMenu && <div
       class="context-menu agent-context-source-menu"
