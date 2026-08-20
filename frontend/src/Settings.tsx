@@ -45,7 +45,8 @@ import type { PromptTemplate } from './promptTemplates'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
 import { formatCommandLine, launchPreview, parseCommandLine } from './commandLine'
 import { ModelPicker } from './ModelPicker'
-import { includeSelectedModel } from './modelFilter'
+import { includeSelectedModel, type ModelOption } from './modelFilter'
+import { ModelRoutingSummary } from './ModelRoutingSummary'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
@@ -104,6 +105,9 @@ type Config = {
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
+  // Config-file only. The Project context card has no Settings control of its own,
+  // so this is read to report the model it resolves to, never written here.
+  project_card_model:string
   scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
   scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
@@ -146,7 +150,10 @@ type VoiceStatusInfo = {
 }
 
 type AutomationStatus={enabled:boolean;diagnostic?:string;rules:Array<{id:string;name:string;enabled:boolean;shadow:boolean;revision:string}>;queue:{size:number;capacity:number;dropped:number};legacy:{active:boolean;diagnostic?:string;migration:string};repository_rules:Array<{project_scope_id:string;path:string;valid:boolean;diagnostic?:string;execution:string}>}
-type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean};models:{models:Array<{id:string;name:string}>;fetched_at?:number;error?:string;stale:boolean};origin:string;cheap_model:string;standard_model:string}
+// `models.models` is the cached OpenRouter catalog verbatim, so it already carries
+// per-token pricing and the context window alongside the id and name. Typing it as
+// `ModelOption` is what lets the pickers show a model's cost without a second request.
+type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean};models:{models:ModelOption[];fetched_at?:number;error?:string;stale:boolean};origin:string;cheap_model:string;standard_model:string}
 
 type UsageStatus = {
   enabled:boolean; refreshing:boolean; package:string; install_command:string
@@ -491,6 +498,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   /** Every route to a different tab, so none of them leaves the drawer standing open
    *  over the tab it just switched to: the rail, a search result, a deep link. */
   const selectTab=useCallback((tab:SettingsTab)=>{setActiveTab(tab);setNavOpen(false)},[setNavOpen])
+  /**
+   * Switch tab and arrive at one named control, for a link *inside* the panel.
+   *
+   * `settingTargets.ts` is the registry for links from outside Settings, which must
+   * survive a rename without a compiler to catch it; a link between two of this
+   * component's own sections needs no such indirection. Both end at the same
+   * `revealSetting`, so arriving looks identical whichever way you came.
+   */
+  const [pendingReveal,setPendingReveal]=useState<{setting:string;token:number}|null>(null)
+  const goToSetting=useCallback((tab:SettingsTab,setting:string)=>{
+    selectTab(tab)
+    // A fresh token per click, so asking twice for the control you are already on
+    // flashes it again rather than doing nothing.
+    setPendingReveal(current=>({setting,token:(current?.token||0)+1}))
+  },[selectTab])
   // Opening the drawer moves focus onto the tab you are on, so the list is navigable by
   // keyboard from where it starts rather than from wherever the trigger left the cursor.
   useEffect(()=>{
@@ -693,6 +715,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(!root)return
     return revealSetting(root,initialSetting)
   },[initialSetting,revealToken,activeTab,draft!==null])
+
+  // The same arrival for an in-panel link (`goToSetting`). Separate from the deep-link
+  // effect rather than folded into it so an incoming `initialSetting` and a click inside
+  // the panel cannot cancel each other's reveal by sharing one piece of state.
+  useEffect(() => {
+    if(!pendingReveal)return
+    const root=panel.current
+    if(!root)return
+    return revealSetting(root,pendingReveal.setting)
+  },[pendingReveal,activeTab,draft!==null])
 
   useEffect(() => {
     if (!capturingCommand) return
@@ -1372,11 +1404,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Models</h3>
-            <p>The routed models every model-backed feature draws from. A feature that wants its own model (attention narration, spoken summaries) overrides one of these rather than replacing them.</p>
-            <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
-            <label for="cheap-model-picker">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/></label>
-            <label for="standard-model-picker">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
-            <label>Scan timeline model<input value={draft.scan_timeline_model} spellcheck={false} placeholder="deepseek/deepseek-v4-flash" onInput={event=>change('scan_timeline_model',event.currentTarget.value)} /><small>Changeable default: an exact OpenRouter model id (defaults to DeepSeek V4 Flash latest alias). Needs the key above.</small></label>
+            <p>The two routed models every model-backed feature draws from. A feature that only wants a cheaper or better model overrides one of these rather than replacing them; a feature whose model has to satisfy a capability the routed pair cannot guarantee pins its own instead. Either way the control lives with the feature, and every choice is listed here.</p>
+            <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span>{!!provider?.models.fetched_at&&<span>prices as of {new Date(provider.models.fetched_at*1000).toLocaleDateString()}</span>}</div>
+            <label for="cheap-model-picker" data-setting="openrouter_cheap_model">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/><small>High-volume, low-stakes work: observers, summaries, titles. Every override falls back to this one.</small></label>
+            <label for="standard-model-picker" data-setting="openrouter_standard_model">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
+            <h4>Where each model is used</h4>
+            <p>Read-only. Each row resolves the model a feature will actually call with the edits currently in this form, and opens the control that decides it.</p>
+            <ModelRoutingSummary draft={draft} catalog={provider?.models.models||[]} onOpen={goToSetting}/>
           </section>
         </Fragment>}
 
@@ -1457,8 +1491,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Scan timeline</h3>
-          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Its model is chosen under <strong>Accounts</strong>. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
+          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
           <label class="settings-toggle" data-setting="scan_timeline_enabled"><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={event=>change('scan_timeline_enabled',event.currentTarget.checked)}/>Allow scan timeline<small>The install-wide gate. Off, nothing is scanned anywhere, whatever any Project permitted.</small></label>
+          <label for="scan-timeline-model-picker" data-setting="scan_timeline_model">Scan timeline model<ModelPicker id="scan-timeline-model-picker" value={draft.scan_timeline_model} options={modelOptions(draft.scan_timeline_model)} emptyLabel="Select exact model…" required onChange={value=>change('scan_timeline_model',value)}/><small>Pinned rather than routed: scanning runs continuously over long transcript slices, so it needs a model that is both cheap at volume and reliable at structured output. Defaults to the DeepSeek V4 Flash latest alias. Needs the OpenRouter key under <strong>Accounts</strong>.</small></label>
           <label>Daily dollar budget<input type="number" min="0" max="1000" step="0.25" value={draft.scan_timeline_daily_budget_usd} onInput={event=>change('scan_timeline_daily_budget_usd',Number(event.currentTarget.value))}/><small>Across every Project and session, reset daily (UTC).</small></label>
           <label>Daily token budget<input type="number" min="512" max="100000000" value={draft.scan_timeline_daily_token_budget} onInput={event=>change('scan_timeline_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Tokens per conversation<input type="number" min="512" max="20000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
@@ -1473,7 +1508,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Incident window seconds<input type="number" min="60" max="86400" value={draft.attention_incident_window_seconds} onInput={event=>change('attention_incident_window_seconds',Number(event.currentTarget.value))}/></label>
           <label class="check"><span>Report shell breakpoints (OSC 133)</span><input type="checkbox" checked={draft.attention_breakpoint_markers} onChange={event=>change('attention_breakpoint_markers',event.currentTarget.checked)}/></label>
           <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
-          <label for="narration-model-picker">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/></label>
+          <label for="narration-model-picker" data-setting="attention_narration_model">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <label>Narration daily dollars<input type="number" step="0.01" min="0" max="100" value={draft.attention_narration_daily_budget_usd} onInput={event=>change('attention_narration_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           </section>
 
@@ -1508,7 +1543,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
           <h3>Spoken summary</h3>
           <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts.</p>
-          <label>Summary model<select value={draft.tts_summary_model} onChange={e=>change('tts_summary_model',e.currentTarget.value)}><option value="">Use automation cheap model</option>{modelOptions(draft.tts_summary_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
+          <label for="summary-model-picker" data-setting="tts_summary_model">Summary model<ModelPicker id="summary-model-picker" value={draft.tts_summary_model} options={modelOptions(draft.tts_summary_model)} emptyLabel="Use the cheap model…" onChange={value=>change('tts_summary_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <label>Daily summary budget (USD)<input type="number" step="0.01" min="0" max="100" value={draft.tts_daily_budget_usd} onInput={e=>change('tts_daily_budget_usd',Number(e.currentTarget.value))} /></label>
           <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /></label>
@@ -1525,7 +1560,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <h3>Mux assistant</h3>
           <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
           <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
-          <label>Assistant model<select value={draft.assistant_model} onChange={e=>change('assistant_model',e.currentTarget.value)}>{!modelOptions(draft.assistant_model).some(model=>model.id===draft.assistant_model)&&<option value={draft.assistant_model}>{draft.assistant_model}</option>}{modelOptions(draft.assistant_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select><small>Needs reliable tool calling. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
+          <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
           <label>Daily assistant budget (USD)<input type="number" step="0.05" min="0" max="1000" value={draft.assistant_daily_budget_usd} onInput={e=>change('assistant_daily_budget_usd',Number(e.currentTarget.value))} /></label>
           <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>

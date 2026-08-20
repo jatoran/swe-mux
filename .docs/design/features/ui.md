@@ -585,9 +585,12 @@ Its rules, and what each one is defending:
   Widening past the breakpoint turns it back into the docked column and closes the level, so a
   column that is permanently on screen never leaves a dismiss target standing.
 - Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
-  - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
-    provider credentials. Everything model-backed depends on that one key, so filing it inside
-    Automation made it unfindable from Voice, the scan timeline, or attention narration.
+  - The **OpenRouter key and the two routed model defaults it unlocks** are on Accounts, with the
+    other provider credentials. Everything model-backed depends on that one key, so filing it
+    inside Automation made it unfindable from Voice, the scan timeline, or attention narration.
+    A model belonging to *one* feature is not a routed default and does not go here: it lives with
+    that feature, because a feature is configured in one pass and a shared model form would split
+    every one of those passes across two tabs. Accounts indexes them all instead.
   - **Auto-delivery and agent messaging** are the Prompt queue tab. They bound how a queued
     message reaches an agent whichever harness it runs, so they are delivery policy rather than
     harness configuration.
@@ -676,8 +679,11 @@ Its rules, and what each one is defending:
   version, flagged when it is newer than the version mux was tested against.
 - Settings -> Voice defaults microphone input off; enabling it shows a note that the first Talk
   downloads the local Whisper model, and the language/model inputs are framed as a first-use choice.
-  Settings -> Accounts lists what one OpenRouter key unlocks, and the scan-timeline model is an
-  editable, changeable default rather than a fixed read-only value. The first-run panel discloses
+  Settings -> Accounts lists what one OpenRouter key unlocks.
+  The scan-timeline model is an editable, changeable default rather than a fixed read-only value,
+  and it sits with the caps it is priced against under Automation -> Scan timeline rather than a
+  tab away, so "which model is this budget being spent on" is answerable without navigating.
+  The first-run panel discloses
   what mux injects per session and points at the next onboarding steps (project, CLI login, session,
   phone).
 - The panel header carries a search box that reaches every setting in every tab, including
@@ -698,10 +704,34 @@ Its rules, and what each one is defending:
   The section rail is excluded from the index and from the jump's candidate scan alike: its
   buttons repeat every heading, so indexing them would duplicate results and counting them as
   candidates would shift the occurrence a recorded result points at.
-- The Accounts tab's cheap and standard model controls accept typed queries and filter the cached
-  OpenRouter catalog live by model name or exact ID.
-  Their listboxes scroll inside a bounded desktop or mobile height instead of expanding to the
-  height of the catalog.
+- Every OpenRouter model setting uses the same filtering combobox, wherever it lives.
+  It accepts typed queries and filters the cached catalog live by model name or exact ID, and its
+  listbox scrolls inside a bounded desktop or mobile height instead of expanding to the height of
+  the catalog.
+  A native `select` cannot search hundreds of entries and cannot carry a second line, and a text
+  input accepts a typo the daemon then rejects as an exact-ID validation error, so neither is used
+  for a model any more.
+- A picker row states the model name, then its exact ID and its price on one meta line.
+  The ID stays visible despite reading much like the name, because it is what the collapsed
+  control shows, what the config stores, and what the filter ranks on: a search result whose
+  match is invisible cannot be explained.
+  Price is per **million** tokens, input then output, converted from the per-token figures
+  OpenRouter quotes, because at two decimals every model in the catalog is `$0.00`.
+  Four values are not prices and never render as one: absent pricing renders nothing rather than
+  `$0.00` (free and unknown are opposite answers), a wholly zero pair renders `free`, OpenRouter's
+  negative marker renders `variable`, and a figure below the last printable digit renders
+  `<$0.001`.
+  The row cannot say which figure is input and which is output, so the option's title does.
+- Wide, the ID yields and the price holds an auto-width right-aligned column, so figures are
+  read down the list against each other.
+  Narrow, the two stack: a setting's control column is about 216px on a phone against a price
+  cell wanting 155-192px, and side by side the ID is erased with no hover to recover it from the
+  title.
+- Settings → Accounts → Models lists **where each model is used** as a read-only inventory:
+  every feature, the model it resolves to under the edits currently in the form, its price, and
+  a control that opens the setting deciding it.
+  It is an index, not a second editor - two controls writing one config key is how a panel starts
+  disagreeing with itself.
 - The footer carries only draft state: status, Cancel, Save. Whole-config actions — reveal the
   config directory, export a sanitized copy, restore defaults — live in a General-tab block,
   because a footer repeats under every tab and so implied a per-tab scope none of them have
