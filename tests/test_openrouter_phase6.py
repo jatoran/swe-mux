@@ -599,3 +599,201 @@ async def test_failed_replace_preserves_working_key_and_never_echoes_secret(
     assert store.get("openrouter_api_key") == "working-key"
     assert "working-key" not in json.dumps(payload)
     assert "bad-replacement" not in json.dumps(payload)
+
+
+# --------------------------------------------------------------------------- #
+# Streamed tool completions
+# --------------------------------------------------------------------------- #
+
+
+def sse(*chunks: dict[str, Any]) -> bytes:
+    lines = [f"data: {json.dumps(chunk)}\n\n" for chunk in chunks]
+    return ("".join(lines) + "data: [DONE]\n\n").encode()
+
+
+def content_chunk(text: str) -> dict[str, Any]:
+    return {"id": "gen-1", "model": "vendor/tool", "choices": [{"delta": {"content": text}}]}
+
+
+async def collect(client: OpenRouterClient, deltas: list[str]) -> Any:
+    async def on_content(delta: str) -> None:
+        deltas.append(delta)
+
+    return await client.complete_tools(
+        model="vendor/tool",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        max_tokens=256,
+        on_content=on_content,
+    )
+
+
+async def test_a_streamed_completion_reassembles_the_ordinary_envelope() -> None:
+    # Usage rides only the final chunk (`stream_options.include_usage`), and it
+    # is what the spend ledger bills against: dropping it would silently record
+    # every streamed assistant turn as free.
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                sse(
+                    content_chunk("Three sessions "),
+                    content_chunk("are working."),
+                    {
+                        "id": "gen-1",
+                        "model": "vendor/tool-resolved",
+                        "provider": "acme",
+                        "choices": [{"delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 40, "completion_tokens": 9, "cost": 0.004},
+                    },
+                ),
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    deltas: list[str] = []
+    turn = await collect(client, deltas)
+
+    assert deltas == ["Three sessions ", "are working."]
+    assert turn.content == "Three sessions are working."
+    assert turn.resolved_model == "vendor/tool-resolved"
+    assert turn.finish_reason == "stop"
+    assert (turn.input_tokens, turn.output_tokens, turn.cost_usd) == (40, 9, 0.004)
+    assert session.requests[0][2]["json"]["stream"] is True
+    assert session.requests[0][2]["json"]["stream_options"] == {"include_usage": True}
+
+
+async def test_streamed_tool_calls_are_merged_by_index_not_appended() -> None:
+    # A tool call arrives as fragments: the name in one chunk and its JSON
+    # arguments spread over many. Appending them as separate calls would hand
+    # the assistant a call with no name and another with unparsable arguments.
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                sse(
+                    {
+                        "choices": [{"delta": {"tool_calls": [
+                            {"index": 0, "id": "call-1", "type": "function",
+                             "function": {"name": "append_project_note", "arguments": ""}}
+                        ]}}]
+                    },
+                    {
+                        "choices": [{"delta": {"tool_calls": [
+                            {"index": 0, "function": {"arguments": '{"project": "pix'}}
+                        ]}}]
+                    },
+                    {
+                        "choices": [{"delta": {"tool_calls": [
+                            {"index": 0, "function": {"arguments": 'el lab"}'}}
+                        ]}}]
+                    },
+                    {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+                ),
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    turn = await collect(client, [])
+
+    assert len(turn.tool_calls) == 1
+    call = turn.tool_calls[0]
+    assert call["id"] == "call-1"
+    assert call["function"]["name"] == "append_project_note"
+    assert json.loads(call["function"]["arguments"]) == {"project": "pixel lab"}
+    assert turn.message["tool_calls"] == turn.tool_calls
+
+
+async def test_a_provider_that_will_not_stream_answers_unstreamed() -> None:
+    # Streaming is a latency optimization, never a capability the reply depends
+    # on, so a provider that rejects the streaming parameters still answers.
+    session = FakeSession(
+        [
+            FakeResponse(400, {"error": {"message": "stream is not supported"}}),
+            FakeResponse(
+                200,
+                {
+                    "id": "gen-2",
+                    "model": "vendor/tool",
+                    "choices": [
+                        {"message": {"role": "assistant", "content": "Buffered."},
+                         "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                },
+            ),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    deltas: list[str] = []
+    turn = await collect(client, deltas)
+
+    assert turn.content == "Buffered."
+    assert deltas == [], "nothing was streamed, so nothing may have been spoken"
+    assert session.requests[1][2]["json"]["stream"] is False
+
+
+async def test_an_empty_stream_falls_back_rather_than_failing_the_turn() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(200, b": keep-alive\n\ndata: [DONE]\n\n"),
+            FakeResponse(
+                200,
+                {
+                    "id": "gen-3",
+                    "model": "vendor/tool",
+                    "choices": [{"message": {"role": "assistant", "content": "Recovered."}}],
+                    "usage": {},
+                },
+            ),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    assert (await collect(client, [])).content == "Recovered."
+
+
+async def test_a_stream_that_breaks_after_speaking_is_not_retried() -> None:
+    # Once text has been handed to the caller it has been spoken aloud. Retrying
+    # would say it a second time, so a mid-reply break is a hard failure.
+    class BreakingContent:
+        async def iter_chunked(self, _size: int):  # type: ignore[no-untyped-def]
+            yield b"data: " + json.dumps(content_chunk("Half a sen")).encode() + b"\n\n"
+            raise TimeoutError
+
+    broken = FakeResponse(200, b"")
+    broken.content = BreakingContent()  # type: ignore[assignment]
+    session = FakeSession([broken])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+    deltas: list[str] = []
+    with pytest.raises(OpenRouterError, match="mid-reply"):
+        await collect(client, deltas)
+    assert deltas == ["Half a sen"]
+    assert len(session.requests) == 1, "a spoken reply must never be re-requested"
+
+
+async def test_an_unstreamed_completion_still_takes_the_buffered_path() -> None:
+    # No callback means nothing is waiting on the first token, and a buffered
+    # response is simpler to retry.
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "id": "gen-4",
+                    "model": "vendor/tool",
+                    "choices": [{"message": {"role": "assistant", "content": "Plain."}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                },
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    turn = await client.complete_tools(
+        model="vendor/tool",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        max_tokens=256,
+    )
+    assert turn.content == "Plain."
+    assert session.requests[0][2]["json"]["stream"] is False
+    assert "stream_options" not in session.requests[0][2]["json"]

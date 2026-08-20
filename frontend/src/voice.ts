@@ -109,14 +109,41 @@ export function cancelRequestedStream(streamId:string):void{
   suppressedStreams.add(streamId)
 }
 
-/** Accept live segment events only for a stream explicitly requested by this tab. */
+/**
+ * Accept live segment events only for a stream explicitly requested by this tab.
+ *
+ * `count <= 0` marks a stream that is still open: the assistant speaks a turn
+ * sentence by sentence and does not know how many clips it will produce until
+ * the model stops, so the stream stays claimed until its closing segment
+ * carries a real count (or `closeRequestedStream` arrives).
+ */
 export function enqueueRequestedStreamClip(clipId:string,streamId:string,index:number,count:number):void{
   const request=requestedStreams.get(streamId)
   if(!request||suppressedStreams.has(streamId))return
   const item:QueueItem={clipId,streamId,sessionId:request.sessionId,origin:request.origin}
-  if(state.playing&&currentClipId!==clipId)queue.push(item)
-  else if(currentClipId!==clipId)void playQueuedClip(item).catch(()=>{})
-  if(index>=count-1)requestedStreams.delete(streamId)
+  if(currentClipId===clipId)return
+  // Busy means "a clip is loaded and has not finished", not "audio is audible":
+  // between assigning src and the `play` event, `state.playing` is false while
+  // the element is very much occupied, and a clip started there would replace
+  // the one about to speak. A stream's segments arrive close together, so that
+  // window is hit often enough to swallow whole sentences.
+  if(playbackBusy())queue.push(item)
+  else void playQueuedClip(item).catch(()=>{})
+  if(count>0&&index>=count-1)requestedStreams.delete(streamId)
+}
+
+function playbackBusy():boolean{
+  if(!audioElement||!currentClipId)return false
+  return !audioElement.ended
+}
+
+/**
+ * The producer finished this stream. Queued clips still play; only the claim
+ * that lets new segments join it is released, so a late clip from an abandoned
+ * turn cannot append itself to whatever is speaking now.
+ */
+export function closeRequestedStream(streamId:string):void{
+  requestedStreams.delete(streamId)
 }
 
 /** Response fallback for a lost/delayed event. Dedupe against current and queued clips. */

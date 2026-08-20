@@ -3244,7 +3244,9 @@ Day-one rules that make the adaptation clean: dual-form responses, confirmation 
 ### Implementation checklist
 
 - [x] Daemon `assistant.py`: dialog store (SQLite, one worker thread, mirroring `voice_clips`), the bounded OpenRouter tool-calling loop (`openrouter.complete_tools`), context assembly, trust-policy engine, budget ledger entry `builtin:assistant`, typed `AssistantError` diagnostics that never touch PTY/session/transcript state.
-  Streaming is sentence-granular by design here: each model call's text is emitted as `assistant_sentence` events (the seam token streaming later fills in), and the tool loop already delivers incrementally across calls.
+  Streaming is sentence-granular by design here: each model call's text is emitted as `assistant_sentence` events, and the tool loop already delivers incrementally across calls.
+  The token-streaming seam that left is now filled (`assistant_stream_replies`, default on): `complete_tools` takes an `on_content` callback, `_SentenceStreamer` releases each sentence as the model writes it, and the client speaks them into one open speech stream per turn instead of waiting for `assistant_turn_done`.
+  A provider that will not stream is answered unstreamed and the sentence contract is unchanged, so the client keeps one path to speak from.
 - [x] Tool bridge: daemon-side read tools over existing read models; `run_ui_command` proposals delivered to the turn's originating device over the event stream with bounded acknowledgement; deterministic name resolution with candidate lists.
 - [x] HTTP surface: create/continue/interrupt a dialog turn, events (sentence boundaries, tool status, typed action/confirmation state), confirm/cancel a pending action, dialog history read.
 - [x] Frontend: conversation view in the voice overlay (toggleable `talk`/`chat`, taller), streaming renderer, confirmation cards with the cancel-window countdown, UI-action executor over the command registry, tier-2 fuzzy matcher (`voiceFuzzy.ts`) in front of the assistant fallback, follow-up window, earcons, TTS attachment via the existing application-speech path.
@@ -3260,6 +3262,18 @@ verification ran against the real fleet on the frozen app. Post-landing testing 
 follow-up rounds now part of the phase: display titles everywhere the assistant speaks or
 resolves a name, the deterministic UI-dispatch ladder, granular note edits, chat-mode
 microphone ownership with deterministic spoken confirm/cancel, and the voice audition picker.
+
+A fifth round (2026-08-19, on `worktree-assistant-voice-latency`, not landed) addressed how the
+spoken lane *felt* rather than what it could do. Measured on the live daemon log: a reply was
+buffered whole by the model and then buffered again by synthesis (3.5 s for 34 characters,
+11.4 s for 419), and a proposal was spoken twice - the card's line, then the model's paraphrase
+of it, the second hard-stopping the first mid-word because starting a stream halts the current
+one. The round: token streaming plus per-sentence speech into one open stream per turn, a
+tighter opening clip for application speech, daemon-side speech suppression once a card is open,
+a terse daemon-built card announcement that restarts the cancel window when a device begins
+reading it, a per-dialog action ledger and identical-proposal guard (a spoken "confirm" the
+closed grammar missed used to reach the model and write the note a second time), a forgiving
+spoken-verdict grammar, and no chat patience while a card is open.
 
 - [x] A typed dialog can list the fleet, answer status questions with system-computed freshness, queue a reworded message, spawn a session, and walk a guarded approval, all through the registry bridge with the trust policy enforced daemon-side.
   (Live: fleet listings by display title, statuses with ages, spawns, note reads/edits under the cancel-window card, a genuinely stranded queue item surfaced. The guarded-approval walk itself is covered by the suite and the unchanged two-step flow, not yet demonstrated in anger.)

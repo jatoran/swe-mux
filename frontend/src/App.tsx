@@ -116,7 +116,8 @@ import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playClip, playRequestedStreamFirst, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
 import {
@@ -2021,6 +2022,13 @@ export function App() {
               enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
             }
           }
+          // The producer finished an open stream. Clips already queued still
+          // play; only the claim that lets late segments join it is released,
+          // which is what keeps an abandoned turn from appending itself to
+          // whatever is speaking now.
+          if(!isReplay&&event.type==='voice_stream_closed'&&event.payload?.stream_id){
+            closeRequestedStream(String(event.payload.stream_id))
+          }
           // The redeploy broadcasts. Never on replay: these are durable events,
           // so a reconnect weeks later would otherwise resurrect a finished
           // redeploy's overlay off the event history. The live copy is what
@@ -2257,16 +2265,11 @@ export function App() {
   // The dispatch executor below mounts once, so it reaches the launcher through
   // a ref that every render re-points at the fresh closure.
   const spawnTerminalRef=useRef<((targetProject?:string,split?:false|SplitDirection|'stack',profileId?:string,targetSessionId?:string,position?:'before'|'after',backend?:string,options?:{argv?:string[];seedText?:string})=>Promise<Session|false>)|null>(null)
-  // Assistant replies speak through the same application-speech pipeline the
-  // deterministic query answers use: client-claimed stream, segmented clips.
+  // The deterministic spoken verdict on a card is not a model turn, so it gets
+  // its own one-shot stream rather than joining the turn's (assistantSpeech.ts).
   const speakAssistantReply=async(text:string)=>{
     if(!voiceStatus?.enabled)throw new Error('Read aloud is off.')
-    const streamId=newVoiceStreamId()
-    unlockPlayback();beginRequestedStream(streamId,'system','system')
-    try{
-      const clip=await api<VoiceClip>('POST','/api/voice/speak',{text,stream_id:streamId})
-      await playRequestedStreamFirst(clip.id,clip.stream_id||streamId,'system','system')
-    }catch(cause){cancelRequestedStream(streamId);throw cause}
+    await speakOnce(text)
   }
   /**
    * Route one utterance/typed line to the assistant; false when it is disabled,
@@ -2432,7 +2435,7 @@ export function App() {
   const assistantView=<AssistantPanel
     enabled={!!assistantInfo?.enabled}
     clientContext={assistantClientContext}
-    speak={voiceStatus?.enabled?speakAssistantReply:null}
+    speechEnabled={!!voiceStatus?.enabled}
     voiceActive={conversation.phase!=='off'}
     pendingSpeech={conversation.hold?conversation.holdBuffer:''}
   />

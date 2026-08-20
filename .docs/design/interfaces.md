@@ -1208,7 +1208,7 @@ POST   /sessions/{id}/voice/prepare-submit  {text}
 POST   /sessions/{id}/voice/submit       {utterance_id, text}
 POST   /sessions/{id}/voice/approval     {action: prepare|confirm|cancel, confirmation_id?}
 POST   /sessions/{id}/voice/interrupt
-POST   /voice/speak                      {text, stream_id?: UUID}
+POST   /voice/speak                      {text, stream_id?: UUID, continue_stream?, final?}
 GET    /voice/stt-latency
 POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
@@ -1232,12 +1232,26 @@ POST   /assistant/dialogs/{id}/interrupt
 POST   /assistant/actions/{id}/confirm
 POST   /assistant/actions/{id}/cancel
 POST   /assistant/actions/{id}/ui-result   {ok, detail?, candidates?} from the executing device
+POST   /assistant/actions/{id}/announced   a device began speaking this card aloud
 ```
 
 Turn progress arrives over `/events` as `assistant_turn_started`, `assistant_sentence`
 (dual-form `display`/`speech`), `assistant_tool_status`, `assistant_action` (the typed
 pending/scheduled/executed confirmation state), `assistant_turn_done`, and
 `assistant_turn_failed`, each carrying `dialog_id` and `turn_id`.
+
+Sentences are the speech contract, not a preview of it.
+Each `assistant_sentence` is released as the model writes it, so a device speaks the reply while the model is still generating; `assistant_turn_done` carries the same text for the record but is not a second thing to say.
+Both carry `speech_suppressed`, set for everything the model emits after a turn opened a confirmation card: the card's own `announcement` is the spoken statement, and the model's paraphrase of it would be the same sentence twice.
+`assistant_turn_done` also carries `sentence_count`, and its `speech` is only what still needs saying - empty when the card covers it.
+
+`assistant_action` carries `announcement`, the daemon-built spoken line for a `pending` or `scheduled` card.
+It omits the text preview the written `restatement` keeps, because synthesis time tracks characters and the operator can read the preview on the card.
+Its wording is the trust policy talking: a `scheduled` card can only be stopped, a `pending` one only runs if the operator agrees, and a client must not reconstruct that distinction itself.
+
+`/assistant/actions/{id}/announced` restarts a `scheduled` card's cancel window from the moment a device begins reading it aloud, so the window measures reaction time rather than synthesis time.
+It only ever moves the deadline forward, is clamped to `CANCEL_WINDOW_MAX_SECONDS` from the action's creation, and is a no-op for anything not currently scheduled.
+A client that never calls it keeps the original window.
 
 Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 16 kHz.
 Whisper decodes the validated PCM from memory and never writes it to disk.
@@ -1285,12 +1299,25 @@ There is no bulk form.
 `/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS engine without transcript reading, summarization, or a model call.
 The optional client-generated stream ID lets the requesting tab claim live segment events before the first synthesis finishes.
 
+It has three shapes, because the assistant produces its reply over several seconds and the operator should not wait for the last sentence to hear the first:
+
+- Default (`continue_stream` absent): opens a stream and synthesizes its opening clip inline, returning it so a lost `voice_clip_ready` still has the HTTP response as a playback fallback.
+- `continue_stream: true`: appends to an already-open stream. Synthesis runs on that stream's single worker and the response is an acknowledgement (`{stream_id, queued, segment_index, stream_open}`), not a clip - the browser is already playing the stream and picks the continuation up from its events. Appending to an unknown or completed stream is a `409`.
+- Empty `text` with `final: true` and a `stream_id`: closes the stream with nothing more to say, which is what a turn that ended on a tool result needs.
+
+`final: false` leaves the stream open.
+Its segments carry `segment_count: 0`, meaning unknown, until the closing one carries the real total; a client must treat a non-positive count as "still open" rather than as the last segment.
+Ordering is the invariant: one worker drains one FIFO per stream, so clip indices are monotonic however the appends arrive.
+`voice_stream_closed` (`stream_id`, `segment_count`, `failed`) marks the end, including the case where a stream ends without a final clip - a failed segment ends its stream rather than speaking the rest out of order.
+
 `/sessions/{id}/voice/generate` reads the latest assistant reply using the session/global effective content mode unless `content_mode` is supplied.
 The request override is validated, applies to one clip only, and never mutates the session's persistent read-aloud preference.
 The optional stream ID has the same claim-before-request role as `/voice/speak`.
 
 Automatic, manual, and application-text synthesis returns the first coherent clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
-Replies of at most 420 characters stay in that one clip; longer replies prefer a complete opening sentence before continuing.
+Agent replies of at most 420 characters stay in that one clip; longer replies prefer a complete opening sentence before continuing.
+Application speech opens at a much tighter bound instead, because that opening clip is time-to-first-sound: synthesis is roughly linear in characters, and a 420-character opener measures 11-14 s of silence on Kokoro against about a second for a short one.
+The wide bound stays for agent replies, where the coherence of somebody else's prose matters more than the first second.
 Each ready segment is independently playable, and later segments continue in tracked background tasks after the HTTP response.
 Summary/verbatim selection remains the existing session/global contract.
 

@@ -37,10 +37,27 @@ Asked for something that is coding, it routes: queue a message to an existing se
 
 `POST /api/assistant/dialogs/{id}/turns` records the user message and returns `202 {turn_id}`; everything else arrives over the ordinary event stream so every connected device renders the same turn:
 
-`assistant_turn_started` → `assistant_sentence` (per sentence, **dual-form**: `display` and separately paced `speech`) → `assistant_tool_status` / `assistant_action` as tools run → `assistant_turn_done` (full display/speech plus usage) or `assistant_turn_failed`.
+`assistant_turn_started` → `assistant_sentence` (per sentence, **dual-form**: `display` and separately paced `speech`) → `assistant_tool_status` / `assistant_action` as tools run → `assistant_turn_done` (full display plus usage) or `assistant_turn_failed`.
 
-The loop behind it makes at most `MAX_MODEL_CALLS_PER_TURN` model calls per user turn, appending tool results between them; the prompt is the fixed short-response primer, the fleet snapshot plus the client's context (focused session, available UI command labels, bounded), and the last `assistant_context_messages` dialog messages.
+The loop behind it makes at most `MAX_MODEL_CALLS_PER_TURN` model calls per user turn, appending tool results between them; the prompt is the fixed short-response primer, the fleet snapshot plus the client's context (focused session, available UI command labels, bounded), the dialog's action ledger, and the last `assistant_context_messages` dialog messages.
 Interrupt cancels the running task; nothing already executed is undone.
+
+- **The sentence events are the reply, not a preview of it.**
+  With `assistant_stream_replies` on (the default), `openrouter.complete_tools` streams and the daemon releases each sentence as the model writes it, so a device speaks the answer while the model is still generating.
+  Splitting happens daemon-side because a token delta is not a sentence and half a sentence is not speakable; the boundary requires the whitespace *after* the terminator to have arrived, which keeps "3.5" and "e.g." intact, and `STREAM_SENTENCE_MAX_CHARS` bounds how long unpunctuated prose can delay the first sound.
+  Streaming is a latency optimization and never a capability the reply depends on: a provider that rejects the streaming parameters is answered unstreamed, and the sentence events are emitted either way, so the client has one path to speak from.
+  The one thing streaming may never do is retry after delivering text - it has been spoken, and a second attempt would say it again.
+- **Everything after a card opens is display-only.**
+  A tool returning `pending_confirmation` sets the turn's speech suppression: subsequent `assistant_sentence` events carry `speech: ""` and `speech_suppressed: true`, and `assistant_turn_done` carries `speech_suppressed` plus a `speech` field holding only what still needs saying.
+  The card is the spoken statement and the model's paraphrase of it is the same sentence twice.
+  This is structural rather than prompted, because a model that ignores the instruction still must not double-speak.
+- **The dialog's action ledger rides every turn's context.**
+  A confirmation is a button or a spoken word, never a turn, so the message log alone cannot record that the operator said yes; the model reads its own unanswered "say confirm" and proposes the write again.
+  The ledger states each recent action's kind, restatement, status, and age, and `executed` means done.
+- **An identical proposal is answered with the existing action, never a second card** (`_duplicate_action`).
+  A pending or scheduled duplicate is refused for every kind: two cards for one intent means answering either leaves the other armed.
+  An already-executed duplicate is refused only for `DUPLICATE_GUARDED_KINDS` - note writes, project creation, queued messages - where repeating is itself the damage; spawning two identical sessions is something operators genuinely ask for.
+  The fingerprint is the kind plus the *resolved* arguments, so two differently-worded proposals for the same write collide.
 
 ## UI command dispatch
 
@@ -109,11 +126,24 @@ The assistant is text-first and voice-attached, not voice-only:
 - **The mode toggle is the microphone's addressee switch.**
   While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
   A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.
-- With Talk active, `assistant_turn_done` speech plays through the existing application-speech pipeline (client-claimed stream, segmented clips, barge-in unchanged).
+- **With Talk active, a turn speaks sentence by sentence into one stream** (`assistantSpeech.ts`).
+  The turn claims a stream at `assistant_turn_started` — which halts the previous turn's audio, since a new question supersedes the answer the operator moved on from — and each `assistant_sentence` with speech is appended to it; `assistant_turn_done` only closes it.
+  Two invariants hold the design together.
+  Everything one turn says shares one stream, including any card it opens, so nothing a turn says can cut off something else the same turn said: starting a second stream hard-stops the first, which is what used to truncate the card's line mid-word and follow it with several seconds of silence while the next clip synthesized.
+  And the appends are serialized, because segment order on the daemon is the order its `speak` calls arrive.
 - A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant in dictation mode too — one addressee removes the ambiguity the wake word exists to resolve.
 - **Spoken confirmation is deterministic.**
-  A pending or scheduled card is spoken aloud with its restatement; a bare `confirm`/`cancel` (a closed word set, `spokenConfirmation` in `assistant.ts`) resolves the newest open card directly against the confirm/cancel endpoints — the model is never in that loop, so it cannot "confirm" by talking about it.
+  A pending or scheduled card is spoken with the daemon-built `announcement`, which omits the text preview the visible card keeps; a bare `confirm`/`cancel` (a closed word set, `spokenConfirmation` in `assistant.ts`) resolves the newest open card directly against the confirm/cancel endpoints — the model is never in that loop, so it cannot "confirm" by talking about it.
   Anything conversational ("yes but change the wording") falls through to the model as an ordinary turn.
+  The grammar is deliberately forgiving about *shape* while staying closed about *meaning*: filler and politeness are trimmed from both ends ("yeah, confirm that please", "mux, do it now"), and a cancel word anywhere in a short utterance beats an affirmative wrapping it, because reading "yes, cancel that" as a confirmation performs the action the operator was stopping.
+  Every phrasing the set misses reaches the model as a fresh request and is proposed a second time, which is what "I confirmed and it asked me again" was.
+- **An open card changes what the microphone is waiting for.**
+  The chat patience that keeps thinking-out-loud from being answered at every breath (`voice_chat_patience_ms`) is dropped while a card is open, and a recognized verdict lets a speculative decode commit the same way a wake-worded command does — the operator is answering a closed question, not composing a thought.
+  The real decode stays on the `dictation` profile: an answer that turns out to be conversational still has to be transcribed accurately, and the speculation already carries the latency win.
+- **A scheduled card's cancel window starts when it is announced.**
+  Six seconds is generous for a card that appeared on screen and too short for one being read aloud, where the window would be spent synthesizing the sentence that announces it.
+  A device that begins speaking one posts `/announced`, which restarts the window (`CANCEL_WINDOW_SPOKEN_SECONDS`, clamped to `CANCEL_WINDOW_MAX_SECONDS` from creation).
+  It fails safe in both directions: the deadline only ever moves forward, and a client that never calls it keeps the original window.
 - Earcons (`earcons.ts`, WebAudio oscillator blips — no assets, no fetch) acknowledge the endpoint instantly and mark turn completion and pending actions, which is what makes 1-2 s of model latency feel attended rather than dead.
 
 ## HTTP surface
@@ -123,21 +153,24 @@ The assistant is text-first and voice-attached, not voice-only:
 - `GET  /api/assistant/dialogs/{id}` — messages, actions, whether a turn is running.
 - `POST /api/assistant/dialogs/{id}/turns` — `{text, client_context}` → `202 {turn_id}`.
 - `POST /api/assistant/dialogs/{id}/interrupt`
-- `POST /api/assistant/actions/{id}/confirm | /cancel | /ui-result`
+- `POST /api/assistant/actions/{id}/confirm | /cancel | /ui-result | /announced`
 
 ## Config knobs (`config.py`)
 
 `assistant_enabled` (off by default, like every model-cost feature), `assistant_model`,
 `assistant_daily_budget_usd`, `assistant_max_output_tokens`, `assistant_context_messages`,
-`assistant_trust_reversible`.
+`assistant_trust_reversible`, `assistant_stream_replies` (token streaming; off buffers the
+turn whole, which is the escape hatch if a model's provider streams tool calls badly —
+correctness does not depend on it either way, only time-to-first-word).
 `create_project` additionally reads `new_project_parent` (Settings → Projects, not an assistant knob): shape-validated at save, existence-checked at use, and empty disables assistant project creation.
 
 ## Key files
 
-- `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution), `AssistantStore`, the tool definitions, the primer.
-- `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion.
+- `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution, the duplicate guard and action ledger), `AssistantStore`, `_SentenceStreamer`, `restate_action`/`action_announcement`, the tool definitions, the primer.
+- `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path.
 - `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control).
-- `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, API calls.
+- `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
+- `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.
 - `frontend/src/AssistantPanel.tsx` — the conversation view and action cards.
 - `frontend/src/voiceFuzzy.ts` — tier 2, the conservative fuzzy pass in front of the fallback.
 - `frontend/src/earcons.ts` — the synthesized acknowledgment sounds.

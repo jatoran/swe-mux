@@ -6,7 +6,8 @@ import logging
 import random
 import re
 import time
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 import aiohttp
@@ -28,6 +29,9 @@ RETRY_ATTEMPTS = 5
 RETRY_BASE_SECONDS = 0.5
 MAX_RETRY_SLEEP_SECONDS = 8.0
 SAFE_ERROR_DETAIL_STATUSES = RETRY_STATUSES | {404, 412, 413, 422}
+# A provider that understood the request and rejected its streaming parameters
+# can still answer unstreamed, so these statuses fall back rather than fail.
+STREAM_UNSUPPORTED_STATUSES = {400, 422}
 TOKEN_LIMIT_PARAMETERS = ("max_completion_tokens", "max_tokens")
 PARAMETER_COMPATIBILITY_ERRORS = (
     "no endpoints found that can handle the requested parameters",
@@ -127,6 +131,116 @@ class OpenRouterToolTurn:
     cost_usd: float | None
     latency_ms: int
     provider_name: str | None = None
+
+
+class _StreamUnsupported(RuntimeError):
+    """Streaming failed in a way the unstreamed request can still answer."""
+
+
+@dataclass
+class _ToolStreamAccumulator:
+    """Rebuilds one chat-completion envelope from its SSE deltas.
+
+    Two things make this more than string concatenation. Tool calls arrive as
+    fragments keyed by an `index` — the name in one chunk, the JSON arguments
+    across many — so they are merged per index rather than appended, and a
+    fragment with no index belongs to the call already open at position zero.
+    And `usage` arrives only in the final chunk (`stream_options.include_usage`),
+    which is what the spend ledger bills against: dropping it would silently
+    record every streamed assistant turn as free.
+    """
+
+    content: str = ""
+    saw_data: bool = False
+    finish_reason: str | None = None
+    generation_id: str | None = None
+    resolved_model: str | None = None
+    provider_name: str | None = None
+    usage: dict[str, Any] = field(default_factory=dict)
+    calls: dict[int, dict[str, Any]] = field(default_factory=dict)
+
+    def feed(self, raw: bytes) -> str:
+        """Consume one SSE line; returns the text delta it carried, if any."""
+        line = raw.decode("utf-8", "replace").strip()
+        if not line or line.startswith(":"):
+            return ""
+        if not line.startswith("data:"):
+            return ""
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            return ""
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError:
+            return ""  # a keep-alive or a partial frame; the next line resyncs
+        if not isinstance(chunk, dict):
+            return ""
+        self.saw_data = True
+        if chunk.get("id"):
+            self.generation_id = str(chunk["id"])
+        if chunk.get("model"):
+            self.resolved_model = str(chunk["model"])
+        if chunk.get("provider"):
+            self.provider_name = str(chunk["provider"])
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            self.usage = usage
+        choices = chunk.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return ""
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            return ""
+        if choice.get("finish_reason"):
+            self.finish_reason = str(choice["finish_reason"])
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            return ""
+        self._merge_tool_calls(delta.get("tool_calls"))
+        piece = delta.get("content")
+        if not isinstance(piece, str) or not piece:
+            return ""
+        self.content += piece
+        return piece
+
+    def _merge_tool_calls(self, fragments: Any) -> None:
+        if not isinstance(fragments, list):
+            return
+        for fragment in fragments:
+            if not isinstance(fragment, dict):
+                continue
+            try:
+                index = int(fragment.get("index", 0))
+            except (TypeError, ValueError):
+                index = 0
+            call = self.calls.setdefault(
+                index,
+                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+            )
+            if fragment.get("id"):
+                call["id"] = str(fragment["id"])
+            if fragment.get("type"):
+                call["type"] = str(fragment["type"])
+            function = fragment.get("function")
+            if not isinstance(function, dict):
+                continue
+            if function.get("name"):
+                call["function"]["name"] = str(function["name"])
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                call["function"]["arguments"] += arguments
+
+    def envelope(self, requested_model: str) -> dict[str, Any]:
+        message: dict[str, Any] = {"role": "assistant", "content": self.content}
+        if self.calls:
+            message["tool_calls"] = [self.calls[index] for index in sorted(self.calls)]
+        return {
+            "id": self.generation_id,
+            "model": self.resolved_model or requested_model,
+            "provider": self.provider_name,
+            "usage": self.usage,
+            "choices": [{"message": message, "finish_reason": self.finish_reason}],
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -438,6 +552,7 @@ class OpenRouterClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int,
+        on_content: Callable[[str], Awaitable[None]] | None = None,
     ) -> OpenRouterToolTurn:
         """One tool-calling chat completion for the assistant's agentic loop.
 
@@ -445,6 +560,14 @@ class OpenRouterClient:
         no response_format and no parameter-profile ladder: `require_parameters`
         restricts routing to providers that honour `tools`, which is the one
         capability a malformed fallback would silently drop.
+
+        `on_content` opts into token streaming: it is awaited with each text
+        delta as it arrives, so a caller can start speaking the first sentence
+        while the rest is still generating. The return value is identical either
+        way — the streamed turn is reassembled into the same envelope, including
+        the usage the ledger bills against. Without the callback the request
+        stays unstreamed, because a buffered response is simpler to retry and
+        nothing is waiting on the first token.
         """
         if not model:
             raise OpenRouterError("an exact OpenRouter model id is required")
@@ -452,19 +575,23 @@ class OpenRouterClient:
             raise OpenRouterError("OpenRouter max_tokens must be greater than zero")
         started = time.monotonic()
         safe_messages = cast(list[dict[str, Any]], utf8_safe_value(messages))
-        payload = await self._request(
-            "POST",
-            "/chat/completions",
-            json_body={
-                "model": model,
-                "messages": safe_messages,
-                "stream": False,
-                "tools": tools,
-                "tool_choice": "auto",
-                "max_tokens": max_tokens,
-                "provider": {"require_parameters": True, "allow_fallbacks": True},
-            },
-        )
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": safe_messages,
+            "stream": False,
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": max_tokens,
+            "provider": {"require_parameters": True, "allow_fallbacks": True},
+        }
+        if on_content is not None:
+            payload = await self._stream_tool_completion(
+                dict(body, stream=True, stream_options={"include_usage": True}),
+                on_content,
+                model=model,
+            )
+        else:
+            payload = await self._request("POST", "/chat/completions", json_body=body)
         choices = payload.get("choices")
         choice = choices[0] if isinstance(choices, list) and choices else None
         message = choice.get("message") if isinstance(choice, dict) else None
@@ -495,6 +622,128 @@ class OpenRouterClient:
             cost_usd=_number(usage.get("cost")),
             latency_ms=int((time.monotonic() - started) * 1000),
             provider_name=str(payload.get("provider")) if payload.get("provider") else None,
+        )
+
+    async def _stream_tool_completion(
+        self,
+        body: dict[str, Any],
+        on_content: Callable[[str], Awaitable[None]],
+        *,
+        model: str,
+    ) -> dict[str, Any]:
+        """Consume an SSE completion and rebuild the ordinary response envelope.
+
+        Retries follow one rule: an attempt that has already handed text to
+        `on_content` cannot be retried, because the caller has spoken it and a
+        second attempt would say it again. Everything before the first delta is
+        an ordinary connect-or-status failure and retries normally, including
+        falling back to the unstreamed request when streaming itself is what the
+        provider will not do.
+        """
+        token = self.secrets.get("openrouter_api_key")
+        if not token:
+            raise OpenRouterError("OpenRouter key is not configured")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        client = await self._client()
+        last_attempt = RETRY_ATTEMPTS - 1
+        detail = ""
+        for attempt in range(RETRY_ATTEMPTS):
+            delivered = False
+            try:
+                async with client.request(
+                    "POST",
+                    f"{OPENROUTER_ORIGIN}/chat/completions",
+                    headers=headers,
+                    json=body,
+                    allow_redirects=False,
+                ) as response:
+                    if response.status >= 400:
+                        error_body = bytearray()
+                        async for chunk in response.content.iter_chunked(65536):
+                            error_body.extend(chunk)
+                            if len(error_body) > MAX_RESPONSE_BYTES:
+                                break
+                        retry_after = _retry_after(response)
+                        detail = (
+                            _provider_error(error_body)
+                            if response.status in SAFE_ERROR_DETAIL_STATUSES
+                            else ""
+                        )
+                        if response.status in RETRY_STATUSES and attempt < last_attempt:
+                            await asyncio.sleep(self._retry_delay(attempt, retry_after))
+                            continue
+                        if response.status in STREAM_UNSUPPORTED_STATUSES:
+                            # The request itself was understood and the streaming
+                            # parameters were not. Answering unstreamed costs only
+                            # the latency streaming exists to save.
+                            raise _StreamUnsupported(detail)
+                        raise OpenRouterError(
+                            f"OpenRouter request failed with HTTP {response.status}"
+                            + (f": {detail}" if detail else ""),
+                            status=response.status,
+                            retryable=_retryable_http_error(response.status, detail),
+                            retry_after=retry_after,
+                        )
+                    accumulator = _ToolStreamAccumulator()
+                    buffer = bytearray()
+                    total = 0
+                    async for chunk in response.content.iter_chunked(8192):
+                        total += len(chunk)
+                        if total > MAX_RESPONSE_BYTES:
+                            raise OpenRouterError(
+                                "OpenRouter response exceeded the size limit"
+                            )
+                        buffer.extend(chunk)
+                        # unsupervised-loop-ok: splits the chunk just received;
+                        # each pass consumes a line and the buffer shrinks.
+                        while True:
+                            newline = buffer.find(b"\n")
+                            if newline < 0:
+                                break
+                            line = bytes(buffer[:newline])
+                            del buffer[: newline + 1]
+                            delta = accumulator.feed(line)
+                            if delta:
+                                delivered = True
+                                await on_content(delta)
+                    trailing = accumulator.feed(bytes(buffer))
+                    if trailing:
+                        delivered = True
+                        await on_content(trailing)
+                    if not accumulator.saw_data:
+                        raise _StreamUnsupported("the completion stream carried no events")
+                    return accumulator.envelope(model)
+            except (aiohttp.ClientError, TimeoutError) as exc:
+                if delivered:
+                    raise OpenRouterError(
+                        f"OpenRouter stream broke mid-reply: {type(exc).__name__}",
+                        retryable=False,
+                    ) from exc
+                if attempt < last_attempt:
+                    await asyncio.sleep(self._retry_delay(attempt, None))
+                    continue
+                raise OpenRouterError(
+                    f"OpenRouter request failed: {type(exc).__name__}", retryable=True
+                ) from exc
+            except _StreamUnsupported as exc:
+                if delivered:
+                    raise OpenRouterError(
+                        "OpenRouter ended the stream mid-reply", retryable=False
+                    ) from exc
+                log.info(
+                    "openrouter streaming unavailable model=%s reason=%s; "
+                    "falling back unstreamed",
+                    model, str(exc)[:200],
+                )
+                return await self._request(
+                    "POST", "/chat/completions", json_body=dict(body, stream=False)
+                )
+        raise OpenRouterError(
+            "OpenRouter request failed" + (f": {detail}" if detail else ""), retryable=True
         )
 
     async def generation_cost(self, generation_id: str) -> float | None:

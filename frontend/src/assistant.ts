@@ -116,6 +116,17 @@ export const confirmAction = (actionId: string) =>
 export const cancelAction = (actionId: string) =>
   api<{ action: AssistantAction }>('POST', `/api/assistant/actions/${actionId}/cancel`)
 
+/**
+ * Tell the daemon this device has begun reading a scheduled card aloud, which
+ * restarts its cancel window. Without it the window is spent synthesizing the
+ * sentence that announces the window, and the action runs before the operator
+ * has heard there was anything to stop.
+ */
+export const announceAction = (actionId: string) =>
+  api<{ extended: boolean; action: AssistantAction }>(
+    'POST', `/api/assistant/actions/${actionId}/announced`,
+  )
+
 export const reportUiResult = (
   actionId: string,
   outcome: { ok: boolean; detail?: string; candidates?: string[] },
@@ -142,29 +153,76 @@ export function noteAssistantActionEvent(action: Partial<AssistantAction>, repla
 export function latestOpenAction(): AssistantAction | null {
   const now = Date.now() / 1000
   let newest: AssistantAction | null = null
-  for (const action of openActions.values()) {
-    if (action.status === 'pending' && action.expires_at && action.expires_at < now) continue
+  for (const [id, action] of [...openActions]) {
+    // An expired card is not merely skipped but forgotten: the endpointing and
+    // patience rules read this as "a question is open", and a stale entry would
+    // keep the microphone in answer mode indefinitely.
+    if (action.expires_at && action.expires_at < now) { openActions.delete(id); continue }
     if (!newest || action.created_at > newest.created_at) newest = action
   }
   return newest
 }
 
 const CONFIRM_WORDS = new Set([
-  'confirm', 'confirmed', 'yes', 'yes confirm', 'yep', 'do it', 'go ahead', 'approve', 'run it',
+  'confirm', 'confirmed', 'yes', 'yep', 'yeah', 'yup', 'sure', 'ok', 'okay', 'correct',
+  'right', 'do it', 'go ahead', 'go for it', 'approve', 'approved', 'run it', 'send it',
+  'that s right', 'sounds good', 'please do', 'affirmative',
 ])
 const CANCEL_WORDS = new Set([
-  'cancel', 'cancel that', 'no', 'nope', 'never mind', 'nevermind', 'stop that', 'dont', 'abort',
+  'cancel', 'no', 'nope', 'nah', 'never mind', 'nevermind', 'stop', 'stop that', 'dont',
+  'don t', 'abort', 'forget it', 'scratch that', 'discard', 'negative',
+])
+// Filler the recognizer keeps and a human never means: stripped from both ends
+// before the closed sets are consulted, so "yeah, confirm that please" is the
+// same verdict as "confirm".
+const VERDICT_FILLER = new Set([
+  'um', 'uh', 'er', 'well', 'so', 'and', 'but', 'mux', 'mucks', 'max', 'please', 'thanks',
+  'thank', 'you', 'it', 'that', 'this', 'one', 'now', 'then', 'just', 'i', 'd', 'say',
 ])
 
 /**
  * Deterministic spoken verdict on the open confirmation card. Confirmation is a
  * human act: it must never route through the model, which could be asked to
- * "confirm" by its own reply text.
+ * "confirm" by its own reply text — so this stays a closed vocabulary rather
+ * than an intent classifier.
+ *
+ * It is forgiving about *shape* and strict about *meaning*. An utterance the
+ * closed set does not recognize falls through to the model as an ordinary turn,
+ * where it reads as a fresh request and the same action is proposed a second
+ * time; every phrasing this misses is therefore a duplicate card, which is how
+ * "I confirmed and it asked me again" happened. Filler and politeness are
+ * stripped from the ends, and a leading affirmative followed by a verdict word
+ * ("yes, cancel that") resolves to the verdict, never to the affirmative.
  */
 export function spokenConfirmation(text: string): 'confirm' | 'cancel' | null {
   const normalized = text.toLowerCase().replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ').trim()
-  if (CONFIRM_WORDS.has(normalized)) return 'confirm'
-  if (CANCEL_WORDS.has(normalized)) return 'cancel'
+  if (!normalized) return null
+  const words = normalized.split(' ')
+  let start = 0
+  let end = words.length
+  // Trim one filler word at a time and test after every trim, rather than
+  // stripping all of it first: "do it now" is a verdict phrase whose second word
+  // is also filler, and trimming greedily would eat the phrase before matching it.
+  while (start < end) {
+    const phrase = words.slice(start, end).join(' ')
+    if (CANCEL_WORDS.has(phrase)) return 'cancel'
+    if (CONFIRM_WORDS.has(phrase)) return 'confirm'
+    // Leading filler first. Several verdict phrases end in a word that is also
+    // filler ("do it", "run it"), so trimming from the right first would eat the
+    // phrase before the address on the left ("mux, do it now") ever came off.
+    if (VERDICT_FILLER.has(words[start])) { start += 1; continue }
+    if (VERDICT_FILLER.has(words[end - 1])) { end -= 1; continue }
+    break
+  }
+  // Last resort, and only for something short enough to be an answer rather
+  // than a sentence. A cancel word anywhere in it wins over an affirmative:
+  // "yes, cancel that" is a cancellation, and reading it as a confirmation
+  // performs the very action the operator was stopping.
+  const remaining = words.slice(start, end)
+  if (remaining.length && remaining.length <= 3) {
+    if (remaining.some(word => CANCEL_WORDS.has(word))) return 'cancel'
+    if (remaining.some(word => CONFIRM_WORDS.has(word))) return 'confirm'
+  }
   return null
 }
 

@@ -147,3 +147,62 @@ test('requested segmented speech starts at the first clip and continues in order
   voice.bargeInPlayback()
   assert.deepEqual(voice.getPlayback(),{clipId:null,playing:false,position:0,duration:0,origin:null})
 })
+
+test('an open stream keeps accepting segments until its count is known',async()=>{
+  // The assistant speaks a turn sentence by sentence and cannot know how many
+  // clips it will produce, so segments arrive with count 0 until the closing
+  // one. Treating 0 as "the last of one" would drop everything after sentence 1.
+  const stream='22222222-2222-4222-8222-222222222222'
+  voice.beginRequestedStream(stream,'system','system')
+  voice.enqueueRequestedStreamClip('open-1',stream,0,0)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'open-1')
+  voice.enqueueRequestedStreamClip('open-2',stream,1,0)
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'open-2','a later sentence must still join the open stream')
+  voice.enqueueRequestedStreamClip('open-3',stream,2,3)
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'open-3')
+  // The closing segment carried a real count, so the stream is no longer claimed.
+  voice.enqueueRequestedStreamClip('open-4',stream,3,0)
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'open-3','a segment after the close must be refused')
+  voice.bargeInPlayback()
+})
+
+test('closing a stream releases the claim without cutting queued audio',async()=>{
+  const stream='33333333-3333-4333-8333-333333333333'
+  voice.beginRequestedStream(stream,'system','system')
+  voice.enqueueRequestedStreamClip('close-1',stream,0,0)
+  await settle()
+  voice.enqueueRequestedStreamClip('close-2',stream,1,0)
+  voice.closeRequestedStream(stream)
+  assert.equal(voice.getPlayback().clipId,'close-1','closing must not stop what is speaking')
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'close-2','already-queued clips still play')
+  voice.enqueueRequestedStreamClip('close-3',stream,2,0)
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'close-2','a late clip cannot rejoin a closed stream')
+  voice.bargeInPlayback()
+})
+
+test('a segment arriving while the previous one is still loading queues behind it',async()=>{
+  // Between assigning src and the `play` event the element reports not-playing
+  // while being entirely occupied. Segments of one stream arrive close enough
+  // together to hit that window, and starting there swallows a whole sentence.
+  const stream='44444444-4444-4444-8444-444444444444'
+  voice.beginRequestedStream(stream,'system','system')
+  voice.enqueueRequestedStreamClip('race-1',stream,0,0)
+  voice.enqueueRequestedStreamClip('race-2',stream,1,0)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'race-1','the first segment must not be replaced by the second')
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'race-2')
+  voice.bargeInPlayback()
+})

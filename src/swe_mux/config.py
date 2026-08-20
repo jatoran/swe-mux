@@ -889,6 +889,12 @@ class Config:
     # The consequential class (send-now, interrupt, end session) always
     # confirms and is deliberately not configurable below that.
     assistant_trust_reversible: str = "cancel_window"
+    # Stream the model's reply token by token so the first sentence can be spoken
+    # while the rest is still generating. Off means the turn is buffered whole,
+    # which is the pre-streaming behaviour and the escape hatch if a configured
+    # model's provider streams tool calls badly; correctness does not depend on
+    # it either way, only time-to-first-word.
+    assistant_stream_replies: bool = True
     observer_titler_enabled: bool = False
     # Phase 7.7 retired the turn summarizer; the scan timeline is the single
     # behavioral-summary producer. A config predating the removal still carries

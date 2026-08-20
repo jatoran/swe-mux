@@ -40,6 +40,13 @@ affect the PTY, session state, transcripts, history, or projects.
   This keeps streaming from cutting a normal Voice Comms answer in the middle of a thought, which otherwise makes the continuation sound like a second generated answer.
   The first clip is emitted and returned before tracked background work synthesizes the remaining clips, so playback begins while the rest is still encoding.
   A per-session lock drops overlapping `auto` preparation requests, and two engine slots bound synthesis concurrency (`_engine_semaphore`).
+- **Application speech opens on a much tighter clip** (`APPLICATION_FIRST_SEGMENT_CHARS`, the
+  `first_max_chars` argument to `streaming_segments`), because the opening clip *is*
+  time-to-first-sound. Synthesis time tracks characters: a 420-character opener measures 11-14 s
+  of silence on Kokoro before a word is heard, against about a second for a short one. Only the
+  first cut moves; the tail keeps the wide bound. Agent read-aloud deliberately keeps the wide
+  opener too - the coherence of somebody else's prose matters more there than the first second,
+  which is the trade this split exists to make separately for each.
 - Content is `summary` (spoken-word summary via OpenRouter, strict `{speech}` JSON schema,
   three-to-eight plain-English sentences) or `verbatim` (assistant text with markdown, code
   fences, links, and tables reduced to listenable prose by `speechify`, bounded by
@@ -146,6 +153,22 @@ affect the PTY, session state, transcripts, history, or projects.
 - Every segmented response shares a stream ID across its clips.
   A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
   The response remains a fallback if that event was delayed or lost.
+- **An application-speech stream can stay open and be appended to** (`SpeechStream`,
+  `VoiceService.speak(continue_stream=…, final=…)`, `close_speech_stream`).
+  The Mux assistant produces its reply over several seconds, so the stream's length is unknown
+  while it runs: open segments carry `segment_count: 0` (unknown) until the closing one carries
+  the real total, and `voice_stream_closed` marks the end for the case where a stream finishes
+  with no final clip.
+  Ordering is the invariant the type exists to hold - exactly one worker task drains one FIFO
+  per stream, so clip indices are monotonic however the appends arrive. Two appends synthesizing
+  concurrently would emit out of order whenever the shorter finished first, and the browser plays
+  clips in arrival order, so the reply's second sentence would speak before its first.
+  A segment that fails to synthesize ends its stream rather than skipping the gap, because
+  speaking sentence three after sentence one failed reads the reply out of order.
+  Client side, a non-positive `segment_count` means "still open" and a segment is queued whenever
+  a clip is loaded and unfinished - not merely while audio is audible, since between assigning
+  `src` and the `play` event the element is occupied while reporting otherwise, and a stream's
+  segments arrive close enough together to hit that window.
 - Barge-in is a hard stream stop.
   The first credible speech frame sidechain-mutes the singleton audio element instead of requiring the user's voice to overpower the phone speaker.
   Capture ignores three 32 ms frames while speaker echo drains, then requires three consecutive speech frames against the quiet microphone.
@@ -248,6 +271,13 @@ affect the PTY, session state, transcripts, history, or projects.
   the compared threshold moves — never the accumulated counters. Commands stay fast
   structurally: speculation still fires at 160 ms and a wake-worded command short-circuits
   the longer tail (energy-detector users, who have no speculation, wait the patience out).
+  **An open assistant confirmation card suspends the patience entirely**, and lets a recognized
+  `confirm`/`cancel` commit a speculative decode the way a wake-worded command does: the
+  assistant asked a closed question, so the operator is answering rather than composing, and a
+  one-word reply held for another 1.2 s is the difference between the confirmation feeling
+  instant and feeling stuck. The real decode stays on the `dictation` profile — an answer that
+  turns out to be conversational still has to be transcribed accurately, and the speculation
+  already carries the latency win.
 - **Push-to-talk** (hold `Ctrl`+`Alt`+`Space`) suspends endpointing entirely: the key release is
   the endpoint. It is the escape hatch for when detection is the problem rather than the fix — a
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
@@ -566,7 +596,12 @@ and never touches the daemon or an LLM.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
 - `POST /api/sessions/{sid}/voice/generate` - start segmented last-reply synthesis; optional `{content_mode: summary|verbatim, stream_id: UUID}` values are one-shot and do not change the session preference.
-- `POST /api/voice/speak` - start segmented trusted application speech without a model call; accepts an optional client stream ID.
+- `POST /api/voice/speak` - start, extend, or close one segmented trusted application-speech
+  stream without a model call. `{text, stream_id?, continue_stream?, final?}`: the default form
+  opens a stream and returns its opening clip, `continue_stream` appends to an open one and
+  returns an acknowledgement rather than a clip, and empty text with `final` closes it.
+  `final: false` leaves the stream open, which is what lets an assistant turn speak sentence by
+  sentence; `voice_stream_closed` reports the end.
 - `GET  /api/sessions/{sid}/last-reply` — the newest assistant segment, cut at its tool boundary and identical to the Transcript tab's last agent message (no terminal OSC 52).
 - `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
 - `POST /api/remote/mobile-voice/enable` — configure/repair the Tailscale Serve HTTPS address.
@@ -585,14 +620,15 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 
 ## Key files
 
-- `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`, the
-  decode profiles, and the latency report helpers.
+- `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`,
+  `SpeechStream` and the open-stream worker, the decode profiles, and the latency report helpers.
 - `src/swe_mux/kokoro_tts.py` — the direct-onnxruntime Kokoro engine, the espeak-free G2P
   constraint, and the out-of-vocabulary repair ladder.
 - `src/swe_mux/voice_models.py` — the pinned, hash-verified Kokoro model download state machine.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
-- `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
+- `frontend/src/voice.ts` — singleton playback, autoplay, barge-in, open-stream queueing.
+- `frontend/src/assistantSpeech.ts` — one speech stream per assistant turn (`assistant.md`).
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/voiceNavigation.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, canonical hierarchical indexes, and fleet speech projection.
 - `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
 - `frontend/src/spokenListContext.ts` - validated five-minute device-local membership and paging context for recent spoken lists.

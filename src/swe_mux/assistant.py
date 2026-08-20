@@ -73,6 +73,33 @@ MAX_MODEL_CALLS_PER_TURN = 6
 # tab closed. Cancel-window actions execute much sooner (see CANCEL_WINDOW).
 CONFIRM_TTL_SECONDS = 120.0
 CANCEL_WINDOW_SECONDS = 6.0
+# The cancel window has to outlast the operator *learning about it*. On screen
+# that is instant and 6 s is generous; spoken it is not, because the card's line
+# has to be synthesized and then read out. A device that starts announcing a
+# scheduled card restarts the window from that moment, so the window measures
+# reaction time rather than synthesis time. Bounded from creation either way: an
+# announcement cannot hold an action armed indefinitely.
+CANCEL_WINDOW_SPOKEN_SECONDS = 10.0
+CANCEL_WINDOW_MAX_SECONDS = 30.0
+# A model that re-proposes an action it already ran (or that is still pending)
+# would double-write a note. Within this window an identical proposal is
+# answered with the existing action instead of a second card.
+DUPLICATE_ACTION_WINDOW_SECONDS = 300.0
+# How much of the dialog's action ledger the model is shown each turn.
+CONTEXT_ACTION_LIMIT = 12
+# Streamed text is released at a sentence boundary, or at this many characters
+# when the model writes prose that never reaches one.
+STREAM_SENTENCE_MAX_CHARS = 220
+_STREAM_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+# Kinds where repeating an already-executed action is itself the damage. A
+# second identical note append writes the paragraph twice; a second identical
+# spawn is a thing operators genuinely ask for, so it stays unguarded.
+DUPLICATE_GUARDED_KINDS = {
+    "append_project_note",
+    "edit_project_note",
+    "create_project",
+    "send_to_session",
+}
 UI_ACK_TIMEOUT_SECONDS = 8.0
 MAX_TURN_TEXT_CHARS = 8_000
 MAX_TOOL_RESULT_CHARS = 12_000
@@ -111,11 +138,18 @@ a tool result, never from memory; include the provided age qualifiers when a rea
 Use tools for anything you cannot answer from the snapshot. Refer to sessions and projects \
 by their names exactly as the snapshot spells them. Project notes are fully editable: \
 append, prepend, insert at a specific line, or replace a unique text span \
-(edit_project_note); read a note first when a precise position matters. Mutating tools may \
-return pending_confirmation: tell the operator what was proposed and how to confirm (say \
-confirm, or the card in the panel); never claim a pending action already happened. If a \
-tool reports ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on \
-the device the operator is speaking through; if none is connected the tool will say so.
+(edit_project_note); read a note first when a precise position matters. If a tool reports \
+ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on the device the \
+operator is speaking through; if none is connected the tool will say so.
+
+Confirmation is not yours to narrate. A mutating tool that returns \
+pending_confirmation has already put a card in front of the operator, and their device \
+reads that card out; restating it is the same sentence twice. Answer with at most a short \
+phrase ("Proposed." / "Ready when you are.") and stop. Never claim a pending action \
+happened. mode "confirm" means it runs only if the operator agrees; mode "cancel_window" \
+means it runs on its own shortly unless they stop it, so do not ask them to confirm it. \
+A result carrying duplicate or already_done means the operator has seen or accepted this \
+exact action already: say so in one short sentence and do not propose it again.
 To stage text in a session's input without sending it, use type_into_session — repeated \
 calls append, nothing reaches the agent, and the session's terminal must be open on the \
 operator's device (focus it first with run_ui_command if needed). submit_session_composer \
@@ -215,6 +249,51 @@ def apply_note_edit(markdown: str, payload: dict[str, Any]) -> str:
             f'"{find[:80]}" appears {count} times; give a longer, unique span'
         )
     return markdown.replace(find, text)
+
+
+class _SentenceStreamer:
+    """Turns a stream of model text deltas into complete sentences.
+
+    A delta is not a speakable unit and half a sentence read aloud is worse than
+    waiting, so text is held until a boundary arrives. The boundary requires the
+    whitespace *after* the terminator to have been received, which is what keeps
+    "3.5" and "e.g." from being cut mid-token. `STREAM_SENTENCE_MAX_CHARS` is the
+    backstop for prose that never punctuates: it bounds how long the first sound
+    can be delayed, which is the whole point of streaming.
+    """
+
+    def __init__(self, emit: Callable[[str], Awaitable[None]]) -> None:
+        self._emit = emit
+        self.buffer = ""
+        self.emitted = False
+
+    async def feed(self, delta: str) -> None:
+        self.buffer += delta
+        # unsupervised-loop-ok: drains one buffer of already-received text and
+        # shrinks it on every pass; bounded by the delta just appended.
+        while True:
+            match = _STREAM_SENTENCE_BREAK.search(self.buffer)
+            if match is not None:
+                head, self.buffer = self.buffer[: match.start()], self.buffer[match.end():]
+            elif len(self.buffer) >= STREAM_SENTENCE_MAX_CHARS:
+                cut = self.buffer.rfind(" ", 0, STREAM_SENTENCE_MAX_CHARS)
+                if cut <= 0:
+                    return
+                head, self.buffer = self.buffer[:cut], self.buffer[cut:].lstrip()
+            else:
+                return
+            head = head.strip()
+            if head:
+                self.emitted = True
+                await self._emit(head)
+
+    async def flush(self) -> None:
+        """Release the unterminated tail once the model has stopped writing."""
+        tail = self.buffer.strip()
+        self.buffer = ""
+        if tail:
+            self.emitted = True
+            await self._emit(tail)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -408,6 +487,31 @@ class AssistantStore:
 
         return await self._run(op)
 
+    async def extend_action_window(
+        self, action_id: str, expires_at: float
+    ) -> dict[str, Any] | None:
+        """Push a scheduled action's deadline out; never in.
+
+        Guarded in SQL rather than in the caller because the cancel-window timer
+        reads this row on every wake: a deadline that could move backwards would
+        let a late announcement execute an action the operator has not heard
+        about yet.
+        """
+
+        def op() -> dict[str, Any] | None:
+            self._db.execute(
+                "UPDATE assistant_actions SET expires_at=? "
+                "WHERE id=? AND status='scheduled' AND expires_at < ?",
+                (expires_at, action_id, expires_at),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM assistant_actions WHERE id=?", (action_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(op)
+
     async def resolve_action(
         self, action_id: str, *, status: str, result: str | None = None
     ) -> dict[str, Any] | None:
@@ -432,6 +536,93 @@ class AssistantStore:
         self._executor.shutdown(wait=True)
 
 
+def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False) -> str:
+    """One sentence naming exactly what a card would do.
+
+    Two forms of the same statement. The written one carries a preview of the
+    text being written, because the card is what the operator reads before
+    confirming a note edit. The spoken one deliberately omits it: the preview is
+    most of the characters, synthesis time tracks characters, and the operator
+    hearing "append to the swe-mux project note" already knows which proposal
+    the visible card describes. Reading a note body aloud to announce that a
+    note is about to be written is the slowest possible way to say nothing new.
+    """
+    text = str(arguments.get("text") or arguments.get("seed_text") or "")
+    preview = "" if spoken else (
+        f' "{text[:120]}{"…" if len(text) > 120 else ""}"' if text else ""
+    )
+    target = str(arguments.get("session") or arguments.get("project") or "")
+    if kind == "send_to_session":
+        mode = "send" if arguments.get("deliver") else "queue a draft"
+        return f"{mode} to {target}:{preview}" if preview else f"{mode} to {target}"
+    if kind == "spawn_session":
+        backend = str(arguments.get("backend") or "default harness")
+        return f"spawn a {backend} session in {target}{preview}"
+    if kind == "create_project":
+        # The absolute path is the whole point of this card: the operator
+        # confirms exactly what lands on disk, not a name they must resolve.
+        # Spoken, the path is read back as a string of separators, so the name
+        # and the git note carry it and the card shows where.
+        name = str(arguments.get("name") or "")
+        root = str(arguments.get("root") or "")
+        where = "" if spoken else (f" at {root}" if root else "")
+        git_note = (
+            " and initialize an empty git repository" if arguments.get("git") else ""
+        )
+        revive = ""
+        if arguments.get("restores"):
+            revive = (
+                f' (restores the removed project "{arguments["restores"]}" with '
+                "its history and settings)"
+            )
+        return f'create the new project "{name}"{where}{git_note}{revive}'
+    if kind == "append_project_note":
+        return f"append to the {target} project note:{preview}" if preview else (
+            f"append to the {target} project note"
+        )
+    if kind == "edit_project_note":
+        note = str(arguments.get("note") or "primary")
+        action = str(arguments.get("action") or "append")
+        where = f"the {target} project's {note} note"
+        if action == "insert_line":
+            return f"insert at line {arguments.get('line')} of {where}:{preview}" if preview \
+                else f"insert a line into {where}"
+        if action == "replace_text":
+            find = str(arguments.get("find") or "")[:80]
+            if spoken:
+                return f"replace a span in {where}"
+            return f'replace "{find}" in {where} with{preview}'
+        return f"{action} to {where}:{preview}" if preview else f"{action} to {where}"
+    if kind == "interrupt_session":
+        return f"interrupt the agent in {target}"
+    if kind == "end_session":
+        return f"end the session {target}"
+    if kind == "run_ui_command":
+        return f"run the UI command: {arguments.get('command')}"
+    if kind == "type_into_session":
+        if spoken:
+            return f"type into {target}'s composer without sending"
+        return f"type into {target}'s composer without sending:{preview}"
+    if kind == "submit_session_composer":
+        return f"press Enter on {target}'s composer, sending its staged text"
+    return kind
+
+
+def action_announcement(kind: str, arguments: dict[str, Any], status: str) -> str:
+    """The spoken line for a card, built once by the daemon.
+
+    It is built here rather than in the client because its wording is the trust
+    policy talking: a `scheduled` card runs on its own and can only be stopped,
+    a `pending` one runs only if the operator says so, and a client that mixed
+    the two would tell the operator to confirm something that already happened.
+    """
+    speech = restate_action(kind, arguments, spoken=True).strip()
+    line = f"{speech[0].upper()}{speech[1:]}" if speech else "An action is proposed"
+    if status == "scheduled":
+        return f"{line}. Say cancel to stop it."
+    return f"{line}. Confirm or cancel?"
+
+
 def action_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     public = dict(row)
     try:
@@ -439,6 +630,16 @@ def action_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     except ValueError:
         public["arguments"] = {}
     public["action_class"] = public.pop("class", None)
+    kind = str(row.get("kind") or "")
+    status = str(row.get("status") or "")
+    # The spoken form travels with the card so the announcement the operator
+    # hears and the card they see cannot drift apart, and so a client never has
+    # to reconstruct trust-policy wording it does not own.
+    public["announcement"] = (
+        action_announcement(kind, public["arguments"], status)
+        if status in {"pending", "scheduled"}
+        else ""
+    )
     return public
 
 
@@ -743,7 +944,47 @@ class AssistantService:
                 break
         return {"projects": projects, "sessions": rows, "captured_at": now}
 
-    async def _context_message(self, client_context: dict[str, Any]) -> str:
+    async def _action_ledger(self, dialog_id: str) -> str:
+        """What this dialog has already proposed and what became of it.
+
+        The message log alone cannot answer that: a confirmation is a button or
+        a spoken word, never a turn, so nothing in the transcript records that
+        the operator said yes. Without this the model reads its own last message
+        ("say confirm") as still-unanswered and proposes the write a second
+        time, which for a note means the paragraph lands twice.
+        """
+        # Fetched wider than it is shown, then filtered, then trimmed: reads and
+        # in-flight dispatches are the bulk of a busy dialog's ledger, and
+        # trimming first would leave the mutations the model needs off the end.
+        rows = await self.store.actions(dialog_id, limit=CONTEXT_ACTION_LIMIT * 6)
+        if not rows:
+            return ""
+        now = time.time()
+        lines: list[str] = []
+        for row in rows:
+            status = str(row["status"])
+            if status == "dispatched":
+                continue
+            if str(row["class"]) in {ACTION_CLASS_READ, ACTION_CLASS_NAVIGATION}:
+                continue
+            age = max(0, int(now - float(row["created_at"])))
+            detail = str(row["restatement"])[:160]
+            if status in {"pending", "scheduled"}:
+                lines.append(f"- awaiting the operator ({age}s ago): {detail}")
+            else:
+                lines.append(f"- {status} ({age}s ago): {detail}")
+        if not lines:
+            return ""
+        return (
+            "Actions already proposed in this conversation (system-computed; an "
+            "`executed` line means it is done and must not be run again, and an "
+            "`awaiting` line must not be proposed again):\n"
+            + "\n".join(lines[-CONTEXT_ACTION_LIMIT:])
+        )
+
+    async def _context_message(
+        self, client_context: dict[str, Any], dialog_id: str = ""
+    ) -> str:
         snapshot = await self.fleet_snapshot()
         focused = str(client_context.get("focused_session_id") or "")
         focused_name = None
@@ -777,6 +1018,10 @@ class AssistantService:
                 "Additional UI command labels available on the operator's device: "
                 + "; ".join(command_lines)
             )
+        if dialog_id:
+            ledger = await self._action_ledger(dialog_id)
+            if ledger:
+                parts.append(ledger)
         return "\n".join(parts)
 
     # ------------------------------------------------------------------- tools
@@ -1011,55 +1256,9 @@ class AssistantService:
             )
         return ACTION_CLASS_CONSEQUENTIAL
 
-    def _restate(self, kind: str, arguments: dict[str, Any]) -> str:
-        text = str(arguments.get("text") or arguments.get("seed_text") or "")
-        preview = f' "{text[:120]}{"…" if len(text) > 120 else ""}"' if text else ""
-        target = str(arguments.get("session") or arguments.get("project") or "")
-        if kind == "send_to_session":
-            mode = "send" if arguments.get("deliver") else "queue a draft"
-            return f"{mode} to {target}:{preview}"
-        if kind == "spawn_session":
-            backend = str(arguments.get("backend") or "default harness")
-            return f"spawn a {backend} session in {target}{preview}"
-        if kind == "create_project":
-            # The absolute path is the whole point of this card: the operator
-            # confirms exactly what lands on disk, not a name they must resolve.
-            name = str(arguments.get("name") or "")
-            root = str(arguments.get("root") or "")
-            where = f" at {root}" if root else ""
-            git_note = (
-                " and initialize an empty git repository" if arguments.get("git") else ""
-            )
-            revive = ""
-            if arguments.get("restores"):
-                revive = (
-                    f' (restores the removed project "{arguments["restores"]}" with '
-                    "its history and settings)"
-                )
-            return f'create the new project "{name}"{where}{git_note}{revive}'
-        if kind == "append_project_note":
-            return f"append to the {target} project note:{preview}"
-        if kind == "edit_project_note":
-            note = str(arguments.get("note") or "primary")
-            action = str(arguments.get("action") or "append")
-            where = f"the {target} project's {note} note"
-            if action == "insert_line":
-                return f"insert at line {arguments.get('line')} of {where}:{preview}"
-            if action == "replace_text":
-                find = str(arguments.get("find") or "")[:80]
-                return f'replace "{find}" in {where} with{preview}'
-            return f"{action} to {where}:{preview}"
-        if kind == "interrupt_session":
-            return f"interrupt the agent in {target}"
-        if kind == "end_session":
-            return f"end the session {target}"
-        if kind == "run_ui_command":
-            return f"run the UI command: {arguments.get('command')}"
-        if kind == "type_into_session":
-            return f"type into {target}'s composer without sending:{preview}"
-        if kind == "submit_session_composer":
-            return f"press Enter on {target}'s composer, sending its staged text"
-        return kind
+    @staticmethod
+    def _restate(kind: str, arguments: dict[str, Any], *, spoken: bool = False) -> str:
+        return restate_action(kind, arguments, spoken=spoken)
 
     # ----------------------------------------------------------- action ledger
 
@@ -1136,6 +1335,12 @@ class AssistantService:
         resolution_error = await self._preflight_mutation(kind, arguments)
         if resolution_error is not None:
             return resolution_error
+        # Resolved arguments are the fingerprint, so two differently-worded
+        # proposals for the same write collide here rather than becoming two
+        # cards and, for a note, two copies of the same paragraph.
+        duplicate = await self._duplicate_action(dialog_id, kind, arguments)
+        if duplicate is not None:
+            return self._duplicate_result(duplicate)
         policy = (
             "confirm"
             if action_class == ACTION_CLASS_CONSEQUENTIAL
@@ -1174,21 +1379,158 @@ class AssistantService:
             "note": "Nothing happens unless the operator confirms.",
         }
 
+    @staticmethod
+    def _action_fingerprint(kind: str, arguments: dict[str, Any]) -> str:
+        """Identity of a proposal: its kind plus its resolved arguments.
+
+        `client_id` is excluded because it names the device that asked, not the
+        thing being done — the same write proposed from a phone and a desktop is
+        one write.
+        """
+        payload = {
+            key: value for key, value in arguments.items() if key != "client_id"
+        }
+        return f"{kind}:{json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)}"
+
+    async def _duplicate_action(
+        self, dialog_id: str, kind: str, arguments: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The prior action this proposal repeats, if there is one.
+
+        Two different failures produce the same duplicate. A card the operator
+        has not answered yet, re-proposed because the model was asked again —
+        that is always wrong, for every kind, since the operator would then have
+        two cards for one intent and answering either leaves the other armed.
+        And a write the operator already confirmed, re-proposed because a spoken
+        "confirm" the closed grammar did not recognize reached the model as a
+        turn — that one is only guarded for kinds where repetition is itself the
+        damage (a note appended twice), because spawning two identical sessions
+        or staging composer text twice are things an operator legitimately asks
+        for.
+        """
+        fingerprint = self._action_fingerprint(kind, arguments)
+        now = time.time()
+        for row in reversed(await self.store.actions(dialog_id, limit=40)):
+            if str(row["kind"]) != kind:
+                continue
+            status = str(row["status"])
+            if status in {"executed", "executing"}:
+                if kind not in DUPLICATE_GUARDED_KINDS:
+                    continue
+                if now - float(row["created_at"]) > DUPLICATE_ACTION_WINDOW_SECONDS:
+                    continue
+            elif status not in {"pending", "scheduled"}:
+                continue
+            try:
+                prior = json.loads(str(row["arguments"] or "{}"))
+            except ValueError:
+                continue
+            if not isinstance(prior, dict):
+                continue
+            if self._action_fingerprint(kind, prior) == fingerprint:
+                return row
+        return None
+
+    @staticmethod
+    def _duplicate_result(row: dict[str, Any]) -> dict[str, Any]:
+        status = str(row["status"])
+        restatement = str(row["restatement"])
+        if status in {"pending", "scheduled"}:
+            log.info(
+                "assistant duplicate proposal suppressed action=%s kind=%s status=%s",
+                row["id"], row["kind"], status,
+            )
+            return {
+                "pending_confirmation": True,
+                "duplicate": True,
+                "action_id": row["id"],
+                "restatement": restatement,
+                "note": (
+                    "This exact action is already waiting for the operator. Say so "
+                    "briefly; do not propose it again."
+                ),
+            }
+        log.info(
+            "assistant duplicate execution suppressed action=%s kind=%s",
+            row["id"], row["kind"],
+        )
+        return {
+            "already_done": True,
+            "action_id": row["id"],
+            "restatement": restatement,
+            "note": (
+                "This exact action already ran in this conversation. Tell the "
+                "operator it is done; do not run it again."
+            ),
+        }
+
     def _schedule_window(self, row: dict[str, Any]) -> None:
+        """Execute a scheduled action when its deadline passes.
+
+        The deadline is re-read from the row on every wake rather than baked
+        into one sleep, because a device that announces the card aloud pushes it
+        out (`announce_action`). Waking early and looping is the only way that
+        extension can be honoured without a second timer racing this one.
+        """
+        action_id = str(row["id"])
+
         async def run() -> None:
             try:
-                await asyncio.sleep(CANCEL_WINDOW_SECONDS)
-                if not await self.store.claim_action(str(row["id"]), ("scheduled",)):
+                # unsupervised-loop-ok: one timer for one scheduled action,
+                # bounded by CANCEL_WINDOW_MAX_SECONDS from its creation.
+                while True:
+                    current = await self.store.action(action_id)
+                    if current is None or current["status"] != "scheduled":
+                        return  # confirmed, cancelled, or already claimed
+                    remaining = float(current.get("expires_at") or 0) - time.time()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(remaining, CANCEL_WINDOW_MAX_SECONDS))
+                if not await self.store.claim_action(action_id, ("scheduled",)):
                     return  # confirmed or cancelled first; the claimant owns it
-                current = await self.store.action(str(row["id"]))
+                current = await self.store.action(action_id)
                 if current is not None:
+                    log.info(
+                        "assistant cancel window elapsed action=%s kind=%s",
+                        action_id, current["kind"],
+                    )
                     await self._execute_mutation_row(current)
             finally:
-                self._window_tasks.pop(str(row["id"]), None)
+                self._window_tasks.pop(action_id, None)
 
-        self._window_tasks[str(row["id"])] = asyncio.create_task(
-            run(), name=f"assistant-window-{row['id']}"
+        self._window_tasks[action_id] = asyncio.create_task(
+            run(), name=f"assistant-window-{action_id}"
         )
+
+    async def announce_action(self, action_id: str) -> dict[str, Any]:
+        """A device reports it has begun speaking this card's announcement.
+
+        Only scheduled actions care: their window is the operator's whole
+        opportunity to object, and it must not be spent on synthesizing the
+        sentence that tells them there is something to object to. Idempotent and
+        clamped from creation, so repeated calls (two devices, a retry) cannot
+        keep an action armed indefinitely, and a client that never calls this
+        simply keeps the original window.
+        """
+        row = await self.store.action(action_id)
+        if row is None:
+            raise AssistantError("unknown action")
+        if row["status"] != "scheduled":
+            return {"extended": False, "action": action_snapshot(row)}
+        ceiling = float(row["created_at"]) + CANCEL_WINDOW_MAX_SECONDS
+        deadline = min(time.time() + CANCEL_WINDOW_SPOKEN_SECONDS, ceiling)
+        updated = await self.store.extend_action_window(action_id, deadline)
+        if updated is None:
+            raise AssistantError("unknown action")
+        extended = float(updated.get("expires_at") or 0) > float(row.get("expires_at") or 0)
+        if extended:
+            await self._emit_action(updated)
+            log.info(
+                "assistant cancel window extended action=%s kind=%s remaining=%.1fs",
+                action_id, updated["kind"],
+                float(updated.get("expires_at") or 0) - time.time(),
+            )
+        return {"extended": extended, "action": action_snapshot(updated)}
 
     async def confirm_action(self, action_id: str) -> dict[str, Any]:
         # Cancel any cancel-window timer *first*, then re-read: the timer may
@@ -1771,7 +2113,12 @@ class AssistantService:
             )
 
     async def _model_call(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], turn_id: str, step: int
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        turn_id: str,
+        step: int,
+        on_content: Callable[[str], Awaitable[None]] | None = None,
     ) -> Any:
         await self._budget_check()
         model = self.config.assistant_model
@@ -1789,6 +2136,7 @@ class AssistantService:
                 messages=messages,
                 tools=tools,
                 max_tokens=self.config.assistant_max_output_tokens,
+                on_content=on_content,
             )
         except asyncio.CancelledError:
             await self.automation_store.observer_finished(
@@ -1829,7 +2177,10 @@ class AssistantService:
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PRIMER},
-            {"role": "system", "content": await self._context_message(client_context)},
+            {
+                "role": "system",
+                "content": await self._context_message(client_context, dialog_id),
+            },
         ]
         for item in history:
             if item["turn_id"] == turn_id and item["role"] == "user":
@@ -1840,31 +2191,62 @@ class AssistantService:
         client_id = str(client_context.get("client_id") or "")[:64]
         tools = self._tool_definitions()
         totals = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "calls": 0}
+        display_parts: list[str] = []
         spoken_parts: list[str] = []
         sentence_index = 0
         message_id = str(uuid.uuid4())
+        # Set the moment a tool opens a confirmation card. Everything the model
+        # says afterwards is a paraphrase of that card, and the card is already
+        # spoken by the device: saying both is the reply read twice, the second
+        # copy cutting off the first. Structural rather than prompted, because a
+        # model that ignores the instruction still must not double-speak.
+        card_open = False
+
+        async def emit_sentence(sentence: str) -> None:
+            nonlocal sentence_index
+            await self.events.emit(
+                "assistant_sentence",
+                source="assistant",
+                dialog_id=dialog_id,
+                turn_id=turn_id,
+                message_id=message_id,
+                index=sentence_index,
+                display=sentence,
+                speech="" if card_open else speech_form(sentence),
+                speech_suppressed=card_open,
+            )
+            sentence_index += 1
+
         for step in range(MAX_MODEL_CALLS_PER_TURN):
             if dialog_id in self._interrupts:
                 raise asyncio.CancelledError
-            turn = await self._model_call(messages, tools, turn_id, step)
+            # Sentences are released as the model writes them, so the device can
+            # begin speaking the answer while the rest is still generating. The
+            # split happens here rather than in the client because a delta is not
+            # a sentence and half a sentence is not speakable.
+            streamer = _SentenceStreamer(emit_sentence)
+            turn = await self._model_call(
+                messages, tools, turn_id, step,
+                streamer.feed if self.config.assistant_stream_replies else None,
+            )
             totals["input_tokens"] += turn.input_tokens
             totals["output_tokens"] += turn.output_tokens
             totals["cost_usd"] += float(turn.cost_usd or 0)
             totals["calls"] += 1
             if turn.content.strip():
-                spoken_parts.append(turn.content.strip())
-                for sentence in split_sentences(turn.content):
-                    await self.events.emit(
-                        "assistant_sentence",
-                        source="assistant",
-                        dialog_id=dialog_id,
-                        turn_id=turn_id,
-                        message_id=message_id,
-                        index=sentence_index,
-                        display=sentence,
-                        speech=speech_form(sentence),
-                    )
-                    sentence_index += 1
+                display_parts.append(turn.content.strip())
+                if not card_open:
+                    spoken_parts.append(turn.content.strip())
+                if streamer.emitted:
+                    # Streaming already published every complete sentence; only
+                    # the unterminated tail is left. Re-emitting from `content`
+                    # here would duplicate the whole reply.
+                    await streamer.flush()
+                else:
+                    for sentence in split_sentences(turn.content):
+                        await emit_sentence(sentence)
+            else:
+                await streamer.flush()
             if not turn.tool_calls:
                 break
             messages.append(turn.message)
@@ -1898,6 +2280,8 @@ class AssistantService:
                         result = {"error": str(exc)[:500]}
                 else:
                     result = {"error": f"unknown tool {name}"}
+                if result.get("pending_confirmation"):
+                    card_open = True
                 await self.events.emit(
                     "assistant_tool_status", source="assistant",
                     dialog_id=dialog_id, turn_id=turn_id, tool=name,
@@ -1909,10 +2293,17 @@ class AssistantService:
                 messages.append(
                     {"role": "tool", "tool_call_id": call_ref, "content": payload}
                 )
-        display = "\n\n".join(spoken_parts).strip()
+        display = "\n\n".join(display_parts).strip()
         if not display:
             display = "Done." if totals["calls"] else ""
-        speech = speech_form(display)
+            if not card_open and display:
+                spoken_parts.append(display)
+        spoken = "\n\n".join(spoken_parts).strip()
+        # The turn's speech is what should still be *heard*, not everything that
+        # was said: a client that speaks the streamed sentences already played
+        # the unsuppressed part, and one that only knows this event must not be
+        # handed the card's paraphrase.
+        speech = speech_form(spoken) if spoken else ""
         await self.store.add_message(
             {
                 "id": message_id,
@@ -1934,9 +2325,10 @@ class AssistantService:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
             "assistant turn complete dialog=%s turn=%s calls=%d in=%d out=%d "
-            "cost=%.5f elapsed=%.0fms",
+            "cost=%.5f elapsed=%.0fms sentences=%d card_open=%s",
             dialog_id, turn_id, totals["calls"], totals["input_tokens"],
             totals["output_tokens"], totals["cost_usd"], elapsed_ms,
+            sentence_index, card_open,
         )
         self.diagnostic = None
         await self.events.emit(
@@ -1947,6 +2339,8 @@ class AssistantService:
             message_id=message_id,
             display=display,
             speech=speech,
+            speech_suppressed=card_open,
+            sentence_count=sentence_index,
             usage={**totals, "elapsed_ms": elapsed_ms},
         )
 

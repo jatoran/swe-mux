@@ -244,6 +244,11 @@
   The rule the design enforces: the model proposes names, deterministic code resolves and
   executes through existing paths, and the consequential-action confirmation floor is not
   configurable.
+  A second rule governs what is *said*: a turn is one speech stream spoken sentence by sentence
+  as the model writes it, a confirmation card is announced once by the daemon-built line and
+  everything the model says afterwards is display-only, and an identical proposal is answered
+  with the existing action rather than a second card - because a confirmation is never a turn,
+  so nothing in the message log records that the operator already said yes.
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
@@ -268,6 +273,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `POST /api/voice/lexicon/check` and auditions via `GET /api/voice/lexicon/preview`);
   exact sounds use misaki's `[word](/phonemes/)` form, atomic in the ladder.
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
+  Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`) because that clip *is* time-to-first-sound, and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
@@ -297,7 +303,8 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   brainstorm pair: plain speech buffers instead of becoming assistant turns until "go ahead"
   releases it as one consolidated turn (bare exact phrases "hold on"/"go ahead" also work);
   `voice_chat_patience_ms` separately lengthens the chat-addressee endpoint tail while
-  wake-worded commands keep short-circuiting it. Hold `Ctrl+Alt+Space` for push-to-talk with
+  wake-worded commands keep short-circuiting it, and an open assistant confirmation card
+  suspends it entirely (a closed question is being answered, not composed). Hold `Ctrl+Alt+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.

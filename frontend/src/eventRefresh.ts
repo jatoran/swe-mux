@@ -34,6 +34,7 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'transcript_message',
   'voice_clip_failed',
   'voice_clip_ready',
+  'voice_stream_closed',
 ])
 
 export function eventRequiresFleetRefresh(type: unknown): boolean {
