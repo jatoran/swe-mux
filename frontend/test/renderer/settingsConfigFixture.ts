@@ -95,6 +95,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "host": "127.0.0.1",
   "log_level": "INFO",
   "middle_click_paste": true,
+  "mobile_back_view_history": true,
   "mobile_gesture_overlay_back": true,
   "mobile_gesture_swipe_away_close": true,
   "mobile_gestures": {

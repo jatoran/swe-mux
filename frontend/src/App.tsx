@@ -172,6 +172,7 @@ import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
+import { composeBackTarget, viewBackEnabled, viewHistory, type ViewEntry, type ViewNavigator, type ViewPosition } from './viewHistory.ts'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
@@ -797,6 +798,7 @@ export function App() {
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
   const [swipeAwayClose, setSwipeAwayClose] = useState(true)
   const [overlayBack, setOverlayBack] = useState(true)
+  const [viewBack, setViewBack] = useState(true)
   // On a phone the navigation sidebar and the clipboard panel are both full-height
   // drawers over the workspace, entering from opposite edges. Two open at once leave
   // no workspace between them and bury one under the other's scrim, so opening either
@@ -1651,6 +1653,7 @@ export function App() {
     setMobileGestures(mobileGestureSettings(config))
     setSwipeAwayClose(swipeAwayCloseEnabled(config))
     setOverlayBack(overlayBackEnabled(config))
+    setViewBack(viewBackEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
     setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
@@ -2593,6 +2596,24 @@ export function App() {
     const next=viewUrl(location.href,projectId,session?.id||null)
     if(`${location.pathname}${location.search}${location.hash}`!==next)window.history.replaceState(window.history.state,'',next)
   },[focusHydrated,projectId,activeId,focusedViewId,sessions,layoutMap])
+
+  // Feed the navigation rung of back (`viewHistory.ts`).
+  //
+  // Recorded from the *committed* (Project, view) pair rather than at the two dozen
+  // places that call `setFocusedViewId` - spawn, resume, branch, project selection, a
+  // closing pane handing focus to its neighbour - because only the settled value is what
+  // the user is actually looking at, and per-call-site recording would rot the first time
+  // a new flow forgot to do it. `reconcileFocusView` above is what settles that value, so
+  // this effect observes what it agreed on rather than a request still in flight.
+  const lastViewPosition=useRef<ViewPosition|null>(null)
+  useEffect(()=>{
+    if(!focusHydrated)return
+    const next:ViewPosition={projectId,viewId:focusedViewId}
+    const previous=lastViewPosition.current
+    lastViewPosition.current=next
+    // Hydration is an arrival rather than a move: there is nothing behind it to return to.
+    if(previous)viewHistory.record(previous,next)
+  },[focusHydrated,projectId,focusedViewId])
 
   useEffect(() => {
     if(!focusHydrated)return
@@ -4308,6 +4329,55 @@ export function App() {
     if (next.kind === 'terminal') setActiveId(next.id)
     if (pane.active_child_id !== next.id) void updateLayout(projectId, activateStackChild(layout, pane.id, next.id))
   }
+
+  // The workspace half of the navigation rung of back. Assigned every render and read
+  // through the ref, because the back target below is built once - it lives on a window
+  // listener for the whole session - while everything a traversal needs to answer (the
+  // live layouts, which Projects still exist, whether this is the mobile layout) moves
+  // underneath it.
+  const backNavigator = useRef<ViewNavigator>({ enabled: () => false, alive: () => false, go: () => undefined })
+  const projectLayoutFor = (id:string):PaneLayout|null => {
+    const project = projects.find(item => item.id === id)
+    return project ? resolveLayout(layoutValues.current[id] || layoutMap[id], project.layout) : null
+  }
+  backNavigator.current = {
+    // Mobile only. On the desktop the tabs are on screen and one click away, and holding
+    // the history sentinel armed permanently would stop the browser's own Back button
+    // from ever leaving the site - the same reason the docked sidebar and drawer are not
+    // dismiss levels there.
+    enabled: () => mobileWorkspace && viewBack,
+    alive: (entry:ViewEntry) => {
+      const layout = projectLayoutFor(entry.projectId)
+      return !!layout && leaves(layout).some(leaf => leaf.id === entry.viewId)
+    },
+    go: (entry:ViewEntry) => {
+      const project = projects.find(item => item.id === entry.projectId)
+      const layout = projectLayoutFor(entry.projectId)
+      const leaf = layout ? leaves(layout).find(item => item.id === entry.viewId) : null
+      if (!project || !layout || !leaf) return
+      // Same acknowledgement a swipe gets, and for the same reason: a tab change the eye
+      // misses is indistinguishable from "back did nothing", and the user presses again
+      // and leaves the app. Named across Projects when the traversal crosses one.
+      const label = mobileTabLabel(leaf)
+      showInteractionHud(entry.projectId === projectId ? label : `${project.name} · ${label}`)
+      // No panel to close on the way: a slide-in panel is a dismiss level, so back would
+      // have spent this press on it before ever reaching the ring.
+      if (entry.projectId !== projectId) setProjectId(entry.projectId)
+      setFocusedViewId(leaf.id)
+      if (leaf.kind === 'terminal') setActiveId(leaf.id)
+      const pane = stackForView(layout, leaf.id)
+      if (pane && pane.active_child_id !== leaf.id) void updateLayout(entry.projectId, activateStackChild(layout, pane.id, leaf.id))
+    },
+  }
+  // Built once so `nav.back`, the back swipe, and the platform gesture are literally the
+  // same step. Escape deliberately does not go through it: with nothing open, Escape
+  // belongs to the terminal, and stepping tabs from inside an agent's TUI is exactly the
+  // side effect the flat Escape handlers were replaced to stop.
+  const backTarget = useMemo(() => composeBackTarget(dismissStack, viewHistory, {
+    enabled: () => backNavigator.current.enabled(),
+    alive: entry => backNavigator.current.alive(entry),
+    go: entry => backNavigator.current.go(entry),
+  }), [])
   async function reloadDaemon() {
     setMainMenuOpen(false)
     setPaletteOpen(false)
@@ -4703,14 +4773,14 @@ export function App() {
     { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setNavigationSidebarOpen(true), voice:{
       phrases:['open navigation','show navigation','open navigation sidebar','show navigation sidebar','open left sidebar','show left sidebar'],
     } },
-    // Unconditionally available, and deliberately not gated on `dismissStack.depth()`:
+    // Unconditionally available, and deliberately not gated on `backTarget.depth()`:
     // `available` is a render-time snapshot, but a drill-down level (History's transcript)
     // lives in its own component's state and opens without re-rendering App. A stale
     // `false` would make `runCommand` refuse the command and toast at exactly the moment
-    // the user swiped back. `pop()` is already inert on an empty stack, which is the same
-    // outcome without the lie. Subscribing App to the stack instead would re-render the
-    // whole shell on every overlay open for a greyed-out palette row.
-    { id: 'nav.back', label: 'Back (close one overlay level)', category: 'view', available: true, run: () => { dismissStack.pop() } },
+    // the user swiped back. `pop()` is already inert with nothing to go back to, which is
+    // the same outcome without the lie. Subscribing App to the target instead would
+    // re-render the whole shell on every overlay open for a greyed-out palette row.
+    { id: 'nav.back', label: 'Back (close one overlay level, then step back a tab)', category: 'view', available: true, run: () => { backTarget.pop() } },
     { id: 'sidebar.close', label: 'Close navigation sidebar', category: 'view', available: true, run: () => setNavigationSidebarOpen(false), voice:{
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
@@ -5151,6 +5221,10 @@ export function App() {
       // One level, not everything on screen. This handler stays bubble-phase on window so
       // a surface that owns Escape for itself — the utility drawer's focus-scoped handler,
       // the shortcut recorder in Settings — still shields it by stopping propagation.
+      //
+      // The dismiss stack directly, never `backTarget`: Escape with nothing open belongs
+      // to the terminal, and stepping the workspace back a tab from inside an agent's TUI
+      // is exactly the kind of side effect the flat Escape handlers were replaced to stop.
       if (event.key === 'Escape') dismissStack.pop()
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -5264,10 +5338,16 @@ export function App() {
     return () => window.clearInterval(timer)
   }, [sidebarSearchOpen])
 
-  // The platform back gesture closes one overlay level. Installed for every device, not
-  // just the mobile workspace: a desktop browser's Back button and mouse-4 reach the same
+  // The platform back gesture steps back one place inside the app: an open overlay level
+  // first, then the recent-views ring (mobile only). Installed for every device, not just
+  // the mobile workspace: a desktop browser's Back button and mouse-4 reach the same
   // handler, and a standalone PWA has no other route back at all.
-  useEffect(() => installSystemBack(), [])
+  useEffect(() => installSystemBack(backTarget), [backTarget])
+  // Whether an entry in the ring still names something reachable depends on state the
+  // ring cannot see, and the history sentinel must not stay armed against entries that
+  // name nothing. A pane closing, a Project going away, or the layout mode flipping is
+  // therefore reported to it rather than polled.
+  useEffect(() => { viewHistory.touch() }, [mobileWorkspace, viewBack, layoutMap, projects])
 
   // -- redeploy tracking --------------------------------------------------
   // Mirror every state change out to sessionStorage, so a reload or a second tab
@@ -5365,13 +5445,17 @@ export function App() {
     const id = dismissStack.register({ label: 'daemon-reload', blocking: true, dismiss: () => undefined })
     return () => dismissStack.unregister(id)
   }, [daemonReloading, redeployDown])
-  // Field diagnostics for "back did the wrong thing" reports: the live level names and the
-  // recent transition ring, readable from a phone's remote console with no build change.
+  // Field diagnostics for "back did the wrong thing" reports: the live level names, the
+  // recent transition ring, and the views back would walk next, readable from a phone's
+  // remote console with no build change.
   useEffect(() => {
     ;(window as unknown as { __muxDismiss?: unknown }).__muxDismiss = {
       depth: () => dismissStack.depth(),
       top: () => dismissStack.topLabel(),
       trace: () => dismissStack.trace(),
+      views: () => viewHistory.entries(),
+      // What back would actually act on, overlays and views together.
+      backDepth: () => backTarget.depth(),
     }
   }, [])
 
@@ -5476,6 +5560,10 @@ export function App() {
       // swipe for itself instead of quietly working the drawer behind it.
       const settingsOnTop = dismissStack.topLabel() === 'settings' || dismissStack.topLabel() === 'settings-nav'
       const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, {
+        // `dismissStack.depth()`, never `backTarget.depth()`. This asks "is an overlay
+        // painted over the workspace", and the answer decides that every other slot
+        // resolves to nothing. Counting the recent-views ring here would make that true
+        // permanently - one tab switch and no gesture would ever run again.
         depth: gestureOverlayDepth(dismissStack.depth(), panels),
         enabled: overlayBack,
         panel: settingsOnTop ? { open: settingsNav.current.open, toggle: SETTINGS_NAV_TOGGLE, close: SETTINGS_NAV_CLOSE } : undefined,

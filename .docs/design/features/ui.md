@@ -454,6 +454,9 @@ Its rules, and what each one is defending:
   dialog from Projects must place it above the manager, never beneath it.
 - **"Back" is one concept with one implementation.**
   Every dismissable level registers with the dismiss stack (`dismissStack.ts`) while it is open, and Escape, the platform back gesture, and the mobile back swipe all resolve to a single `pop()` that closes exactly one level.
+  Back has a **second rung underneath that one**, reached only when nothing is layered: the recent-views ring (`viewHistory.ts`), which steps the mobile workspace back through the tabs and Projects most recently looked at before the press is finally handed to the platform.
+  `composeBackTarget` joins the two into the single `BackTarget` that `systemBack.ts` and the `nav.back` command hold, so the ordering - overlays, then navigation, then leave, which is Android's own - lives in one place rather than in each entry point.
+  Escape is the one channel deliberately left on `dismissStack.pop()` alone: with nothing open Escape belongs to the terminal, and stepping the workspace back a tab from inside an agent's TUI is the same class of side effect the flat Escape handlers were replaced to stop.
   Registration happens through `useModalFocus`, so declaring a focus-trapped modal is also how it declares what back means for it; anything that is not its own focus-trapped modal — a drill-down, a menu, a slide-in panel, an in-pane find bar — uses `useDismissLevel`.
   Coverage is total rather than partial: modals, the nine context menus, the mobile slide-in panels, the palette, the quick launcher, every root-owned dialog, and the in-pane widgets (terminal find, resource find, note outline, files tree menu, note row menu) are all levels.
   Four surfaces had grown private versions of this ladder before it existed — the paired `useModalFocus` gates in `AutomationDashboard.tsx`, the nested Escape ternary in `ProjectRunMenu.tsx`, the four-rung unwind in `Settings.tsx`, and two flat Escape handlers in `App.tsx` closing nine and eighteen things at once — which is the evidence that it is one behavior rather than a per-dialog decision.
@@ -1061,15 +1064,35 @@ Its rules, and what each one is defending:
   The override applies to one- and two-finger horizontal swipes alike, even to unbound slots; the drawer wins when both panels are open because it overlays the sidebar.
   Slide-in panels are dismiss-stack levels for system Back and Escape, but `gestureOverlayDepth` excludes their entries from modal-overlay gesture precedence.
   Resolution is a pure layer between recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input → touch gestures).
-- **The platform back gesture closes one overlay level.**
+- **The platform back gesture steps back one place inside the app.**
   swe-mux installs as a `display: standalone` PWA, where back is the primary navigation control, and the app keeps no route history of its own (the URL is only ever `replaceState`d to track the focused session).
   With nothing to pop, Android's back backgrounded the whole app while a modal was open.
-  `systemBack.ts` keeps **one** sentinel history entry alive for exactly as long as the dismiss stack is non-empty: pushed when the first level opens, consumed by the platform on a back gesture, and re-pushed if levels remain.
+  `systemBack.ts` keeps **one** sentinel history entry alive for exactly as long as the back target has somewhere to go: pushed when the first level opens, consumed by the platform on a back gesture, and re-pushed if anything remains.
   One sentinel rather than one per level is the invariant that matters — per-level entries desynchronize the first time a level closes by button instead of by back, with nothing able to resynchronize them.
   Closing the last level steps back over the sentinel so the next back press is not silently swallowed, and the popstate that step causes is counted and ignored rather than read as a user gesture.
   A sentinel that is no longer the current history entry is dropped rather than stepped over, because navigating the user somewhere they did not ask to go is the worse failure.
 - The one back press this deliberately does not see is the one that dismisses the Android soft keyboard: the platform consumes it and never tells the page, so an overlay behind the keyboard survives the first press.
   That matches how the keyboard shadows back everywhere else on the platform and is not special-cased.
+- **With nothing layered, back steps through the tabs and Projects most recently looked at, then leaves.**
+  Closing the last overlay used to be the end of what back could do, so a phone user reading a session - by far the most common thing to be doing - had back background the entire PWA.
+  `viewHistory.ts` holds a ring of the last ten distinct `(Project, view)` pairs, recorded from the **committed** focus pair rather than at the two dozen call sites that set focus, because only the settled value is what the user is actually looking at and per-call-site recording would rot the first time a new flow forgot it.
+  It is an in-memory ring rather than one history entry per view, and that is the load-bearing choice: Chrome's history-manipulation intervention marks entries pushed without a user gesture as skippable, focus here moves programmatically constantly (a spawn, a resume, a branch, a closing pane handing focus to its neighbour), and those entries would quietly stop being poppable so that back left the app at random.
+  Keeping the ring in memory means the feature adds no history entries at all - `systemBack.ts` maintains the same single sentinel it already did.
+- Four rules are what separate that from a gesture that traps the user, and each is a test.
+  A traversal **consumes** its entry and never re-records, because a ring that refills itself is a cycle back can never walk out of, which is worse than the bug being fixed.
+  Recording is **MRU-distinct and excludes the destination**: a revisited view moves rather than repeating, and arriving somewhere drops it out of the ring, so flipping between two tabs twenty times still leaves exactly one step back and ten presses is a bound rather than a typical walk.
+  Dead entries - a closed pane, an ended session, a removed Project - are **skipped when back is pressed rather than pruned when pushed**, since what is reachable is only knowable at that moment, and a run of them costs one press in total rather than one press each.
+  The **traversal echo** (restoring a view makes the recorder observe a move *to* it) is recognized by identity with the entry just handed out, not by a "skip the next record" flag: a flag is silently eaten by a restore that changed nothing, taking a real navigation with it.
+- A back that lands on another tab shows the same `InteractionHud` label pill a swipe does, prefixed with the Project name when the step crossed one.
+  Same reason as the swipe: a tab change the eye misses is indistinguishable from "back did nothing", and the user presses again and leaves the app.
+- The ring is **armed on the mobile layout only**, though it is recorded on every layout.
+  On the desktop the tabs are on screen and one click away, and a permanently armed sentinel would stop the browser's own Back button from ever leaving the site - the same reason the docked sidebar and drawer are not dismiss levels there.
+  Recording regardless is what lets a phone rotate across the 760 px breakpoint and back with its history intact instead of wiped.
+  Liveness and the layout mode are state the ring cannot see, so `App` tells it when they move rather than having it poll; otherwise the sentinel stays armed against entries naming nothing.
+- `gestureOverlayDepth` keeps reading `dismissStack.depth()` and never the composite.
+  It asks "is an overlay painted over the workspace", and that answer is what resolves every non-back gesture slot to nothing - counting navigation history there would make it true permanently, and one tab switch would kill every gesture on the device.
+- The hot-reloadable `mobile_back_view_history` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour, where back on a session closed swe-mux outright.
+  `nav.back` remains one command for both rungs, so a key binding, a gesture slot, and the palette entry all step back the same way.
 - The same motion is available in-app as a **rightward swipe** while any level is open, since Android owns the edge-anchored swipes and only a mid-screen one is available.
   The overlay wrappers are in the recognizer's target allowlist solely to carry it, and the list is every wrapper rather than the most common one: `.modal-layer`, `.settings-layer`, `.usage-layer` (usage, automation, fleet queue, observations, bandwidth), `.process-layer`, `.folder-picker-layer`, and `.palette-layer`.
   Listing only `.modal-layer` left the swipe silently dead on most of the app's large surfaces.
@@ -2495,6 +2518,7 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/App.tsx`
 - `frontend/src/dismissStack.ts`
 - `frontend/src/systemBack.ts`
+- `frontend/src/viewHistory.ts`
 - `frontend/src/modalFocus.ts`
 - `frontend/src/sidebarSearch.ts`
 - `frontend/src/fuzzyText.ts`
