@@ -168,6 +168,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                       -> Phase 7.9  Code-structure graph: blast radius + per-session change map [done]
                                       -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [done]
                                       -> Phase 7.11 Scan timeline as an agent-readable surface + window-scoped fields [open]
+                                      -> Phase 7.12 Code-analysis expansion: conflict prediction + entity change facts + quality deltas [open]
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
@@ -2594,6 +2595,55 @@ If the tiered idea is ever revisited, the shape is a cheap observer on `tool_res
 - [ ] No scan-triggering or backfill capability is reachable through MCP, and no generic record-dump tool exists.
 - [ ] `approach_status` and `dead_end` are solicited only on wide-window triggers, an absent field is storage-distinguishable from an asserted one, `PROMPT_VERSION` is bumped, and the `abandoned`/`succeeded` ratio is re-measured on a comparable session to confirm the diagnosis.
 - [ ] The observer model is unchanged, and the reason is recorded: enum conformance was already clean at zero fallback fires, and the residual repairs are `uniqueItems` artifacts that no model choice fixes.
+
+## Phase 7.12 - Code-analysis expansion: conflict prediction, entity-level change facts, and quality deltas
+
+The structural graph (Phase 7.9) knows how the code connects, and the behavioral substrate knows what every session touched, but nothing yet joins the two at the symbol level.
+This phase layers five deterministic analyses over that join, ordered by how much of their value only mux can produce: mux is the only observer that sees every parallel session's edits as they happen, which is what makes cross-session conflict prediction and stale-caller detection possible at all.
+Everything here is model-free, registers as consumers in the enablement DAG (`automation_registry.py`), writes annotations only (never a PTY write), and inherits the Phase 7.9 honesty rules: static results are labeled a lower bound, unresolved is recorded rather than guessed, and empty beats a plausible guess.
+It depends on Phase 7.9 (the graph and its per-write re-parse) and Phase 7.8 (provenance attribution).
+The entity-diff substrate ships first because the conflict and drift detectors consume it.
+
+### Substrate - changed-entity diff per turn
+
+- [ ] On the `file_write` re-parse the graph already performs, diff the file's symbol set against its prior parse: added, deleted, and modified (body-hash changed) functions/classes/methods, plus each modified symbol's signature (name, parameter list) before and after. Store as compact per-run entity-change records keyed on `agent_run_id` and the `normalize_target()` path identity, so they join facts, provenance edges, and graph edges. (`code_graph.py` owns the parse; the diff is a comparison of two `defines` sets plus per-symbol content hashes, not a new parser.)
+- [ ] Do not adopt an external tree-diff tool (the GumTree/`code-diff` class): parsing another tool's text output is brittle, and the symbol-table diff on our own parses answers the questions the consumers below actually ask.
+- [ ] Surface the record where a turn is already narrated: attention-narration input, the change-map node detail card, and doc-debt precision (a doc owning a file where a signature changed owes more than one where only a body changed).
+
+### Cross-session conflict prediction (fleet-unique)
+
+- [ ] Detect symbol-level overlap between concurrently live branches of one repository: session A modified symbol `S` while session B, in a different checkout, modified `S` itself, a caller of `S`, or a file in `S`'s one-hop blast radius. File-level overlap is the cheap first tier; the graph is what makes it symbol-level.
+- [ ] Fire before merge, as a fleet-scoped annotation naming both sessions, the overlapping symbols, and the linking edge kind (same symbol / caller / import), deduped per session pair per symbol per run. This warns about semantic conflicts a clean git merge cannot detect, and only a system observing every session's writes can produce it.
+- [ ] Branch seeds reuse the change map's admission and re-anchoring rules (`_change_map_checkout`): repository-relative identity, worktree-aware, never ingesting worktree copies into the graph.
+
+### Signature drift - stale callers
+
+- [ ] When an entity-change record shows a signature change, intersect the symbol's reverse callers with the run's own `file_write` facts; callers in files the run never touched are flagged in one annotation naming the changed signature and the untouched caller files. Sharper than the shipped `_unexamined_callers` because it names the specific breaking change, and labeled a lower bound for the same dynamic-dispatch reasons.
+
+### Lint delta
+
+- [ ] After a turn's writes, run `ruff` on the touched Python files and report only diagnostics **new** against a per-file baseline captured at the previous parse, never the pre-existing count. Include the `ASYNC` rules: blocking-call-in-async is a bug class that has bitten this codebase (`loop_lag.py` exists because of it). Ruff is a standalone binary with no venv coupling, which is why it clears the bar LSP failed; `tsc`/`dmypy` deltas are explicitly deferred because they carry project-environment coupling.
+- [ ] Bound the cost: touched files only, one run per turn boundary, a hard per-run diagnostic cap, and the annotation deduped per file per run.
+
+### Dependency-introduction detection
+
+- [ ] On a `file_write` to a dependency manifest or lockfile (`pyproject.toml`, `package.json`, `uv.lock`, `package-lock.json`), diff the declared dependency set and annotate each addition with the run that introduced it. Agents add packages casually, and "this run added dependency X" is a decision the human wants surfaced when it happens, not discovered weeks later.
+- [ ] Optionally check additions against a vulnerability database via `osv-scanner` (a single Go binary, Windows-clean), gated separately because it is a network call. An absent scanner degrades to the introduction annotation alone, stated rather than silent.
+
+### Deferred (same substrate, not scheduled)
+
+- [ ] Runtime-traceback-to-graph linking: parse tracebacks out of the PTY stream mux already captures, resolve frames to graph nodes, and record observed dynamic call edges. The most novel derivation, held until the detectors above prove the annotation surface can carry more volume.
+- [ ] Turn-scoped mutation testing: mutate only the turn's changed function bodies and run only the covering tests from the `test_gap` map, answering whether an agent-written test constrains the code it shipped with. Opt-in and background; needs a cost model first.
+- [ ] Cross-language API contract mapping: join FastAPI route definitions to frontend fetch call sites from the same parses, so an endpoint-shape change flags untouched frontend callers - a blast radius that crosses HTTP and that no import graph can see.
+- [ ] Config-schema validation on write, and per-turn complexity deltas.
+
+### Phase 7.12 exit criteria
+
+- [ ] Entity-change records are produced from the existing per-write re-parse, run-attributed, joinable on the shared path identity, with no external tree-diff dependency.
+- [ ] A symbol-level overlap between two live checkouts of one repository produces one fleet-scoped annotation before merge, naming both sessions and the linking edge kind, deduped, and labeled a lower bound.
+- [ ] A signature change with untouched reverse callers produces one annotation naming the change and the stale files.
+- [ ] Lint findings are reported as new-only deltas on touched files with bounded cost, and dependency additions are annotated with the run that introduced them, with an absent vulnerability scanner stated rather than silent.
+- [ ] Every detector is per-Project gated through the enablement DAG, writes annotations only, and pushes nothing into any agent.
 
 ## Phase 8 - Telegram multi-session control (descoped)
 
