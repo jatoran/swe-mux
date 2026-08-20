@@ -41,7 +41,8 @@ import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { ResourcesModal, type ResourceSegment } from './ResourcesModal'
 import { HistoryBrowser } from './HistoryBrowser'
 import { resumeDraft, type ScheduleDraft, type ScheduleTargetKind } from './schedules'
-import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
+import { AccountSwitcher } from './ProviderAccounts'
+import { harnessMark } from './harnessIcons'
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
@@ -86,7 +87,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SearchIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
+import { ActionsIcon, AlertsIcon, BroadcastIcon, ClipboardHistoryIcon, CogIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HistoryIcon, NavPanelIcon, NotesIcon, PackageIcon, PlusIcon, ProcessesIcon, PromptsIcon, QueueIcon, RefreshIcon, SearchIcon, ServerIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -293,7 +294,7 @@ const activityGlyphs=(session:Session|undefined,standing:StandingRender)=>{
 const sessionGlyph=(session:Session|undefined)=>{
   if(!session)return null
   if(!isAgent(session))return <span class="tab-session-glyph shell" title="shell">❯</span>
-  return <span class={`tab-session-glyph agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>
+  return <span class={`tab-session-glyph agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{harnessMark(session.backend)}</span>
 }
 
 // The one state indicator every surface draws. Shape (and any gauge wrapped
@@ -6706,16 +6707,16 @@ export function App() {
 
     {sidebarMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>PROJECTS</strong></div>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.add')}}>Add project…</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.create')}}>Manage projects…</button>
-      <button onClick={()=>{setSidebarMenu(null);setGroupEdit({name:''})}}>Create group</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('history.open')}}>Session history</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}>Notes…</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>Resources…</button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('project.add')}}><span class="menu-row-icon" aria-hidden="true"><PlusIcon/></span><span class="menu-row-label">Add project…</span></button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('project.create')}}><span class="menu-row-icon" aria-hidden="true"><FilesIcon/></span><span class="menu-row-label">Manage projects…</span></button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);setGroupEdit({name:''})}}><span class="menu-row-icon" aria-hidden="true"><GroupIcon/></span><span class="menu-row-label">Create group</span></button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('history.open')}}><span class="menu-row-icon" aria-hidden="true"><HistoryIcon/></span><span class="menu-row-label">Session history</span></button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}><span class="menu-row-icon" aria-hidden="true"><NotesIcon/></span><span class="menu-row-label">Notes…</span></button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}><span class="menu-row-icon" aria-hidden="true"><ProcessesIcon/></span><span class="menu-row-label">Resources…</span></button>
       <div class="context-rule" />
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('daemon.reload')}}>Reload daemon (keep sessions)</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('app.redeploy')}}>Rebuild + redeploy app (keep sessions)</button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">All Settings…</span></button>
+      <button class="menu-row" title="Reload daemon (keep sessions)" onClick={()=>{setSidebarMenu(null);runNamedCommand('daemon.reload')}}><span class="menu-row-icon" aria-hidden="true"><ServerIcon/></span><span class="menu-row-label">Reload daemon (keep sessions)</span></button>
+      <button class="menu-row" title="Rebuild + redeploy app (keep sessions)" onClick={()=>{setSidebarMenu(null);runNamedCommand('app.redeploy')}}><span class="menu-row-icon" aria-hidden="true"><PackageIcon/></span><span class="menu-row-label">Rebuild + redeploy app (keep sessions)</span></button>
     </div>}
 
     {/* A Group's own menu: the three things a Group can be told to do, in the place a
@@ -6859,38 +6860,42 @@ export function App() {
           replace them. Those counts are back where they belong, on the rows themselves.
           Right-clicking a Project row still opens the Project-scoped versions prefiltered
           to it; anything that acts on one Project lives there, not here. */}
-      <button onClick={() => runNamedCommand('history.open')}>Session history</button>
-      <button onClick={() => runNamedCommand('notes.browse')}>Notes</button>
-      <button onClick={() => runNamedCommand('queue.fleet')}>Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</button>
-      <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library</button>
-      <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history</button>
+      <button class="menu-row" onClick={() => runNamedCommand('history.open')}><span class="menu-row-icon" aria-hidden="true"><HistoryIcon/></span><span class="menu-row-label">Session history</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('notes.browse')}><span class="menu-row-icon" aria-hidden="true"><NotesIcon/></span><span class="menu-row-label">Notes</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('queue.fleet')}><span class="menu-row-icon" aria-hidden="true"><QueueIcon/></span><span class="menu-row-label">Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</span></button>
+      <button class="menu-row" onClick={()=>runNamedCommand('prompts.open')}><span class="menu-row-icon" aria-hidden="true"><PromptsIcon/></span><span class="menu-row-label">Prompt library</span></button>
+      <button class="menu-row" onClick={()=>runNamedCommand('clipboard.open')}><span class="menu-row-icon" aria-hidden="true"><ClipboardHistoryIcon/></span><span class="menu-row-label">Clipboard history</span></button>
       {/* One row for what used to be four — processes, bandwidth, storage, and token
           spend are segments of one dialog now. The three named entry points survive as
           palette commands and as the sidebar's resource chip, which lands on the
           segment it was already showing. */}
-      <button onClick={() => runNamedCommand('resources.open')}>Resources</button>
-      <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
+      <button class="menu-row" onClick={() => runNamedCommand('resources.open')}><span class="menu-row-icon" aria-hidden="true"><ProcessesIcon/></span><span class="menu-row-label">Resources</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('notifications.open')}><span class="menu-row-icon" aria-hidden="true"><AlertsIcon/></span><span class="menu-row-label">Notifications{notificationUnread?` [${notificationUnread} new]`:''}</span></button>
       <div class="context-rule"/>
       {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
           beside the tree it edits. It is repeated here on purpose: the header button is
           discoverable only once the sidebar is open and the header is in view, and this
           menu is where every other app-wide surface is looked for. Two doors to one
           registry is the lesser cost. */}
-      <button onClick={() => runNamedCommand('project.create')}>Projects</button>
-      <button onClick={() => runNamedCommand('actions.configure')}>Configure Actions</button>
-      <button onClick={() => runNamedCommand('hooks.open')}>Automation Dashboard</button>
-      <MenuGroup id="maintenance" label="Maintenance" openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
-        <button onClick={() => runNamedCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
-        <button onClick={() => runNamedCommand('app.redeploy')}>Rebuild + redeploy app (keep sessions)</button>
-        <button onClick={() => runNamedCommand('ui.reload')}>Reload UI</button>
+      <button class="menu-row" onClick={() => runNamedCommand('project.create')}><span class="menu-row-icon" aria-hidden="true"><FilesIcon/></span><span class="menu-row-label">Projects</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('actions.configure')}><span class="menu-row-icon" aria-hidden="true"><ActionsIcon/></span><span class="menu-row-label">Configure Actions</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('hooks.open')}><span class="menu-row-icon" aria-hidden="true"><DashboardIcon/></span><span class="menu-row-label">Automation Dashboard</span></button>
+      <MenuGroup id="maintenance" label="Maintenance" icon={<WrenchIcon/>} openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
+        {/* Three rows that all mean "reload", so the marks name the thing reloaded rather
+            than the act: the daemon, the frozen bundle, the page. */}
+        <button class="menu-row" title="Reload daemon (keep sessions)" onClick={() => runNamedCommand('daemon.reload')}><span class="menu-row-icon" aria-hidden="true"><ServerIcon/></span><span class="menu-row-label">Reload daemon (keep sessions)</span></button>
+        <button class="menu-row" title="Rebuild + redeploy app (keep sessions)" onClick={() => runNamedCommand('app.redeploy')}><span class="menu-row-icon" aria-hidden="true"><PackageIcon/></span><span class="menu-row-label">Rebuild + redeploy app (keep sessions)</span></button>
+        <button class="menu-row" onClick={() => runNamedCommand('ui.reload')}><span class="menu-row-icon" aria-hidden="true"><RefreshIcon/></span><span class="menu-row-label">Reload UI</span></button>
       </MenuGroup>
       <div class="context-rule"/>
       {/* Broadcast is an app-wide input mode, not a Project action: membership is
           per-session, set from a session's own context menu. */}
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcasting input' : 'Start broadcasting input'}</button>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}>Command palette <span class="menu-hint">ctrl alt p</span></button>
+      <button class="menu-row" onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}><span class="menu-row-icon" aria-hidden="true"><BroadcastIcon/></span><span class="menu-row-label">{broadcast ? 'Stop broadcasting input' : 'Start broadcasting input'}</span></button>
+      {/* The palette is a search box over every command, so it wears the magnifier the
+          sidebar filter wears. Nothing else in this menu is a search. */}
+      <button class="menu-row" onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}><span class="menu-row-icon" aria-hidden="true"><SearchIcon/></span><span class="menu-row-label">Command palette</span><span class="menu-hint">ctrl alt p</span></button>
       <div class="context-rule"/>
-      <button onClick={() => runNamedCommand('settings.open')}>Settings</button>
+      <button class="menu-row" onClick={() => runNamedCommand('settings.open')}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Settings</span></button>
     </div>}
 
     {sidebarOpen && <button class="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}

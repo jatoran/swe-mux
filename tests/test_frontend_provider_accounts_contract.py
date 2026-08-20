@@ -53,13 +53,21 @@ def test_sidebar_account_status_uses_separate_terminal_icon_rows_at_the_bottom()
     app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
-    assert "providerGlyph" in accounts
-    assert 'const claudeMark=<svg class="provider-mark"' in accounts
-    assert 'stroke="currentColor"' in accounts
-    assert "provider==='claude'?claudeMark:provider==='codex'?openaiMark" in accounts
-    assert "provider==='claude'?'✳'" not in accounts
-    assert "harnessDisplayName(provider).slice(0,1).toUpperCase()" in accounts
-    assert 'class="provider-mark"' in accounts
+    icons = (ROOT / "frontend" / "src" / "harnessIcons.tsx").read_text(encoding="utf-8")
+
+    # One mark per harness, in one module. They used to live here, beside the switcher,
+    # which knows only the harnesses that have provider accounts - so every other harness
+    # fell back to its initial and `oh-my-pi` and `opencode` both drew as `O`.
+    assert "harnessMark" in accounts
+    assert "providerGlyph" not in accounts
+    assert "stroke: 'currentColor'," in icons
+    assert 'class="provider-mark"' in icons
+    assert "provider==='claude'?'✳'" not in icons
+    for harness in ("claude", "codex", "pi", "omp", "opencode"):
+        assert f"  {harness}: " in icons
+    # An unknown harness is a daemon newer than this build, and its own initial is the
+    # most a browser can honestly say about it.
+    assert "harnessDisplayName(name).slice(0, 1).toUpperCase()" in icons
     assert "accountAbbreviation(currentLabel(current,account))" in accounts
     assert 'class="quota-grid-column quota-grid-identity"' in accounts
     assert 'class="quota-grid-column quota-grid-metric"' in accounts

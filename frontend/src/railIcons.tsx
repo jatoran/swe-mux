@@ -252,6 +252,73 @@ export const SearchIcon = () => <svg {...stroke}>
   <line x1="15" y1="15" x2="20" y2="20" />
 </svg>
 
+// App-menu marks. The sidebar's `menu` and its right-click twin used to be pure text rows,
+// which the terminal skin prefixed with one `> ` per row: a marker that is the same on every
+// row says only "this is a menu row", so a reader scanned fifteen identical prefixes and read
+// every label to find one entry. These replace it per row. They are sized at the menu's own
+// 14px and share the drawer set's stroke weight, so a mark that appears in both places (Notes,
+// Queue, Actions, Alerts) is literally the same drawing.
+
+/** A clock running backwards: what already happened, not what is scheduled. Deliberately the
+ *  mirror of `ScheduleIcon`'s forward hand - the two are the same face, and the direction of
+ *  the arrow is the whole difference between "ran" and "will run". */
+export const HistoryIcon = () => <svg {...stroke}>
+  <path d="M3.5 12a8.5 8.5 0 1 0 2.7-6.2" />
+  <polyline points="3 3.5 3 9 8.5 9" />
+  <path d="M12 7.6V12l3.2 1.9" />
+</svg>
+
+/** A gauge with its needle: a dashboard, which is a reading rather than a document. The pivot
+ *  is filled — an arc and a diagonal alone read as an abstract swoosh at 14px, and the hub is
+ *  the one mark that fixes them as a dial. */
+export const DashboardIcon = () => <svg {...stroke}>
+  <path d="M3.4 17.5a8.6 8.6 0 1 1 17.2 0" />
+  <path d="M12 17.5 16.3 11" />
+  <circle cx="12" cy="17.5" r="1.3" fill="currentColor" stroke="none" />
+</svg>
+
+/** A wrench: the group holding the reload and rebuild controls. Maintenance is the one entry
+ *  here that is a category rather than a destination, and a tool is how a menu says so. */
+export const WrenchIcon = () => <svg {...stroke}>
+  <path d="M20.4 5.4 17 8.8l-2-2 3.4-3.4a5.2 5.2 0 0 0-6.9 6.3l-6.9 6.9a2 2 0 0 0 2.8 2.8l6.9-6.9a5.2 5.2 0 0 0 6.1-7.1z" />
+</svg>
+
+/** A circular arrow: reload the thing you are looking at. */
+export const RefreshIcon = () => <svg {...stroke}>
+  <path d="M20.5 12a8.5 8.5 0 1 1-2.7-6.2" />
+  <polyline points="21 3.5 21 9 15.5 9" />
+</svg>
+
+/** Two stacked rack units: the daemon, as distinct from the page in front of you. Both rows
+ *  reload, so the marks have to carry which *thing* reloads; a second circular arrow would
+ *  have said "reload" twice and named neither. */
+export const ServerIcon = () => <svg {...stroke}>
+  <rect x="3" y="4" width="18" height="7" rx="1.6" />
+  <rect x="3" y="13" width="18" height="7" rx="1.6" />
+  <line x1="6.5" y1="7.5" x2="8.5" y2="7.5" />
+  <line x1="6.5" y1="16.5" x2="8.5" y2="16.5" />
+</svg>
+
+/** A sealed box: the frozen desktop bundle, which redeploy rebuilds and swaps whole. */
+export const PackageIcon = () => <svg {...stroke}>
+  <path d="M21 8.4v7.2a1.6 1.6 0 0 1-.85 1.41l-7.4 4.05a1.6 1.6 0 0 1-1.5 0l-7.4-4.05A1.6 1.6 0 0 1 3 15.6V8.4a1.6 1.6 0 0 1 .85-1.41l7.4-4.05a1.6 1.6 0 0 1 1.5 0l7.4 4.05A1.6 1.6 0 0 1 21 8.4z" />
+  <polyline points="3.4 7.7 12 12.4 20.6 7.7" />
+  <line x1="12" y1="12.4" x2="12" y2="21.4" />
+</svg>
+
+/** Concentric waves off a core: one keystroke reaching several sessions. */
+export const BroadcastIcon = () => <svg {...stroke}>
+  <circle cx="12" cy="12" r="2" />
+  <path d="M8.6 8.6a4.8 4.8 0 0 0 0 6.8M15.4 8.6a4.8 4.8 0 0 1 0 6.8" />
+  <path d="M5.7 5.7a8.9 8.9 0 0 0 0 12.6M18.3 5.7a8.9 8.9 0 0 1 0 12.6" />
+</svg>
+
+/** One card behind another: a Group, which is Projects held together rather than a Project. */
+export const GroupIcon = () => <svg {...stroke}>
+  <rect x="3" y="8" width="13" height="12" rx="2" />
+  <path d="M8 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" />
+</svg>
+
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   actions: ActionsIcon,
