@@ -98,6 +98,12 @@ class Harness:
             submit_delay=0.0,
         )
         self.config = Config(**config_overrides)
+        for session in sessions:
+            # The interject gate resolves the *target's* Project root, which a
+            # live record carries and the stub otherwise would not.
+            session.record.project_root = str(self.root)
+        # Project root -> interject_grant, standing in for the on-disk field.
+        self.interject_grants: dict[str, str] = {}
         self.projects = SimpleNamespace(
             projects={"p1": SimpleNamespace(id="p1", name="project", root=str(self.root))}
         )
@@ -113,6 +119,7 @@ class Harness:
                 cwd, body, project=self._identity_for(cwd), **kw
             ),
             read_observations=read_observations,
+            interject_grant_field=lambda root: self.interject_grants.get(str(root), "off"),
         )
 
     def register_project(self, project_id: str, name: str) -> Path:

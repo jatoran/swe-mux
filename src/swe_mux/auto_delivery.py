@@ -18,6 +18,13 @@ bound the roadmap requires around that decision:
 - **Never an override.** The controller cannot pass ``confirm`` (the queue
   operation rejects it from a non-human initiator), so blocked/unknown
   readiness always means "not now" and never "anyway".
+- **The consecutive cap bounds an unattended run, and clears on evidence that
+  the run is not unattended.** A human send and a reply the session itself wrote
+  to a peer both reset the count and restore a grant the cap switched off
+  (``PromptQueueStore.credit_auto_attention``). What the cap is for is a session
+  being pushed by something that never answers; a session that answers is not
+  that. Volume in an agent-to-agent exchange is bounded where it belongs, by the
+  per-thread and per-origin bounds in `agent_messaging.py`.
 - **Fail closed and stay stopped.** A failed delivery — where the PTY write may
   or may not have landed — disables the session's grant and requires human
   reconciliation. It never retries blindly.
@@ -43,9 +50,12 @@ from .config import Config
 from .harness import delivers_prompts_through_pty
 from .prompt_queue import (
     AUTO_POLICY_GLOBAL,
+    DELIVERY_NOW,
     HUMAN_SENDER_KINDS,
+    SEND_CAP_REASON,
     PromptQueueService,
     QueueError,
+    delivery_mode,
     schedule_status,
 )
 
@@ -203,6 +213,7 @@ class AutoDeliveryController:
         max_sends: int | None = None,
         by: str,
         accept_agent_messages: bool | None = None,
+        accept_agent_interjections: bool | None = None,
     ) -> dict[str, Any]:
         """Write a grant while ``_policy_lock`` is held.
 
@@ -227,11 +238,11 @@ class AutoDeliveryController:
         now = time.time()
         ttl = max(1, int(ttl_minutes or self.config.auto_delivery_session_ttl_minutes))
         cap = max(1, int(max_sends or self.config.auto_delivery_max_consecutive))
-        accept: dict[str, Any] = (
-            {}
-            if accept_agent_messages is None
-            else {"accept_agent_messages": int(bool(accept_agent_messages))}
-        )
+        accept: dict[str, Any] = {}
+        if accept_agent_messages is not None:
+            accept["accept_agent_messages"] = int(bool(accept_agent_messages))
+        if accept_agent_interjections is not None:
+            accept["accept_agent_interjections"] = int(bool(accept_agent_interjections))
         policy = await self.queue.store.set_auto_policy(
             session_id,
             enabled=1,
@@ -302,6 +313,73 @@ class AutoDeliveryController:
         row = await self.queue.store.auto_policy(session_id)
         return bool(row and row.get("accept_agent_messages"))
 
+    async def accepts_agent_interjections(self, session_id: str) -> bool:
+        """Whether a peer may have a message written into this session's turn.
+
+        On by default for a live agent conversation, alongside the rest of the
+        per-run grant, and independent of the other two switches: arming decides
+        whether a message counts as authorized, auto-delivery decides who presses
+        send, and this decides whether send may happen while a turn is running.
+        Turning any one of them off never rewrites another.
+        """
+        row = await self.queue.store.auto_policy(session_id)
+        return bool(row and row.get("accept_agent_interjections"))
+
+    async def set_accept_agent_interjections(
+        self, session_id: str, accept: bool, *, by: str = "user"
+    ) -> dict[str, Any]:
+        session = self.sessions.sessions.get(session_id)
+        if session is None:
+            raise QueueError("unknown_target", "no such session", status=404)
+        async with self._policy_lock:
+            return await self.queue.store.set_auto_policy(
+                session_id, accept_agent_interjections=int(bool(accept)), updated_by=by
+            )
+
+    async def outlook(self, session_id: str) -> dict[str, Any]:
+        """Whether anything will press send at this session, and what stops it.
+
+        Written for the *sender* of an agent message. An armed message that
+        nothing can deliver is indistinguishable, from the sender's side, from
+        one that simply has not been read yet — so an agent whose peer's grant
+        is off goes quiet instead of reporting the stall. This is the fact that
+        makes the difference sayable: it names the install-wide brakes and the
+        target's own grant, and it is derived rather than stored.
+        """
+        row = await self.queue.store.auto_policy(session_id)
+        master = bool(self.config.auto_delivery_enabled)
+        paused = await self.paused()
+        quiet = in_quiet_window(
+            self.config.auto_delivery_quiet_start, self.config.auto_delivery_quiet_end
+        )
+        enabled = bool(row and row.get("enabled"))
+        accepts = bool(row and row.get("accept_agent_messages"))
+        blocked_by: str | None = None
+        if not master:
+            blocked_by = "auto-delivery is switched off for this install"
+        elif paused:
+            blocked_by = "auto-delivery is paused install-wide"
+        elif quiet:
+            blocked_by = "quiet hours are active"
+        elif row is None:
+            # A live agent run gets its grant on the next controller tick, so
+            # this is a sub-second window rather than a standing state. Worded so
+            # it cannot be read as a refusal.
+            blocked_by = "the target has no auto-delivery grant yet"
+        elif not enabled:
+            blocked_by = str(row.get("disabled_reason") or "the target's grant is off")
+        elif not accepts:
+            blocked_by = "the target is not accepting agent-authored messages armed"
+        return {
+            "auto_delivery": blocked_by is None,
+            "blocked_by": blocked_by,
+            "sends_remaining": (
+                max(0, int(row.get("max_sends") or 0) - int(row.get("sends_used") or 0))
+                if row
+                else 0
+            ),
+        }
+
     async def report_unsafe(self, note: str = "") -> dict[str, float]:
         """Operator review input: one confirmed bad automatic delivery.
 
@@ -352,9 +430,11 @@ class AutoDeliveryController:
                     # One exception to "a row bound to this run is authoritative":
                     # a grant that merely *lapsed* while the conversation was idle
                     # recorded no decision, so the conversation default comes back
-                    # when the conversation does. Every other disabled state —
-                    # an opt-out, an exhausted send budget, a failed delivery —
-                    # stays until a human resolves it.
+                    # when the conversation does. An opt-out and a failed delivery
+                    # stay until a human resolves them. An exhausted send budget
+                    # is cleared by evidence rather than by time, so it is not
+                    # restored here either — `credit_auto_attention` clears it at
+                    # the moment the evidence arrives.
                     assert row is not None
                     if not self._restorable(row, record, now=time.time()):
                         continue
@@ -371,6 +451,7 @@ class AutoDeliveryController:
                     # restore a setting the user changed during it; only a fresh
                     # run gets the accept-agent-messages default with it.
                     accept_agent_messages=None if same_run else True,
+                    accept_agent_interjections=None if same_run else True,
                 )
                 changed = True
             if changed:
@@ -391,6 +472,9 @@ class AutoDeliveryController:
                     **row,
                     "enabled": bool(row.get("enabled")),
                     "accept_agent_messages": bool(row.get("accept_agent_messages")),
+                    "accept_agent_interjections": bool(
+                        row.get("accept_agent_interjections")
+                    ),
                     "live": bool(record is not None and record.state not in {"exited", "crashed"}),
                     "label": getattr(record, "name", None),
                     "run_matches": bool(
@@ -531,7 +615,7 @@ class AutoDeliveryController:
         if max_sends and int(policy.get("sends_used") or 0) >= max_sends:
             await self.disable_session(
                 session_id,
-                reason=f"reached {max_sends} consecutive automatic sends",
+                reason=SEND_CAP_REASON,
                 by="controller",
             )
             return None
@@ -570,8 +654,21 @@ class AutoDeliveryController:
 
         evaluation = self.queue.readiness.evaluate(session)
         if str(evaluation.get("delivery_state")) != "safe":
-            self._stability.pop(session_id, None)
-            return None
+            # An item that asked to land mid-turn is authorized by the readiness
+            # tracker's separate, strictly narrower predicate. Every gate above
+            # still applies to it — the master switch, the grant, the run
+            # binding, the head-of-line rule, the consecutive cap, quiet hours,
+            # the back-off. All this adds is that "the target is working" stops
+            # being the thing that ends the pass, and only for an item whose
+            # sender was authorized to ask (`agent_messaging.py`).
+            if not (
+                self.config.agent_interject_enabled
+                and policy.get("accept_agent_interjections")
+                and delivery_mode(head) == DELIVERY_NOW
+                and str(evaluation.get("interject_state")) == "safe"
+            ):
+                self._stability.pop(session_id, None)
+                return None
         key = (str(head["id"]), int(head["revision"]))
         tracked = self._stability.get(session_id)
         if tracked is None or (tracked[0], tracked[1]) != key:
@@ -581,9 +678,7 @@ class AutoDeliveryController:
             return None
 
         if not await self.queue.store.consume_auto_send(session_id, max_sends):
-            await self.disable_session(
-                session_id, reason="automatic send budget exhausted", by="controller"
-            )
+            await self.disable_session(session_id, reason=SEND_CAP_REASON, by="controller")
             return None
         self._stability.pop(session_id, None)
         try:

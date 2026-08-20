@@ -19,7 +19,13 @@ mux shell session via the agent shims.
 **No read tool delivers anything, and neither `notify` nor `request_spawn` does.** `notify`
 stages a message in another session's Phase 4 queue, where head-of-line order, receiver
 readiness, and (by default) human arming still apply; `request_spawn` writes an inert Fleet
-Queue approval draft and starts nothing. The Phase 7.6 tools `interrupt` and `end_session`
+Queue approval draft and starts nothing. `notify(delivery="now")` asks for the item to be
+delivered into a turn that is already running rather than at the target's next prompt; it
+still delivers nothing itself, is refused unless the target's Project granted it and the
+target session accepts it, and is authorized at delivery time by a strictly narrower
+readiness predicate (`agent-messaging.md`, `delivery-readiness.md`). It does not stop the
+turn - the CLI buffers the text and takes it at the turn boundary - so it is a latency
+choice, and `interrupt` remains the way to stop one. The Phase 7.6 tools `interrupt` and `end_session`
 are the first that act on a running agent, and they act only under a per-Project grant that
 defaults to writing an inert approval a human must decide (see "Session control" below).
 
@@ -139,7 +145,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `project_notes` | read-only inventory of Project notes, excluding the global Scratchpad; every note names its Project |
 | `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
 | `project_actions` | what a Project declares as runnable: native actions, imported VS Code tasks, and package scripts, each with its source file, steps, declared inputs, and whether a human has approved that file's exact current bytes; `include_schema` returns the `.swe-mux/actions.toml` authoring reference in the same result |
-| `message_status` | current outcome of one `notify`, visible only to its attributed sending session, wherever it was sent |
+| `message_status` | current outcome of one `notify`, visible only to its attributed sending session, wherever it was sent; an `armed` result also carries `target_delivery`, because "armed" alone cannot distinguish a peer that is busy from one nothing can reach without a human |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
 | `provenance` | cross-session lineage for one file: who wrote which content hash, who later read it, and the tests those runs ran, from Tier 0 facts plus `build_provenance_edges`. Ambiguous edges (another write landed between the reported write and read) are withheld and only counted. Lineage, never blame |
 | `verified_status` | whether a claim is tested or only declared done, via `detect_declared_vs_verified` over a run's Tier 0 test facts; reports "claims done · tests ran · tests passed", "tests failed", or "nothing verified". Defaults to the caller's own current run; `session_id` targets another |
@@ -152,7 +158,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `find_references` | every call or reference to a symbol in a file — the precise structural neighborhood, not a grep. Gated on `code_graph` |
 | `code_context` | a compact structural neighborhood for context packing: each file's key symbols, imports, and direct callers, instead of reading whole files. Gated on `code_graph` |
 | `test_gap` | recently-changed files whose static blast radius contains no covering test. A lower bound: a test reaching the code through dynamic dispatch is invisible, so a listed file is a candidate not a proof. Gated on `code_graph` |
-| `notify` | stages a message with a visible sender/message/correlation envelope, and a `from_project` header when it crossed a Project; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
+| `notify` | stages a message with a visible sender/message/correlation envelope, a `from_project` header when it crossed a Project, and a `delivery` header when it landed mid-turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |

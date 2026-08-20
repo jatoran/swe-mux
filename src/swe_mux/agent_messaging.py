@@ -38,10 +38,22 @@ because a receiver cannot infer where a peer is working.
 Receiver-side policy decides how much a message is worth on arrival. A live
 agent conversation accepts agent-authored messages ``armed`` by default, as part
 of the per-run grant in ``auto_delivery.py`` — armed still waits for
-head-of-line order and delivery readiness like any other queue item, so it never
-interrupts an active turn and never bypasses an approval or question prompt.
-A session whose operator turned ``accept_agent_messages`` off for that run
-receives an inert ``draft`` instead, which only a human can arm.
+head-of-line order and delivery readiness like any other queue item, and never
+bypasses an approval or question prompt. A session whose operator turned
+``accept_agent_messages`` off for that run receives an inert ``draft`` instead,
+which only a human can arm.
+
+``delivery="now"`` is the one thing here that reaches a session mid-turn, and it
+is gated three ways before the caller may even ask: an install-wide switch, the
+*target* Project's ``interject_grant``, and the receiving session's own
+``accept_agent_interjections`` for its run. Asking is not authorization: whether
+the write happens is the readiness tracker's separate ``interject_state``
+predicate at delivery time, which requires the lifecycle evidence and the CLI's
+own screen to agree a turn is running with no composer content to land on top
+of, and which refuses an approval prompt, a picker, a rate limit, a retired
+transcript, and a remote boundary outright. What it buys is latency — the CLI
+buffers the paste and takes it at the turn boundary — not preemption; stopping a
+turn is ``interrupt`` (`session_control.py`).
 """
 
 from __future__ import annotations
@@ -61,7 +73,13 @@ from .project_scope import (
     resolve_project_scope,
     split_qualified_target,
 )
-from .prompt_queue import PromptQueueService, QueueError
+from .prompt_queue import (
+    DELIVERY_MODES,
+    DELIVERY_NOW,
+    DELIVERY_WHEN_IDLE,
+    PromptQueueService,
+    QueueError,
+)
 
 log = logging.getLogger("swe_mux.agent_messaging")
 
@@ -88,6 +106,7 @@ def _notification_body(
     reason: str,
     replies_left: int,
     armed: bool,
+    interject: bool,
     body: str,
 ) -> str:
     headers = [
@@ -124,6 +143,18 @@ def _notification_body(
         else "authority: peer agent, held until a human armed it — a person"
         " saw this message and released it to you."
     )
+    # A mid-turn arrival is a different experience to a message waiting at a
+    # prompt, and the receiver cannot tell them apart from the text: the CLI
+    # buffers the paste and hands it over at the turn boundary, so it reads
+    # exactly like something typed between turns. Naming it is what lets a
+    # receiver treat an interruption as one.
+    if interject:
+        headers.append(
+            "delivery: written into a turn that was already running, under this"
+            " Project's mid-turn grant. Your CLI held it until the turn ended."
+            " The sender asked for it to reach you sooner than the queue would;"
+            " that is a claim about urgency, not about authority."
+        )
     # The receiver is the one who needs to know a reply is allowed, and the
     # envelope is the only surface they see. Without this an agent discovers the
     # answer from a refusal, which is how a reply gets abandoned as impossible.
@@ -149,6 +180,8 @@ class AgentMessagingService:
         *,
         append_observation: Any = None,
         read_observations: Any = None,
+        interject_grant_field: Any = None,
+        clock: Any = time.time,
     ) -> None:
         self.queue = queue
         self.sessions = sessions
@@ -159,6 +192,14 @@ class AgentMessagingService:
         # never reaches into the filesystem layer directly.
         self._append_observation = append_observation
         self._read_observations = read_observations
+        self._interject_grant_field = interject_grant_field
+        self._clock = clock
+        # Mid-turn delivery is bounded in memory rather than in SQLite: both
+        # bounds are about the last hour and the last minute, so a daemon
+        # restart resetting them costs nothing, and neither is an audit fact -
+        # the delivery row is (`queue_deliveries.interjected`).
+        self._interjects_by_origin: dict[str, list[float]] = {}
+        self._last_interject_at: dict[str, float] = {}
 
     # -- scope ----------------------------------------------------------------
 
@@ -249,6 +290,91 @@ class AgentMessagingService:
             raise QueueError("target_ended", "the target session has ended")
         return target
 
+    # -- mid-turn delivery ----------------------------------------------------
+
+    async def _authorize_interject(
+        self, caller_id: str, destination: Any, *, retry: bool
+    ) -> None:
+        """Three gates and two bounds before a message may ask to land mid-turn.
+
+        None of them decide whether the write is *safe* - that is the readiness
+        tracker's separate interject predicate, checked at delivery, and it can
+        refuse everything authorized here. These decide whether the caller is
+        allowed to ask at all, and they are deliberately layered the way the rest
+        of the control plane is: an install-wide switch the operator holds, a
+        per-Project standing permission somebody wrote down, and the receiving
+        session's own opt-out for its run. Being written to mid-turn costs the
+        receiver attention immediately, so the receiver keeps a veto.
+        """
+        if not self.config.agent_interject_enabled:
+            raise QueueError(
+                "interject_disabled",
+                "mid-turn delivery is disabled on this mux install; send the"
+                " message without `delivery` and it waits for the target's queue",
+                status=403,
+            )
+        target_id = str(destination.record.id)
+        root = str(getattr(destination.record, "project_root", "") or "")
+        grant = "off"
+        if root and self._interject_grant_field is not None:
+            grant = str(self._interject_grant_field(root) or "off")
+        if grant != "granted":
+            raise QueueError(
+                "interject_not_granted",
+                "that Project has not granted mid-turn delivery"
+                ' (`interject_grant = "granted"` in its .swe-mux/config.toml);'
+                " send the message without `delivery` and it waits for the"
+                " target's queue",
+                status=403,
+            )
+        if not await self.auto.accepts_agent_interjections(target_id):
+            raise QueueError(
+                "interject_refused_by_target",
+                "that session is not accepting mid-turn deliveries for this run;"
+                " send the message without `delivery` and it waits in its queue",
+                status=403,
+            )
+        if retry:
+            # A retry with a correlation id returns the message it already
+            # staged, so it is not a second mid-turn delivery and must not be
+            # charged as one. The three gates above still ran: they are standing
+            # permissions, and one that was revoked since should refuse.
+            return
+        now = float(self._clock())
+        budget = int(self.config.agent_interject_hourly_budget)
+        recent = [at for at in self._interjects_by_origin.get(caller_id, ()) if at >= now - 3600]
+        self._interjects_by_origin[caller_id] = recent
+        if budget <= 0 or len(recent) >= budget:
+            raise QueueError(
+                "interject_budget_exhausted",
+                f"this session has asked for {len(recent)} mid-turn deliveries in"
+                f" the last hour (limit {budget}); send it as an ordinary message"
+                " instead",
+                status=429,
+            )
+        floor = float(self.config.agent_interject_min_interval_seconds)
+        last = self._last_interject_at.get(target_id)
+        if last is not None and now - last < floor:
+            raise QueueError(
+                "interject_too_soon",
+                f"that session took a mid-turn delivery {int(now - last)}s ago"
+                f" (floor {int(floor)}s); let it work, or send an ordinary message",
+                status=429,
+            )
+
+    def _spend_interject(self, caller_id: str, target_id: str) -> None:
+        """Charge one mid-turn delivery, once the item actually exists.
+
+        Split from the check because a correlation-id retry returns the original
+        message rather than staging a second one. Charging at check time would
+        make the retry spend a second slot and then fail the interval floor, so
+        an idempotent call would answer with a refusal instead of the message it
+        already staged.
+        """
+        now = float(self._clock())
+        self._interjects_by_origin.setdefault(caller_id, []).append(now)
+        self._last_interject_at[target_id] = now
+
     # -- notify ---------------------------------------------------------------
 
     async def notify(
@@ -260,6 +386,7 @@ class AgentMessagingService:
         reason: str = "",
         correlation_id: str | None = None,
         project: Any = None,
+        delivery: str = DELIVERY_WHEN_IDLE,
     ) -> dict[str, Any]:
         """Stage a message from the calling session into ``target``'s queue."""
         if not self.config.agent_messaging_enabled:
@@ -359,6 +486,8 @@ class AgentMessagingService:
             )
 
         thread_id = str(inbound.get("thread_id") or "") or None
+        # Inherited rather than minted: somebody wrote to this session first.
+        continues_thread = thread_id is not None
         max_turns = int(self.config.agent_message_max_thread_turns)
         turns = 0
         if thread_id:
@@ -373,11 +502,30 @@ class AgentMessagingService:
         else:
             thread_id = str(uuid.uuid4())
 
+        mode = str(delivery or DELIVERY_WHEN_IDLE)
+        if mode not in DELIVERY_MODES:
+            raise QueueError(
+                "invalid_delivery",
+                f"delivery must be one of {', '.join(DELIVERY_MODES)}",
+                status=400,
+            )
+        correlation = _envelope_value(correlation_id, max_chars=200) or str(uuid.uuid4())
+        if mode == DELIVERY_NOW:
+            await self._authorize_interject(
+                caller_id,
+                destination,
+                retry=bool(correlation_id)
+                and await self.queue.store.message_by_correlation(
+                    AGENT_SENDER_KIND, caller_id, correlation
+                )
+                is not None,
+            )
+
+        outlook = await self.auto.outlook(target_id)
         armed = bool(await self.auto.accepts_agent_messages(target_id))
         ttl_seconds = DEFAULT_MESSAGE_TTL_HOURS * 3600
         expires_at = time.time() + ttl_seconds
         message_id = str(uuid.uuid4())
-        correlation = _envelope_value(correlation_id, max_chars=200) or str(uuid.uuid4())
         sender_name = str(getattr(caller.record, "name", "") or caller_id)
         sender_run_id = str(getattr(caller.record, "agent_run_id", "") or caller_id)
         sender_backend = str(getattr(caller.record, "backend", "") or "unknown")
@@ -400,6 +548,7 @@ class AgentMessagingService:
             reason=reason,
             replies_left=max(0, max_turns - (turns + 1)),
             armed=armed,
+            interject=mode == DELIVERY_NOW,
             body=text,
         )
         message = await self.queue.enqueue(
@@ -428,8 +577,26 @@ class AgentMessagingService:
                 "created_at": time.time(),
             },
             payload={"kind": "agent_notify", "version": 2},
-            constraints={"expires_at": expires_at},
+            constraints={"expires_at": expires_at, "delivery": mode},
         )
+        if mode == DELIVERY_NOW and not message.get("deduplicated"):
+            self._spend_interject(caller_id, target_id)
+        # Continuing a thread somebody else started is direct evidence that the
+        # sending session consumed what was delivered to it and is still working
+        # the exchange - the opposite of the unattended run the
+        # consecutive-auto-send cap exists to stop. So it credits the *sender's*
+        # inbound budget and restores a grant the cap switched off. Opening a
+        # fresh thread proves nothing about what the caller has read, so it is
+        # deliberately not evidence; volume inside an exchange is bounded here
+        # instead, by `max_thread_turns` and the per-origin hourly budget.
+        if continues_thread and await self.queue.store.credit_auto_attention(
+            caller_id, by="agent-reply"
+        ):
+            log.info(
+                "auto-delivery grant restored for %s: it answered in a thread a peer"
+                " started, so the conversation is not an unattended run",
+                caller_id,
+            )
         log.info(
             "agent notification staged sender=%s sender_run=%s target=%s message=%s"
             " correlation=%s thread=%s chain_depth=%d reply=%s deduplicated=%s"
@@ -469,17 +636,38 @@ class AgentMessagingService:
             "expires_at": (message.get("constraints") or {}).get(
                 "expires_at", expires_at
             ),
-            "note": (
-                "The matching message was deleted by the receiving operator and was not recreated."
-                if message["state"] == "deleted"
-                else
-                "Delivered under the receiving session's queue policy: it waits for"
-                " head-of-line order and delivery readiness, and never interrupts an"
-                " active turn."
-                if message["state"] == "armed"
-                else "Staged as an inert draft; a human must arm and send it."
-            ),
+            "target_delivery": outlook,
+            "note": self._staging_note(str(message["state"]), outlook),
         }
+
+    @staticmethod
+    def _staging_note(state: str, outlook: dict[str, Any]) -> str:
+        """What actually happens next, including when the answer is "nothing".
+
+        The armed note used to say only that the message waits for head-of-line
+        order and readiness. Both true, and neither says whether anything will
+        ever press send. A sender told "armed" by a target whose auto-delivery
+        grant is off has no way to distinguish a peer that is busy from one that
+        cannot be reached without a human, so it waits, and the exchange stops
+        with nobody able to say why (observed live 2026-08-19).
+        """
+        if state == "deleted":
+            return (
+                "The matching message was deleted by the receiving operator and"
+                " was not recreated."
+            )
+        if state != "armed":
+            return "Staged as an inert draft; a human must arm and send it."
+        if outlook.get("auto_delivery"):
+            return (
+                "Armed. It waits for head-of-line order and delivery readiness,"
+                " and never interrupts an active turn."
+            )
+        return (
+            "Armed, but nothing will send it automatically: "
+            f"{outlook.get('blocked_by')}. It waits for a human to press send."
+            " Say so rather than waiting silently for a reply."
+        )
 
     # -- drafted spawn --------------------------------------------------------
 
@@ -755,12 +943,13 @@ class AgentMessagingService:
                 "cancelled": "refused",
                 "deleted": "refused",
             }.get(raw_state, "refused")
-        return {
+        target_id = str(message.get("target_session_id") or "")
+        result: dict[str, Any] = {
             "message_id": str(message["id"]),
             "correlation_id": message.get("correlation_id"),
             "status": status,
             "queue_state": raw_state,
-            "target_session_id": str(message.get("target_session_id") or ""),
+            "target_session_id": target_id,
             "target_name": message.get("target_label"),
             "created_at": message.get("created_at"),
             "updated_at": message.get("updated_at"),
@@ -770,6 +959,11 @@ class AgentMessagingService:
             "stranded_reason": message.get("stranded_reason"),
             "cancel_kind": message.get("cancel_kind"),
         }
+        if status == "armed" and target_id:
+            # "Armed" alone cannot be acted on: it is the same word for a peer
+            # that is merely busy and for one nothing can reach without a human.
+            result["target_delivery"] = await self.auto.outlook(target_id)
+        return result
 
     # -- mailbox --------------------------------------------------------------
 

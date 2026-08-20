@@ -88,9 +88,11 @@
   `design/interfaces.md`, `design/data-model.md`, `technical/backend/packages.md`,
   `technical/frontend/packages.md`
 - Changing gated auto-delivery (the per-conversation default/override, stability window, quiet hours,
-  emergency pause, item scheduling/expiry, or the promotion criteria):
+  emergency pause, item scheduling/expiry, the consecutive-send cap and what clears it, mid-turn
+  delivery, or the promotion criteria):
   `design/features/auto-delivery.md`, `design/features/prompt-queue.md`,
-  `design/features/delivery-readiness.md`, `design/interfaces.md`, `design/data-model.md`
+  `design/features/delivery-readiness.md`, `design/features/agent-messaging.md`,
+  `design/interfaces.md`, `design/data-model.md`
 - Changing agent-to-agent messages, the fleet queue (the app-wide authorship view, served
   by the older-named `/api/queue/mailbox`), sender provenance, or drafted spawn requests:
   `design/features/agent-messaging.md`, `design/features/mux-mcp.md`,

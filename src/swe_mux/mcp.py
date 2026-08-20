@@ -592,14 +592,16 @@ TOOLS: list[dict[str, Any]] = [
         "name": "notify",
         "description": (
             "Send a short message to another agent session. It "
-            "enters that session's prompt queue and waits: it never interrupts "
-            "an active turn, never answers an approval prompt, and by default "
+            "enters that session's prompt queue and waits for that session to be "
+            "ready: it never answers an approval prompt, and by default "
             "lands as an inert draft a human must approve. Use it to hand off "
             "or to flag something the other session needs; do not use it to "
             "issue instructions you would not want a human to read first. "
             "You may reply to a session that messaged you: pass its session id "
             "as the target and the reply continues the same bounded exchange. "
-            "The result reports how many messages that exchange has left. "
+            "The result reports how many messages that exchange has left, and "
+            "whether anything will actually deliver it - if it says nothing "
+            "will, say so rather than waiting silently for a reply. "
             "Your own Project is the default. To reach a session in another "
             'Project, pass project:"fleet" or the Project name, or address the '
             'target as "Project name/session name". The receiver is told which '
@@ -632,6 +634,25 @@ TOOLS: list[dict[str, Any]] = [
                     "description": (
                         "Optional idempotency key: retrying with the same value "
                         "returns the original message instead of a duplicate"
+                    ),
+                },
+                "delivery": {
+                    "type": "string",
+                    "enum": ["when_idle", "now"],
+                    "description": (
+                        'When to deliver. "when_idle" (the default) waits for the '
+                        "target to finish what it is doing and be at its prompt. "
+                        '"now" also allows delivery into a turn that is already '
+                        "running, which is what you want for something the other "
+                        "session should know before it finishes - a correction, a "
+                        "changed constraint, work you have just taken over. It "
+                        "does not stop the turn: the CLI buffers your text and "
+                        "takes it at the turn boundary, so what you buy is arriving "
+                        "sooner, not preemption. To actually stop a turn, use "
+                        "interrupt. Refused unless the target's Project granted "
+                        "mid-turn delivery and the target session accepts it; the "
+                        "refusal says which, and sending without this argument "
+                        "always works."
                     ),
                 },
             },
@@ -3622,6 +3643,7 @@ class McpService:
             reason=str(args.get("reason") or ""),
             correlation_id=str(args.get("correlation_id") or "") or None,
             project=project,
+            delivery=str(args.get("delivery") or "when_idle"),
         )
         return dict(result)
 

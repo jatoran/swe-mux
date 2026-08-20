@@ -209,14 +209,18 @@
   with the most recent sender last / sender Project label and whether the message crossed a
   Project / rule id / Tier 0 fact fingerprints),
   `payload_json` (typed action payload for control-plane drafts), `constraints_json`
-  (`not_before`, `expires_at`) — plus blocked reasons, stranded reason, `cancel_kind`
+  (`not_before`, `expires_at`, `delivery` — `now` for an item that asked to land in a running
+  turn; the `when_idle` default is never persisted, so an item without the key means what
+  every item meant before the mode existed) — plus blocked reasons, stranded reason, `cancel_kind`
   (`cancelled|skipped|revoked|expired`), `retargeted_from_json`, and lifecycle timestamps
   including `deleted_at`. Delete blanks the body and action-bearing JSON immediately, hides
   the row from every read surface, and retains the content-free row until normal retention
   so sender correlation retries resolve to the deleted identity instead of recreating it.
 - `queue_deliveries`: the delivery audit — per attempt: revision, target identity,
-  readiness state + reasons, explicit-confirmation flag, `initiator` (`user|auto` — who
-  pressed send), outcome (`pending|sent|refused|failed`), error, byte count, and a
+  readiness state + reasons, explicit-confirmation flag, `interjected` (the write landed in a
+  running turn — not derivable from the other two, since an interject is neither `safe` nor a
+  human override, and it is the one delivery shape that had to be separately authorized),
+  `initiator` (`user|auto` — who pressed send), outcome (`pending|sent|refused|failed`), error, byte count, and a
   partial-unique `idempotency_key` (a repeated key replays the recorded outcome instead of
   delivering twice). Deliberately carries no prompt text; bodies live in `queue_messages`
   only.
@@ -224,14 +228,29 @@
   runtime auto-delivery state, deliberately not config — the default-on per-conversation grant
   or override (bound
   `agent_run_id`, `expires_at`, `max_sends`/`sends_used`, `accept_agent_messages`,
-  `disabled_reason`), one reserved `*` row for the emergency pause, and the persisted
+  `accept_agent_interjections`, `disabled_reason`), one reserved `*` row for the emergency
+  pause, and the persisted
   proving-period counters (`auto_sent`, `auto_refused`, `auto_failed`, `unsafe_reported`,
   `proving_since`). The store carries a v1→v2 migration: the Phase 5 columns are added in
   place, because `CREATE TABLE IF NOT EXISTS` would otherwise reach only fresh databases.
-  `accept_agent_messages` keeps a column default of `0` while the conversation-default grant
-  writes `1` explicitly. A column default would also land on rows inserted by an opt-out and
-  on the reserved pause row, where "on" is not what was meant, so the per-run default belongs
-  in the one code path that grants a run rather than in the DDL.
+  `accept_agent_messages` and `accept_agent_interjections` both keep a column default of `0`
+  while the conversation-default grant writes `1` explicitly. A column default would also land
+  on rows inserted by an opt-out and on the reserved pause row, where "on" is not what was
+  meant, so the per-run default belongs in the one code path that grants a run rather than in
+  the DDL.
+  That has one consequence a later column has to pay for: the defaults are written once, when
+  a run is granted, so a column added afterwards reads as "opted out" on every conversation
+  already live. `accept_agent_interjections` therefore carries a one-time backfill in the same
+  migration, over exactly the rows that are `enabled=1 AND accept_agent_messages=1` - a grant
+  that is on, whose run also accepts agent messages, and which said nothing about mid-turn ones
+  because the concept did not exist. A disabled row, an opted-out row, and the pause row each
+  said something and are left saying it. Without the backfill the capability looks dead on the
+  whole fleet until each conversation happens to roll over, which from the operator's side is
+  indistinguishable from it being broken.
+  `disabled_reason` is read as well as written: the consecutive-send cap is the one disable
+  reason that clears on evidence rather than on a human act, so the store recognizes it (the
+  current string and the two earlier spellings) and restores the grant when a human sends by
+  hand or the session writes a reply (`features/auto-delivery.md`).
 - `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start or
   reopen an agent session on their own, and their run history.
   A definition is a deferred `SpawnRequest` (`project_id`, `backend`, `profile_id`, `cwd`,

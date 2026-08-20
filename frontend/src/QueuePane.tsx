@@ -607,6 +607,24 @@ export function QueuePane({
                 />
                 <span>accept agent messages armed</span>
               </label>
+              {/* Independent of the two above: arming decides whether a peer's
+                  message counts as authorized, auto-delivery decides who presses
+                  send, and this decides whether send may happen while a turn is
+                  still running. Only a peer whose Project was granted mid-turn
+                  delivery can ask for it, and the readiness tracker still has to
+                  agree the turn is really running. */}
+              <label
+                class="queue-auto-toggle"
+                title="A peer may have an urgent message written into a running turn; the CLI takes it at the turn boundary"
+              >
+                <input
+                  type="checkbox"
+                  checked={!!policy?.accept_agent_interjections}
+                  disabled={busyId === 'auto'}
+                  onChange={event => setPolicy({ acceptAgentInterjections: event.currentTarget.checked })}
+                />
+                <span>accept mid-turn agent messages</span>
+              </label>
             </>
           )}
           {auto && !auto.master_enabled && (

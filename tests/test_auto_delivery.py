@@ -22,12 +22,18 @@ import pytest
 from swe_mux.auto_delivery import (
     COUNTER_SENT,
     COUNTER_UNSAFE,
+    FAILED_DELIVERY_REASON,
     AutoDeliveryController,
     in_quiet_window,
     promotion_status,
 )
 from swe_mux.config import Config
-from swe_mux.prompt_queue import PromptQueueService, PromptQueueStore, QueueError
+from swe_mux.prompt_queue import (
+    SEND_CAP_REASON,
+    PromptQueueService,
+    PromptQueueStore,
+    QueueError,
+)
 
 
 def record(sid: str, **kw: Any) -> Any:
@@ -68,11 +74,19 @@ class EventsStub:
 
 
 class ReadinessStub:
-    def __init__(self, state: str = "safe") -> None:
+    def __init__(self, state: str = "safe", *, interject_state: str = "blocked") -> None:
         self.state = state
+        # Defaults to blocked: a test that says nothing about mid-turn delivery
+        # must not accidentally authorize one.
+        self.interject_state = interject_state
 
     def evaluate(self, session: Any) -> dict[str, Any]:
-        return {"delivery_state": self.state, "reasons": ["all_required_evidence_positive"]}
+        return {
+            "delivery_state": self.state,
+            "reasons": ["all_required_evidence_positive"],
+            "interject_state": self.interject_state,
+            "interject_reasons": [],
+        }
 
 
 class Harness:
@@ -283,11 +297,149 @@ async def test_the_consecutive_cap_disables_the_grant_and_a_human_send_resets_it
     assert await harness.auto.tick() == []
     policy = await harness.store.auto_policy("s1")
     assert policy is not None and not policy["enabled"]
-    assert "consecutive" in str(policy["disabled_reason"])
-    # A manual delivery is evidence of attention: it resets the budget.
+    assert policy["disabled_reason"] == SEND_CAP_REASON
+    # A manual delivery is evidence of attention: it resets the budget *and*
+    # restores the grant the budget switched off. Resetting the count alone was
+    # the 2026-08-19 bug — the conversation-default pass deliberately refuses to
+    # restore anything but a lapse, so the grant stayed off for the whole run
+    # while `sends_used` read 0 and the operator hand-pumped every send.
     await harness.service.send_next(second["id"], revision=second["revision"])
     refreshed = await harness.store.auto_policy("s1")
-    assert refreshed is not None and refreshed["sends_used"] == 0
+    assert refreshed is not None
+    assert refreshed["sends_used"] == 0
+    assert refreshed["enabled"]
+    assert refreshed["disabled_reason"] is None
+    # And the restored grant actually delivers again, which is the only thing
+    # the operator cares about.
+    third = await harness.service.enqueue(target_session_id="s1", body="three", armed=True)
+    await harness.settle()
+    assert await harness.auto.tick() == [third["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_grant_capped_by_an_older_build_still_recovers(harness: Harness) -> None:
+    """The reason string was renamed; rows written by the previous build remain.
+
+    Every install that hit this bug has rows carrying the old spelling, and a
+    predicate that only knew the new one would leave exactly those grants off
+    forever — the fix appearing to do nothing on the machine that needed it.
+    """
+    for legacy in ("reached 3 consecutive automatic sends", "automatic send budget exhausted"):
+        await harness.auto.enable_session("s1")
+        await harness.store.set_auto_policy(
+            "s1", enabled=0, disabled_reason=legacy, sends_used=3
+        )
+        message = await harness.service.enqueue(
+            target_session_id="s1", body="by hand", armed=True
+        )
+        await harness.service.send_next(message["id"], revision=message["revision"])
+        restored = await harness.store.auto_policy("s1")
+        assert restored is not None, legacy
+        assert restored["enabled"], legacy
+        assert restored["disabled_reason"] is None, legacy
+
+
+@pytest.mark.asyncio
+async def test_a_decision_is_not_cleared_by_attention(harness: Harness) -> None:
+    """Only the cap clears on evidence. An opt-out and a failed-delivery hold
+    each record something a human has to resolve, and a manual send is not that
+    resolution — it says the operator is present, not that they verified the
+    terminal or changed their mind."""
+    for reason in ("disabled by user", FAILED_DELIVERY_REASON):
+        await harness.auto.enable_session("s1")
+        await harness.store.set_auto_policy("s1", enabled=0, disabled_reason=reason)
+        message = await harness.service.enqueue(
+            target_session_id="s1", body="by hand", armed=True
+        )
+        await harness.service.send_next(message["id"], revision=message["revision"])
+        held = await harness.store.auto_policy("s1")
+        assert held is not None, reason
+        assert not held["enabled"], reason
+        assert held["disabled_reason"] == reason
+        # The count still resets: that part was never the decision.
+        assert held["sends_used"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_controller_delivers_a_mid_turn_item_into_a_working_session(
+    harness: Harness,
+) -> None:
+    """Every other gate still applies; "the target is working" stops being the
+    thing that ends the pass, and only for an item that asked for it."""
+    harness.readiness.state = "blocked"
+    harness.readiness.interject_state = "safe"
+    ordinary = await harness.service.enqueue(
+        target_session_id="s1",
+        body="whenever",
+        armed=True,
+        sender_kind="agent",
+        sender_id="s2",
+    )
+    await harness.settle()
+    assert await harness.auto.tick() == []
+
+    await harness.service.cancel(ordinary["id"])
+    urgent = await harness.service.enqueue(
+        target_session_id="s1",
+        body="stop using the v1 endpoint",
+        armed=True,
+        sender_kind="agent",
+        sender_id="s2",
+        constraints={"delivery": "now"},
+    )
+    await harness.settle()
+    assert await harness.auto.tick() == [urgent["id"]]
+
+
+@pytest.mark.asyncio
+async def test_the_receiver_switch_and_the_master_each_stop_a_mid_turn_item(
+    harness: Harness,
+) -> None:
+    harness.readiness.state = "blocked"
+    harness.readiness.interject_state = "safe"
+    urgent = await harness.service.enqueue(
+        target_session_id="s1",
+        body="urgent",
+        armed=True,
+        sender_kind="agent",
+        sender_id="s2",
+        constraints={"delivery": "now"},
+    )
+    await harness.settle()
+    await harness.auto.set_accept_agent_interjections("s1", False)
+    assert await harness.auto.tick() == []
+
+    await harness.auto.set_accept_agent_interjections("s1", True)
+    harness.config.agent_interject_enabled = False
+    await harness.settle()
+    assert await harness.auto.tick() == []
+
+    harness.config.agent_interject_enabled = True
+    await harness.settle()
+    assert await harness.auto.tick() == [urgent["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_mid_turn_item_still_answers_to_the_stability_window(
+    harness: Harness,
+) -> None:
+    """One reading that the turn is running is a race; a held window is evidence,
+    exactly as it is for the ordinary path."""
+    harness.readiness.state = "blocked"
+    harness.readiness.interject_state = "safe"
+    urgent = await harness.service.enqueue(
+        target_session_id="s1",
+        body="urgent",
+        armed=True,
+        sender_kind="agent",
+        sender_id="s2",
+        constraints={"delivery": "now"},
+    )
+    # First tick only opens the window.
+    assert await harness.auto.tick() == []
+    assert not harness.writes
+    await asyncio.sleep(float(harness.config.auto_delivery_stable_seconds) + 0.05)
+    assert await harness.auto.tick() == [urgent["id"]]
 
 
 @pytest.mark.asyncio

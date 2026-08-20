@@ -54,6 +54,7 @@ export interface QueueAutoSession {
   session_id: string
   enabled: boolean
   accept_agent_messages: boolean
+  accept_agent_interjections: boolean
   agent_run_id: string | null
   label: string | null
   live: boolean
@@ -257,6 +258,7 @@ export const setSessionAutoPolicy = (
     ttlMinutes?: number
     maxSends?: number
     acceptAgentMessages?: boolean
+    acceptAgentInterjections?: boolean
   },
 ) =>
   api<QueueAutoStatus>('PUT', `/api/queue/auto/sessions/${sessionId}`, {
@@ -264,6 +266,7 @@ export const setSessionAutoPolicy = (
     ttl_minutes: patch.ttlMinutes,
     max_sends: patch.maxSends,
     accept_agent_messages: patch.acceptAgentMessages,
+    accept_agent_interjections: patch.acceptAgentInterjections,
   })
 
 /** Operator review: one confirmed bad automatic delivery resets the proving period. */

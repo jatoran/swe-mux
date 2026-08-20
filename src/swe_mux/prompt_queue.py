@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 import uuid
@@ -129,6 +130,50 @@ NON_OVERRIDABLE_REASONS = frozenset(
 )
 PROTECTED_AWAITING_REASONS = frozenset({"approval", "question", "elicitation"})
 
+# The disable reason the consecutive-auto-send cap writes. It lives here rather
+# than in `auto_delivery.py` because the store is what has to recognize it: the
+# cap is the one disable reason that *evidence of a live conversation* clears,
+# and that evidence (a human send, a reply the session itself wrote) arrives
+# through this module. Every other disable reason records a decision or an
+# ambiguity and stays until a human resolves it.
+SEND_CAP_REASON = "reached the consecutive automatic send cap"
+# The same condition as written by earlier builds — one from the pre-check and
+# one from the CAS that lost the race. Rows carrying them are cap exhaustions
+# under the old spelling, and must clear the same way; otherwise the fix does
+# nothing on the install that needed it, which is exactly how the previous
+# lapse-reason rename went wrong.
+_LEGACY_CAP_RACE_REASON = "automatic send budget exhausted"
+_LEGACY_CAP_PATTERN = re.compile(r"^reached \d+ consecutive automatic sends$")
+
+
+# What an item asked for, carried in its constraints. `when_idle` waits for the
+# ordinary `safe` readiness contract. `now` additionally accepts a *running*
+# turn, on the strictly narrower `interject_state` predicate in
+# `delivery_readiness.py` — never by overriding `delivery_state`, which stays
+# the only thing that decides whether an ordinary delivery may happen.
+DELIVERY_WHEN_IDLE = "when_idle"
+DELIVERY_NOW = "now"
+DELIVERY_MODES = (DELIVERY_WHEN_IDLE, DELIVERY_NOW)
+
+
+def delivery_mode(message: dict[str, Any]) -> str:
+    """Which delivery mode one message asked for."""
+    mode = str((message.get("constraints") or {}).get("delivery") or DELIVERY_WHEN_IDLE)
+    return mode if mode in DELIVERY_MODES else DELIVERY_WHEN_IDLE
+
+
+def is_send_cap_reason(reason: Any) -> bool:
+    """Whether a grant is switched off *only* because it ran out of auto-sends."""
+    text = str(reason or "")
+    if not text:
+        return False
+    return (
+        text == SEND_CAP_REASON
+        or text == _LEGACY_CAP_RACE_REASON
+        or bool(_LEGACY_CAP_PATTERN.match(text))
+    )
+
+
 # New-session seeds: bodies at or under this bound ride the agent CLI's argv
 # (one Windows command line, ~32,767 chars shared with the exe path and
 # flags); anything larger is staged to a file inside the workspace and seeded
@@ -200,6 +245,7 @@ CREATE TABLE IF NOT EXISTS queue_deliveries (
   delivery_state TEXT,
   reasons_json TEXT,
   confirmed INTEGER NOT NULL DEFAULT 0,
+  interjected INTEGER NOT NULL DEFAULT 0,
   initiator TEXT NOT NULL DEFAULT 'user',
   outcome TEXT NOT NULL,
   error TEXT,
@@ -219,6 +265,7 @@ CREATE TABLE IF NOT EXISTS queue_auto_policy (
   enabled INTEGER NOT NULL DEFAULT 0,
   agent_run_id TEXT,
   accept_agent_messages INTEGER NOT NULL DEFAULT 0,
+  accept_agent_interjections INTEGER NOT NULL DEFAULT 0,
   expires_at REAL,
   max_sends INTEGER NOT NULL DEFAULT 0,
   sends_used INTEGER NOT NULL DEFAULT 0,
@@ -336,6 +383,40 @@ class PromptQueueStore:
             # every pre-Phase-5 attempt was a human act, hence the default.
             self._db.execute(
                 "ALTER TABLE queue_deliveries ADD COLUMN initiator TEXT NOT NULL DEFAULT 'user'"
+            )
+        if delivery_columns and "interjected" not in delivery_columns:
+            # Whether the write landed in a *running* turn. Not derivable from
+            # `delivery_state`/`confirmed`: an interject is neither safe nor a
+            # human override, and it is the one delivery shape that had to be
+            # separately authorized, so it is separately audited.
+            self._db.execute(
+                "ALTER TABLE queue_deliveries ADD COLUMN interjected INTEGER NOT NULL DEFAULT 0"
+            )
+        policy_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(queue_auto_policy)").fetchall()
+        }
+        if policy_columns and "accept_agent_interjections" not in policy_columns:
+            # The receiver's own switch for mid-turn writes. Defaults to 0 here
+            # and is set to the per-run default alongside the rest of the grant,
+            # exactly like `accept_agent_messages` — a row that predates the
+            # column has not made a decision, and must not read as one.
+            self._db.execute(
+                "ALTER TABLE queue_auto_policy"
+                " ADD COLUMN accept_agent_interjections INTEGER NOT NULL DEFAULT 0"
+            )
+            # Carry the per-run default onto the conversations that are live
+            # *right now*. Only a fresh run gets the defaults written for it, so
+            # without this every session already running when the column arrived
+            # would read as having opted out — the feature would appear dead on
+            # the whole fleet until each conversation happened to roll over,
+            # which is indistinguishable from it being broken. The condition is
+            # the precise one: a grant that is on, whose run also accepts agent
+            # messages. A disabled row, an opted-out row, and the reserved pause
+            # row each said something, and are left saying it.
+            self._db.execute(
+                "UPDATE queue_auto_policy SET accept_agent_interjections=1"
+                " WHERE enabled=1 AND accept_agent_messages=1"
             )
         self._db.commit()
 
@@ -465,6 +546,25 @@ class PromptQueueStore:
             ).fetchone()
             assert row is not None
             return _row_to_message(row)
+
+        return await self._run(op)
+
+    async def message_by_correlation(
+        self, sender_kind: str, sender_id: str | None, correlation_id: str
+    ) -> dict[str, Any] | None:
+        """The row a retry with this correlation would return, if there is one.
+
+        The same lookup ``create_message`` dedups on, exposed so a caller can
+        tell a retry from a first attempt *before* charging it against a budget.
+        """
+
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM queue_messages WHERE sender_kind=? AND"
+                " IFNULL(sender_id,'')=IFNULL(?,'') AND correlation_id=?",
+                (sender_kind, sender_id, correlation_id),
+            ).fetchone()
+            return _row_to_message(row) if row is not None else None
 
         return await self._run(op)
 
@@ -882,6 +982,7 @@ class PromptQueueStore:
         delivery_state: str | None = None,
         reasons: list[str] | None = None,
         confirmed: bool = False,
+        interjected: bool = False,
         error: str | None = None,
         byte_count: int | None = None,
         blocked_reasons: list[str] | None = None,
@@ -897,7 +998,7 @@ class PromptQueueStore:
             # Sent and failed attempts keep theirs (failed may have written).
             self._db.execute(
                 "UPDATE queue_deliveries SET outcome=?, delivery_state=?, reasons_json=?,"
-                " confirmed=?, error=?, bytes=?, completed_at=?,"
+                " confirmed=?, interjected=?, error=?, bytes=?, completed_at=?,"
                 " idempotency_key=CASE WHEN ?='refused' THEN NULL ELSE idempotency_key END"
                 " WHERE id=?",
                 (
@@ -905,6 +1006,7 @@ class PromptQueueStore:
                     delivery_state,
                     _dumps(reasons),
                     int(confirmed),
+                    int(interjected),
                     error,
                     byte_count,
                     now,
@@ -1214,6 +1316,7 @@ class PromptQueueStore:
             "enabled",
             "agent_run_id",
             "accept_agent_messages",
+            "accept_agent_interjections",
             "expires_at",
             "max_sends",
             "sends_used",
@@ -1288,23 +1391,58 @@ class PromptQueueStore:
 
         await self._run(op)
 
-    async def reset_auto_sends(self, session_id: str) -> None:
-        """A human send resets the consecutive-auto-send count.
+    async def credit_auto_attention(self, session_id: str, *, by: str) -> bool:
+        """Evidence that this conversation is live: refresh its auto-send budget.
 
-        The cap exists to bound *unattended* runs; a manual delivery is direct
-        evidence the user is at the keyboard. Never inserts a policy row — a
-        session with no opt-in has nothing to reset.
+        The consecutive cap exists to bound an *unattended* run — a session being
+        pushed by something that never answers. Two facts contradict that, and
+        both arrive here: a human pressing send, and the session itself writing a
+        reply to a peer. Either resets the count.
+
+        Resetting the count alone was not enough, and that was the bug. Once the
+        cap fired it also wrote ``enabled=0`` with a disable reason, and the
+        controller's conversation-default pass deliberately refuses to restore
+        anything but a *lapse* — so a grant that hit the cap stayed off for the
+        rest of the run while ``sends_used`` sat at 0, and the documented
+        "a manual send resets the count" recovery did nothing. Observed live
+        2026-08-19: every session in a three-way agent exchange read
+        ``enabled=0, sends_used=0, disabled_reason="reached 3 consecutive
+        automatic sends"``, and the operator hand-pumped 20 manual sends to keep
+        the conversation moving.
+
+        So this clears the disable too — but *only* when the cap is what wrote
+        it. An explicit opt-out, a failed delivery, a replaced run, and a lapse
+        each mean something different and are left exactly as they are. Returns
+        whether a disabled grant was restored. Never inserts a policy row: a
+        session with no grant has nothing to credit.
         """
         now = time.time()
 
-        def op() -> None:
-            self._db.execute(
-                "UPDATE queue_auto_policy SET sends_used=0, updated_at=? WHERE session_id=?",
-                (now, session_id),
-            )
+        def op() -> bool:
+            row = self._db.execute(
+                "SELECT enabled, disabled_reason FROM queue_auto_policy WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            restore = not row["enabled"] and is_send_cap_reason(row["disabled_reason"])
+            if restore:
+                self._db.execute(
+                    "UPDATE queue_auto_policy SET sends_used=0, enabled=1,"
+                    " disabled_reason=NULL, enabled_at=?, updated_at=?, updated_by=?"
+                    " WHERE session_id=?",
+                    (now, now, by, session_id),
+                )
+            else:
+                self._db.execute(
+                    "UPDATE queue_auto_policy SET sends_used=0, updated_at=?"
+                    " WHERE session_id=?",
+                    (now, session_id),
+                )
             self._db.commit()
+            return restore
 
-        await self._run(op)
+        return await self._run(op)
 
     async def bump_counter(self, name: str, delta: float = 1.0) -> None:
         now = time.time()
@@ -1937,16 +2075,36 @@ class PromptQueueService:
                 protected=True,
             )
         confirmed = False
+        interjected = False
         if delivery_state != "safe":
-            if not confirm:
+            # An item that asked to be delivered *now* is authorized by its own,
+            # strictly narrower predicate rather than by an override: nothing
+            # here passes `confirm`, and every protection above has already run.
+            # `interject_state` is `safe` only for a turn both the lifecycle
+            # evidence and the CLI's own screen agree is running, with no
+            # composer content to land on top of.
+            wants_now = delivery_mode(message) == DELIVERY_NOW
+            if wants_now and str(evaluation.get("interject_state")) == "safe":
+                interjected = True
+            elif not confirm:
+                # An item that asked for `now` is refused with the reasons that
+                # actually stopped *it*. Reporting the ordinary readiness reasons
+                # would say "root_agent_working" — the one thing it was allowed
+                # to step over — and leave the real blocker unnamed.
+                refusal_reasons = reasons
+                if wants_now:
+                    refusal_reasons = [
+                        str(item) for item in evaluation.get("interject_reasons") or []
+                    ] or reasons
                 raise await refuse(
                     "delivery_not_safe",
                     f"delivery readiness is {delivery_state}; confirm to send anyway",
                     message_state="blocked",
                     delivery_state=delivery_state,
-                    reasons=reasons,
+                    reasons=refusal_reasons,
                 )
-            confirmed = True
+            else:
+                confirmed = True
 
         body = str(message["body"])
         data = paste_payload(body)
@@ -1975,6 +2133,7 @@ class PromptQueueService:
                 delivery_state=delivery_state,
                 reasons=reasons,
                 confirmed=confirmed,
+                interjected=interjected,
                 error=str(exc),
                 byte_count=byte_count,
             )
@@ -1986,6 +2145,7 @@ class PromptQueueService:
                 outcome="failed",
                 delivery_state=delivery_state,
                 confirmed=confirmed,
+                interjected=interjected,
                 initiator=initiator,
                 bytes=byte_count,
             )
@@ -2015,12 +2175,19 @@ class PromptQueueService:
             delivery_state=delivery_state,
             reasons=reasons,
             confirmed=confirmed,
+            interjected=interjected,
             byte_count=byte_count,
         )
         await self._emit_updated(message_id, target_id, "sent")
         if initiator == "user":
-            # Attention resets the unattended-run budget (`auto_delivery.py`).
-            await self.store.reset_auto_sends(target_id)
+            # Attention resets the unattended-run budget, and restores a grant the
+            # budget itself switched off (`credit_auto_attention`).
+            if await self.store.credit_auto_attention(target_id, by="manual-send"):
+                log.info(
+                    "auto-delivery grant restored for %s: a human send is evidence"
+                    " the conversation is attended",
+                    target_id,
+                )
         self.events.emit_background(
             "queue_delivery",
             session_id=target_id,
@@ -2028,6 +2195,7 @@ class PromptQueueService:
             outcome="sent",
             delivery_state=delivery_state,
             confirmed=confirmed,
+            interjected=interjected,
             submit_confirmed=submitted,
             initiator=initiator,
             bytes=byte_count,
@@ -2036,6 +2204,7 @@ class PromptQueueService:
             "status": "sent",
             "delivery_id": delivery_id,
             "confirmed": confirmed,
+            "interjected": interjected,
             "submit_confirmed": submitted,
             "delivery_state": delivery_state,
             "initiator": initiator,
@@ -2094,6 +2263,11 @@ def normalize_constraints(constraints: Any) -> dict[str, Any] | None:
     typo from parking an item in the queue for a decade. ``delay_seconds`` is
     accepted as a convenience and resolved to ``not_before`` here so exactly
     one representation is ever persisted.
+
+    ``delivery`` is ``when_idle`` (the default, and the only behaviour before
+    this existed) or ``now``. It is a property of the *item*, checked in
+    ``send_next`` for the same reason the schedule is: the manual and automatic
+    paths must not be able to disagree about what an item asked for.
     """
     if not constraints:
         return None
@@ -2129,6 +2303,18 @@ def normalize_constraints(constraints: Any) -> dict[str, Any] | None:
         raise QueueError(
             "invalid_constraints", "expires_at must be after not_before", status=400
         )
+    delivery = constraints.get("delivery")
+    if delivery is not None:
+        if delivery not in DELIVERY_MODES:
+            raise QueueError(
+                "invalid_constraints",
+                f"delivery must be one of {', '.join(DELIVERY_MODES)}",
+                status=400,
+            )
+        if delivery != DELIVERY_WHEN_IDLE:
+            # The default is not persisted: an item without the key means
+            # exactly what every item meant before the mode existed.
+            result["delivery"] = str(delivery)
     return result or None
 
 

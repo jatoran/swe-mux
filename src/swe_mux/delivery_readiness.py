@@ -58,6 +58,13 @@ class ReadinessMemory:
     phase_since: float = 0.0
     input_revision_at_completion: int | None = None
     screen_at_completion: str | None = None
+    # The input revision when the current root turn *started*. During a turn
+    # `input_revision_at_completion` is deliberately None — the CLI consumed the
+    # line the operator submitted, so there is no composer boundary to compare
+    # against — which leaves nothing to notice an operator typing a draft while
+    # the turn runs. That draft is exactly what a mid-turn write would be pasted
+    # on top of, so the interject predicate gets its own boundary.
+    input_revision_at_turn_start: int | None = None
     # Set when this session's own transcript has been read and interpreted, which
     # a live parser status cannot show for a session that has been idle since
     # before the daemon started.
@@ -194,6 +201,7 @@ class DeliveryReadinessTracker:
             )
             return
 
+        phase_before = memory.phase
         if event.type in {"backend_detected", "session_spawned"}:
             self._sessions.pop(event.session_id, None)
             self._memory(session)
@@ -244,6 +252,18 @@ class DeliveryReadinessTracker:
                 self._transition(
                     memory, phase="aborted", reason=f"root_turn_{outcome}", event=event
                 )
+
+        # Snapshot the composer boundary at the moment the turn begins, in one
+        # place rather than at each transition that reaches `working`. Anything
+        # typed after this is an operator draft sitting in the CLI's composer,
+        # and a mid-turn write would be pasted on top of it.
+        if memory.phase == "working":
+            if phase_before != "working":
+                memory.input_revision_at_turn_start = int(
+                    getattr(session, "input_revision", 0)
+                )
+        else:
+            memory.input_revision_at_turn_start = None
 
     def _adopt_catchup_settle(
         self, session: ReadinessSession, memory: ReadinessMemory
@@ -559,6 +579,15 @@ class DeliveryReadinessTracker:
             delivery_state = "unknown"
             reasons = ["incomplete_readiness_evidence"]
 
+        interject_state, interject_reasons = self._interject_check(
+            delivery_state=delivery_state,
+            hard_block_reasons=hard_block_reasons,
+            checks=checks,
+            pty_state=pty_state,
+            memory=memory,
+            input_revision=input_revision,
+        )
+
         if record_metrics:
             self._evaluation_counts[delivery_state] += 1
             for reason in reasons:
@@ -593,13 +622,87 @@ class DeliveryReadinessTracker:
                 "exclusive_input_owner": exclusive_input_owner,
                 "input_revision": input_revision,
                 "completion_input_revision": memory.input_revision_at_completion,
+                "turn_start_input_revision": memory.input_revision_at_turn_start,
                 "subagent_events_ignored": memory.subagent_events,
                 "recent_transitions": list(memory.transitions),
             },
             "candidate_safe": delivery_state == "safe",
+            "interject_state": interject_state,
+            "interject_reasons": interject_reasons,
             "authorized": False,
             "diagnostic": ", ".join(reasons),
         }
+
+    @staticmethod
+    def _interject_check(
+        *,
+        delivery_state: str,
+        hard_block_reasons: list[str],
+        checks: dict[str, bool | None],
+        pty_state: str,
+        memory: ReadinessMemory,
+        input_revision: int,
+    ) -> tuple[str, list[str]]:
+        """Whether text may be written into a turn that is *currently running*.
+
+        A second, strictly narrower predicate beside ``delivery_state`` — never a
+        relaxation of it. `blocked` covers a dozen different situations and only
+        one of them is "the agent is busy": the rest are an approval dialog, a
+        model picker, an elicitation, a rate limit, a retired transcript, a
+        remote shell. Writing into any of those is corruption rather than
+        urgency, so this does not ask "is the block overridable"; it asks for a
+        positive, corroborated reading that a turn is running and nothing else
+        is true.
+
+        Both a hook/transcript fact (`root_agent_working`) and the CLI's own
+        screen (`pty_state == "working"`, the "esc to interrupt" affordance) must
+        agree. Requiring both is what keeps the window between an approval dialog
+        appearing and the daemon recording `awaiting` from reading as a running
+        turn: the screen rules classify an approval prompt as `approval`, and a
+        picker or viewer as `uninformative`, before any working marker is
+        considered.
+
+        It never authorizes anything. `send_next` consumes it, and only for an
+        item whose sender asked for it.
+        """
+        if delivery_state == "safe":
+            # An idle session takes an interject as an ordinary delivery.
+            return "safe", []
+        blockers = [
+            reason for reason in hard_block_reasons if reason != "root_agent_working"
+        ]
+        if "root_agent_working" not in hard_block_reasons:
+            # Not safe and not working: whatever is wrong, a running turn is not
+            # it, and there is nothing here an interject is entitled to step over.
+            blockers.append("not_a_running_turn")
+        if pty_state != "working":
+            # The screen has to corroborate. `uninformative` (a picker or viewer),
+            # `approval`, and `authentication` all land here, as does an
+            # unreadable tail — absence of corroboration is not corroboration.
+            blockers.append("screen_does_not_show_a_running_turn")
+        for check, failure in (
+            ("stable_run_identity", "unstable_run_identity"),
+            ("lifecycle_evidence_fresh", "lifecycle_evidence_stale"),
+            ("observation_supported", "observation_capability_unknown"),
+            ("adapter_etiquette_defined", "adapter_etiquette_undefined"),
+            ("local_terminal_boundary", "non_local_terminal_boundary"),
+            ("live_agent_run", "not_live_agent_run"),
+        ):
+            if checks.get(check) is not True:
+                blockers.append(failure)
+        # A draft typed *during* the turn is the composer content a mid-turn
+        # paste would land on top of. `operator_quiet` only covers the last few
+        # seconds, so it cannot stand in for this. Queue delivery is itself
+        # accounted as operator input, so an interject already written into this
+        # turn lands here too — deliberately: one splice per running turn, and
+        # the boundary resets when the turn does.
+        if memory.input_revision_at_turn_start is None:
+            blockers.append("turn_start_input_boundary_unknown")
+        elif input_revision != memory.input_revision_at_turn_start:
+            blockers.append("composer_touched_since_turn_start")
+        if blockers:
+            return "blocked", list(dict.fromkeys(blockers))
+        return "safe", []
 
     def metrics(self) -> dict[str, Any]:
         now = self.clock()

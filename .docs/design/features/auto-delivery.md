@@ -32,11 +32,29 @@ message on behalf of the user; a per-conversation opt-out remains available.
   worked in: observed live 2026-08-13 with the whole fleet reading
   `disabled_reason: grant expired` at `sends_used: 0`, so an agent-authored message arrived
   `armed` and then waited for a human indefinitely.
-- **A lapse is recoverable; a decision is not.** Lapsing records only that time passed, so the
-  conversation default restores it once the session is in use again, without touching a
-  separate `accept_agent_messages` choice made during that run. Every other disabled state —
-  an explicit opt-out, an exhausted consecutive-send budget, an ambiguous failed delivery —
-  records something that happened and stays until a human clears it.
+- **A lapse is recoverable by time; the send cap is recoverable by evidence; a decision is
+  not recoverable at all.** Lapsing records only that time passed, so the conversation default
+  restores it once the session is in use again, without touching a separate
+  `accept_agent_messages` choice made during that run. An explicit opt-out and an ambiguous
+  failed delivery record something that happened and stay until a human clears them.
+  The exhausted consecutive-send budget sits between the two: it records that *nobody was
+  seen*, so anything that shows somebody is clears it - a human send, or a reply the session
+  itself wrote to a peer (`PromptQueueStore.credit_auto_attention`).
+- **The cap only ever bounded an unattended run, and until 2026-08-19 it could not be
+  recovered from at all.** `reset_auto_sends` zeroed `sends_used` and left `enabled=0` with
+  the disable reason in place, while the conversation-default pass deliberately restores only
+  a lapse - so the documented "a manual send resets the count" recovery did nothing, and a
+  grant that hit the cap stayed off for the rest of the run. Measured on a live install that
+  day: three sessions in a working three-way exchange all read
+  `enabled=0, sends_used=0, disabled_reason="reached 3 consecutive automatic sends"`, ten
+  automatic sends all day against twenty manual ones, and the exchange stopped because the
+  operator stopped hand-pumping it. A reply now clears it too, because a session that answers
+  is the opposite of the failure the cap exists to catch, and because volume in an
+  agent-to-agent exchange is bounded where it belongs - `max_thread_turns` and the per-origin
+  hourly budget in `agent-messaging.md`.
+- **The cap's default is not raised.** Raising it is a *widening* of standing unattended
+  authority and is gated on the promotion criteria below; making it recoverable is not, since
+  every recovery path requires positive evidence that something is reading the deliveries.
 - **Same live run only.** A replaced run (resume, branch, restart into a new conversation,
   or an in-CLI `/clear`/`/new` — `backends.md`) receives a fresh default grant rather than
   inheriting the prior run's expiry or send count. A user opt-out applies only to the run it
@@ -60,6 +78,20 @@ message on behalf of the user; a per-conversation opt-out remains available.
 - **It can never override.** The controller cannot pass `confirm`: `send_next` rejects a
   confirmation from a non-human initiator (`confirm_requires_user`). Blocked or unknown
   readiness always means "not now", never "anyway".
+- **Mid-turn delivery is a second predicate, not an override.** An item may carry
+  `constraints.delivery = "now"`, and `send_next` then authorizes it from
+  `interject_state` instead of `delivery_state` - a strictly narrower reading that requires
+  both the lifecycle evidence and the CLI's own screen to agree a turn is running, with no
+  composer content to land on top of (`delivery-readiness.md`). Nothing about it passes
+  `confirm`, and every protection still runs first, so an approval prompt, a picker, a rate
+  limit, a retired transcript, and a remote boundary all still refuse. Who may *ask* for it is
+  `agent-messaging.md`; the controller's own gates - master switch, grant, run binding,
+  head-of-line, the consecutive cap, the stability window, quiet hours, the back-off - are all
+  unchanged and all still apply.
+- **What mid-turn delivery buys is latency, not preemption.** Claude and Codex both buffer
+  text typed during a turn and take it at the turn boundary, so the write arrives sooner than
+  the queue would have delivered it and not sooner than the turn ends. Stopping a turn is
+  `interrupt`, which is a different capability with a different contract.
 - **Fail closed and stay stopped.** A *failed* delivery — where the PTY write may or may not
   have landed — disables that session's grant and asks the user to verify the terminal. It
   never retries blindly. A *refused* attempt backs the session off
@@ -107,9 +139,12 @@ status line.
 ## UI
 
 - **Queue panel, `auto:` strip**: a one-line status (on/off, sends left, minutes left, quiet
-  hours, why it is off) that discloses the default-on per-conversation toggle and the
-  `accept agent messages armed` toggle. Both are on by default for a live agent conversation,
-  so the disclosure is an opt-out surface. The auto-delivery toggle alone is unavailable when
+  hours, why it is off) that discloses the default-on per-conversation toggle, the
+  `accept agent messages armed` toggle, and `accept mid-turn agent messages`. All three are on
+  by default for a live agent conversation, so the disclosure is an opt-out surface. They are
+  independent: arming decides whether a peer's message counts as authorized, auto-delivery
+  decides who presses send, and the third decides whether send may happen while a turn is
+  still running. Cycling one never rewrites another. The auto-delivery toggle alone is unavailable when
   the install's master switch is off, with the reason stated. Collapsed by default because it is carried permanently
   above the queue in a narrow column; it used to cost three wrapped lines there.
 - **Per-item schedule**: `+5m` / `+15m` / `+1h` presets and `Clear schedule`, behind the
@@ -133,7 +168,8 @@ status line.
 GET  /api/queue/auto                       policy, per-session rows, counters, promotion
 POST /api/queue/auto/pause                 {paused}          emergency disable
 PUT  /api/queue/auto/sessions/{sid}        {enabled, ttl_minutes, max_sends,
-                                            accept_agent_messages}
+                                            accept_agent_messages,
+                                            accept_agent_interjections}
 POST /api/queue/auto/report-unsafe         {note}            operator review input
 PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 ```
@@ -151,7 +187,10 @@ install, scanned every second.
 `auto_delivery_session_ttl_minutes`, `auto_delivery_quiet_start`, `auto_delivery_quiet_end`,
 `auto_delivery_refusal_backoff_seconds` (`config.py`, validated with lower bounds — a
 zero-length stability window would defeat the gate it exists to be), all editable in
-Settings → Prompt queue. Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
+Settings → Prompt queue.
+Mid-turn delivery adds `agent_interject_enabled` (install master, on),
+`agent_interject_hourly_budget` (10 per origin session) and
+`agent_interject_min_interval_seconds` (60, per target). Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
 SQLite, not config, so the emergency pause never waits on a config write.
 
 ## Key files

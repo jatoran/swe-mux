@@ -6,8 +6,10 @@ Bounded messaging *between sessions that already exist*, plus a way for an agent
 human to create one. Roadmap Phase 5; `CONTROL_PLANE_ROADMAP.md` §7.2. Fleet Queue is the
 one human review surface for both kinds of request:
 
-- `mux.notify(target, body)` — an agent stages a message in a sibling session's prompt
-  queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
+- `mux.notify(target, body, delivery=)` — an agent stages a message in a sibling session's
+  prompt queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
+  `delivery="now"` asks for it to land in a turn that is already running, which three gates
+  and two bounds decide whether the caller may even ask for.
 - `mux.request_spawn(prompt, …)` - an agent writes an **inert draft** that appears in Fleet Queue.
   It starts nothing; a human approving it is what spawns the session.
 - The **fleet queue** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, and revocation.
@@ -68,6 +70,11 @@ its own is the default and nothing widens implicitly.
   | ring back past the session that messaged you | — | `relay_cycle` |
   | kill switch (`agent_messaging_enabled`) | on | `agent_messaging_disabled` |
   | expiry | 24 h | item is cancelled, `cancel_kind: expired` |
+  | mid-turn kill switch (`agent_interject_enabled`) | on | `interject_disabled` |
+  | target Project's `interject_grant` | `off` | `interject_not_granted` |
+  | target's `accept_agent_interjections` | on for a live run | `interject_refused_by_target` |
+  | mid-turn deliveries per origin per hour | 10 | `interject_budget_exhausted` |
+  | floor between mid-turn deliveries to one target | 60 s | `interject_too_soon` |
 
 - **The envelope states its authority, because a receiver cannot infer it.** A peer's note and
   an instruction a human approved arrive through the same pipe. The `authority` header says
@@ -87,6 +94,37 @@ its own is the default and nothing widens implicitly.
   upstream" refused the first reply every time and left the sender's feedback
   unacknowledged. Cycle detection now refuses only a ring that reaches *past* the session
   that spoke to you (A→B→C→A), which is the loop that routes around the propagation bound.
+- **Mid-turn delivery is asked for by the sender, permitted by the Project, and vetoed by
+  the receiver.** `delivery="now"` marks the queue item; whether the write is *safe* is decided
+  later and elsewhere, by the readiness tracker's `interject_state`
+  (`delivery-readiness.md`), which can refuse everything the gates here allowed. The three
+  gates are deliberately the same shape as the rest of the control plane: an install-wide
+  switch the operator holds, a per-Project standing permission somebody wrote down
+  (`interject_grant = "granted"`, its own field rather than a level of
+  `session_control_grant`, because being written to mid-turn is a property of a working
+  repository), and the receiving session's own opt-out for its run. The receiver keeps a veto
+  because the receiver pays the cost: an ordinary message costs nothing until it is read, and
+  a mid-turn one costs attention immediately. Every refusal names the ordinary path, because a
+  sender that reads "no" without reading "send it without `delivery` instead" abandons the
+  message.
+- **The envelope says a message arrived mid-turn, because the receiver cannot tell.** The CLI
+  buffers the paste and hands it over at the turn boundary, so it reads exactly like something
+  typed between turns. The `delivery:` header names it and says what the claim is: the sender
+  asked for it to arrive sooner, which is a claim about urgency and not about authority.
+- **A reply refreshes the replying session's own auto-delivery budget.** Writing a reply is
+  direct evidence that the session consumed what was delivered to it and is still working the
+  exchange - the opposite of the unattended run the consecutive-send cap exists to stop - so
+  it clears a grant the cap switched off (`auto-delivery.md`). This is why the volume bound
+  that actually ends a runaway exchange has to be `max_thread_turns` and the per-origin hourly
+  budget, and why `max_thread_turns` is 40 rather than the 12 that was about to refuse a
+  working three-way conversation on its ninetieth minute (measured 2026-08-19).
+- **A `notify` result says whether anything will deliver what it just staged.** `armed` alone
+  is unactionable: it is the same word for a peer that is merely busy and for one nothing can
+  reach without a human. The result and `message_status` both carry `target_delivery`
+  (`auto_delivery`, `blocked_by`, `sends_remaining`), derived from the install's brakes and
+  the target's own grant, and the note tells a sender that finds it blocked to say so rather
+  than waiting silently for a reply. Without it, three sessions in a live exchange went quiet
+  on 2026-08-19 with no participant able to explain why.
 - **Two bounds, because they stop different things.** `chain_depth` bounds **propagation** -
   how many distinct sessions one thread reaches - and grows only when a message lands on a
   session that has not spoken in the thread yet; a back-and-forth reaches nobody new and so

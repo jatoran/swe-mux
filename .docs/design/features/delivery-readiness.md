@@ -42,6 +42,25 @@ deliverable as an idle one — that is the user-facing point of modeling them as
 annotations rather than states. The corpus pins a loop-armed idle turn end evaluating
 `safe`.
 
+`interject_state` is a second, strictly narrower classification beside `delivery_state`,
+and never a relaxation of it.
+It answers a different question - may text be written into a turn that is *currently running* - and it exists because `blocked` covers a dozen unrelated situations of which only one is "the agent is busy".
+The rest are an approval dialog, a model picker, an elicitation, a rate limit, a retired transcript, a remote shell, and writing into any of those is corruption rather than urgency.
+So it does not ask whether a block is overridable; it asks for a positive, corroborated reading that a turn is running and nothing else is true:
+
+- the only hard block is `root_agent_working`, and
+- the CLI's own screen agrees (`pty_state == "working"`, the "esc to interrupt" affordance).
+  Requiring both is what closes the window between an approval dialog appearing and the daemon recording `awaiting`: the screen rules classify an approval prompt as `approval` and a picker or viewer as `uninformative` *before* any working marker is considered, and an unreadable tail is not corroboration either.
+- run identity is stable, lifecycle evidence is fresh, the observation channel has spoken, the adapter's etiquette is known, and the boundary is local, and
+- nothing has touched the composer since the turn started.
+  The ordinary `partial_input_absent` check cannot see this: `input_revision_at_completion` is deliberately `None` mid-turn, because the CLI consumed the line the operator submitted and there is no completion boundary to compare against.
+  So the tracker keeps its own `input_revision_at_turn_start`, snapshotted when the phase becomes `working`.
+  Queue delivery is itself accounted as operator input, so a mid-turn write already made into this turn also fails this check - deliberately: one splice per running turn, and the boundary resets when the turn does.
+
+Only `send_next` consumes it, and only for an item whose sender asked for it
+(`constraints.delivery = "now"`, `auto-delivery.md`, `agent-messaging.md`).
+It is not an override and does not become one: the non-overridable protections run before it, and the controller still cannot pass `confirm`.
+
 Every result remains `authorized: false`: the tracker classifies evidence and never grants
 authority. Callers act on that classification, all outside this module: the Phase 4
 queue's `send_next` (a human act, with an explicit confirm for blocked/unknown), the

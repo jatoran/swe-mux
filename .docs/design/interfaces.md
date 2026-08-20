@@ -533,7 +533,8 @@ GET    /queue/auto                                  master switch, pause, defaul
                                                      counters, promotion criteria
 POST   /queue/auto/pause                            {paused}   emergency disable
 PUT    /queue/auto/sessions/{sid}                   {enabled?, ttl_minutes?, max_sends?,
-                                                     accept_agent_messages?}
+                                                     accept_agent_messages?,
+                                                     accept_agent_interjections?}
 POST   /queue/auto/report-unsafe                    {note}     operator review input
 GET    /queue/mailbox?author=all|non_human|human    application-wide authorship view
                          [&project_id=...]

@@ -84,6 +84,37 @@ def test_project_config_round_trips_automations() -> None:
     assert parsed["automations"] == {"tier0": True, "raw_store": True}
 
 
+def test_interject_grant_round_trips_and_defaults_off(tmp_path: Path) -> None:
+    """Mid-turn delivery is off until a Project writes it down.
+
+    Its own field rather than a level of `session_control_grant`: being written
+    to mid-turn is a property of a working repository, and folding it into the
+    actuation grant would hand it to every Project that wanted interrupt/end.
+    """
+    from swe_mux.project_files import project_interject_grant
+
+    root = tmp_path / "repo"
+    (root / ".swe-mux").mkdir(parents=True)
+    assert project_interject_grant(root) == "off"
+
+    parsed = parse_project_config(serialize_project_config({"interject_grant": "granted"}))
+    assert parsed["interject_grant"] == "granted"
+    (root / ".swe-mux" / "config.toml").write_bytes(
+        serialize_project_config({"interject_grant": "granted"})
+    )
+    assert project_interject_grant(root) == "granted"
+
+    # A malformed value falls back to the safe answer rather than raising at a
+    # call site that has no way to report it.
+    (root / ".swe-mux" / "config.toml").write_bytes(b'version = 1\ninterject_grant = "yes"\n')
+    assert project_interject_grant(root) == "off"
+
+
+def test_interject_grant_rejects_an_unknown_level() -> None:
+    with pytest.raises(ValueError, match="interject_grant must be off or granted"):
+        parse_project_config(b'version = 1\ninterject_grant = "draft"\n')
+
+
 def test_project_config_rejects_unknown_automation() -> None:
     with pytest.raises(ValueError, match="unknown automations"):
         parse_project_config(b'version = 1\nautomations = { bogus = true }\n')

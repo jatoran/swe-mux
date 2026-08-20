@@ -728,7 +728,35 @@ class Config:
     # separately. The default is now one longer than a full pass over a
     # typical fleet, and it is still a bound rather than an invitation.
     agent_message_max_chain_depth: int = 6
-    agent_message_max_thread_turns: int = 12
+    # 12 was a guess made before any exchange had run long enough to test it. A
+    # three-way fleet doing real work reached 9 in ninety minutes (measured
+    # 2026-08-19), so the bound was about to stop a working conversation rather
+    # than a runaway one — and its refusal ("summarise for a human") is right for
+    # the second and wrong for the first. This is the *volume* bound and it is
+    # now the one that actually stops two agents talking forever, since a reply
+    # also refreshes the receiving session's auto-delivery budget
+    # (`auto_delivery.py`), so it is sized to outlast a working exchange while
+    # still ending one that has stopped converging.
+    agent_message_max_thread_turns: int = 40
+    # Mid-turn delivery (`mux.notify(delivery="now")`). The install-wide master
+    # switch; per-Project the capability is off until `interject_grant` is set to
+    # "granted" in that Project's `.swe-mux/config.toml`, and the receiving
+    # session can still opt out for its run. False here refuses it everywhere.
+    #
+    # An interject is not an override: it is authorized by its own, strictly
+    # narrower predicate (`interject_state` in `delivery_readiness.py`), which
+    # requires the lifecycle evidence and the CLI's own screen to agree that a
+    # turn is running and nothing else is true. What it buys is latency - the
+    # CLI buffers the text and takes it at the turn boundary - not preemption.
+    agent_interject_enabled: bool = True
+    # How many mid-turn deliveries one origin session may ask for per hour. Far
+    # tighter than the ordinary message budget: a message that waits costs the
+    # receiver nothing until it is read, and one that lands mid-turn costs it
+    # attention immediately.
+    agent_interject_hourly_budget: int = 10
+    # The floor between two mid-turn deliveries into the *same* session, so a
+    # peer cannot machine-gun a session that is trying to work.
+    agent_interject_min_interval_seconds: float = 60.0
     # `mux.requestSpawn` creates an inert Fleet Queue approval draft and nothing
     # else; approval is a human act.
     request_spawn_enabled: bool = True
@@ -1242,6 +1270,14 @@ def _validate(config: Config) -> None:
         errors["agent_message_max_chain_depth"] = "must be between 1 and 10 hops"
     if not 1 <= config.agent_message_max_thread_turns <= 100:
         errors["agent_message_max_thread_turns"] = "must be between 1 and 100 messages"
+    if not 0 <= config.agent_interject_hourly_budget <= 1000:
+        errors["agent_interject_hourly_budget"] = (
+            "must be between 0 and 1000 mid-turn deliveries per hour"
+        )
+    if not 0 <= config.agent_interject_min_interval_seconds <= 3600:
+        errors["agent_interject_min_interval_seconds"] = (
+            "must be between 0 and 3600 seconds"
+        )
     if not 0 <= config.session_control_hourly_budget <= 1000:
         errors["session_control_hourly_budget"] = "must be between 0 and 1000 actions per hour"
     if not 1 <= config.session_control_graceful_timeout_s <= 120:

@@ -197,6 +197,7 @@ from .project_files import (
     project_approval_ceiling,
     project_approval_rules,
     project_automations,
+    project_interject_grant,
     project_note_summaries,
     project_path,
     project_session_control_grant,
@@ -1369,6 +1370,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         auto_delivery,
         append_observation=append_observation,
         read_observations=read_observations,
+        interject_grant_field=project_interject_grant,
     )
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
@@ -8188,7 +8190,13 @@ async def queue_auto_pause(request: web.Request) -> web.Response:
 
 
 async def queue_auto_session(request: web.Request) -> web.Response:
-    """Per-session opt-in: auto-delivery and/or accepting agent messages."""
+    """Per-session opt-in: auto-delivery, accepting agent messages, mid-turn ones.
+
+    Three independent switches on purpose. Arming decides whether an agent
+    message counts as authorized, auto-delivery decides who presses send, and
+    accepting interjections decides whether send may happen while a turn runs.
+    Cycling one never rewrites another.
+    """
     controller: AutoDeliveryController = request.app["auto_delivery"]
     session_id = request.match_info["sid"]
     body = await request.json()
@@ -8196,6 +8204,10 @@ async def queue_auto_session(request: web.Request) -> web.Response:
     if "accept_agent_messages" in body:
         await controller.set_accept_agent_messages(
             session_id, bool(body["accept_agent_messages"]), by=by
+        )
+    if "accept_agent_interjections" in body:
+        await controller.set_accept_agent_interjections(
+            session_id, bool(body["accept_agent_interjections"]), by=by
         )
     if "enabled" in body:
         if body["enabled"]:

@@ -203,6 +203,15 @@ Argv for an agent CLI is an authority field, so repository-supplied argv would b
 escalation, while naming a locally-authored profile is the same kind of statement
 `preferred_backend` already makes (`launch-profiles.md`).
 
+`interject_grant` (`off` by default, or `granted`) is the Project's standing permission for a
+peer agent to have a message delivered into a *running* turn here rather than at the next
+prompt (`agent-messaging.md`).
+It is its own field rather than a level of `session_control_grant` because being written to
+mid-turn is a property of a working repository, and folding it into the actuation grant would
+hand it to every Project that wanted interrupt/end.
+It authorizes nobody to write anything by itself: the install master switch, the receiving
+session's own opt-out, and the readiness tracker's mid-turn predicate all still apply.
+
 Repository-owned `.swe-mux/config.toml` cannot authorize general commands, executables, hooks, network bindings, automatic actions, credentials, or secrets.
 The sole command exception is `[worktree].setup_command`, which runs only after an explicit user create-and-spawn worktree request and before that worktree's session starts.
 The Projects manager exposes it under Git and worktrees and states that it is committed executable configuration.

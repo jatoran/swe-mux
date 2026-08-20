@@ -53,6 +53,17 @@ PROJECT_CONFIG_FIELDS = {
     # approves; "granted" lets an agent create a session here directly, inside a
     # per-origin budget. Authority is by target Project, as for interrupt/end.
     "spawn_grant",
+    # Whether an agent in another session may have a message delivered into a
+    # *running* turn here (`mux.notify(delivery="now")`). "off" (the default) is
+    # the behaviour that existed before the mode did: every agent message waits
+    # for this session's queue and its readiness contract. "granted" additionally
+    # allows a mid-turn write, still only when the readiness tracker's separate
+    # interject predicate is satisfied and the receiving session has not opted
+    # out for its run. Deliberately its own field rather than a level of
+    # `session_control_grant`: being written to mid-turn is a property of a
+    # working repository, and reusing an actuation grant for it would grant it to
+    # every Project that wanted interrupt/end.
+    "interject_grant",
     # Which tool-permission requests mux may answer for sessions in this Project
     # while a conversation holds the `allowlisted` mode, as `Tool` /
     # `Tool(pattern)` rules. The rules live here rather than on the session
@@ -69,6 +80,10 @@ PROJECT_CONFIG_FIELDS = {
 #: The two authority levels a grant field may hold. "off" is not a value here -
 #: it is the absence of the `session_control` automation opt-in.
 SESSION_CONTROL_GRANTS = ("draft", "granted")
+#: What `interject_grant` may hold. "draft" is absent on purpose: a drafted
+#: interject is a contradiction - a human arming it later delivers it to whatever
+#: turn is running *then*, which is an ordinary queued message and already exists.
+INTERJECT_GRANTS = ("off", "granted")
 #: Values `approval_ceiling` may hold, weakest first. Mirrors
 #: `models.APPROVAL_MODES` and is asserted equal to it in the test suite; it is
 #: restated rather than imported to keep this module free of model imports.
@@ -806,6 +821,26 @@ def project_spawn_grant(root: str | Path) -> str:
     return "draft"
 
 
+def project_interject_grant(root: str | Path) -> str:
+    """Whether agents may have messages delivered mid-turn to this Project.
+
+    "off" (the default, and the fallback for a malformed or unreadable config) or
+    "granted". Read per call rather than cached because the answer is a standing
+    permission a person edits by hand, and a stale "granted" is the direction
+    that costs something.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            grant = values.get("interject_grant")
+            if grant in INTERJECT_GRANTS:
+                return str(grant)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        pass
+    return "off"
+
+
 def project_approval_rules(root: str | Path) -> list[str] | None:
     """This Project's declared auto-approval allowlist.
 
@@ -1169,6 +1204,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("session_control_grant must be draft or granted")
     if parsed.get("spawn_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError("spawn_grant must be draft or granted")
+    if parsed.get("interject_grant") not in {None, *INTERJECT_GRANTS}:
+        raise ValueError("interject_grant must be off or granted")
     if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
         raise ValueError("approval_ceiling must be wait, allowlisted, or allow_all")
     if "approval_allow" in parsed and (
@@ -1243,6 +1280,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "prompt_library_scope",
         "session_control_grant",
         "spawn_grant",
+        "interject_grant",
         "approval_ceiling",
     ):
         if value := values.get(key):

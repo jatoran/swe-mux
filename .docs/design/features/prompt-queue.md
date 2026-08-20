@@ -67,7 +67,15 @@ separately opt-in.
   `expires_at` (Phase 5 scheduling), bounded by a 30-day horizon. Both paths honour them: an
   early manual send is refused as `delivery_not_due` and keeps its state ("Send now"
   overrides the clock), and an expired item is cancelled (`cancel_kind: expired`) rather
-  than delivered late.
+  than delivered late. `delivery` (`when_idle` | `now`) is on the item for the same reason:
+  the manual and automatic paths must not be able to disagree about what an item asked for.
+  A `now` item is authorized from the readiness tracker's separate `interject_state` rather
+  than from `delivery_state`, which is a second predicate and not an override - the
+  non-overridable protections still run first, a non-human initiator still cannot `confirm`,
+  and a refusal reports the reasons that stopped *it* rather than `root_agent_working`, which
+  is the one thing it was allowed to step over. The `when_idle` default is never persisted, so
+  an item without the key means what every item meant before the mode existed
+  (`auto-delivery.md`, `delivery-readiness.md`, `agent-messaging.md`).
 - **Delivery bytes mirror the browser paste path.** Bracketed paste with newlines as CR,
   a 180 ms settle, then a separate `\r` — both writes through the shared operator-input
   accounting helper (`source="queue"`, `input_owner=False`), so `input_revision` /

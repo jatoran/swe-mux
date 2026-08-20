@@ -68,12 +68,31 @@ class EventsStub:
 
 
 class ReadinessStub:
-    def __init__(self, state: str = "safe", reasons: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        state: str = "safe",
+        reasons: list[str] | None = None,
+        *,
+        interject_state: str = "blocked",
+        interject_reasons: list[str] | None = None,
+    ) -> None:
         self.state = state
         self.reasons = reasons if reasons is not None else ["all_required_evidence_positive"]
+        # The second, strictly narrower predicate. Defaults to blocked so a test
+        # that says nothing about it cannot accidentally authorize a mid-turn
+        # write, which is the direction that costs something.
+        self.interject_state = interject_state
+        self.interject_reasons = (
+            interject_reasons if interject_reasons is not None else ["not_a_running_turn"]
+        )
 
     def evaluate(self, session: Any) -> dict[str, Any]:
-        return {"delivery_state": self.state, "reasons": list(self.reasons)}
+        return {
+            "delivery_state": self.state,
+            "reasons": list(self.reasons),
+            "interject_state": self.interject_state,
+            "interject_reasons": list(self.interject_reasons),
+        }
 
 
 class Harness:
@@ -830,6 +849,12 @@ async def test_a_v1_database_migrates_in_place(tmp_path: Path) -> None:
         assert claim["status"] == "claimed"
         rows = await store.deliveries(fresh["id"])
         assert rows[0]["initiator"] == "auto"
+        # Mid-turn delivery added two more columns to tables that already exist
+        # on every install, so they take the same in-place path.
+        assert rows[0]["interjected"] == 0
+        await store.set_auto_policy("s1", accept_agent_interjections=1)
+        policy = await store.auto_policy("s1")
+        assert policy is not None and policy["accept_agent_interjections"] == 1
     finally:
         store.close()
 
