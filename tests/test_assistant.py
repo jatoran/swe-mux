@@ -16,6 +16,7 @@ from swe_mux.assistant import (
     ACTION_CLASS_READ,
     ACTION_CLASS_REVERSIBLE,
     ASSISTANT_RULE_ID,
+    CANCEL_WINDOW_MAX_SECONDS,
     AssistantError,
     AssistantService,
     AssistantStore,
@@ -950,5 +951,381 @@ async def test_spawn_uses_the_ordinary_spawn_path(tmp_path: Path) -> None:
         assert effects["spawned"] == [
             {"project_id": "p1", "backend": "claude", "seed_text": "fix the tests"}
         ]
+    finally:
+        service.store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Speaking a turn: what is said, once, and when
+# --------------------------------------------------------------------------- #
+
+
+def note_call(text: str = "ship the thing", call_id: str = "call-1") -> dict[str, Any]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "append_project_note",
+            "arguments": json.dumps({"project": "pixel lab", "text": text}),
+        },
+    }
+
+
+def note_service(
+    tmp_path: Path, turns: list[OpenRouterToolTurn], *, trust: str = "confirm"
+) -> tuple[AssistantService, list[MuxEvent], list[str]]:
+    appended: list[str] = []
+
+    async def note_append(project_id: str, text: str) -> dict[str, Any]:
+        appended.append(f"{project_id}:{text}")
+        return {"title": "pixel lab notes", "bytes": len(text)}
+
+    service, emitted, _queue, _effects = make_service(tmp_path, turns, trust=trust)
+    service.note_append = note_append
+    return service, emitted, appended
+
+
+async def test_a_card_speaks_once_and_the_model_does_not_repeat_it(
+    tmp_path: Path,
+) -> None:
+    """The card is the spoken statement; the model's paraphrase of it is not.
+
+    Both used to be spoken, and because starting one stream halts the other, the
+    operator heard a truncated card, a silence, and then the same thing again.
+    Suppression is structural rather than prompted: a model that ignores the
+    instruction still must not double-speak.
+    """
+    service, emitted, appended = note_service(
+        tmp_path,
+        [
+            tool_turn("Adding that now.", [note_call()]),
+            tool_turn("I've proposed appending that to the pixel lab note; say confirm."),
+        ],
+    )
+    try:
+        await run_turn(service, "add a note to pixel lab")
+        assert appended == []
+        sentences = [event for event in emitted if event.type == "assistant_sentence"]
+        # Everything before the card keeps its voice; everything after it is
+        # display-only.
+        assert sentences[0].payload["speech"]
+        assert sentences[0].payload["speech_suppressed"] is False
+        assert all(
+            event.payload["speech"] == "" and event.payload["speech_suppressed"] is True
+            for event in sentences[1:]
+        )
+        done = [event for event in emitted if event.type == "assistant_turn_done"][0]
+        assert done.payload["speech_suppressed"] is True
+        # The display still records everything the model said; only the speech
+        # drops the part the card already covers.
+        assert "say confirm" in done.payload["display"]
+        assert "say confirm" not in done.payload["speech"]
+        assert done.payload["speech"].startswith("Adding that now")
+    finally:
+        service.store.close()
+
+
+async def test_the_spoken_card_line_omits_the_text_it_is_about_to_write(
+    tmp_path: Path,
+) -> None:
+    """Reading a note body aloud to announce that a note is about to be written
+    is the slowest way to say nothing new: synthesis time tracks characters, and
+    the operator can already read the preview on the card."""
+    body = "Ship the redeploy checklist and mention the supervisor bundle caveat"
+    service, emitted, _appended = note_service(
+        tmp_path, [tool_turn("", [note_call(body)]), tool_turn("Proposed.")]
+    )
+    try:
+        await run_turn(service, "note that")
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ][0]
+        assert body in str(card.payload["restatement"]), "the card still shows it"
+        announcement = str(card.payload["announcement"])
+        assert body not in announcement
+        assert announcement == "Append to the pixel lab project note. Confirm or cancel?"
+    finally:
+        service.store.close()
+
+
+async def test_a_scheduled_card_is_announced_as_stoppable_not_confirmable(
+    tmp_path: Path,
+) -> None:
+    """Wording is the trust policy talking. A cancel-window action runs on its
+    own, so telling the operator to confirm it describes a decision they do not
+    have - and the action lands before the sentence finishes either way."""
+    service, emitted, _appended = note_service(
+        tmp_path,
+        [tool_turn("", [note_call()]), tool_turn("Proposed.")],
+        trust="cancel_window",
+    )
+    try:
+        await run_turn(service, "note that")
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action"
+            and event.payload.get("status") == "scheduled"
+        ][0]
+        assert str(card.payload["announcement"]).endswith("Say cancel to stop it.")
+    finally:
+        for task in service._window_tasks.values():
+            task.cancel()
+        service.store.close()
+
+
+async def test_announcing_a_scheduled_card_restarts_its_cancel_window(
+    tmp_path: Path,
+) -> None:
+    """The window has to outlast the operator *learning about it*. Spoken, that
+    means synthesizing and then reading a sentence, which the original six
+    seconds is not long enough to cover."""
+    service, emitted, _appended = note_service(
+        tmp_path,
+        [tool_turn("", [note_call()]), tool_turn("Proposed.")],
+        trust="cancel_window",
+    )
+    try:
+        await run_turn(service, "note that")
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action"
+            and event.payload.get("status") == "scheduled"
+        ][0]
+        action_id = str(card.payload["id"])
+        before = float(card.payload["expires_at"])
+        outcome = await service.announce_action(action_id)
+        assert outcome["extended"] is True
+        assert float(outcome["action"]["expires_at"]) > before
+        # Bounded from creation, so repeated announcements cannot hold an action
+        # armed indefinitely.
+        row = await service.store.action(action_id)
+        assert row is not None
+        ceiling = float(row["created_at"]) + CANCEL_WINDOW_MAX_SECONDS
+        for _ in range(5):
+            await service.announce_action(action_id)
+        final = await service.store.action(action_id)
+        assert final is not None
+        assert float(final["expires_at"]) <= ceiling + 0.001
+    finally:
+        for task in service._window_tasks.values():
+            task.cancel()
+        service.store.close()
+
+
+async def test_announcing_anything_not_scheduled_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    # A confirm-trust card has no window to extend, and an unknown id is an
+    # error rather than a silent success.
+    service, emitted, _appended = note_service(
+        tmp_path, [tool_turn("", [note_call()]), tool_turn("Proposed.")]
+    )
+    try:
+        await run_turn(service, "note that")
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ][0]
+        outcome = await service.announce_action(str(card.payload["id"]))
+        assert outcome["extended"] is False
+        with pytest.raises(AssistantError, match="unknown action"):
+            await service.announce_action("no-such-action")
+    finally:
+        service.store.close()
+
+
+async def test_a_confirmed_write_is_not_proposed_again(tmp_path: Path) -> None:
+    """The failure this closes: a spoken "confirm" the closed grammar did not
+    recognize reaches the model as an ordinary turn, the model sees its own
+    unanswered "say confirm" and calls the tool again - and the paragraph lands
+    in the note twice."""
+    service, emitted, appended = note_service(
+        tmp_path,
+        [
+            tool_turn("", [note_call()]),
+            tool_turn("Proposed."),
+            tool_turn("", [note_call(call_id="call-2")]),
+            tool_turn("Already done."),
+        ],
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "note that", {})
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ][0]
+        await service.confirm_action(str(card.payload["id"]))
+        assert appended == ["p1:ship the thing"]
+
+        await service.start_turn(dialog["id"], "yes do that one", {})
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        assert appended == ["p1:ship the thing"], "the write must not repeat"
+        cards = [
+            row for row in await service.store.actions(dialog["id"])
+            if row["status"] in {"pending", "scheduled"}
+        ]
+        assert cards == [], "and no second card may pend"
+    finally:
+        service.store.close()
+
+
+async def test_an_unanswered_card_is_not_duplicated(tmp_path: Path) -> None:
+    # Two cards for one intent is always wrong: answering either leaves the
+    # other armed, which is what "it popped up the confirm again" looked like.
+    service, emitted, _appended = note_service(
+        tmp_path,
+        [
+            tool_turn("", [note_call()]),
+            tool_turn("Proposed."),
+            tool_turn("", [note_call(call_id="call-2")]),
+            tool_turn("Still waiting on you."),
+        ],
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        for _ in range(2):
+            await service.start_turn(dialog["id"], "note that", {})
+            await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        pending = [
+            row for row in await service.store.actions(dialog["id"])
+            if row["status"] == "pending"
+        ]
+        assert len(pending) == 1
+        assert len([e for e in emitted if e.type == "assistant_action"]) == 1
+    finally:
+        service.store.close()
+
+
+async def test_a_repeated_spawn_is_allowed_because_repetition_is_the_ask(
+    tmp_path: Path,
+) -> None:
+    """The executed-duplicate guard covers only kinds where repeating *is* the
+    damage. Two identical sessions is a thing operators genuinely want, so
+    spawning stays unguarded while note writes do not."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps({"project": "pixel lab", "backend": "claude"}),
+        },
+    }
+    service, _emitted, _queue, effects = make_service(
+        tmp_path,
+        [
+            tool_turn("", [call]),
+            tool_turn("Started."),
+            tool_turn("", [dict(call, id="call-2")]),
+            tool_turn("Started another."),
+        ],
+        trust="auto",
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        for _ in range(2):
+            await service.start_turn(dialog["id"], "spawn a claude in pixel lab", {})
+            await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        assert len(effects["spawned"]) == 2
+    finally:
+        service.store.close()
+
+
+async def test_the_turn_prompt_carries_what_already_happened(tmp_path: Path) -> None:
+    """A confirmation is a button or a spoken word, never a turn, so nothing in
+    the message log records that the operator said yes. The action ledger is
+    where the model learns it."""
+    service, emitted, _appended = note_service(
+        tmp_path,
+        [
+            tool_turn("", [note_call()]),
+            tool_turn("Proposed."),
+            tool_turn("It is already saved."),
+        ],
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "note that", {})
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ][0]
+        await service.confirm_action(str(card.payload["id"]))
+        await service.start_turn(dialog["id"], "did that save?", {})
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        provider = cast(Any, service.provider)
+        context = str(provider.calls[-1]["messages"][1]["content"])
+        assert "Actions already proposed in this conversation" in context
+        assert "executed" in context
+        assert "append to the pixel lab project note" in context
+    finally:
+        service.store.close()
+
+
+async def test_a_streamed_reply_speaks_sentence_by_sentence(tmp_path: Path) -> None:
+    """Streaming exists so the first sentence can be spoken while the model is
+    still writing the second. The daemon does the splitting because a delta is
+    not a sentence and half a sentence is not speakable."""
+
+    class StreamingProviderStub:
+        def __init__(self, chunks: list[str]) -> None:
+            self.chunks = chunks
+            self.calls: list[dict[str, Any]] = []
+
+        async def complete_tools(self, **kwargs: Any) -> OpenRouterToolTurn:
+            self.calls.append(kwargs)
+            on_content = kwargs.get("on_content")
+            assert on_content is not None, "the assistant must opt into streaming"
+            for chunk in self.chunks:
+                await on_content(chunk)
+            return tool_turn("".join(self.chunks))
+
+    service, emitted, _queue, _effects = make_service(tmp_path, [])
+    service.provider = cast(
+        Any,
+        StreamingProviderStub(
+            ["Three sess", "ions are working. ", "Nothing is waiting", " on you."]
+        ),
+    )
+    try:
+        await run_turn(service, "how is the fleet")
+        sentences = [
+            str(event.payload["display"])
+            for event in emitted
+            if event.type == "assistant_sentence"
+        ]
+        # Split at the boundary, not at the delta: the first sentence is released
+        # whole and before the second one exists.
+        assert sentences == ["Three sessions are working.", "Nothing is waiting on you."]
+        assert all(
+            event.payload["speech"]
+            for event in emitted
+            if event.type == "assistant_sentence"
+        )
+        done = [event for event in emitted if event.type == "assistant_turn_done"][0]
+        assert done.payload["sentence_count"] == 2
+    finally:
+        service.store.close()
+
+
+async def test_an_unstreamed_reply_still_publishes_its_sentences(
+    tmp_path: Path,
+) -> None:
+    # The provider may refuse to stream, and the config knob turns it off. Either
+    # way the sentence contract holds, so the client has one path to speak from.
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("One done. Two next.")]
+    )
+    service.config.assistant_stream_replies = False
+    try:
+        await run_turn(service, "status")
+        assert [
+            str(event.payload["display"])
+            for event in emitted
+            if event.type == "assistant_sentence"
+        ] == ["One done.", "Two next."]
     finally:
         service.store.close()

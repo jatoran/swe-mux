@@ -27,7 +27,7 @@ import type { VoiceConversationEntry, VoiceConversationRole } from './voiceConve
 import { insertIntoTerminal } from './terminalActions'
 import { voiceCommsMessage } from './voiceComms'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
-import { assistantFollowUpActive } from './assistant'
+import { assistantFollowUpActive, latestOpenAction, spokenConfirmation } from './assistant'
 import { playEarcon } from './earcons'
 import type { ComponentChildren } from 'preact'
 
@@ -335,6 +335,14 @@ export function useConversation(
   // Deterministic client state, never a model decision: the annoyance is turns
   // firing at every pause, and only the client can decline to send the next one.
   const chatAddressee=()=>!!onAssistantRef.current&&(assistantChatRef.current?.()===true||assistantFollowUpActive())
+  /**
+   * An assistant confirmation card is open and this device would route the
+   * answer to it. That state changes what the microphone is waiting for: the
+   * operator is answering a question, not composing a thought, so the endpoint
+   * stops being patient and a recognized verdict is treated as a complete
+   * utterance the way a wake-worded command is.
+   */
+  const awaitingVerdict=()=>chatAddressee()&&latestOpenAction()!==null
   const beginHold=()=>{
     enterHold(true);setPhase('listening')
     respond('Holding — thinking out loud is buffered, not answered. Say “go ahead” when you want the assistant to respond.')
@@ -596,7 +604,13 @@ export function useConversation(
     // the daemon is busy, or return nothing, and none of that is the user's problem.
     catch{return}
     finally{if(speculationRef.current?.utteranceId===marks.utteranceId)speculationRef.current=null}
-    if(!decoded.parsed.command)return
+    // A bare confirm/cancel over an open card is the same kind of evidence a
+    // wake-worded command is: a closed, complete utterance whose meaning cannot
+    // change by continuing. Waiting the rest of the tail for it makes answering
+    // a question the slowest thing the operator does, and every second spent
+    // there is a second a scheduled action is running down its cancel window.
+    const verdict=awaitingVerdict()?spokenConfirmation(decoded.text):null
+    if(!decoded.parsed.command&&!verdict)return
     if(!capture.commitSpeculative(marks.utteranceId))return
     recordHistory('you',decoded.text)
     try{await handleTranscript(decoded.parsed,decoded.text)}
@@ -668,6 +682,11 @@ export function useConversation(
       // the speculative decode short-circuits the tail for wake-worded phrases.
       endpointPatienceMs:()=>{
         if(standbyRef.current||!chatAddressee())return 0
+        // Patience is for thinking out loud. An open confirmation card means the
+        // assistant asked a closed question, so the answer gets the detector's
+        // ordinary tail — holding a one-word reply for another 1.2 s is the
+        // difference between the confirmation feeling instant and feeling stuck.
+        if(awaitingVerdict())return 0
         const configured=statusRef.current?.chat_patience_ms
         return Math.max(0,Math.min(5000,typeof configured==='number'?configured:1200))
       },

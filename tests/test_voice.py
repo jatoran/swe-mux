@@ -335,6 +335,32 @@ def test_streaming_segments_keep_a_comms_sized_reply_coherent() -> None:
     assert streaming_segments(text) == [text]
 
 
+def test_a_tighter_opening_clip_only_moves_the_first_cut() -> None:
+    # Time-to-first-sound is the opening clip's length, because synthesis is
+    # roughly linear in characters. Application speech buys that back by opening
+    # short; the tail keeps the wide bound so the rest stays coherent.
+    text = (
+        "Three sessions are working. The swe-mux session has been running for "
+        "eleven minutes, and the other two finished their turns a moment ago, so "
+        "nothing is waiting on you right now."
+    )
+    assert len(text) <= 420
+    assert streaming_segments(text) == [text], "the wide default keeps this whole"
+    opened = streaming_segments(text, first_max_chars=140)
+    assert opened[0] == "Three sessions are working."
+    assert len(opened) == 2
+    assert " ".join(opened) == " ".join(text.split())
+
+
+def test_a_long_opening_sentence_still_starts_speaking_early() -> None:
+    # Only a sentence longer than the opening bound falls back to a word cut;
+    # nothing may be dropped when it does.
+    text = "A single deliberately unpunctuated clause that keeps going " * 6 + "end."
+    opened = streaming_segments(text, first_max_chars=140)
+    assert len(opened[0]) <= 140
+    assert " ".join(opened) == " ".join(text.split())
+
+
 async def last_reply_response(tmp_path: Path, events: list[dict[str, Any]]) -> dict[str, Any]:
     transcript_path = tmp_path / "transcript.jsonl"
     transcript_path.write_text(
@@ -799,6 +825,106 @@ async def test_system_speech_is_synthesized_without_a_model(tmp_path: Path) -> N
         assert clip["trigger"] == "system"
         assert clip["content_mode"] == "verbatim"
         assert spoken == ["Three sessions: one active."]
+    finally:
+        service.store.close()
+
+
+def stream_events(emitted: list[MuxEvent], stream_id: str) -> list[MuxEvent]:
+    return [
+        event
+        for event in emitted
+        if event.type in {"voice_clip_ready", "voice_stream_closed"}
+        and event.payload.get("stream_id") == stream_id
+    ]
+
+
+async def test_an_open_speech_stream_appends_in_order_and_closes(tmp_path: Path) -> None:
+    # The assistant speaks a turn sentence by sentence, so the stream's length is
+    # unknown while it runs: segments carry count 0 until the closing one, which
+    # carries the real total and lets the browser release its claim.
+    service, _events, emitted, _record = make_service(tmp_path)
+    spoken = patch_engine(service)
+    stream = "11111111-1111-4111-8111-111111111111"
+    try:
+        first = await service.speak("Opening sentence.", stream_id=stream, final=False)
+        assert first["stream_open"] is True
+        assert first["segment_count"] == 0
+        await service.speak(
+            "Second sentence.", stream_id=stream, continue_stream=True, final=False
+        )
+        await service.speak(
+            "Third sentence.", stream_id=stream, continue_stream=True, final=True
+        )
+        await asyncio.sleep(0.05)
+        assert spoken == ["Opening sentence.", "Second sentence.", "Third sentence."]
+        events = stream_events(emitted, stream)
+        clips = [event for event in events if event.type == "voice_clip_ready"]
+        assert [event.payload["segment_index"] for event in clips] == [0, 1, 2]
+        # Only the closing clip names a count; anything earlier would tell the
+        # browser the stream had ended and drop every later sentence.
+        assert [event.payload["segment_count"] for event in clips] == [0, 0, 3]
+        assert events[-1].type == "voice_stream_closed"
+        assert events[-1].payload["segment_count"] == 3
+    finally:
+        service.store.close()
+
+
+async def test_an_open_stream_closes_with_nothing_left_to_say(tmp_path: Path) -> None:
+    # A turn that ends on a tool result has no closing sentence, so the last clip
+    # it emitted carries no real count. Without an explicit close the browser
+    # would hold the stream claimed and let a later turn's clips join it.
+    service, _events, emitted, _record = make_service(tmp_path)
+    patch_engine(service)
+    stream = "22222222-2222-4222-8222-222222222222"
+    try:
+        await service.speak("Working on it.", stream_id=stream, final=False)
+        await asyncio.sleep(0.05)
+        closed = await service.close_speech_stream(stream)
+        assert closed == {
+            "stream_id": stream, "closed": True, "known": True, "segment_count": 1
+        }
+        assert stream_events(emitted, stream)[-1].type == "voice_stream_closed"
+        # Closing twice is not an error; the second call simply finds nothing.
+        assert (await service.close_speech_stream(stream))["known"] is False
+    finally:
+        service.store.close()
+
+
+async def test_appending_to_a_closed_stream_is_refused(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    patch_engine(service)
+    stream = "33333333-3333-4333-8333-333333333333"
+    try:
+        await service.speak("All done.", stream_id=stream, final=True)
+        await asyncio.sleep(0.05)
+        with pytest.raises(VoiceError, match="closed"):
+            await service.speak(
+                "Late text.", stream_id=stream, continue_stream=True, final=True
+            )
+    finally:
+        service.store.close()
+
+
+async def test_a_failed_segment_ends_its_stream_rather_than_reordering_it(
+    tmp_path: Path,
+) -> None:
+    # A gap cannot be skipped: speaking sentence three after sentence one failed
+    # would read the reply out of order. The stream ends, and says so.
+    service, _events, emitted, _record = make_service(tmp_path)
+    patch_engine(service)
+    stream = "44444444-4444-4444-8444-444444444444"
+    try:
+        await service.speak("First.", stream_id=stream, final=False)
+        patch_engine(service, fail="engine unavailable")
+        await service.speak(
+            "Second.", stream_id=stream, continue_stream=True, final=False
+        )
+        await asyncio.sleep(0.05)
+        closed = [
+            event for event in stream_events(emitted, stream)
+            if event.type == "voice_stream_closed"
+        ]
+        assert closed and closed[-1].payload["failed"] is True
     finally:
         service.store.close()
 

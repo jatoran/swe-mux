@@ -973,6 +973,7 @@ def create_app(
             web.post("/api/assistant/actions/{action_id}/confirm", assistant_confirm_action),
             web.post("/api/assistant/actions/{action_id}/cancel", assistant_cancel_action),
             web.post("/api/assistant/actions/{action_id}/ui-result", assistant_ui_result),
+            web.post("/api/assistant/actions/{action_id}/announced", assistant_announced),
             web.get("/api/voice", voice_status),
             web.get("/api/voice/models/kokoro", kokoro_model_status),
             web.post("/api/voice/models/kokoro/download", kokoro_model_download),
@@ -10027,6 +10028,17 @@ async def assistant_cancel_action(request: web.Request) -> web.Response:
     return json_response(await assistant.cancel_action(request.match_info["action_id"]))
 
 
+async def assistant_announced(request: web.Request) -> web.Response:
+    """A device has begun speaking a scheduled card's announcement aloud.
+
+    Restarts that card's cancel window so the operator's chance to object is not
+    spent synthesizing the sentence that tells them there is something to object
+    to. A no-op for anything not currently scheduled.
+    """
+    assistant: AssistantService = request.app["assistant"]
+    return json_response(await assistant.announce_action(request.match_info["action_id"]))
+
+
 async def assistant_ui_result(request: web.Request) -> web.Response:
     assistant: AssistantService = request.app["assistant"]
     body = await request.json()
@@ -11305,10 +11317,27 @@ async def voice_generate(request: web.Request) -> web.Response:
 
 
 async def voice_speak(request: web.Request) -> web.Response:
+    """Start, extend, or close one trusted application-speech stream.
+
+    `continue_stream` appends to an open stream instead of starting a new one,
+    and empty text with `final` closes it — the shape an assistant turn that
+    ended on a tool result needs, having no closing sentence to speak.
+    """
+    voice: VoiceService = request.app["voice"]
     try:
         body = await request.json()
-        clip = await request.app["voice"].speak(
-            str(body.get("text") or ""), stream_id=body.get("stream_id")
+        if not isinstance(body, dict):
+            raise VoiceError("speak body must be an object")
+        text = str(body.get("text") or "")
+        stream_id = body.get("stream_id")
+        final = bool(body.get("final", True))
+        if not text.strip() and final and stream_id:
+            return json_response(await voice.close_speech_stream(str(stream_id)))
+        clip = await voice.speak(
+            text,
+            stream_id=stream_id,
+            continue_stream=bool(body.get("continue_stream")),
+            final=final,
         )
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)

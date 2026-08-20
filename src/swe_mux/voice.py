@@ -31,6 +31,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -75,6 +76,16 @@ STT_MAX_BYTES = 2 * 1024 * 1024
 STT_MAX_SECONDS = 35.0
 STT_LATENCY_SAMPLES = 200
 VOICE_APPROVAL_TTL_SECONDS = 20.0
+# The opening clip bound for trusted application speech (the assistant's own
+# voice and the deterministic spoken answers). Synthesis time tracks characters,
+# so this is time-to-first-sound: ~1 s here against the 3-14 s measured when a
+# whole reply is one 420-character clip.
+APPLICATION_FIRST_SEGMENT_CHARS = 140
+# An open speech stream with no producer left is dropped after this long. A
+# stream is closed explicitly by whoever opened it; this only reclaims the ones
+# whose tab went away mid-turn.
+SPEECH_STREAM_IDLE_SECONDS = 600.0
+SPEECH_STREAM_LIMIT = 32
 # Capture always resamples to this rate, and decoding runs from the raw PCM rather
 # than a file, so the utterance is never resampled twice and never touches the disk.
 STT_SAMPLE_RATE = 16_000
@@ -268,6 +279,40 @@ class Transcription:
         }
 
 
+@dataclass
+class SpeechStream:
+    """One open application-speech stream: ordered clips appended over time.
+
+    The assistant speaks a turn sentence by sentence, so the stream's segment
+    count is unknown while the turn is still running. Ordering is the invariant
+    this type exists to hold: exactly one worker task drains one FIFO, so clip
+    indices are monotonic no matter how the appends arrive. Two appends
+    synthesizing concurrently would emit out of order whenever the shorter one
+    finished first, and the browser plays clips in arrival order — the reply's
+    second sentence would speak before its first.
+
+    `total` is `None` until the producer closes the stream; the closing segment
+    is the only one that carries a real `segment_count`, which is how the client
+    learns the stream ended without a separate poll.
+    """
+
+    stream_id: str
+    session_id: str
+    trigger: str
+    content_mode: str
+    agent_run_id: str | None = None
+    model: str | None = None
+    created_at: float = 0.0
+    pending: deque[str] = dataclass_field(default_factory=deque)
+    next_index: int = 0
+    total: int | None = None
+    task: asyncio.Task[None] | None = None
+    failed: bool = False
+    # True while the opening clip is still synthesizing inline. The worker must
+    # not start in that window: it would emit segment 1 before segment 0.
+    opening: bool = True
+
+
 def _finite(value: Any, *, limit: float = LATENCY_MAX_MS) -> float:
     """Clamp one browser-supplied duration into a plottable millisecond range."""
     try:
@@ -420,7 +465,9 @@ def _bounded_speech_chunks(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def streaming_segments(text: str, max_chars: int = 420) -> list[str]:
+def streaming_segments(
+    text: str, max_chars: int = 420, first_max_chars: int | None = None
+) -> list[str]:
     """Split speakable text into short independently playable clips.
 
     Auto read-aloud emits each clip as soon as its synthesis finishes. A reply
@@ -429,15 +476,24 @@ def streaming_segments(text: str, max_chars: int = 420) -> list[str]:
     middle of a thought sounds like a second, unrelated response when playback
     advances to the continuation. Only sentences longer than the clip bound fall
     back to word chunks.
+
+    `first_max_chars` tightens *only* the opening clip, which is the one the
+    operator waits on in silence. Synthesis is roughly linear in characters, so
+    a 420-character opening clip is measured at 11-14 s on Kokoro before any
+    sound; the same text opened at 140 characters starts speaking in about a
+    second and encodes the rest while it plays. Agent read-aloud keeps the wide
+    bound (coherence of somebody else's prose matters more than the first
+    second); application speech passes `APPLICATION_FIRST_SEGMENT_CHARS`.
     """
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
         return []
     bound = max(80, max_chars)
-    if len(cleaned) <= bound:
+    lead = min(bound, max(40, first_max_chars)) if first_max_chars else bound
+    if len(cleaned) <= lead:
         return [cleaned]
     first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0]
-    first = _bounded_speech_chunks(first_sentence, bound)[0]
+    first = _bounded_speech_chunks(first_sentence, lead)[0]
     remainder = cleaned[len(first):].strip()
     return [first, *_bounded_speech_chunks(remainder, bound)]
 
@@ -657,6 +713,8 @@ class VoiceService:
         self._submitted_id_set: set[str] = set()
         self._stt_latency: deque[dict[str, Any]] = deque(maxlen=STT_LATENCY_SAMPLES)
         self._approval_challenges: dict[str, VoiceApprovalChallenge] = {}
+        # Open application-speech streams, keyed by the client-minted stream id.
+        self._streams: dict[str, SpeechStream] = {}
 
     @property
     def clip_directory(self) -> Path:
@@ -920,8 +978,32 @@ class VoiceService:
             )
             return first
 
-    async def speak(self, text: str, *, stream_id: str | None = None) -> dict[str, Any]:
-        """Synthesize trusted application text without involving a language model."""
+    async def speak(
+        self,
+        text: str,
+        *,
+        stream_id: str | None = None,
+        continue_stream: bool = False,
+        final: bool = True,
+    ) -> dict[str, Any]:
+        """Synthesize trusted application text without involving a language model.
+
+        Two shapes, because the assistant produces its reply over several
+        seconds and the operator should not wait for the last sentence to hear
+        the first:
+
+        - `continue_stream=False` opens a stream. The opening clip is
+          synthesized inline and returned, so a lost `voice_clip_ready` event
+          still has the HTTP response as its playback fallback.
+        - `continue_stream=True` appends to an already-open stream. Synthesis
+          runs on that stream's single worker and the response is an
+          acknowledgement, not a clip: the browser is already playing this
+          stream and picks the continuation up from its events.
+
+        `final=False` leaves the stream open. Its segments carry
+        `segment_count=0` (unknown) until the closing one, which carries the
+        real total.
+        """
         if not self.config.tts_enabled:
             raise VoiceError("read aloud is off")
         spoken = re.sub(r"\s+", " ", text).strip()
@@ -929,29 +1011,219 @@ class VoiceService:
             raise VoiceError("system speech must contain 1-2000 characters")
         if any(ord(character) < 32 for character in spoken):
             raise VoiceError("system speech contains control characters")
-        stream_id = self._stream_id(stream_id)
-        segments = streaming_segments(spoken)
-        row = self._new_clip_row("system", "system", None, "verbatim")
-        await self._synthesize_stream_segment(
-            row, segments[0], session_id="system", agent_run_id=None, trigger="system",
-            stream_id=stream_id, index=0, count=len(segments),
+        segments = streaming_segments(
+            spoken, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS
         )
+        if not segments:
+            raise VoiceError("nothing speakable remained after preprocessing")
+        if continue_stream:
+            if stream_id is None:
+                raise VoiceError("continuing a speech stream needs its stream_id")
+            return self._append_stream(self._stream_id(stream_id), segments, final=final)
+        stream_id = self._stream_id(stream_id)
+        stream = self._open_stream(stream_id)
+        row = self._new_clip_row("system", "system", None, "verbatim")
+        # Reserved before the await so an append landing mid-synthesis queues
+        # behind this text rather than in front of it. `opening` holds the
+        # worker back until index 0 has actually been emitted.
+        stream.next_index = 1
+        stream.pending.extend(segments[1:])
+        if final:
+            stream.total = len(segments)
+        try:
+            await self._synthesize_stream_segment(
+                row, segments[0], session_id="system", agent_run_id=None,
+                trigger="system", stream_id=stream_id, index=0,
+                count=len(segments) if final else 0,
+            )
+        except VoiceError:
+            stream.opening = False
+            self._forget_stream(stream)
+            raise
+        stream.opening = False
         first = clip_snapshot(row)
         first["stream_id"] = stream_id
-        first["segment_count"] = len(segments)
-        if len(segments) > 1:
-            self._start_segment_tail(
-                session_id="system", agent_run_id=None, trigger="system",
-                content_mode="verbatim", model=None, stream_id=stream_id,
-                segments=segments[1:], total=len(segments),
-            )
-        else:
-            await self._prune()
+        first["segment_count"] = len(segments) if final else 0
+        first["segment_index"] = 0
+        first["stream_open"] = not final
         log.info(
-            "voice system first segment ready clip=%s characters=%d segments=%d",
-            row["id"], len(spoken), len(segments),
+            "voice system first segment ready clip=%s stream=%s characters=%d "
+            "segments=%d open=%s",
+            row["id"], stream_id, len(spoken), len(segments), not final,
         )
+        if stream.pending:
+            self._ensure_stream_worker(stream)
+        elif stream.total is not None:
+            await self._finish_stream(stream)
         return first
+
+    async def close_speech_stream(self, stream_id: str) -> dict[str, Any]:
+        """Mark an open application-speech stream complete with no more text.
+
+        The producer (one assistant turn) does not know it has finished until
+        the model stops, and a turn that ends on a tool result adds no closing
+        sentence. Without this the browser would hold the stream open forever
+        and keep accepting late clips for a turn the operator already left.
+        """
+        stream = self._streams.get(self._stream_id(stream_id))
+        if stream is None:
+            return {"stream_id": stream_id, "closed": True, "known": False}
+        if stream.total is None:
+            stream.total = stream.next_index + len(stream.pending)
+        # An opening clip still synthesizing owns the finalization; closing here
+        # would announce the end of a stream whose first sound has not played.
+        if not stream.opening and (stream.task is None or stream.task.done()):
+            await self._finish_stream(stream)
+        return {
+            "stream_id": stream.stream_id,
+            "closed": True,
+            "known": True,
+            "segment_count": stream.total,
+        }
+
+    # ------------------------------------------------------- speech streams
+
+    def _open_stream(self, stream_id: str) -> SpeechStream:
+        self._expire_streams()
+        stream = SpeechStream(
+            stream_id=stream_id,
+            session_id="system",
+            trigger="system",
+            content_mode="verbatim",
+            created_at=time.time(),
+        )
+        self._streams[stream_id] = stream
+        return stream
+
+    def _append_stream(
+        self, stream_id: str, segments: list[str], *, final: bool
+    ) -> dict[str, Any]:
+        stream = self._streams.get(stream_id)
+        if stream is None:
+            raise VoiceError("that speech stream is closed")
+        if stream.total is not None:
+            raise VoiceError("that speech stream is already complete")
+        base = stream.next_index + len(stream.pending)
+        stream.pending.extend(segments)
+        if final:
+            stream.total = base + len(segments)
+        self._ensure_stream_worker(stream)
+        log.info(
+            "voice stream append stream=%s from=%d segments=%d open=%s",
+            stream_id, base, len(segments), not final,
+        )
+        return {
+            "stream_id": stream_id,
+            "queued": len(segments),
+            "segment_index": base,
+            "stream_open": not final,
+        }
+
+    def _ensure_stream_worker(self, stream: SpeechStream) -> None:
+        """Start the drain task unless one is already running for this stream."""
+        if stream.opening:
+            return  # `speak` starts the worker once its opening clip is out
+        if stream.task is not None and not stream.task.done():
+            return
+        if not stream.pending:
+            return
+        stream.task = asyncio.create_task(
+            self._drain_stream(stream), name=f"voice-stream-{stream.stream_id}"
+        )
+        self._segment_tasks.add(stream.task)
+        stream.task.add_done_callback(self._segment_tail_done)
+
+    async def _drain_stream(self, stream: SpeechStream) -> None:
+        """Synthesize this stream's queued segments strictly in order.
+
+        The empty-queue check and clearing `task` are one atomic step (no await
+        between them), which is what lets `_ensure_stream_worker` decide to
+        start a worker by reading `task` alone: an append that lands while this
+        runs is either seen by the loop or starts a fresh worker, never neither.
+        """
+        # unsupervised-loop-ok: one worker for one speech stream, ending as soon
+        # as its queue is empty; the stream itself is bounded by one turn.
+        while True:
+            if not stream.pending:
+                stream.task = None
+                if stream.total is not None:
+                    await self._finish_stream(stream)
+                return
+            segment = stream.pending.popleft()
+            index = stream.next_index
+            stream.next_index += 1
+            total = stream.total
+            last = total is not None and index >= total - 1
+            row = self._new_clip_row(
+                stream.session_id, stream.trigger, stream.agent_run_id, stream.content_mode
+            )
+            row["model"] = stream.model
+            try:
+                await self._synthesize_stream_segment(
+                    row, segment, session_id=stream.session_id,
+                    agent_run_id=stream.agent_run_id, trigger=stream.trigger,
+                    stream_id=stream.stream_id, index=index,
+                    count=total if last and total is not None else 0,
+                )
+            except VoiceError:
+                # The stream cannot continue past a gap without speaking the
+                # reply out of order, so it ends here — announced, not silent.
+                stream.failed = True
+                stream.pending.clear()
+                stream.task = None
+                await self._finish_stream(stream)
+                return
+
+    async def _finish_stream(self, stream: SpeechStream) -> None:
+        if self._streams.get(stream.stream_id) is not stream:
+            return  # already finished
+        self._forget_stream(stream)
+        await self.events.emit(
+            "voice_stream_closed",
+            session_id=stream.session_id,
+            source="daemon",
+            stream_id=stream.stream_id,
+            segment_count=stream.next_index,
+            failed=stream.failed,
+        )
+        log.info(
+            "voice stream complete stream=%s trigger=%s segments=%d failed=%s",
+            stream.stream_id, stream.trigger, stream.next_index, stream.failed,
+        )
+        await self._prune()
+
+    def _forget_stream(self, stream: SpeechStream) -> None:
+        if self._streams.get(stream.stream_id) is stream:
+            self._streams.pop(stream.stream_id, None)
+
+    def _expire_streams(self) -> None:
+        """Drop streams whose producer went away without closing them."""
+        cutoff = time.time() - SPEECH_STREAM_IDLE_SECONDS
+        stale = [
+            stream_id
+            for stream_id, stream in self._streams.items()
+            if stream.created_at < cutoff
+            and not stream.opening
+            and (stream.task is None or stream.task.done())
+        ]
+        for stream_id in stale:
+            self._streams.pop(stream_id, None)
+        if len(self._streams) > SPEECH_STREAM_LIMIT:
+            # Only idle streams are evictable: dropping one mid-synthesis would
+            # strand its worker emitting clips nothing will ever accept.
+            idle = sorted(
+                (
+                    stream
+                    for stream in self._streams.values()
+                    if not stream.opening and (stream.task is None or stream.task.done())
+                ),
+                key=lambda stream: stream.created_at,
+            )
+            for stream in idle[: len(self._streams) - SPEECH_STREAM_LIMIT]:
+                self._streams.pop(stream.stream_id, None)
+                stale.append(stream.stream_id)
+        if stale:
+            log.info("voice streams expired count=%d", len(stale))
 
     async def kokoro_preview(self, voice_id: str) -> bytes:
         """One audition clip for a voice the operator has not committed to.
