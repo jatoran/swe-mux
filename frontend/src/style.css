@@ -2649,7 +2649,30 @@ body {
      the ring, so the control has to be visible before the pointer is anywhere near it —
      a highlighted empty box is not something a first-run user knows to hover. */
   body:has(.tutorial-layer) .sidebar-projects-header .sidebar-tool{opacity:1}
+  /* The filter's close button is the only control in the row while it is up, and the
+     row is not a title any more - there is nothing to reveal it by hovering past. */
+  .sidebar-projects-header.searching .sidebar-tool{opacity:1}
 }
+/* -- the sidebar's typed filter ------------------------------------------------
+   Searching takes the header row rather than opening one below it: the controls it
+   replaces act on a tree that is not drawn while it is up, and an extra row would push
+   every result down a line at the moment it appeared. The row keeps its height so
+   opening the filter never reflows the tree underneath. */
+.sidebar-projects-header.searching{gap:5px;padding-right:3px}
+.sidebar-search-mark{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;color:var(--muted)}
+.sidebar-search-mark svg{display:block;width:14px;height:14px}
+/* The header runs 8px uppercase with letter spacing, which is a label style and unusable
+   as an input. Everything type-related is restated here rather than inherited. */
+.sidebar-search-input{flex:1 1 auto;min-width:0;height:calc(22px*var(--ui-scale));border:0;background:transparent;color:var(--text);font:12px 'Cascadia Mono',Consolas,monospace;text-transform:none;letter-spacing:0;outline:none}
+.sidebar-search-input::placeholder{color:var(--muted);opacity:.75}
+.sidebar-search-empty{margin:0;padding:10px 8px;color:var(--muted);font-size:10px;font-style:italic}
+/* The filter's mark on the tree's own rows: what Enter commits to, and where the arrow
+   keys are. An inset bar on the leading edge rather than a background, because a Project
+   row and a session row already spend their background on selection and attention state -
+   a third meaning painted the same way would be a third thing to tell apart at a glance,
+   in a column whose whole job is to be glanced at. */
+.project-row.search-cursor,.session-row.search-cursor{box-shadow:inset 2px 0 var(--accent)}
+.project-row.search-cursor{background:var(--panel2)}
 .sidebar-ungrouped-projects{position:relative;display:flex;flex-direction:column;margin:0 0 10px}
 /* An empty list — a Group nobody has filled yet, or the root with every Project grouped
    — says what to do with it and is the drop target for doing it. Without a body the

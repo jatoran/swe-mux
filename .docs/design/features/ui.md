@@ -45,7 +45,9 @@ responsive controls.
   The Group header's only button is `✎`, which renames the Group.
   It appears on hover over its own header, and on keyboard focus, so the resting sidebar is a list of names rather than a column of glyphs; a coarse pointer has no hover and always shows it.
 - **The `PROJECTS` header owns every control that acts on the tree as a whole**, because none of them may scroll away with the list.
-  It holds four buttons:
+  It holds five buttons:
+  - A magnifier opens the typed filter, which hides rows out of this tree rather than replacing it.
+    It leads the row because it is the control that scales: fold and sort rearrange a tree still on screen, and the filter is what answers "where is X" when it is not.
   - A double chevron folds or unfolds **every Project row and every Group** in one click — pointing up to collapse, down to expand.
     It offers Expand only once nothing on screen is left to collapse, so the next click finishes a half-folded tree instead of undoing it.
     It is an icon rather than the `⊟`/`⊞` it replaced: that pair is the box-drawing mark for a single *tree node*, so it reads as
@@ -66,13 +68,14 @@ responsive controls.
     screen away from the tree they edit.
   - `+` opens the registry **and** its Add-project dialog in one click, so the create dialog dismisses onto the registry rather than
     back onto the tree. Reaching it used to mean opening the registry and finding its button.
-- The three icon controls are sized against `⇅`, not against each other's boxes. `⇅` is a text glyph and carries far more ink per
+- The four icon controls are sized against `⇅`, not against each other's boxes. `⇅` is a text glyph and carries far more ink per
   pixel than a 2-unit stroke on a 24-box does, so matching them by box left the icons reading as the smaller controls even at
   equal dimensions; they are drawn larger than the glyph's nominal size to land at the same visual weight.
-- The four header controls are revealed by hovering the header, and by keyboard focus on any of them, so the resting sidebar is a
+- The five header controls are revealed by hovering the header, and by keyboard focus on any of them, so the resting sidebar is a
   title rather than a toolbar; a coarse pointer has no hover and always shows them. Opacity, never `display`, so the row does not
   reflow as they come and go. The guided tour spotlights the cogwheel and blocks clicks outside its ring, so the tour's presence
   overrides the reveal — a highlighted empty box is not something a first-run user knows to hover.
+  The filter's own close button is exempt: while the filter is up it is the row's only control, and there is no title left to hover past.
 - Project sort is one global mode, applied to root Projects, the Projects inside every Group, and
   the placement of the Groups themselves. It was per section once, on the
   theory that a Group might be a hand-arranged shortlist while another is a long alphabetical
@@ -285,6 +288,52 @@ responsive controls.
   the window still opens upward.
 - Git state is Project/session metadata. Worktrees have no first-class sidebar row, creation
   modal, or workspace ownership; the drawer's Git tab is their only surface (`git.md`).
+
+### Sidebar filter
+
+The typed filter over Groups, Projects, and sessions.
+It hides rows out of the sidebar's own tree; it never draws a list of its own.
+Its rules, and what each one is defending:
+
+- **The tree is the result surface.**
+  Group sections, Project sections, and the session rows nested under each Project's pane layout all stay exactly where they are, and the only difference a query makes is which rows are still present.
+  A flat ranked list in the tree's place was tried and is wrong: everything on screen moved at the first keystroke, so finding a row meant re-reading a column that no longer looked like the one being searched.
+  Nothing is reordered by score - re-sorting a hand-arranged tree behind the user is the one thing this must not do.
+- **Opening the filter changes nothing.**
+  An empty query means *not filtering*, which is not the same as filtering to nothing: the tree draws itself untouched and narrows only once a character lands.
+- **It replaces the header row rather than adding one.**
+  The controls it replaces (fold, sort, registry, add) act on a tree that is being filtered rather than arranged, and an added row would push every row below it down a line at the instant the filter opened.
+  The row keeps its height, so nothing reflows.
+- **Two containment rules make it a tree filter rather than three independent ones.**
+  A node that matched keeps its subtree: a Group matched by name keeps its Projects and their sessions, and a Project matched by name keeps its sessions, so typing a Project's name never renders it as an empty heading.
+  A node that is kept keeps its ancestors: a matching session pulls its Project and that Project's Group back on screen, because a row with no heading over it does not say where it lives.
+- **A pruned pane tree stops describing branches it no longer draws.**
+  The layout cluster a split or a stack renders counts the terminals *still drawn* rather than the terminals present, so a split whose other side was filtered out collapses to a plain row instead of drawing an empty branch beside the match.
+  It is the same count the tree already used to skip layout nodes holding no terminal.
+- **A fold never hides a match.**
+  While a query is up, a Project with anything left under it and a Group with anything left in it both draw open whatever their stored fold says - answering "where is X" with a closed section is answering with silence.
+  The stored flags are untouched and return when the filter clears, which is why folding is *inert* while filtering: the Project row draws its collapse spacer instead of its toggle, and a Group header's fold click does nothing, rather than setting a preference whose effect nobody can see.
+- **Every sidebar drag is inert while a query is up.**
+  A drop computes its insertion index from the rows that are drawn, so reordering a partial tree would move a Project, a Group, or a session somewhere nobody aimed at.
+  Drag returns the moment the query is empty again.
+- **Ranking exists for exactly one thing: what `Enter` opens.**
+  The best match carries an inset bar on its leading edge - an edge mark rather than a background, because Project and session rows already spend their background on selection and attention state.
+  Arrows move it over the drawn rows in *sidebar* order and stop at both ends rather than wrapping; every keystroke releases it back to the new best match.
+  With nothing typed there is no mark and `Enter` does nothing, rather than opening whichever Project happens to sit at the top.
+  A row kept only by containment is never the best match: landing on a Project you were shown because one of its sessions matched goes to the wrong place.
+- **Matching is shared with the Settings index** (`fuzzyText.ts`).
+  Every whitespace-separated term must match something, so a second word narrows.
+  A Project outranks a session it ties with, being the coarser destination and the one that contains the other; a live session outranks an ended one of the same name, though both are still drawn.
+  A session matches on the name its row draws, plus its Project's name and root, its harness, and its branch or worktree.
+- **It retires itself after five seconds untouched**, clearing the query and restoring the tree.
+  A filter is a transient lens, and one left standing over a sidebar the user walked away from misreports the fleet at a glance.
+  Typing, arrows, the pointer crossing the tree, and activating a row all restart the clock.
+  Interaction is recorded in a ref and idleness is polled, so pointer movement over the tree costs no re-render.
+- **Reopening always starts empty.**
+  There is nothing worth restoring: a query typed minutes ago would filter the tree by a question already answered.
+- It is a dismiss level, so Escape and the platform back gesture put the tree back.
+  Unlike the sidebar itself it is a level on every device, because it is transient everywhere and so never leaves the stack permanently armed.
+- Reachable from the palette and bindable as `sidebar.search`, which opens the sidebar with it - the filter is chrome inside a column that is hidden on a phone and collapsible to a rail on the desktop.
 
 ## Menus and overlays
 
@@ -2447,6 +2496,8 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/dismissStack.ts`
 - `frontend/src/systemBack.ts`
 - `frontend/src/modalFocus.ts`
+- `frontend/src/sidebarSearch.ts`
+- `frontend/src/fuzzyText.ts`
 - `frontend/src/sessionRowConfig.ts`
 - `frontend/src/sessionRowFields.ts`
 - `frontend/src/sessionRowPrefs.ts`

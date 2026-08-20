@@ -53,11 +53,13 @@ import {
   applyOwnerReleased,
   applyRejectedFrame,
   claimReasonForFocus,
+  focusHeldByOtherField,
   inputOwnerNotice,
   shouldReclaimAfterDisplacement,
   shouldReplayRejectedInput,
   UNOWNED,
   type ClaimReason,
+  type FocusedField,
   type OwnershipView,
 } from './inputOwnership'
 import { pendingInputDecision } from './pendingInput'
@@ -307,6 +309,15 @@ function terminalCaretSnapshot(term: Terminal): TerminalCaretSnapshot {
 
 function mobileClipboardFallback(): boolean {
   return window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
+}
+
+/** The focused element, in the shape `focusHeldByOtherField` reads. `.xterm` is what
+ *  marks a terminal's own hidden textarea, so a pane still takes focus from another
+ *  terminal - only a text field elsewhere in the app holds it off. */
+function activeEditableField(): FocusedField {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement)) return null
+  return { tagName: active.tagName, isContentEditable: active.isContentEditable, inTerminal: !!active.closest('.xterm') }
 }
 
 async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (files: Blob[]) => Promise<void>): Promise<'attachment'|'text'> {
@@ -2266,7 +2277,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // Mobile browsers should receive focus from the user's terminal tap.
         // Pre-focusing an invisible textarea outside a gesture can leave Gboard
         // believing the field is active without actually opening the keyboard.
-        if(!reconnecting&&!mobileLiveInput)term.focus()
+        //
+        // And a socket that opens a few hundred milliseconds after the user started
+        // typing into a text field elsewhere - the sidebar filter, a rename dialog -
+        // must not pull the keyboard out of it mid-word. Same principle as the passive
+        // claim above: attaching is not the user asking for the keyboard.
+        if(!reconnecting&&!mobileLiveInput&&!focusHeldByOtherField(activeEditableField()))term.focus()
       }
       next.onmessage=event=>{if(socket===next)handleMessage(event,next)}
       next.onclose=()=>{if(socket!==next)return;socket=null;attachmentReadyRef.current=false;setAttachmentReady(false);scheduleReconnect()}

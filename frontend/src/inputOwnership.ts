@@ -126,6 +126,33 @@ export function claimReasonForFocus(lastInteractionAt: number | null, now: numbe
   return now - lastInteractionAt <= GESTURE_WINDOW_MS ? 'gesture' : 'passive'
 }
 
+/** Structural view of the focused element, so the rule below is testable without a DOM. */
+export type FocusedField = {
+  tagName?: string
+  isContentEditable?: boolean
+  /** Whether the element sits inside a terminal pane. */
+  inTerminal?: boolean
+} | null
+
+const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA'])
+
+/**
+ * Whether the keyboard is currently in a text field that is not a terminal's.
+ *
+ * A pane finishing its attach focuses its terminal, which is correct when the user is
+ * looking at that terminal and wrong when they have since started typing somewhere else:
+ * a socket opening is not the user asking for the keyboard, and an attach that lands a
+ * few hundred milliseconds into a sidebar filter or a rename dialog swallows the words
+ * already typed into it. The check is deliberately narrow - only a real text field, and
+ * only one outside a terminal - so a pane still takes focus from a button, from the
+ * document body, and from another terminal, which is where its attach focus earns its
+ * keep.
+ */
+export function focusHeldByOtherField(focused: FocusedField): boolean {
+  if (!focused || focused.inTerminal) return false
+  return focused.isContentEditable === true || EDITABLE_TAGS.has((focused.tagName || '').toUpperCase())
+}
+
 /** Whether rejected keystrokes should be re-sent after re-claiming input.
  *
  * A frame that was already a retry is not retried again: at that point the other

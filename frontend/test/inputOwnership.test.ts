@@ -5,6 +5,7 @@ import {
   applyOwnerReleased,
   applyRejectedFrame,
   claimReasonForFocus,
+  focusHeldByOtherField,
   GESTURE_WINDOW_MS,
   inputOwnerNotice,
   shouldReclaimAfterDisplacement,
@@ -114,4 +115,19 @@ test('a pane does say when input it held went elsewhere, or a keystroke was refu
     inputOwnerNotice({ owns: false, epoch: 1, ownerDevice: 'mobile', denied: 'input_rejected' }),
     'Input active on mobile',
   )
+})
+
+test('an attach holds off only for a text field outside a terminal', () => {
+  // Nothing focused, or the body: the pane's attach focus is what puts the keyboard
+  // somewhere useful, so it proceeds.
+  assert.equal(focusHeldByOtherField(null), false)
+  assert.equal(focusHeldByOtherField({ tagName: 'BODY' }), false)
+  assert.equal(focusHeldByOtherField({ tagName: 'BUTTON' }), false)
+  // The sidebar filter, a rename dialog, a note editor: the user is mid-word.
+  assert.equal(focusHeldByOtherField({ tagName: 'input' }), true)
+  assert.equal(focusHeldByOtherField({ tagName: 'TEXTAREA' }), true)
+  assert.equal(focusHeldByOtherField({ tagName: 'DIV', isContentEditable: true }), true)
+  // Another terminal's own hidden textarea is not somewhere to be protected from:
+  // that is exactly the handover the attach focus exists to perform.
+  assert.equal(focusHeldByOtherField({ tagName: 'TEXTAREA', inTerminal: true }), false)
 })

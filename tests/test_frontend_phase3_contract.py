@@ -334,18 +334,25 @@ def test_groups_sort_in_among_root_projects_and_collapse_from_their_header() -> 
     )
     # Each run of root Projects between Groups is its own droppable list.
     assert "rootRows.map(row=>{" in app
-    assert "if(row.kind==='root')return <div" in app
+    assert "if(row.kind==='root'){" in app
+    assert 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""' in app
     assert "key={row.key}" in app
     # Dragging a Group header returns the one sort to Manual, which is the two-tier tree.
     assert app.count("setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))") == 2
     # Click folds, drag reorders; the drag swallows the click it ends with.
     assert "suppressDragClickRef.current===`bucket:${bucket.id}`" in app
     assert "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))" in app
-    assert "{!bucketCollapsed&&bucket.items.map(project=>sidebarProjectRow(project))}" in app
+    assert "{!bucketCollapsed&&bucketItems.map(project=>sidebarProjectRow(project))}" in app
+    assert (
+        "const bucketItems=bucket.items.filter(project=>!sidebarFilter"
+        "||sidebarFilter.projects.has(project.id))" in app
+    )
     # An emptied Group keeps its section and says what to do with it — that hint is also
     # the drop target, since a header alone is too thin a strip to aim a dragged row at.
+    # The hint is suppressed while a filter is up: it is also the drop target, and every
+    # sidebar drag is inert against a tree that is missing rows.
     assert (
-        "{!bucketCollapsed&&!bucket.items.length&&<p class=\"project-list-empty\">"
+        "{!bucketCollapsed&&!bucketItems.length&&!sidebarFilter&&<p class=\"project-list-empty\">"
         "Drag a Project here</p>}" in app
     )
     assert ".project-list-empty{" in css

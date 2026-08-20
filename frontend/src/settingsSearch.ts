@@ -16,7 +16,13 @@
  * is opaque to the walk: a component vnode is a function reference plus props,
  * and calling it would mean running hooks outside a render. Those panels are
  * still reachable through their tab and their own headings.
+ *
+ * Ranking itself is not local to this file: `fuzzyText.ts` owns the ladder, which
+ * the sidebar's Project/session filter scores by too.
  */
+import { fieldScore, normalizeSearchText } from './fuzzyText.ts'
+
+export { normalizeSearchText }
 
 /** Structural view of a preact vnode, so the walk is testable without a renderer. */
 export type VNodeLike = {
@@ -42,9 +48,6 @@ export type SettingsSearchEntry = {
   /** Which same-`key` element of this `kind` in this tab, in document order. */
   occurrence: number
 }
-
-export const normalizeSearchText = (value: string): string =>
-  value.toLowerCase().replace(/\s+/g, ' ').trim()
 
 /** CSS selector for the elements an entry of each kind could have come from. */
 export const kindSelector: Record<SettingsEntryKind, string> = {
@@ -192,47 +195,6 @@ export const tabEntry = (tab: string, tabLabel: string, tabIndex: number): Setti
   keywords: normalizeSearchText(tabLabel), kind: 'section', occurrence: 0,
 })
 
-/**
- * Length of the tightest run of `haystack` containing `needle` as a subsequence,
- * or -1. The span is what makes this usable as a fuzzy net: "scrlbck" matching
- * "scrollback bytes" is a real abbreviation, while "sound" matching "set
- * shortcut for open command palette" is five letters scattered over a sentence.
- */
-function subsequenceSpan(haystack: string, needle: string): number {
-  let best = -1
-  for (let start = haystack.indexOf(needle[0]); start >= 0; start = haystack.indexOf(needle[0], start + 1)) {
-    let at = start
-    let matched = true
-    for (let index = 1; index < needle.length; index += 1) {
-      at = haystack.indexOf(needle[index], at + 1)
-      if (at < 0) { matched = false; break }
-    }
-    if (!matched) break
-    const span = at - start + 1
-    if (best < 0 || span < best) best = span
-  }
-  return best
-}
-
-// Ranked so that what you typed matching the start of a control's own label
-// always beats the same word buried in another control's help text.
-function termScore(entry: SettingsSearchEntry, term: string): number {
-  const label = entry.key
-  if (label === term) return 1200
-  if (label.startsWith(term)) return 900
-  const wordAt = label.indexOf(` ${term}`)
-  if (wordAt >= 0) return 760 - Math.min(wordAt, 60)
-  const at = label.indexOf(term)
-  if (at >= 0) return 620 - Math.min(at, 60)
-  const keywordAt = entry.keywords.indexOf(term)
-  if (keywordAt >= 0) return 300 - Math.min(keywordAt, 240) / 4
-  if (term.length >= 3) {
-    const span = subsequenceSpan(label, term)
-    if (span > 0 && span <= term.length * 2 + 2) return 140
-  }
-  return 0
-}
-
 const KIND_BONUS: Record<SettingsEntryKind, number> = { field: 50, action: 10, section: 20 }
 
 /**
@@ -246,7 +208,7 @@ export function searchSettings(entries: SettingsSearchEntry[], query: string, li
   for (const entry of entries) {
     let score = 0
     for (const term of terms) {
-      const value = termScore(entry, term)
+      const value = fieldScore(entry.key, entry.keywords, term)
       if (!value) { score = 0; break }
       score += value
     }

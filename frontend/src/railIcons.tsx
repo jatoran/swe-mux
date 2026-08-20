@@ -244,6 +244,14 @@ export const PlusIcon = () => <svg {...stroke}>
   <line x1="5" y1="12" x2="19" y2="12" />
 </svg>
 
+/** A magnifier: filter the thing this surface lists down to what you type. Drawn
+ *  slightly small in its box so the handle clears the edge at the 17px the sidebar
+ *  header renders these at, where a full-bleed glyph loses the handle to the crop. */
+export const SearchIcon = () => <svg {...stroke}>
+  <circle cx="10.5" cy="10.5" r="6" />
+  <line x1="15" y1="15" x2="20" y2="20" />
+</svg>
+
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   actions: ActionsIcon,

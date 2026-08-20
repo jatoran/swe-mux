@@ -234,6 +234,14 @@ work, while a claim that changes owners must use the freshly registered viewport
 - Opening a session says nothing to the user. Display needs no ownership and the first real
   keystroke claims input by itself, so a refused attach costs nothing and reporting it
   prompts the user to fix what is not broken.
+- A finished attach does not take DOM focus out of a text field elsewhere in the app
+  (`focusHeldByOtherField`). The socket opens on the daemon's clock, not the user's, so an
+  attach landing a few hundred milliseconds into a sidebar filter or a rename dialog would
+  swallow the words already typed there. This is the same rule as the passive claim beside
+  it: attaching is not the user asking for the keyboard. It is deliberately narrow - only a
+  real text field, and only one outside a terminal - so a pane still takes focus from a
+  button, from the document body, and from another terminal, which is where the attach focus
+  earns its keep.
 - Ownership is released when its connection ends, before anything is awaited — a handler
   cancelled on disconnect re-raises at its first await.
 - A pane never reports a size it did not measure on screen. Unmeasured dimensions are not

@@ -86,7 +86,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
+import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SearchIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -183,6 +183,11 @@ import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, setAllCollapsed, toggleCollapsed,
 } from './sidebarProjects'
+import {
+  NO_SEARCH_CURSOR, SIDEBAR_SEARCH_DEBOUNCE_MS, SIDEBAR_SEARCH_IDLE_TICK_MS,
+  buildSidebarSearchIndex, clampSearchCursor, moveSearchCursor, sameSearchRow,
+  sidebarSearchExpired, sidebarTreeFilter, type SidebarSearchCandidate,
+} from './sidebarSearch'
 import {
   PROJECT_SORT_OPTIONS, SIDEBAR_ORDER_KEY,
   isBucketCollapsed, loadSidebarOrder, mergeVisibleOrder,
@@ -676,6 +681,18 @@ export function App() {
       .then(result=>applyProjectUse(result.project_id,result.last_used_at))
       .catch(()=>{})
   }
+  // The sidebar's typed filter. `sidebarSearchInput` is what the keyboard is holding
+  // and `sidebarSearchQuery` is what the list is ranked by; they differ for one debounce
+  // interval, which is what keeps a fast typist from re-ranking on every keystroke.
+  // `sidebarSearchTouchedAt` is a ref rather than state on purpose: the idle timer is
+  // fed by pointer movement over the results, and doing that through state would
+  // re-render the sidebar on every mouse move.
+  const [sidebarSearchOpen,setSidebarSearchOpen]=useState(false)
+  const [sidebarSearchInput,setSidebarSearchInput]=useState('')
+  const [sidebarSearchQuery,setSidebarSearchQuery]=useState('')
+  const [sidebarSearchCursor,setSidebarSearchCursor]=useState(0)
+  const sidebarSearchRef=useRef<HTMLInputElement|null>(null)
+  const sidebarSearchTouchedAt=useRef(0)
   const [sortMenu,setSortMenu]=useState<{x:number;y:number}|null>(null)
   // Held as a Group id rather than the record, so a rename landing while the menu is open
   // redraws it with the new name instead of the one it was opened on.
@@ -2171,6 +2188,27 @@ export function App() {
   // does not remove the Projects from the rail or the numbered shortcuts.
   const displayProjects=rootEntries.flatMap(entry=>entry.kind==='group'?entry.bucket.items:[entry.project])
   const displayProjectIds=mergeVisibleOrder(orderedProjects.map(project=>project.id),displayProjects.map(project=>project.id))
+  // Which rows the typed filter still leaves on screen, or null while nothing is typed
+  // — which means *not filtering*, and is why opening the filter changes nothing until
+  // a character lands. Computed here rather than beside the tree it edits because the
+  // drag handlers close over it: a drop computes its insertion index from the rows that
+  // are drawn, so reordering a partial tree would move a Project somewhere nobody aimed
+  // at. Rebuilt every render rather than memoized — the index is a linear pass over
+  // Projects and sessions, and both change under it constantly, so a session that just
+  // went `awaiting` has to stay findable by what its row is drawing.
+  const sidebarFilter=sidebarSearchOpen
+    ? sidebarTreeFilter(
+      buildSidebarSearchIndex(displayProjects,sessions),
+      displayBuckets.map(bucket=>({id:bucket.id,name:bucket.name,projectIds:bucket.items.map(item=>item.id)})),
+      sidebarSearchQuery,
+    )
+    : null
+  /** Whether a session row survives the filter. Also the predicate the pane-tree walk
+   *  prunes by, so a split branch whose only terminal was filtered out stops being a
+   *  branch instead of drawing an empty one. */
+  const sessionPassesFilter=(id:string)=>!sidebarFilter||sidebarFilter.sessions.has(id)
+  // A filtered tree is missing rows, so every sidebar drag is inert while one is up.
+  const sidebarReorderable=!sidebarFilter
   // Which way the toolbar's fold control points. "Everything on screen is folded"
   // rather than "anything is", so the button only offers Expand once there is
   // genuinely nothing left to collapse — a half-folded tree still reads as untidy,
@@ -2719,6 +2757,10 @@ export function App() {
     await commitProjectOrder(drop.previewIds)
   }
   const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project)=>{
+    // A filtered tree is missing rows, so the insertion index a drop computes from
+    // what is drawn would not be the position the user aimed at.
+    if(!sidebarReorderable)return
+
     const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
     const rowHeight=event.currentTarget.getBoundingClientRect().height
     const originGroupId=groupIdFor(project)
@@ -2817,6 +2859,10 @@ export function App() {
     }
   }
   const beginBucketPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,bucketId:string,label:string)=>{
+    // A filtered tree is missing rows, so the insertion index a drop computes from
+    // what is drawn would not be the position the user aimed at.
+    if(!sidebarReorderable)return
+
     const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
     // Every Group renders, empty ones included, so `rendered` is the whole list and
     // the merge below is now the identity. It stays because the merge is what keeps
@@ -2856,6 +2902,10 @@ export function App() {
    *  `groupTerminalsInStack`, which appends: a row aimed at the top of the list arrived at the
    *  bottom of a pane, and the list looked like it ignored the gesture. */
   const beginSessionPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,session:Session)=>{
+    // A filtered tree is missing rows, so the insertion index a drop computes from
+    // what is drawn would not be the position the user aimed at.
+    if(!sidebarReorderable)return
+
     const list=event.currentTarget.closest<HTMLElement>('.project-group')?.querySelector<HTMLElement>(':scope > .session-list')||null
     const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
     const rowHeight=event.currentTarget.getBoundingClientRect().height
@@ -3849,6 +3899,32 @@ export function App() {
     await updateLayout(session.project_id,isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id)))
   }
 
+  /** Anything that counts as still using the filter, which restarts its idle clock:
+   *  a keystroke, an arrow, the pointer crossing the results, activating a row. */
+  const touchSidebarSearch=()=>{sidebarSearchTouchedAt.current=Date.now()}
+  const openSidebarSearch=()=>{
+    touchSidebarSearch()
+    setSidebarSearchCursor(NO_SEARCH_CURSOR)
+    setSidebarSearchOpen(true)
+  }
+  /** Close and clear in one act. The filter holds nothing worth restoring: reopening
+   *  it onto a stale query would filter the tree by something typed minutes ago. */
+  const closeSidebarSearch=()=>{
+    setSidebarSearchOpen(false)
+    setSidebarSearchInput('')
+    setSidebarSearchQuery('')
+    setSidebarSearchCursor(NO_SEARCH_CURSOR)
+  }
+  /** The palette/keybinding entry point, which has to bring the sidebar with it: the
+   *  filter is chrome inside a column that is a hidden overlay on a phone and can be
+   *  collapsed to a rail on the desktop, and focusing an input nobody can see is the
+   *  worst of both. */
+  const toggleSidebarSearch=()=>{
+    if(sidebarSearchOpen){closeSidebarSearch();return}
+    setNavigationSidebarOpen(true)
+    openSidebarSearch()
+  }
+
   /** Show one session's prompt queue, which lives in the drawer's Queue tab.
    *
    *  Focuses the target first: the tab is session-scoped and follows focus, so a chip
@@ -4639,6 +4715,11 @@ export function App() {
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
+    // Brings the sidebar with it, because the filter is chrome inside a column that is
+    // hidden on a phone and collapsible on the desktop.
+    { id: 'sidebar.search', label: 'Filter Projects and sessions', category: 'view', available: true, run: () => toggleSidebarSearch(), voice:{
+      phrases:['filter projects','filter sessions','search projects','search sessions','search the sidebar'],
+    } },
     // Settings' section drawer, which only exists in the narrow layout. Real commands
     // rather than a special case inside the recognizer, because that is the only channel
     // a resolved gesture has — and it makes the drawer reachable from the palette too.
@@ -5156,6 +5237,32 @@ export function App() {
   useDismissLevel(() => setRedeployConfirmOpen(false), redeployConfirmOpen, 'redeploy-confirm')
   useDismissLevel(() => setReviewState(null), !!reviewState, 'second-opinion')
   useDismissLevel(() => setHandoffState(null), !!handoffState, 'handoff-export')
+  // The sidebar filter is a level too, so Escape and the platform back gesture put the
+  // tree back. It is not gated on `mobileWorkspace` the way the sidebar itself is: the
+  // filter is transient on every device, so it never leaves the stack permanently armed.
+  useDismissLevel(() => closeSidebarSearch(), sidebarSearchOpen, 'sidebar-search')
+
+  // -- sidebar filter -----------------------------------------------------
+  // Focus follows opening, so the button and the keyboard both land on the input.
+  useEffect(() => { if (sidebarSearchOpen) sidebarSearchRef.current?.focus() }, [sidebarSearchOpen])
+  // Typing settles before the list re-ranks. Cleared on close so a query typed, abandoned,
+  // and re-opened cannot arrive after the fact.
+  useEffect(() => {
+    if (!sidebarSearchOpen) return
+    const timer = window.setTimeout(() => setSidebarSearchQuery(sidebarSearchInput), SIDEBAR_SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [sidebarSearchInput, sidebarSearchOpen])
+  // Polled rather than scheduled, because what feeds it is a ref: every interaction
+  // stamps `sidebarSearchTouchedAt` without re-rendering, and a `setTimeout` restarted
+  // per interaction would have to be state to be restartable from a pointer move.
+  useEffect(() => {
+    if (!sidebarSearchOpen) return
+    touchSidebarSearch()
+    const timer = window.setInterval(() => {
+      if (sidebarSearchExpired(sidebarSearchTouchedAt.current, Date.now())) closeSidebarSearch()
+    }, SIDEBAR_SEARCH_IDLE_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [sidebarSearchOpen])
 
   // The platform back gesture closes one overlay level. Installed for every device, not
   // just the mobile workspace: a desktop browser's Back button and mouse-4 reach the same
@@ -5870,20 +5977,30 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,ackedTurns)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${session.pending?'pending-terminal-row':''}`} title={isColdSession(session)?coldSessionSummary(session):undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${isSearchCursorSession(session.id)?'search-cursor':''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${session.pending?'pending-terminal-row':''}`} title={isColdSession(session)?coldSessionSummary(session):undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
       <SessionRowBody session={session} tokens={rowTokens(session)} config={rowConfig}/>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}</div>
   }
+  /** Terminals under `node` that the sidebar is still drawing. The pane tree's own
+   *  pruning rule and the typed filter's are the same question asked twice, so they
+   *  are one count: a branch with none left is not a branch, and a cluster down to
+   *  one stops drawing itself as a cluster. Without the filter half, a split whose
+   *  other side was filtered out would draw an empty branch beside the match. */
+  const drawnTerminals=(node:PaneNode|PaneLeaf):number=>{
+    if(node.type==='leaf')return node.kind==='terminal'&&sessionPassesFilter(node.id)?1:0
+    const children=node.type==='stack'?node.children:[node.first,node.second]
+    return children.reduce((total,child)=>total+drawnTerminals(child),0)
+  }
   const sidebarNode=(node:PaneNode|PaneLeaf|null|undefined):ComponentChildren=>{
     if(!node)return null
     if(node.type==='leaf'){
-      if(node.kind!=='terminal')return null
+      if(node.kind!=='terminal'||!sessionPassesFilter(node.id))return null
       const session=sessions.find(item=>item.id===node.id)
       return session?sessionRow(session):null
     }
-    const branches=(node.type==='stack'?node.children:[node.first,node.second]).filter(child=>child.type==='leaf'?child.kind==='terminal':terminalIds({...emptyLayout(),root:child}).length>0)
+    const branches=(node.type==='stack'?node.children:[node.first,node.second]).filter(child=>drawnTerminals(child)>0)
     if(branches.length===0)return null
     if(branches.length===1)return sidebarNode(branches[0])
     const label=node.type==='stack'?'Sessions sharing one tabbed pane':`${node.direction} split branches`
@@ -6005,19 +6122,56 @@ export function App() {
     <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
   </section>
 
+  // Where the keyboard cursor is, over the rows the filter left drawn in sidebar order.
+  // Unset means "wherever the best match is": typing re-ranks, so the cursor follows the
+  // new best match without the user having to steer, and an arrow key takes over from
+  // there. Held as a position rather than a row id because the list under it changes on
+  // every keystroke and a clamp is the honest way to survive that.
+  const sidebarSearchRows=sidebarFilter?.order||[]
+  const sidebarBestIndex=sidebarFilter?.best
+    ? sidebarSearchRows.findIndex(row=>sameSearchRow(row,sidebarFilter.best))
+    : NO_SEARCH_CURSOR
+  const sidebarCursorIndex=sidebarSearchCursor>NO_SEARCH_CURSOR
+    ? clampSearchCursor(sidebarSearchCursor,sidebarSearchRows.length)
+    : sidebarBestIndex
+  const sidebarCursorRow=sidebarCursorIndex>NO_SEARCH_CURSOR?sidebarSearchRows[sidebarCursorIndex]||null:null
+  const isSearchCursorProject=(id:string)=>sidebarCursorRow?.kind==='project'&&sidebarCursorRow.id===id
+  const isSearchCursorSession=(id:string)=>sidebarCursorRow?.kind==='session'&&sidebarCursorRow.id===id
+  const activateSidebarSearchResult=(result:SidebarSearchCandidate)=>{
+    touchSidebarSearch()
+    if(result.kind==='project')selectProject(result.projectId)
+    else{
+      const session=sessions.find(item=>item.id===result.id)
+      // A row whose session vanished between the render and the keypress: the Project is
+      // still where the user was pointing, so land there rather than doing nothing.
+      if(session)void selectSession(session)
+      else selectProject(result.projectId)
+    }
+    closeSidebarSearch()
+  }
+  const moveSidebarSearchCursor=(delta:number)=>{
+    touchSidebarSearch()
+    setSidebarSearchCursor(moveSearchCursor(sidebarCursorIndex,delta,sidebarSearchRows.length))
+  }
   const sidebarProjectRow=(project:Project)=>{
     const children = sessions
       .filter(session => session.project_id === project.id)
       .sort((a,b)=>a.created_at-b.created_at||a.id.localeCompare(b.id))
     const projectLayout=resolveLayout(layoutMap[project.id],project.layout)
     const projectPaneIds=terminalIds(projectLayout)
-    const unpanedChildren=children.filter(session=>!projectPaneIds.includes(session.id))
+    const unpanedChildren=children.filter(session=>!projectPaneIds.includes(session.id)&&sessionPassesFilter(session.id))
     const dropClass=dragProject?.overId===project.id&&dragProject.side?`project-drop-target drop-${dragProject.side}`:''
-    const collapsed=collapsedProjects.has(project.id)
+    // A fold is a resting-state preference, and a filter that left a match hidden behind
+    // one would be answering "where is X" with silence — so while filtering, a Project
+    // with anything left under it draws open. The stored flag is untouched and comes back
+    // when the filter clears, which is why the toggle is replaced by its spacer here:
+    // folding inside a transient lens would set a preference nobody could see take effect.
+    const filteredOpen=!!sidebarFilter&&children.some(session=>sessionPassesFilter(session.id))
+    const collapsed=collapsedProjects.has(project.id)&&!filteredOpen
     const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
-    const hasSessions=children.length>0
+    const hasSessions=children.length>0&&!sidebarFilter
     return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
-      <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace?'Hold for actions, hold and drag to reorder or regroup':'Drag to reorder, or into a Group'} onPointerDown={event=>beginProjectPointerDrag(event,project)} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
+      <div class={`project-row draggable-project ${isSearchCursorProject(project.id)?'search-cursor':''} ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace?'Hold for actions, hold and drag to reorder or regroup':'Drag to reorder, or into a Group'} onPointerDown={event=>beginProjectPointerDrag(event,project)} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
         {hasSessions?<button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button>:<span class="project-chevron project-collapse-spacer" aria-hidden="true"/>}<strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-menu-toggle class="project-row-menu" title={`Project actions for ${project.name}`} aria-label={`Project actions for ${project.name}`} aria-haspopup="menu" aria-expanded={projectMenu?.project.id===project.id} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(projectMenu?.project.id===project.id){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(project,rect.left,rect.bottom+4)}}>⋮</button><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
       </div>
       {!collapsed&&<div class="session-list">
@@ -6094,22 +6248,63 @@ export function App() {
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
             rows, while only explicit Groups receive their own headers.
-            Its four controls are the tree's own: fold, sort, the registry behind it,
-            and add. The last two used to be a footer button and an app-menu row —
+            Its five controls are the tree's own: filter, fold, sort, the registry
+            behind it, and add. The registry and add used to be a footer button and an app-menu row —
             both a screen away from the thing they act on. On a fine pointer they are
             revealed by hovering the header (see `.sidebar-projects-header` in the
             stylesheet); touch has no hover, so touch always shows them. */}
-        <div class="sidebar-tools sidebar-projects-header">
-          <strong>PROJECTS</strong>
-          <button class="sidebar-tool" disabled={!displayProjects.length} aria-label={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} title={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} onClick={()=>setAllFolded(!allFolded)}>{allFolded?<UnfoldMoreIcon/>:<UnfoldLessIcon/>}</button>
-          <button class={`sidebar-tool sidebar-sort ${sidebarOrder.projectSort==='custom'?'':'active'}`} disabled={!displayProjects.length} aria-haspopup="menu" aria-expanded={!!sortMenu} aria-label="Sort Projects and Groups" title={`Sort - ${projectSortLabel(sidebarOrder.projectSort)}`} onClick={event=>{event.stopPropagation();if(sortMenu){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(rect.right,rect.bottom+4)}}>⇅</button>
-          <button data-tutorial="projects" class="sidebar-tool" aria-label="Manage Projects" title="Manage Projects" onClick={()=>openProjectsManager()}><CogIcon/></button>
-          {/* Both surfaces at once: the registry opens behind the create dialog, so
-              dismissing the dialog lands on the registry rather than back on the tree.
-              Reaching "add" used to mean opening the registry and finding its button. */}
-          <button class="sidebar-tool" aria-label="Add a Project" title="Add a Project" onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/></button>
-        </div>
-        <div class="project-tree">
+        {/* Searching takes the whole header rather than opening a row under it: the
+            controls beside it act on a tree that is not currently drawn, and a filter
+            that pushed the list down a line would move every result out from under the
+            pointer at the moment it appeared. */}
+        {sidebarSearchOpen
+          ?<div class="sidebar-tools sidebar-projects-header searching">
+            <span class="sidebar-search-mark" aria-hidden="true"><SearchIcon/></span>
+            <input
+              ref={sidebarSearchRef}
+              class="sidebar-search-input"
+              type="text"
+              // Not `type="search"`: the browser's own clear affordance sits where this
+              // row's close button already is, and its Escape handling would swallow the
+              // key before the dismiss stack sees it.
+              placeholder="Filter Projects and sessions"
+              aria-label="Filter Projects and sessions"
+              autocomplete="off"
+              spellcheck={false}
+              value={sidebarSearchInput}
+              // Every keystroke releases the cursor back to "wherever the best match is",
+              // because the ranking it was steering over has just been recomputed.
+              onInput={event=>{touchSidebarSearch();setSidebarSearchInput(event.currentTarget.value);setSidebarSearchCursor(NO_SEARCH_CURSOR)}}
+              onKeyDown={event=>{
+                touchSidebarSearch()
+                if(event.key==='ArrowDown'){event.preventDefault();moveSidebarSearchCursor(1);return}
+                if(event.key==='ArrowUp'){event.preventDefault();moveSidebarSearchCursor(-1);return}
+                if(event.key!=='Enter')return
+                event.preventDefault()
+                // Enter commits to the marked row, which is the best match until an arrow
+                // key moves it. With nothing typed the sidebar is its ordinary tree, so
+                // there is no mark and Enter does nothing rather than opening whichever
+                // Project happens to sit at the top.
+                if(sidebarCursorRow)activateSidebarSearchResult(sidebarCursorRow)
+              }}
+            />
+            <button class="sidebar-tool" aria-label="Close filter" title="Close filter" onClick={closeSidebarSearch}>×</button>
+          </div>
+          :<div class="sidebar-tools sidebar-projects-header">
+            <strong>PROJECTS</strong>
+            {/* First of the controls because it is the one that scales: fold and sort
+                rearrange a tree you can still see, and this is what you reach for when
+                you cannot. */}
+            <button class="sidebar-tool" disabled={!displayProjects.length} aria-label="Filter Projects and sessions" title="Filter Projects and sessions" onClick={openSidebarSearch}><SearchIcon/></button>
+            <button class="sidebar-tool" disabled={!displayProjects.length} aria-label={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} title={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} onClick={()=>setAllFolded(!allFolded)}>{allFolded?<UnfoldMoreIcon/>:<UnfoldLessIcon/>}</button>
+            <button class={`sidebar-tool sidebar-sort ${sidebarOrder.projectSort==='custom'?'':'active'}`} disabled={!displayProjects.length} aria-haspopup="menu" aria-expanded={!!sortMenu} aria-label="Sort Projects and Groups" title={`Sort - ${projectSortLabel(sidebarOrder.projectSort)}`} onClick={event=>{event.stopPropagation();if(sortMenu){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(rect.right,rect.bottom+4)}}>⇅</button>
+            <button data-tutorial="projects" class="sidebar-tool" aria-label="Manage Projects" title="Manage Projects" onClick={()=>openProjectsManager()}><CogIcon/></button>
+            {/* Both surfaces at once: the registry opens behind the create dialog, so
+                dismissing the dialog lands on the registry rather than back on the tree.
+                Reaching "add" used to mean opening the registry and finding its button. */}
+            <button class="sidebar-tool" aria-label="Add a Project" title="Add a Project" onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/></button>
+          </div>}
+        <div class="project-tree" onPointerMove={sidebarSearchOpen?touchSidebarSearch:undefined}>
           {/* The box the token engine's character budget is measured from: one
               row's text column, at zero height, inside the real container chain.
               The wrappers are the tree's own classes and `.row-metric` restates the
@@ -6129,6 +6324,15 @@ export function App() {
               </div>
             </div></div>
           </div>
+          {/* The filter hides rows out of this tree rather than replacing it. Nothing here
+              is reordered and nothing moves: the only difference a query makes is which
+              rows are still present, so the column being searched keeps looking like the
+              column that was there before. `pointermove` feeds the idle clock because
+              reading the tree is using the filter - without it, one you are still looking
+              at retires itself mid-scan. */}
+          {sidebarFilter&&!sidebarFilter.order.length
+            ?<p class="sidebar-search-empty">No Project or session matches "{sidebarSearchQuery.trim()}"</p>
+            :<>
           {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
           {/* One flat sequence of Group sections and runs of root Projects, in the order
               the active sort put them. Under Manual that is every root Project and then
@@ -6142,13 +6346,26 @@ export function App() {
               there is always somewhere to drag a Project back out to — otherwise a user
               who grouped every Project would have no way to ungroup one by hand. */}
           {rootRows.map(row=>{
-            if(row.kind==='root')return <div class="sidebar-project-list sidebar-ungrouped-projects" data-group-id="" key={row.key}>
-              {row.items.map(project=>sidebarProjectRow(project))}
-              {!row.items.length&&<p class="project-list-empty">Drag a Project here to ungroup it</p>}
-            </div>
+            // Filtering prunes the runs and sections rather than only the rows inside them:
+            // an empty root run would otherwise draw its "drag a Project here" hint into a
+            // filtered tree, inviting a gesture that is inert while a query is up.
+            if(row.kind==='root'){
+              const items=row.items.filter(project=>!sidebarFilter||sidebarFilter.projects.has(project.id))
+              if(sidebarFilter&&!items.length)return null
+              return <div class="sidebar-project-list sidebar-ungrouped-projects" data-group-id="" key={row.key}>
+                {items.map(project=>sidebarProjectRow(project))}
+                {!items.length&&<p class="project-list-empty">Drag a Project here to ungroup it</p>}
+              </div>
+            }
             const bucket=row.bucket
-            const bucketCollapsed=isBucketCollapsed(sidebarOrder,bucket.id)
-            const peerIds=bucket.items.map(item=>item.id)
+            if(sidebarFilter&&!sidebarFilter.groups.has(bucket.id))return null
+            const bucketItems=bucket.items.filter(project=>!sidebarFilter||sidebarFilter.projects.has(project.id))
+            // Same reason a filtered Project draws open: a Group folded shut would hide the
+            // match the query just found. The stored flag is untouched, and the header's
+            // fold click is inert while filtering rather than silently setting a preference
+            // whose effect nobody can see.
+            const bucketCollapsed=isBucketCollapsed(sidebarOrder,bucket.id)&&!sidebarFilter
+            const peerIds=bucketItems.map(item=>item.id)
             // Folding a section hides whichever Project holds the waiting agent, so
             // the header has to answer for all of them: a count for how much is live,
             // and the strongest state as a dot, because a bare count cannot say that
@@ -6157,7 +6374,7 @@ export function App() {
             // The whole section is the Group's right-click target, not just its header: the
             // header is a one-line strip, and the drop hint below it is part of the same
             // Group. Rows inside carry their own menus and are let through untouched.
-            return <section class={`sidebar-project-list sidebar-project-bucket ${bucketCollapsed?'collapsed':''} ${bucket.items.length?'':'empty'}`} key={bucket.id} data-reorder-id={bucket.id} data-group-id={bucket.id} onContextMenu={event=>{if((event.target as Element).closest('.project-row,.session-row'))return;event.preventDefault();event.stopPropagation();openGroupMenu(bucket.id,event.clientX,event.clientY)}}>
+            return <section class={`sidebar-project-list sidebar-project-bucket ${bucketCollapsed?'collapsed':''} ${bucketItems.length?'':'empty'}`} key={bucket.id} data-reorder-id={bucket.id} data-group-id={bucket.id} onContextMenu={event=>{if((event.target as Element).closest('.project-row,.session-row'))return;event.preventDefault();event.stopPropagation();openGroupMenu(bucket.id,event.clientX,event.clientY)}}>
             {/* Desktop uses the header as both drag handle and collapse toggle. Mobile
                 keeps only the tap-to-fold half because Project rows are its sole sidebar
                 reorder target, and gets the Group menu on a hold instead of the right-click
@@ -6166,6 +6383,9 @@ export function App() {
               // The hold fires while the finger is still down, so the click it ends with
               // would fold the Group behind the menu it just opened.
               if(groupHeldRef.current){groupHeldRef.current=false;return}
+              // A filtered Group is drawn open whatever its stored flag says, so folding
+              // here would set a preference with no visible effect until the filter clears.
+              if(sidebarFilter)return
               setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
               <span class="bucket-chevron" aria-hidden="true">{bucketCollapsed?'▸':'▾'}</span><span>{bucket.name}</span>
               {bucketStatus&&bucketStatus.liveCount>0&&<span class={`bucket-collapsed-badge activity-${bucketStatus.activity} ${bucketStatus.unread?'unread':''}`} title={`${bucketStatus.liveCount} live session${bucketStatus.liveCount===1?'':'s'} · ${projectRailActivityLabel[bucketStatus.activity]}${bucketStatus.unread?' · unread output':''}`}><i aria-hidden="true"/>{bucketStatus.liveCount}</span>}
@@ -6174,11 +6394,12 @@ export function App() {
                   pixel from the fold toggle, and no header button should be able to
                   dissolve a Group in a single stray click. */}
               <button class="bucket-rename" title="Rename group" aria-label={`Rename group ${bucket.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button></header>
-              {!bucketCollapsed&&bucket.items.map(project=>sidebarProjectRow(project))}
+              {!bucketCollapsed&&bucketItems.map(project=>sidebarProjectRow(project))}
               {/* Both the explanation and the drop target: an empty Group with no body
                   is a header alone, which is too thin a strip to aim a dragged row at. */}
-              {!bucketCollapsed&&!bucket.items.length&&<p class="project-list-empty">Drag a Project here</p>}
+              {!bucketCollapsed&&!bucketItems.length&&!sidebarFilter&&<p class="project-list-empty">Drag a Project here</p>}
             </section>})}
+            </>}
         </div>
         <div class="sidebar-status">
           <AccountSwitcher onManage={()=>openSettings('Accounts')}/>

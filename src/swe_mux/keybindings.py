@@ -77,6 +77,10 @@ KEYBINDING_COMMANDS = (
     ("sidebar.open", "Open navigation sidebar", "view"),
     ("sidebar.close", "Close navigation sidebar", "view"),
     ("sidebar.toggle", "Toggle navigation sidebar", "view"),
+    # The sidebar's typed filter over Projects and sessions. No default chord: it has a
+    # button on the PROJECTS header, and this is here for the palette, a gesture, and
+    # anyone who wants one.
+    ("sidebar.search", "Filter Projects and sessions", "view"),
     ("pane.swapNext", "Swap focused pane with next", "pane"),
     ("session.groupStack", "Stack selected and focused sessions", "pane"),
     ("session.openSplitHorizontal", "Open selected session in split right", "pane"),
