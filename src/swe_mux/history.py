@@ -163,7 +163,24 @@ CREATE TABLE IF NOT EXISTS git_provenance (
   role TEXT NOT NULL DEFAULT 'observer',
   match_method TEXT,
   contributed_paths_json TEXT NOT NULL DEFAULT '[]',
+  retracted_at REAL,
+  retracted_reason TEXT,
   UNIQUE(session_id,agent_run_id,worktree_root,commit_oid)
+);
+CREATE TABLE IF NOT EXISTS git_ref_moves (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  worktree_root TEXT NOT NULL,
+  commit_oid TEXT NOT NULL,
+  previous_head TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  commit_count INTEGER NOT NULL DEFAULT 0,
+  authored_count INTEGER NOT NULL DEFAULT 0,
+  subject TEXT NOT NULL DEFAULT '',
+  committed_at REAL,
+  observed_at REAL NOT NULL,
+  updated_at REAL NOT NULL,
+  UNIQUE(worktree_root,commit_oid,previous_head)
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, ts);
@@ -179,6 +196,10 @@ CREATE INDEX IF NOT EXISTS idx_git_provenance_run
   ON git_provenance(agent_run_id, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_git_provenance_commit
   ON git_provenance(project_id, commit_oid);
+CREATE INDEX IF NOT EXISTS idx_git_ref_moves_project
+  ON git_ref_moves(project_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_git_ref_moves_commit
+  ON git_ref_moves(project_id, commit_oid);
 """
 
 _MESSAGE_SEARCH_TABLES = ("history_messages_fts", "history_messages_trigram")
@@ -236,8 +257,36 @@ _GIT_PROVENANCE_UPSERT = (
     "OR excluded.evidence_rank>=git_provenance.evidence_rank) "
     "THEN excluded.contributed_paths_json ELSE git_provenance.contributed_paths_json END,"
     "evidence_rank=MAX(git_provenance.evidence_rank,excluded.evidence_rank),"
+    # A retraction is cleared only by evidence *stronger* than what was retracted,
+    # never by re-observing the same thing. The daemon seeing one checkout's HEAD
+    # move a second time must not undo a repair; a contributor match proving the
+    # session's bytes are in the commit must.
+    "retracted_at=CASE WHEN excluded.evidence_rank>git_provenance.evidence_rank "
+    "THEN NULL ELSE git_provenance.retracted_at END,"
+    "retracted_reason=CASE WHEN excluded.evidence_rank>git_provenance.evidence_rank "
+    "THEN NULL ELSE git_provenance.retracted_reason END,"
     "observed_at=MIN(git_provenance.observed_at,excluded.observed_at),"
     "updated_at=MAX(git_provenance.updated_at,excluded.updated_at)"
+)
+_GIT_REF_MOVE_UPSERT = (
+    "INSERT INTO git_ref_moves("
+    "id,project_id,worktree_root,commit_oid,previous_head,kind,commit_count,"
+    "authored_count,subject,committed_at,observed_at,updated_at"
+    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+    "ON CONFLICT(worktree_root,commit_oid,previous_head) DO UPDATE SET "
+    # A move is classified from the repository, not accumulated from sightings, so
+    # the newest reading replaces the old one outright. Taking a MAX of the counts
+    # looked conservative and was the opposite: it pinned a miscount in place, so
+    # a classifier fix that correctly recounted a landing as two commits could
+    # never displace the fifty an earlier bug had recorded.
+    "project_id=excluded.project_id,kind=excluded.kind,"
+    "commit_count=excluded.commit_count,"
+    "authored_count=excluded.authored_count,"
+    "subject=CASE WHEN excluded.subject!='' "
+    "THEN excluded.subject ELSE git_ref_moves.subject END,"
+    "committed_at=COALESCE(excluded.committed_at,git_ref_moves.committed_at),"
+    "observed_at=MIN(git_ref_moves.observed_at,excluded.observed_at),"
+    "updated_at=MAX(git_ref_moves.updated_at,excluded.updated_at)"
 )
 _MESSAGE_SEARCH_TRIGGERS = (
     "history_messages_ai",
@@ -647,6 +696,15 @@ class HistoryIndex:
                 "ALTER TABLE git_provenance ADD COLUMN contributed_paths_json "
                 "TEXT NOT NULL DEFAULT '[]'"
             )
+        # Retraction. The ledger could previously only be *promoted* — every field
+        # is gated on `evidence_rank>=` and the rank itself takes a MAX — so a row
+        # that later turned out to record occupancy rather than authorship had no
+        # way out. "This session had nothing to do with it" is not a stronger
+        # claim than the one it replaces, so it cannot arrive as one.
+        if "retracted_at" not in provenance_columns:
+            self._db.execute("ALTER TABLE git_provenance ADD COLUMN retracted_at REAL")
+        if "retracted_reason" not in provenance_columns:
+            self._db.execute("ALTER TABLE git_provenance ADD COLUMN retracted_reason TEXT")
         self._canonicalize_provenance_roots()
         project_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(projects)").fetchall()
@@ -2303,6 +2361,202 @@ class HistoryIndex:
         item.pop("evidence_rank", None)
         return item
 
+    async def record_git_ref_move(
+        self,
+        *,
+        project_id: str,
+        worktree_root: str,
+        commit_oid: str,
+        previous_head: str,
+        kind: str,
+        commit_count: int,
+        authored_count: int = 0,
+        subject: str = "",
+        committed_at: float | None = None,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record that a checkout's HEAD moved, as a fact about the *checkout*.
+
+        Deliberately not keyed by session. Every session attached to a checkout
+        watches the same reference move, so recording it per session wrote N rows
+        saying one thing, and each of those rows named a session that in most cases
+        had nothing to do with the commits involved. A landing fast-forward is a
+        fact about `D:/PROJECTS/swe-mux`, not about the three agents that happened
+        to have it open.
+        """
+        timestamp = observed_at if observed_at is not None else time.time()
+        root = canonical_worktree_root(worktree_root)
+        row_id = uuid.uuid4().hex
+
+        def op() -> None:
+            self._db.execute(
+                _GIT_REF_MOVE_UPSERT,
+                (
+                    row_id,
+                    project_id,
+                    root,
+                    commit_oid.lower(),
+                    previous_head.lower(),
+                    kind,
+                    int(commit_count),
+                    int(authored_count),
+                    subject[:512],
+                    committed_at,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def git_ref_moves(
+        self, *, project_id: str, commit_oids: list[str] | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        clauses = ["project_id=?"]
+        args: list[Any] = [project_id]
+        if commit_oids:
+            normalized = list(dict.fromkeys(oid.lower() for oid in commit_oids))[:500]
+            clauses.append(f"commit_oid IN ({','.join('?' for _ in normalized)})")
+            args.extend(normalized)
+        bounded_limit = max(1, min(limit, 500))
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM git_ref_moves WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY observed_at DESC,id LIMIT ?",
+                (*args, bounded_limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await self._run(op)
+
+    async def git_commit_claims(
+        self, *, project_id: str, commit_oids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """What the ledger already holds about a set of commits.
+
+        Two questions, one indexed query, asked on the event path before anything
+        is written: when each checkout first recorded each commit (a commit
+        recorded under another checkout *earlier* arrived in this one), and which
+        sessions are already known to have run the command that created it (a
+        bystander's occupancy adds nothing to an answered question).
+
+        `first_seen` carries the time deliberately. "Recorded elsewhere" without
+        it is symmetric, and a symmetric arrival test is not a test at all: when a
+        worktree branch lands, both checkouts hold the commit, and the one that
+        *made* it would call its own work an arrival because the checkout it later
+        landed in also has a row.
+
+        The two halves treat retraction differently, and the asymmetry is the
+        point. `committers` is a *claim* and a withdrawn claim is not an answer, so
+        it is filtered. `first_seen` is an *observation* — a checkout held this
+        commit at this time — and withdrawing the session's attribution does not
+        unmake that. Filtering it made the oracle forget which checkout saw a
+        commit first as soon as a repair withdrew the row that recorded it, so a
+        later pass read a landing as fresh authorship all over again.
+        """
+        if not commit_oids or not project_id:
+            return {}
+        normalized = list(dict.fromkeys(oid.lower() for oid in commit_oids))[:500]
+
+        def op() -> dict[str, dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT commit_oid,worktree_root,role,ambiguous,session_id,observed_at,"
+                "retracted_at FROM git_provenance WHERE project_id=? "
+                f"AND commit_oid IN ({','.join('?' for _ in normalized)})",
+                (project_id, *normalized),
+            ).fetchall()
+            claims: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                claim = claims.setdefault(
+                    str(row["commit_oid"]), {"first_seen": {}, "committers": []}
+                )
+                root = str(row["worktree_root"] or "")
+                observed_at = float(row["observed_at"] or 0.0)
+                if root:
+                    seen = claim["first_seen"]
+                    if root not in seen or observed_at < seen[root]:
+                        seen[root] = observed_at
+                if row["retracted_at"]:
+                    continue
+                if str(row["role"] or "") == "committer" and not row["ambiguous"]:
+                    session_id = str(row["session_id"] or "")
+                    if session_id and session_id not in claim["committers"]:
+                        claim["committers"].append(session_id)
+            return claims
+
+        return await self._run(op)
+
+    async def restore_git_provenance(self, ids: list[str]) -> int:
+        """Undo a retraction, for the pass that made it.
+
+        The ranked upsert clears a retraction only for evidence strictly stronger
+        than the row that was withdrawn, which is right for new evidence and wrong
+        for a *reclassification*: a repair that reconsiders its own verdict is
+        offering the same strength of evidence and a different answer. Without
+        this, an improvement to the classifier could never reach the rows the
+        previous classifier got wrong.
+        """
+        if not ids:
+            return 0
+        timestamp = time.time()
+
+        def op() -> int:
+            total = 0
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                for start in range(0, len(ids), 500):
+                    chunk = ids[start : start + 500]
+                    cursor = self._db.execute(
+                        "UPDATE git_provenance SET retracted_at=NULL,retracted_reason=NULL,"
+                        f"updated_at=? WHERE retracted_at IS NOT NULL AND id IN "
+                        f"({','.join('?' for _ in chunk)})",
+                        (timestamp, *chunk),
+                    )
+                    total += cursor.rowcount or 0
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+            return total
+
+        return await self._run(op)
+
+    async def retract_git_provenance(self, ids: list[str], *, reason: str) -> int:
+        """Withdraw rows that turned out not to be a claim about their session.
+
+        Retraction is the only operation that can weaken the ledger, and it is
+        deliberately explicit: an id list produced by a pass that examined each
+        row, never a predicate evaluated at read time against whatever the table
+        happens to hold.
+        """
+        if not ids:
+            return 0
+        timestamp = time.time()
+
+        def op() -> int:
+            total = 0
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                for start in range(0, len(ids), 500):
+                    chunk = ids[start : start + 500]
+                    cursor = self._db.execute(
+                        "UPDATE git_provenance SET retracted_at=?,retracted_reason=?,"
+                        f"updated_at=? WHERE retracted_at IS NULL AND id IN "
+                        f"({','.join('?' for _ in chunk)})",
+                        (timestamp, reason[:200], timestamp, *chunk),
+                    )
+                    total += cursor.rowcount or 0
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+            return total
+
+        return await self._run(op)
+
     async def git_provenance(
         self,
         *,
@@ -2311,9 +2565,12 @@ class HistoryIndex:
         agent_run_id: str | None = None,
         commit_oids: list[str] | None = None,
         limit: int = 200,
+        include_retracted: bool = False,
     ) -> list[dict[str, Any]]:
         clauses = ["project_id=?"]
         args: list[Any] = [project_id]
+        if not include_retracted:
+            clauses.append("retracted_at IS NULL")
         if session_id:
             clauses.append("session_id=?")
             args.append(session_id)

@@ -12593,7 +12593,8 @@ async def git_provenance(request: web.Request) -> web.Response:
         not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
     ):
         return json_response({"error": "commit must contain full Git object IDs"}, 400)
-    items = await request.app["history"].git_provenance(
+    history = request.app["history"]
+    items = await history.git_provenance(
         project_id=project.id,
         session_id=request.query.get("session_id") or None,
         agent_run_id=request.query.get("agent_run_id") or None,
@@ -12601,10 +12602,21 @@ async def git_provenance(request: web.Request) -> web.Response:
         limit=limit,
     )
     await _decorate_provenance_identity(request.app, items)
+    # Reference moves are checkout facts and are not filtered by session: asking
+    # "what did this session do" and "what happened to this checkout" are
+    # different questions, and answering the first with the second is what used to
+    # put a merge nobody in the checkout had made on every session's ledger.
+    moves = await history.git_ref_moves(project_id=project.id, commit_oids=commit_oids or None)
     # `items` stays one row per session per commit, which is what each piece of
     # evidence is about. `commits` answers the reader's question — who made this
     # commit and whose work is in it — without a second round trip.
-    return json_response({"items": items, "commits": summarize_git_provenance(items)})
+    return json_response(
+        {
+            "items": items,
+            "commits": summarize_git_provenance(items),
+            "ref_moves": moves,
+        }
+    )
 
 
 async def _decorate_provenance_identity(

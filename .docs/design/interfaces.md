@@ -1546,7 +1546,7 @@ Concurrent requests with the same Project root and comparison ref await one shar
 Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`, `oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`.
 Git supplies the graph prefixes and the browser renders them without reconstructing topology.
 
-`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items, commits}` from the durable session-to-commit evidence ledger.
+`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items, commits, ref_moves}` from the durable session-to-commit evidence ledger.
 `project_id` is required and must name a registered Project, `limit` is 1 to 500 with a default of 200, and repeated `commit` parameters select multiple full 40-to-64-character object IDs.
 Every item carries its durable id, session id and captured label, nullable agent run id, Project, exact worktree root, full commit OID, parent OIDs, copied subject and commit time, previous HEAD, relationship, confidence, ambiguity flag, role, match method, contributed paths, source, nullable source event sequence and tool-call id, and first/latest observation times.
 Each item is additionally decorated on read with `display_name`, the session's current name under the rule every surface uses, resolved from the live session when the fleet holds it and from its History row otherwise, and with `history_id`, the conversation a reader can open.
@@ -1556,6 +1556,10 @@ Rows are newest-first by their first observation time.
 `commits` rolls the same rows up per commit into `{commit_oid, subject, committed_at, worktree_root, committer, contributors[], attribution}`, so a reader gets who made a commit and whose work is in it without a second request.
 `attribution` is `exact` when a committer was isolated, `correlated` when only contributions or occupancy are known, and `ambiguous` for a commit whose work mux never observed.
 `items` stays one row per session per commit because that is what each piece of evidence is about; the set is assembled for the reader rather than denormalized into every row.
+Retracted rows are absent from `items` and from the rollup: a withdrawn row is evidence the ledger no longer stands behind, and a reader asking who made a commit must not be handed one.
+`ref_moves` carries `{id, project_id, worktree_root, commit_oid, previous_head, kind, commit_count, authored_count, subject, committed_at, observed_at}` for the checkout reference movements in scope, newest first.
+It is deliberately **not** filtered by `session_id` or `agent_run_id`.
+"What did this session do" and "what happened to this checkout" are different questions, and answering the first with the second is what used to put a merge nobody in the checkout had made onto every session's ledger.
 The route rejects unknown parameters and never accepts a repository path from the caller.
 
 `GET /git/commits/{full_oid}/changes?project_id=ID[&parent=FULL_OID]` validates the commit and selected direct parent, then returns the complete parent list, the commit `message`, and a bounded file summary.

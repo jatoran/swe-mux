@@ -20,15 +20,25 @@ from pathlib import Path
 from typing import Any, assert_never
 
 from .config import default_data_dir
-from .git_monitor import BLOB_DIGEST_MAX_BYTES, GitCommitChange, parse_raw_changes
+from .git_monitor import (
+    BLOB_DIGEST_MAX_BYTES,
+    COMMIT_RANGE_LIMIT,
+    GitCommitChange,
+    GitCommitMetadata,
+    parse_raw_changes,
+)
 from .git_provenance import (
+    COMMIT_TIME_SLACK_SECONDS,
     COMMITTER_EXACT_RANK,
     CONTRIBUTOR_LOOKBACK_SECONDS,
+    MONITOR_AUTHORSHIP_WINDOW_SECONDS,
+    MONITOR_OBSERVED_RANK,
     candidate_writes,
+    classify_ref_move,
     resolve_contributors,
 )
 from .harness import transcript_dialect
-from .history import HistoryIndex
+from .history import HistoryIndex, canonical_worktree_root
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +85,12 @@ _EMPTY_REPORT_COUNTS = (
     "exact_records",
     "correlated_records",
     "ambiguous_records",
+    "ref_moves_planned",
+    "ref_moves_written",
+    "retractions_planned",
+    "retractions_written",
+    "restorations_planned",
+    "restorations_written",
 )
 
 
@@ -644,6 +660,253 @@ def _is_ancestor(catalog: dict[str, CommitObject], ancestor: str, commit: str) -
     return False
 
 
+def _reaches(catalog: dict[str, CommitObject], ancestor: str, commit: str) -> bool:
+    """Whether `ancestor` is reachable from `commit` through *any* parent.
+
+    `_is_ancestor` walks first parents only, which is what its caller wants. This
+    one answers the general question, because a commit absorbed by a merge is
+    reachable only through a second parent and calling that "not an ancestor"
+    would classify every landing as a rebase.
+    """
+    if not ancestor or not commit:
+        return False
+    seen: set[str] = set()
+    frontier = [commit]
+    while frontier and len(seen) < ANCESTRY_WALK_LIMIT * 10:
+        current = frontier.pop()
+        if current == ancestor:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        node = catalog.get(current)
+        if node is not None:
+            frontier.extend(node.parents)
+    return False
+
+
+def _ancestors(catalog: dict[str, CommitObject], oid: str, *, limit: int) -> set[str]:
+    """`oid` and everything reachable from it, bounded."""
+    seen: set[str] = set()
+    frontier = [oid]
+    while frontier and len(seen) < limit:
+        current = frontier.pop()
+        if not current or current in seen:
+            continue
+        seen.add(current)
+        node = catalog.get(current)
+        if node is not None:
+            frontier.extend(node.parents)
+    return seen
+
+
+def _first_parent_line(
+    catalog: dict[str, CommitObject], base: str, head: str, *, limit: int = COMMIT_RANGE_LIMIT
+) -> list[CommitObject]:
+    """The commits `head`'s own line of development gained over `base`, newest first.
+
+    This is `git log --first-parent base..head`, and the `base..` half is not
+    optional. Walking first parents until the walk *equals* `base` is wrong
+    whenever `base` is a merge's second parent — exactly the shape a landing
+    fast-forward produces — because the walk then never meets it and runs to the
+    limit, reporting a two-commit move as a fifty-commit one.
+    """
+    excluded = _ancestors(catalog, base, limit=ANCESTRY_WALK_LIMIT * 10) if base else set()
+    line: list[CommitObject] = []
+    current = head
+    for _ in range(limit):
+        if not current or current in excluded:
+            break
+        node = catalog.get(current)
+        if node is None:
+            break
+        line.append(node)
+        current = node.parents[0] if node.parents else ""
+    return line
+
+
+def _repair_owned(reason: str) -> bool:
+    """Whether a retraction was made by this pass, and so may be reconsidered.
+
+    A row withdrawn for any other reason is left exactly as it is. Reconsidering
+    only its own verdicts is what lets the classifier improve without the repair
+    becoming a general licence to overwrite the ledger.
+    """
+    return reason == "committer_known" or reason.startswith("arrival:")
+
+
+def _plan_repairs(
+    project: dict[str, str], existing: list[dict[str, Any]], catalog: dict[str, CommitObject]
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[str],
+    Counter[str],
+]:
+    """Reclassify the occupancy rows the monitor wrote before it could tell
+    authorship from arrival.
+
+    Returns the promotions to write, the ref moves to record, the rows to retract,
+    and the rows to restore. Every checkout-scoped move is emitted whatever the
+    verdict, because the move happened; only the *session* rows are withdrawn, and
+    only when the session had nothing to do with the commits the reference gained.
+
+    Rows this pass previously retracted are re-examined rather than skipped. A
+    classifier that could not revisit its own mistakes would leave the first
+    version's errors in the ledger permanently.
+    """
+    stats: Counter[str] = Counter()
+    promotions: list[dict[str, Any]] = []
+    moves: dict[tuple[str, str, str], dict[str, Any]] = {}
+    retractions: list[dict[str, Any]] = []
+    restorations: list[str] = []
+    # The checkout map keeps the *earliest* time each one recorded a commit,
+    # because "recorded elsewhere" is only evidence of arrival when the elsewhere
+    # came first. Without that ordering the test is symmetric — after a landing
+    # both checkouts hold the commit — and the worktree that made it reads its own
+    # work as an arrival.
+    #
+    # It is built from every row, retracted or not, while the committer map is
+    # built only from standing ones. A withdrawn *claim* is not an answer; a
+    # withdrawn row's *observation time* is still a fact about when a checkout
+    # held the commit. Conflating the two made this pass forget its own inputs:
+    # the run that withdrew a worktree's row left the next run unable to see that
+    # the worktree had the commit first, so it read the landing as authorship and
+    # restored exactly the rows it should have kept withdrawn.
+    first_seen: dict[str, dict[str, float]] = defaultdict(dict)
+    committers: dict[str, set[str]] = defaultdict(set)
+    for row in existing:
+        oid = str(row.get("commit_oid") or "")
+        if not oid:
+            continue
+        root_key = canonical_worktree_root(str(row.get("worktree_root") or ""))
+        observed = float(row.get("observed_at") or 0.0)
+        seen = first_seen[oid]
+        if root_key not in seen or observed < seen[root_key]:
+            seen[root_key] = observed
+        if row.get("retracted_at"):
+            continue
+        if str(row.get("role") or "") == "committer" and not row.get("ambiguous"):
+            committers[oid].add(str(row.get("session_id") or ""))
+    for row in existing:
+        if str(row.get("source") or "") != "git_monitor":
+            continue
+        if str(row.get("role") or "") != "observer":
+            continue
+        withdrawn = bool(row.get("retracted_at"))
+        if withdrawn and not _repair_owned(str(row.get("retracted_reason") or "")):
+            continue
+        oid = str(row.get("commit_oid") or "")
+        previous = str(row.get("previous_head") or "")
+        if oid not in catalog:
+            stats["repair_commit_missing"] += 1
+            continue
+        commit = catalog[oid]
+        root = canonical_worktree_root(str(row.get("worktree_root") or project["root"]))
+        observed_at = float(row.get("observed_at") or commit.committed_at)
+        if previous and previous in catalog:
+            forward: bool | None = _reaches(catalog, previous, oid)
+            backward: bool | None = _reaches(catalog, oid, previous)
+            line = _first_parent_line(catalog, previous, oid)
+        elif previous:
+            # The old position is gone from the object database — a pruned rebase
+            # leftover. Nothing can be placed against it.
+            forward, backward, line = None, None, [commit]
+        else:
+            forward, backward, line = True, False, [commit]
+        known = frozenset(
+            node.oid
+            for node in line
+            if any(
+                other != root and seen < observed_at
+                for other, seen in first_seen.get(node.oid, {}).items()
+            )
+        )
+        move = classify_ref_move(
+            tuple(
+                GitCommitMetadata(
+                    oid=node.oid,
+                    parents=node.parents,
+                    committed_at=node.committed_at,
+                    subject=node.subject,
+                )
+                for node in line
+            ),
+            head_oid=oid,
+            head_parents=commit.parents,
+            forward=forward,
+            backward=backward,
+            window_start=observed_at - MONITOR_AUTHORSHIP_WINDOW_SECONDS,
+            window_end=observed_at + COMMIT_TIME_SLACK_SECONDS,
+            known_elsewhere=known,
+        )
+        if previous:
+            moves.setdefault(
+                (root, previous, oid),
+                {
+                    "project_id": project["id"],
+                    "worktree_root": root,
+                    "commit_oid": oid,
+                    "previous_head": previous,
+                    "kind": move.kind,
+                    "commit_count": move.total,
+                    "authored_count": len(move.authored),
+                    "subject": commit.subject,
+                    "committed_at": commit.committed_at,
+                    "observed_at": observed_at,
+                },
+            )
+        session_id = str(row.get("session_id") or "")
+        others = committers.get(oid, set()) - {session_id}
+        if others:
+            if not withdrawn:
+                retractions.append({"id": str(row["id"]), "reason": "committer_known"})
+            stats["retracted_bystander"] += 1
+            continue
+        if move.is_arrival or oid not in {node.oid for node in move.authored}:
+            if not withdrawn:
+                retractions.append({"id": str(row["id"]), "reason": f"arrival:{move.kind}"})
+            stats[f"retracted_{move.kind}"] += 1
+            continue
+        if withdrawn:
+            # This pass withdrew the row and now reads the same move differently.
+            restorations.append(str(row["id"]))
+            stats["repair_restored"] += 1
+        if withdrawn or row.get("ambiguous") or str(
+            row.get("match_method") or ""
+        ) != f"monitor_{move.kind}":
+            promotions.append(
+                {
+                    "session_id": session_id,
+                    "session_name": str(row.get("session_name") or ""),
+                    "agent_run_id": str(row.get("agent_run_id") or ""),
+                    "project_id": project["id"],
+                    "worktree_root": root,
+                    "commit_oid": oid,
+                    "parent_oids": commit.parents,
+                    "subject": commit.subject,
+                    "committed_at": commit.committed_at,
+                    "previous_head": previous or None,
+                    "relationship": "observed",
+                    "confidence": "correlated",
+                    "ambiguous": False,
+                    "source": "git_monitor",
+                    "source_event_seq": row.get("source_event_seq"),
+                    "tool_call_id": row.get("tool_call_id"),
+                    "evidence_rank": MONITOR_OBSERVED_RANK,
+                    "observed_at": observed_at,
+                    "role": "observer",
+                    "match_method": f"monitor_{move.kind}",
+                    "contributed_paths": row.get("contributed_paths") or (),
+                }
+            )
+            stats["repair_promoted"] += 1
+        else:
+            stats["repair_current"] += 1
+    return promotions, list(moves.values()), retractions, restorations, stats
+
+
 def _reattribute_committers(
     project: dict[str, str],
     existing: list[dict[str, Any]],
@@ -822,7 +1085,18 @@ def _plan_contributors(
     return records, stats
 
 
-def _plan(inputs: ProjectInputs) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+@dataclass(slots=True, frozen=True)
+class PlanResult:
+    """One Project's whole plan: rows to write, moves to record, rows to withdraw."""
+
+    records: list[dict[str, Any]]
+    moves: list[dict[str, Any]]
+    retractions: list[dict[str, Any]]
+    restorations: list[str]
+    report: dict[str, Any]
+
+
+def _plan(inputs: ProjectInputs) -> PlanResult:
     project = inputs.project
     owners = inputs.owners
     command_owners = inputs.command_owners
@@ -984,6 +1258,17 @@ def _plan(inputs: ProjectInputs) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     records.extend(contributor_records)
     stats.update(contributor_stats)
 
+    # Pass four: reclassify the occupancy the monitor recorded before it could
+    # tell a commit being written from a commit arriving. This is the only pass
+    # that *withdraws* rows, and it withdraws exactly two kinds: a session that
+    # merely had a checkout open when someone else's work landed in it, and a
+    # bystander to a commit whose author is already known.
+    promotions, moves, retractions, restorations, repair_stats = _plan_repairs(
+        project, [*inputs.existing, *records], catalog
+    )
+    records.extend(promotions)
+    stats.update(repair_stats)
+
     report: dict[str, Any] = {
         "project_id": project["id"],
         "project_name": project["name"],
@@ -1001,15 +1286,18 @@ def _plan(inputs: ProjectInputs) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         "ambiguous_records": sum(record["confidence"] == "ambiguous" for record in records),
         "committer_records": sum(record["role"] == "committer" for record in records),
         "contributor_records": sum(record["role"] == "contributor" for record in records),
+        "ref_moves_planned": len(moves),
+        "retractions_planned": len(retractions),
+        "restorations_planned": len(restorations),
     }
-    return records, report
+    return PlanResult(records, moves, retractions, restorations, report)
 
 
 async def _backfill_project(
     database: Path, inputs: ProjectInputs, *, apply: bool
 ) -> dict[str, Any]:
     try:
-        records, report = await asyncio.to_thread(_plan, inputs)
+        plan = await asyncio.to_thread(_plan, inputs)
     except Exception as error:
         # One Project whose root is gone, is not a repository, or times out must
         # not abort a sweep over every other Project. It is reported, not hidden.
@@ -1026,20 +1314,43 @@ async def _backfill_project(
             "dry_run": not apply,
             **dict.fromkeys(_EMPTY_REPORT_COUNTS, 0),
         }
+    records, report = plan.records, plan.report
     report["dry_run"] = not apply
     report["records_written"] = 0
+    report["ref_moves_written"] = 0
+    report["retractions_written"] = 0
+    report["restorations_written"] = 0
     if apply:
         history = HistoryIndex(database)
         try:
+            # Restore before writing, so a reconsidered row is standing when its
+            # promotion lands and the upsert has nothing to argue with.
+            report["restorations_written"] = await history.restore_git_provenance(
+                plan.restorations
+            )
             for start in range(0, len(records), 1000):
                 report["records_written"] += await history.record_git_provenance_batch(
                     records[start : start + 1000]
+                )
+            for move in plan.moves:
+                await history.record_git_ref_move(**move)
+            report["ref_moves_written"] = len(plan.moves)
+            # Retraction runs last on purpose. A promotion and a retraction are
+            # planned from one snapshot and never name the same row, but if that
+            # ever stopped holding, the conservative outcome is the withdrawal.
+            by_reason: dict[str, list[str]] = defaultdict(list)
+            for item in plan.retractions:
+                by_reason[str(item["reason"])].append(str(item["id"]))
+            for reason, ids in by_reason.items():
+                report["retractions_written"] += await history.retract_git_provenance(
+                    ids, reason=reason
                 )
         finally:
             history.close()
     log.info(
         "git provenance backfill project project_id=%s dry_run=%s commands=%d planned=%d "
-        "written=%d committer=%d contributor=%d exact=%d correlated=%d ambiguous=%d",
+        "written=%d committer=%d contributor=%d exact=%d correlated=%d ambiguous=%d "
+        "moves=%d retracted=%d",
         inputs.project["id"],
         not apply,
         report["commands"],
@@ -1050,6 +1361,8 @@ async def _backfill_project(
         report["exact_records"],
         report["correlated_records"],
         report["ambiguous_records"],
+        report["ref_moves_planned"],
+        report["retractions_planned"],
     )
     return report
 
@@ -1087,6 +1400,9 @@ async def backfill_git_provenance(
             "exact_records": sum(item["exact_records"] for item in reports),
             "correlated_records": sum(item["correlated_records"] for item in reports),
             "ambiguous_records": sum(item["ambiguous_records"] for item in reports),
+            "ref_moves_written": sum(item["ref_moves_written"] for item in reports),
+            "retractions_written": sum(item["retractions_written"] for item in reports),
+            "restorations_written": sum(item["restorations_written"] for item in reports),
         }
     report["operation_id"] = operation_id
     report["dry_run"] = not apply

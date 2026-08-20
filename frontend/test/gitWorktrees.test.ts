@@ -11,20 +11,26 @@ import {
   fileStatLabel,
   graphDecorations,
   graphNodeLane,
+  groupProvenance,
+  occupancyLabel,
   parseCommitChanges,
   parseGitGraph,
+  parseGitCommitAttributions,
   parseGitOverview,
   parseGitProvenance,
+  parseGitRefMoves,
   parsePatchSnapshot,
   parseWorktrees,
   pathTail,
   provenanceAmbiguityNote,
   provenanceRoleLabel,
+  refMoveLabel,
   repoSessions,
   sessionGitCwd,
   shortBranch,
   worktreeForPath,
   type GitProvenance,
+  type GitRefMove,
   type SessionGit,
 } from '../src/gitWorktrees.ts'
 
@@ -378,17 +384,129 @@ test('a provenance row says what the session did and why it could not be pinned 
     provenanceRoleLabel(row({ role: 'contributor', contributedPaths: ['a.py', 'b.py'] })),
     'wrote 2 files in it',
   )
-  assert.equal(provenanceRoleLabel(row({ role: 'observer' })), 'was in the checkout')
+  assert.equal(provenanceRoleLabel(row({ role: 'observer' })), 'was in the checkout when it appeared')
   assert.equal(provenanceAmbiguityNote(row({})), '')
   // A shared checkout is no longer a reason, so the note never claims it is.
   assert.match(
     provenanceAmbiguityNote(row({ ambiguous: true, matchMethod: 'command_ambiguous' })),
     /same window/,
   )
-  assert.match(
+  // Neither is a reference moving many commits at once. That is classified now,
+  // and it is recorded against the checkout rather than against a session, so no
+  // row should ever again explain a merge as a failure to name a session.
+  assert.doesNotMatch(
     provenanceAmbiguityNote(row({ ambiguous: true, role: 'observer', matchMethod: 'monitor_range' })),
     /merge or a rebase/,
   )
+})
+
+test('a reference movement is a fact about a checkout, said plainly', () => {
+  const move = (over: Partial<GitRefMove>): GitRefMove => ({
+    id: 'm', projectId: 'p', worktreeRoot: '/repo', commitOid: 'a'.repeat(40),
+    previousHead: 'b'.repeat(40), kind: 'fast_forward', commitCount: 2, authoredCount: 0,
+    subject: 'Landed', committedAt: null, observedAt: 1, ...over,
+  })
+  assert.match(refMoveLabel(move({})), /fast-forwarded onto 2 commits written elsewhere/)
+  assert.match(refMoveLabel(move({ kind: 'merged', authoredCount: 1 })), /merged, creating 1 commit/)
+  assert.match(
+    refMoveLabel(move({ kind: 'created', commitCount: 1, authoredCount: 1 })),
+    /gained 1 commit written here/,
+  )
+  assert.match(refMoveLabel(move({ kind: 'rebased', authoredCount: 2 })), /replaying 2 commits/)
+  assert.match(refMoveLabel(move({ kind: 'reset' })), /moved back onto 2 commits/)
+  assert.match(refMoveLabel(move({ kind: 'unknown' })), /could not place/)
+})
+
+test('ref moves parse, and an unrecognized kind is named rather than dropped', () => {
+  const base = {
+    id: 'm', project_id: 'p', worktree_root: '/repo', commit_oid: 'a'.repeat(40),
+    previous_head: 'b'.repeat(40), kind: 'fast_forward', commit_count: 3, authored_count: 0,
+    subject: 'Landed', committed_at: 10, observed_at: 20,
+  }
+  const moves = parseGitRefMoves({ ref_moves: [
+    base,
+    { ...base, id: 'n', kind: 'something_new' },
+    // Without an id or a previous head there is no movement to describe.
+    { ...base, id: 'x', previous_head: 42 },
+  ] })
+  assert.deepEqual(moves.map(item => item.id), ['m', 'n'])
+  assert.equal(moves[0].kind, 'fast_forward')
+  assert.equal(moves[0].commitCount, 3)
+  assert.equal(moves[1].kind, 'unknown')
+  assert.deepEqual(parseGitRefMoves({ items: [] }), [])
+})
+
+test('a commit summary answers who made it and whose work is in it', () => {
+  const raw = {
+    items: [
+      {
+        id: 'c1', session_id: 'maker', session_name: 'Maker', project_id: 'p',
+        worktree_root: '/repo', commit_oid: 'a'.repeat(40), relationship: 'created',
+        confidence: 'exact', ambiguous: false, source: 'session_tool', observed_at: 1,
+        role: 'committer', match_method: 'command_range',
+      },
+      {
+        id: 'c2', session_id: 'helper', session_name: 'Helper', project_id: 'p',
+        worktree_root: '/repo', commit_oid: 'a'.repeat(40), relationship: 'contributed',
+        confidence: 'exact', ambiguous: false, source: 'tier0_write', observed_at: 1,
+        role: 'contributor', match_method: 'write_content', contributed_paths: ['a.py'],
+      },
+    ],
+    commits: [{
+      commit_oid: 'a'.repeat(40), subject: 'Add it', committed_at: 5, worktree_root: '/repo',
+      committer: { id: 'c1', session_id: 'maker' },
+      contributors: [{ id: 'c2', session_id: 'helper' }],
+      attribution: 'exact',
+    }],
+  }
+  const [commit] = parseGitCommitAttributions(raw)
+  assert.equal(commit.attribution, 'exact')
+  assert.equal(commit.committer?.sessionId, 'maker')
+  assert.deepEqual(commit.contributors.map(item => item.sessionId), ['helper'])
+  assert.deepEqual(commit.contributors[0].contributedPaths, ['a.py'])
+  assert.deepEqual(parseGitCommitAttributions({ items: [] }), [])
+})
+
+test('the ledger groups by commit so occupancy cannot bury the answer', () => {
+  const row = (id: string, sessionId: string, role: string, over: Record<string, unknown> = {}) => ({
+    id, session_id: sessionId, session_name: sessionId, project_id: 'p',
+    worktree_root: '/repo', commit_oid: 'a'.repeat(40), relationship: 'observed',
+    confidence: 'correlated', ambiguous: false, source: 'git_monitor', observed_at: 1,
+    role, ...over,
+  })
+  const raw = {
+    items: [
+      row('c1', 'maker', 'committer', {
+        relationship: 'created', confidence: 'exact', source: 'session_tool',
+        match_method: 'command_range', observed_at: 9,
+      }),
+      row('c2', 'helper', 'contributor', {
+        relationship: 'contributed', source: 'tier0_write', contributed_paths: ['a.py'],
+      }),
+      row('o1', 'bystander-a', 'observer'),
+      row('o2', 'bystander-b', 'observer'),
+      // A second commit, older, so ordering is observable.
+      { ...row('o3', 'bystander-a', 'observer'), commit_oid: 'b'.repeat(40), observed_at: 0 },
+    ],
+    commits: [{
+      commit_oid: 'a'.repeat(40), subject: 'Add it', committed_at: 5, worktree_root: '/repo',
+      committer: { id: 'c1' }, contributors: [{ id: 'c2' }], attribution: 'exact',
+    }],
+  }
+  const [first, second] = groupProvenance(raw)
+  assert.equal(first.commitOid, 'a'.repeat(40))
+  assert.equal(first.committer?.sessionId, 'maker')
+  assert.deepEqual(first.contributors.map(item => item.sessionId), ['helper'])
+  // The committer and contributor are named as themselves, never also counted as
+  // bystanders to their own work.
+  assert.deepEqual(first.observers.map(item => item.sessionId), ['bystander-a', 'bystander-b'])
+  assert.equal(occupancyLabel(first), '2 sessions had this checkout open')
+  // Newest first, dated by the most recent thing observed about the commit.
+  assert.equal(first.observedAt, 9)
+  assert.equal(second.commitOid, 'b'.repeat(40))
+  assert.equal(second.committer, null)
+  assert.equal(occupancyLabel(second), '1 session had this checkout open')
+  assert.deepEqual(groupProvenance({ items: [] }), [])
 })
 
 test('file status labels fit the narrow change list', () => {
