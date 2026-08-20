@@ -48,6 +48,119 @@ def test_git_commit_classifier_is_narrow_and_marks_amend() -> None:
     assert amend.relationship == "rewrote"
 
 
+def test_classifier_sees_every_command_that_can_create_a_commit() -> None:
+    """`git commit` was never the only one, and in a worktree flow it is not even
+    the common one: reconciling and landing are both `git merge`."""
+    kinds = {
+        "git merge master": ("merge", "created"),
+        "git merge --ff-only worktree-feature": ("merge", "created"),
+        "git cherry-pick abc1234": ("cherry_pick", "created"),
+        "git revert HEAD": ("revert", "created"),
+        "git rebase master": ("rebase", "rewrote"),
+        "git rebase --continue": ("rebase", "rewrote"),
+        "git am patch.mbox": ("am", "created"),
+    }
+    for command, (kind, relationship) in kinds.items():
+        result = classify_git_commit_command("Bash", command)
+        assert result is not None, command
+        assert (result.kind, result.relationship) == (kind, relationship), command
+
+    # Resolving or abandoning an operation creates nothing, and neither does a
+    # merge told explicitly not to commit.
+    for command in (
+        "git rebase --abort",
+        "git merge --abort",
+        "git cherry-pick --quit",
+        "git merge --no-commit master",
+        "git rebase --skip",
+    ):
+        assert classify_git_commit_command("Bash", command) is None, command
+    # Still narrow in form.
+    assert classify_git_commit_command("Bash", "git merge-base --is-ancestor a b") is None
+    assert classify_git_commit_command("Bash", "git -C ../other merge master") is None
+
+
+def test_classify_ref_move_separates_authorship_from_arrival() -> None:
+    """The distinction the whole module turns on, in isolation."""
+    merge = _commit(SIBLING, (OLD, NEW), 100.0, "Merge")
+    landed = _commit(NEW, (OLD,), 10.0, "Landed")
+
+    made = git_provenance.classify_ref_move(
+        (merge,),
+        head_oid=SIBLING,
+        head_parents=(OLD, NEW),
+        forward=True,
+        backward=False,
+        window_start=90.0,
+        window_end=110.0,
+    )
+    assert made.kind == "merged"
+    assert made.authored == (merge,)
+
+    arrival = git_provenance.classify_ref_move(
+        (landed,),
+        head_oid=NEW,
+        head_parents=(OLD,),
+        forward=True,
+        backward=False,
+        window_start=90.0,
+        window_end=110.0,
+    )
+    assert arrival.kind == "fast_forward"
+    assert arrival.is_arrival
+
+    # Recent enough to look fresh, but the ledger already holds it elsewhere.
+    known = git_provenance.classify_ref_move(
+        (merge,),
+        head_oid=SIBLING,
+        head_parents=(OLD, NEW),
+        forward=True,
+        backward=False,
+        window_start=90.0,
+        window_end=110.0,
+        known_elsewhere=frozenset({SIBLING}),
+    )
+    assert known.kind == "fast_forward"
+    assert known.is_arrival
+
+    rewound = git_provenance.classify_ref_move(
+        (landed,),
+        head_oid=NEW,
+        head_parents=(OLD,),
+        forward=False,
+        backward=True,
+        window_start=0.0,
+        window_end=1e12,
+    )
+    assert rewound.kind == "reset"
+    assert rewound.is_arrival
+
+    rebased = git_provenance.classify_ref_move(
+        (merge,),
+        head_oid=SIBLING,
+        head_parents=(OLD,),
+        forward=False,
+        backward=False,
+        window_start=90.0,
+        window_end=110.0,
+    )
+    assert rebased.kind == "rebased"
+    assert rebased.authored == (merge,)
+
+    # Git declining to place the move must never read as authorship.
+    blind = git_provenance.classify_ref_move(
+        (merge,),
+        head_oid=SIBLING,
+        head_parents=(OLD,),
+        forward=None,
+        backward=None,
+        window_start=90.0,
+        window_end=110.0,
+    )
+    assert blind.kind == "unknown"
+    assert blind.is_arrival
+
+
 def test_commit_message_subject_reads_the_forms_a_command_uses() -> None:
     assert commit_message_subject('git commit -m "Fix the join"') == "Fix the join"
     assert commit_message_subject("git commit -m 'Fix the join'") == "Fix the join"
@@ -372,11 +485,13 @@ async def test_a_checkout_spelled_two_ways_is_one_row(tmp_path: Path) -> None:
     reopened.close()
 
 
-def _session(session_id: str = "session-1") -> Any:
+def _session(
+    session_id: str = "session-1", name: str = "Builder", run_id: str = "run-1"
+) -> Any:
     record = SimpleNamespace(
         id=session_id,
-        name="Builder",
-        agent_run_id="run-1",
+        name=name,
+        agent_run_id=run_id,
         project_id="project-1",
         git_cwd="C:/repo",
         git=GitState(root="C:/repo", head=OLD),
@@ -390,29 +505,49 @@ def _patch_git(
     *,
     head: str = NEW,
     commits: tuple[GitCommitMetadata, ...] = (),
+    first_parent: tuple[GitCommitMetadata, ...] | None = None,
+    forward: bool | None = True,
+    backward: bool | None = False,
 ) -> None:
+    """Stand in for the repository.
+
+    `commits` is the full-ancestry range and `first_parent` the reference's own
+    line; they differ exactly when a merge is involved, which is the case the
+    classifier exists to tell apart, so the fake has to be able to express it.
+    """
+
     async def position(_cwd: str) -> GitPosition:
         return GitPosition("C:/repo", head)
 
-    async def commit_range(_cwd: str, _base: str | None, _head: str, **_kwargs: Any) -> Any:
+    async def commit_range(
+        _cwd: str, _base: str | None, _head: str, **kwargs: Any
+    ) -> Any:
+        if kwargs.get("first_parent") and first_parent is not None:
+            return first_parent
         return commits
 
     async def metadata(_cwd: str, oid: str) -> GitCommitMetadata | None:
         return next((item for item in commits if item.oid == oid), None)
 
+    async def is_ancestor(_cwd: str, ancestor: str, descendant: str) -> bool | None:
+        return forward if descendant == head else backward
+
     monkeypatch.setattr(git_provenance, "read_git_position", position)
     monkeypatch.setattr(git_provenance, "read_commit_range", commit_range)
     monkeypatch.setattr(git_provenance, "read_commit_metadata", metadata)
+    monkeypatch.setattr(git_provenance, "read_is_ancestor", is_ancestor)
 
 
-async def _commit_command(service: GitProvenanceService, session_id: str, call_id: str) -> None:
+async def _run_command(
+    service: GitProvenanceService, session_id: str, call_id: str, command: str
+) -> None:
     await service.handle_event(
         MuxEvent(
             1.0,
             session_id,
             "transcript",
             "tool_use",
-            {"tool": "Bash", "call_id": call_id, "target": 'git commit -m "Add provenance"'},
+            {"tool": "Bash", "call_id": call_id, "target": command},
             1,
         )
     )
@@ -426,6 +561,10 @@ async def _commit_command(service: GitProvenanceService, session_id: str, call_i
             2,
         )
     )
+
+
+async def _commit_command(service: GitProvenanceService, session_id: str, call_id: str) -> None:
+    await _run_command(service, session_id, call_id, 'git commit -m "Add provenance"')
 
 
 async def test_successful_session_git_commit_records_exact_provenance(
@@ -691,7 +830,244 @@ async def test_monitor_head_transition_records_correlated_observation(
     history.close()
 
 
-async def test_monitor_bulk_reference_move_is_ambiguous(
+async def _git_change(
+    service: GitProvenanceService, session_id: str, head: str, previous_head: str, ts: float = 2.0
+) -> None:
+    await service.handle_event(
+        MuxEvent(
+            ts,
+            session_id,
+            "daemon",
+            "git_changed",
+            {"git": {"root": "C:/repo"}, "head": head, "previous_head": previous_head},
+            9,
+        )
+    )
+
+
+async def test_landing_fast_forward_claims_nothing_for_the_sessions_it_moves_under(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The defect this whole pass exists to remove.
+
+    `git merge --ff-only` in the primary checkout drags every attached session's
+    HEAD onto commits written in a worktree minutes earlier. Each of those
+    sessions used to get a row saying a merge or a rebase had happened and no
+    single commit belonged to it — a sentence about a commit none of them had
+    touched. The move is a fact about the checkout and is now recorded as one.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    landed = (_commit(SIBLING, (NEW,), -9000.0, "Landed"), _commit(NEW, (OLD,), -9100.0, "Base"))
+    _patch_git(monkeypatch, head=SIBLING, commits=landed, first_parent=landed)
+
+    await _git_change(service, session.record.id, SIBLING, OLD)
+
+    assert await history.git_provenance(project_id="project-1") == []
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert len(moves) == 1
+    assert moves[0]["kind"] == "fast_forward"
+    assert moves[0]["commit_count"] == 2
+    assert moves[0]["authored_count"] == 0
+    assert moves[0]["worktree_root"] == "C:/repo"
+    history.close()
+
+
+async def test_arrival_is_recognized_from_the_ledger_without_asking_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commit already recorded under another checkout arrived in this one.
+
+    This is what makes a landing honest for free: mux saw the worktree session
+    make the commit, so the checkout it lands in claims none of it — even though
+    the commit is recent enough that the time window alone would call it fresh.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+
+    async def seed(observed_at: float) -> None:
+        await history.record_git_provenance(
+            session_id="worktree-session",
+            session_name="Worktree",
+            agent_run_id="run-w",
+            project_id="project-1",
+            worktree_root="C:/repo/.worktrees/feature",
+            commit_oid=NEW,
+            relationship="created",
+            confidence="exact",
+            ambiguous=False,
+            source="session_tool",
+            evidence_rank=git_provenance.COMMITTER_EXACT_RANK,
+            observed_at=observed_at,
+            role="committer",
+            match_method="command_range",
+        )
+
+    await seed(1.0)
+    service = GitProvenanceService(history, manager, EventBus())
+    _patch_git(
+        monkeypatch,
+        commits=(_commit(NEW, (OLD,), 11.0, "Made in the worktree"),),
+        first_parent=(_commit(NEW, (OLD,), 11.0, "Made in the worktree"),),
+    )
+
+    await _git_change(service, session.record.id, NEW, OLD, ts=2.0)
+
+    rows = await history.git_provenance(project_id="project-1")
+    assert [row["session_id"] for row in rows] == ["worktree-session"]
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert moves[0]["kind"] == "fast_forward"
+    history.close()
+
+
+async def test_the_arrival_oracle_only_points_backwards_in_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The checkout that *made* a commit must not read its own work as an arrival.
+
+    After a landing both checkouts hold the commit, so "recorded under another
+    checkout" is symmetric and, used alone, retracts the one true answer along
+    with the noise. Measured on real data: it stamped the worktree session that
+    ran `git merge` as a bystander to its own merge commit.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    # The other checkout recorded it *after* this observation — it landed there.
+    await history.record_git_provenance(
+        session_id="downstream",
+        session_name="Primary checkout",
+        agent_run_id="run-d",
+        project_id="project-1",
+        worktree_root="C:/repo-primary",
+        commit_oid=NEW,
+        relationship="observed",
+        confidence="correlated",
+        ambiguous=False,
+        source="git_monitor",
+        evidence_rank=git_provenance.MONITOR_OBSERVED_RANK,
+        observed_at=500.0,
+        role="observer",
+    )
+    service = GitProvenanceService(history, manager, EventBus())
+    made = (_commit(NEW, (OLD,), 11.0, "Made here"),)
+    _patch_git(monkeypatch, commits=made, first_parent=made)
+
+    await _git_change(service, session.record.id, NEW, OLD, ts=20.0)
+
+    rows = {row["session_id"]: row for row in await history.git_provenance(project_id="project-1")}
+    assert rows[session.record.id]["match_method"] == "monitor_created"
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert moves[0]["kind"] == "created"
+    assert moves[0]["authored_count"] == 1
+    history.close()
+
+
+async def test_merge_command_attributes_the_merge_commit_to_the_session_that_ran_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git merge` creates a commit, and full ancestry hides that it created one.
+
+    The merge absorbs the side branch, so `previous..head` counts the commits it
+    pulled in and reads as a bulk arrival. The reference's own first-parent line
+    gained exactly one commit, and that commit is this session's.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    merge = _commit(SIBLING, (OLD, NEW), 12.0, "Merge branch 'master' into feature")
+    _patch_git(
+        monkeypatch,
+        head=SIBLING,
+        # Full ancestry sees two; the first-parent line sees only the merge.
+        commits=(merge, _commit(NEW, (OLD,), 11.0, "From master")),
+        first_parent=(merge,),
+    )
+
+    await _run_command(service, session.record.id, "call-merge", "git merge master")
+    rows = await history.git_provenance(project_id="project-1")
+
+    assert len(rows) == 1
+    assert rows[0]["commit_oid"] == SIBLING
+    assert rows[0]["role"] == "committer"
+    assert rows[0]["confidence"] == "exact"
+    assert rows[0]["ambiguous"] is False
+    # Picked the same way any single authored commit is: it was the only one the
+    # command created. That it was a merge is in the row's own two parents, and
+    # in the move recorded for the checkout.
+    assert rows[0]["match_method"] == "command_range"
+    assert rows[0]["parent_oids"] == [OLD, NEW]
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert moves[0]["kind"] == "merged"
+    assert moves[0]["authored_count"] == 1
+    history.close()
+
+
+async def test_ff_only_land_records_a_move_and_no_committer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recognized command that authored nothing claims nothing.
+
+    Recognizing `git merge` is not the same as believing every `git merge` made a
+    commit. Argv cannot tell a fast-forward from a merge, so the outcome decides.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    landed = (_commit(SIBLING, (NEW,), -9000.0, "Landed"), _commit(NEW, (OLD,), -9100.0, "Base"))
+    _patch_git(monkeypatch, head=SIBLING, commits=landed, first_parent=landed)
+
+    await _run_command(
+        service, session.record.id, "call-land", "git merge --ff-only worktree-feature"
+    )
+
+    assert await history.git_provenance(project_id="project-1") == []
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert moves[0]["kind"] == "fast_forward"
+    history.close()
+
+
+async def test_rebase_credits_every_commit_it_replayed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replay's commits all belong to the session that ran it.
+
+    There is nothing to disambiguate between them, which is why a run of them is
+    recorded rather than reduced to one answer plus an apology.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    replayed = (_commit(SIBLING, (NEW,), 12.0, "Second"), _commit(NEW, (OLD,), 11.0, "First"))
+    _patch_git(
+        monkeypatch,
+        head=SIBLING,
+        commits=replayed,
+        first_parent=replayed,
+        # A rebase leaves the old position unreachable in both directions.
+        forward=False,
+        backward=False,
+    )
+
+    await _run_command(service, session.record.id, "call-rebase", "git rebase master")
+    rows = {row["commit_oid"]: row for row in await history.git_provenance(project_id="project-1")}
+
+    assert set(rows) == {NEW, SIBLING}
+    assert all(row["role"] == "committer" for row in rows.values())
+    assert all(row["relationship"] == "rewrote" for row in rows.values())
+    assert all(row["match_method"] == "command_rebased" for row in rows.values())
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert moves[0]["kind"] == "rebased"
+    history.close()
+
+
+async def test_reset_authors_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = _session()
@@ -700,24 +1076,124 @@ async def test_monitor_bulk_reference_move_is_ambiguous(
     service = GitProvenanceService(history, manager, EventBus())
     _patch_git(
         monkeypatch,
-        commits=(_commit(SIBLING, (NEW,), 12.0, "Merged"), _commit(NEW, (OLD,), 11.0, "Base")),
+        head=OLD,
+        commits=(_commit(OLD, (), 11.0, "Rewound to"),),
+        first_parent=(_commit(OLD, (), 11.0, "Rewound to"),),
+        forward=False,
+        backward=True,
     )
 
-    await service.handle_event(
-        MuxEvent(
-            2.0,
-            session.record.id,
-            "daemon",
-            "git_changed",
-            {"git": {"root": "C:/repo"}, "head": SIBLING, "previous_head": OLD},
-            9,
-        )
+    await _git_change(service, session.record.id, OLD, NEW)
+
+    assert await history.git_provenance(project_id="project-1") == []
+    moves = await history.git_ref_moves(project_id="project-1")
+    assert moves[0]["kind"] == "reset"
+    history.close()
+
+
+async def test_bystander_occupancy_is_not_recorded_once_a_committer_is_known(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An answered question does not need eleven more rows saying nothing.
+
+    A commit made in a shared checkout moves every attached session's HEAD. Once
+    one of them is known to have run the command, the others' occupancy adds
+    nothing — and used to bury the answer under ten rows in the ledger view.
+    """
+    committer = _session()
+    bystander = _session(session_id="bystander", name="Bystander", run_id="run-2")
+    manager = cast(
+        Any,
+        SimpleNamespace(
+            sessions={committer.record.id: committer, bystander.record.id: bystander}
+        ),
     )
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    made = (_commit(NEW, (OLD,), 11.0, "Add provenance"),)
+    _patch_git(monkeypatch, commits=made, first_parent=made)
+
+    await _commit_command(service, committer.record.id, "call-1")
+    await _git_change(service, bystander.record.id, NEW, OLD)
+
+    rows = await history.git_provenance(project_id="project-1")
+    assert [row["session_id"] for row in rows] == [committer.record.id]
+    assert service.status()["suppressed"] == 1
+    history.close()
+
+
+async def test_monitor_records_occupancy_for_a_commit_authored_here(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Occupancy still counts when nothing else explains the commit.
+
+    A commit made by a form the command recognizer does not match leaves the
+    session that was in the checkout as the only evidence there is, and that is
+    worth recording — as `correlated` occupancy, never as an answer.
+    """
+    session = _session()
+    manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    made = (_commit(NEW, (OLD,), 11.0, "Committed by a script"),)
+    _patch_git(monkeypatch, commits=made, first_parent=made)
+
+    await _git_change(service, session.record.id, NEW, OLD)
     rows = await history.git_provenance(project_id="project-1")
 
     assert len(rows) == 1
-    assert rows[0]["confidence"] == "ambiguous"
-    assert rows[0]["match_method"] == "monitor_range"
+    assert rows[0]["role"] == "observer"
+    assert rows[0]["confidence"] == "correlated"
+    assert rows[0]["ambiguous"] is False
+    assert rows[0]["match_method"] == "monitor_created"
+    history.close()
+
+
+async def test_retraction_withdraws_a_row_and_stronger_evidence_restores_it(
+    tmp_path: Path,
+) -> None:
+    """The ledger's only weakening operation, and the one thing that undoes it.
+
+    Every other field is gated on `evidence_rank >=`, so before retraction existed
+    a row that turned out to record occupancy had no way out: "this session had
+    nothing to do with it" is not a stronger claim than the one it replaces.
+    """
+    history = HistoryIndex(tmp_path / "mux.db")
+
+    async def record(rank: int, role: str, paths: tuple[str, ...] = ()) -> dict[str, Any]:
+        return await history.record_git_provenance(
+            session_id="session-1",
+            session_name="Builder",
+            agent_run_id="run-1",
+            project_id="project-1",
+            worktree_root="C:/repo",
+            commit_oid=NEW,
+            relationship="observed",
+            confidence="correlated",
+            ambiguous=False,
+            source="git_monitor",
+            evidence_rank=rank,
+            role=role,
+            contributed_paths=paths,
+        )
+
+    await record(git_provenance.MONITOR_OBSERVED_RANK, "observer")
+    row = (await history.git_provenance(project_id="project-1"))[0]
+    assert await history.retract_git_provenance([row["id"]], reason="arrival") == 1
+    assert await history.git_provenance(project_id="project-1") == []
+    withheld = await history.git_provenance(project_id="project-1", include_retracted=True)
+    assert withheld[0]["retracted_reason"] == "arrival"
+
+    # Re-observing the same thing must not undo a repair.
+    await record(git_provenance.MONITOR_OBSERVED_RANK, "observer")
+    assert await history.git_provenance(project_id="project-1") == []
+
+    # Proof that the session's bytes are in the commit must.
+    await record(git_provenance.CONTRIBUTOR_PATH_RANK, "contributor", ("src/one.py",))
+    restored = await history.git_provenance(project_id="project-1")
+    assert len(restored) == 1
+    assert restored[0]["role"] == "contributor"
+    assert restored[0]["retracted_at"] is None
     history.close()
 
 
@@ -728,11 +1204,15 @@ def _provenance_request(
     live: dict[str, Any] | None = None,
     naming_rows: dict[str, dict[str, Any]] | None = None,
     titles: list[dict[str, Any]] | None = None,
+    moves: list[dict[str, Any]] | None = None,
 ) -> SimpleNamespace:
     """A request whose app carries the three stores identity decoration reads."""
 
     async def rows(**_kwargs: object) -> list[dict[str, Any]]:
         return items
+
+    async def ref_moves(**_kwargs: object) -> list[dict[str, Any]]:
+        return list(moves or [])
 
     async def naming(ids: object) -> dict[str, dict[str, Any]]:
         return dict(naming_rows or {})
@@ -744,7 +1224,11 @@ def _provenance_request(
         query=query,
         app={
             "projects": SimpleNamespace(projects={"p": SimpleNamespace(id="p")}),
-            "history": SimpleNamespace(git_provenance=rows, history_naming_rows=naming),
+            "history": SimpleNamespace(
+                git_provenance=rows,
+                git_ref_moves=ref_moves,
+                history_naming_rows=naming,
+            ),
             "sessions": SimpleNamespace(sessions=dict(live or {})),
             "automation_store": SimpleNamespace(annotations=annotations),
         },

@@ -107,6 +107,45 @@ export type GitProvenance = {
   observedAt: number
 }
 
+/**
+ * What a *checkout's* reference did, which is a different question from what any
+ * session did.
+ *
+ * Every session attached to a checkout watches the same reference move, so this
+ * is deliberately not keyed by session. Recording it per session is what put
+ * "several commits arrived at once, so no single one belongs to this session" on
+ * the ledger of every agent that merely had the directory open when a branch
+ * landed.
+ */
+export type GitRefMove = {
+  id: string
+  projectId: string
+  worktreeRoot: string
+  commitOid: string
+  previousHead: string
+  kind: 'created' | 'merged' | 'fast_forward' | 'rebased' | 'reset' | 'unknown'
+  /** Commits the reference's own first-parent line gained. */
+  commitCount: number
+  /** How many of those were written by this move rather than arriving from elsewhere. */
+  authoredCount: number
+  subject: string
+  committedAt: number | null
+  observedAt: number
+}
+
+/** One commit's whole answer: who made it, and whose work is in it. */
+export type GitCommitAttribution = {
+  commitOid: string
+  subject: string
+  committedAt: number | null
+  worktreeRoot: string
+  committer: GitProvenance | null
+  contributors: GitProvenance[]
+  attribution: 'exact' | 'correlated' | 'ambiguous'
+}
+
+const REF_MOVE_KINDS = ['created', 'merged', 'fast_forward', 'rebased', 'reset', 'unknown']
+
 /** A live session sitting somewhere in this repository, with whatever Git state it reported. */
 export type SessionGit = {
   id: string
@@ -305,6 +344,135 @@ export function parseGitProvenance(raw: unknown): GitProvenance[] {
   return items
 }
 
+export function parseGitRefMoves(raw: unknown): GitRefMove[] {
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { ref_moves?: unknown }).ref_moves)) return []
+  const items: GitRefMove[] = []
+  for (const value of (raw as { ref_moves: unknown[] }).ref_moves) {
+    if (!value || typeof value !== 'object') continue
+    const row = value as Record<string, unknown>
+    if (
+      typeof row.id !== 'string'
+      || typeof row.worktree_root !== 'string'
+      || typeof row.commit_oid !== 'string'
+      || typeof row.previous_head !== 'string'
+      || typeof row.observed_at !== 'number'
+    ) continue
+    items.push({
+      id: row.id,
+      projectId: typeof row.project_id === 'string' ? row.project_id : '',
+      worktreeRoot: row.worktree_root,
+      commitOid: row.commit_oid,
+      previousHead: row.previous_head,
+      // An unrecognized kind is reported as unknown rather than dropped: the move
+      // happened, and hiding it would be a worse answer than not naming it.
+      kind: REF_MOVE_KINDS.includes(String(row.kind))
+        ? row.kind as GitRefMove['kind']
+        : 'unknown',
+      commitCount: typeof row.commit_count === 'number' ? row.commit_count : 0,
+      authoredCount: typeof row.authored_count === 'number' ? row.authored_count : 0,
+      subject: typeof row.subject === 'string' ? row.subject : '',
+      committedAt: typeof row.committed_at === 'number' ? row.committed_at : null,
+      observedAt: row.observed_at,
+    })
+  }
+  return items
+}
+
+export function parseGitCommitAttributions(raw: unknown): GitCommitAttribution[] {
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { commits?: unknown }).commits)) return []
+  const byId = new Map(parseGitProvenance(raw).map(item => [item.id, item]))
+  const entry = (value: unknown): GitProvenance | null => {
+    if (!value || typeof value !== 'object') return null
+    const row = value as Record<string, unknown>
+    // The summary carries a projection of each row; the parsed row is the whole
+    // thing, so prefer it and fall back only when the id is not in `items`.
+    const known = typeof row.id === 'string' ? byId.get(row.id) : undefined
+    if (known) return known
+    const sessionId = typeof row.session_id === 'string' ? row.session_id : ''
+    if (!sessionId) return null
+    return byId.get(sessionId) || null
+  }
+  const items: GitCommitAttribution[] = []
+  for (const value of (raw as { commits: unknown[] }).commits) {
+    if (!value || typeof value !== 'object') continue
+    const row = value as Record<string, unknown>
+    if (typeof row.commit_oid !== 'string' || !row.commit_oid) continue
+    const contributors = Array.isArray(row.contributors)
+      ? row.contributors.map(entry).filter((item): item is GitProvenance => item !== null)
+      : []
+    items.push({
+      commitOid: row.commit_oid,
+      subject: typeof row.subject === 'string' ? row.subject : '',
+      committedAt: typeof row.committed_at === 'number' ? row.committed_at : null,
+      worktreeRoot: typeof row.worktree_root === 'string' ? row.worktree_root : '',
+      committer: entry(row.committer),
+      contributors,
+      attribution: ['exact', 'correlated', 'ambiguous'].includes(String(row.attribution))
+        ? row.attribution as GitCommitAttribution['attribution']
+        : 'ambiguous',
+    })
+  }
+  return items
+}
+
+/**
+ * One commit's rows, gathered into the answer a reader actually wants.
+ *
+ * The ledger stores a row per session per commit because that is what each piece
+ * of evidence is about, and rendering it that way flatly is what let ten "was in
+ * the checkout" rows bury the one row naming who made the commit. The committer
+ * and contributors come from the daemon's own summary, so the rule for "who made
+ * this" has one home; only the occupancy list is assembled here, because it is
+ * the part the summary deliberately leaves out.
+ */
+export type ProvenanceGroup = GitCommitAttribution & {
+  observers: GitProvenance[]
+  observedAt: number
+}
+
+export function groupProvenance(raw: unknown): ProvenanceGroup[] {
+  const items = parseGitProvenance(raw)
+  const byCommit = new Map<string, GitProvenance[]>()
+  for (const item of items) {
+    const entries = byCommit.get(item.commitOid) || []
+    entries.push(item)
+    byCommit.set(item.commitOid, entries)
+  }
+  const attributions = new Map(
+    parseGitCommitAttributions(raw).map(item => [item.commitOid, item]),
+  )
+  const groups: ProvenanceGroup[] = []
+  for (const [commitOid, rows] of byCommit) {
+    const summary = attributions.get(commitOid)
+    const named = new Set<string>()
+    if (summary?.committer) named.add(summary.committer.id)
+    for (const item of summary?.contributors || []) named.add(item.id)
+    groups.push({
+      commitOid,
+      subject: summary?.subject || rows[0].subject,
+      committedAt: summary?.committedAt ?? rows[0].committedAt,
+      worktreeRoot: summary?.worktreeRoot || rows[0].worktreeRoot,
+      committer: summary?.committer || null,
+      contributors: summary?.contributors || [],
+      attribution: summary?.attribution || 'ambiguous',
+      // Everything the summary did not already name. A session that committed or
+      // contributed is not also listed as a bystander to its own work.
+      observers: rows.filter(item => !named.has(item.id)),
+      // The ledger is read newest-first, and a commit is as recent as the first
+      // thing observed about it.
+      observedAt: Math.max(...rows.map(item => item.observedAt)),
+    })
+  }
+  return groups.sort((left, right) => right.observedAt - left.observedAt)
+}
+
+/** How many sessions merely had the checkout open, said once instead of N times. */
+export function occupancyLabel(group: ProvenanceGroup): string {
+  const count = group.observers.length
+  if (count === 1) return '1 session had this checkout open'
+  return `${count} sessions had this checkout open`
+}
+
 /** What a row claims about the session, in the reader's words. */
 export function provenanceRoleLabel(item: GitProvenance): string {
   if (item.role === 'committer') return item.relationship === 'rewrote' ? 'amended' : 'committed'
@@ -312,7 +480,35 @@ export function provenanceRoleLabel(item: GitProvenance): string {
     const count = item.contributedPaths.length
     return count === 1 ? 'wrote 1 file in it' : `wrote ${count} files in it`
   }
-  return 'was in the checkout'
+  return 'was in the checkout when it appeared'
+}
+
+/**
+ * What happened to a checkout, said plainly.
+ *
+ * This sentence replaces "several commits arrived at once (a merge or a rebase),
+ * so no single one belongs to this session" — which described two structurally
+ * different events as one, and framed a checkout fact as a failed attempt to
+ * attribute a commit to whichever session happened to be reading it.
+ */
+export function refMoveLabel(move: GitRefMove): string {
+  const count = move.commitCount === 1 ? '1 commit' : `${move.commitCount} commits`
+  switch (move.kind) {
+    case 'fast_forward':
+      return `fast-forwarded onto ${count} written elsewhere`
+    case 'merged':
+      return `merged, creating 1 commit over ${count}`
+    case 'created':
+      return move.authoredCount === move.commitCount
+        ? `gained ${count} written here`
+        : `gained ${count}, ${move.authoredCount} written here`
+    case 'rebased':
+      return `rewritten, replaying ${count}`
+    case 'reset':
+      return `moved back onto ${count} that already existed`
+    default:
+      return `moved by ${count} git could not place`
+  }
 }
 
 /**
@@ -320,13 +516,12 @@ export function provenanceRoleLabel(item: GitProvenance): string {
  *
  * A shared checkout is deliberately absent: it stopped being a reason for
  * ambiguity, and leaving the old sentence in would keep explaining a rule the
- * daemon no longer applies.
+ * daemon no longer applies. So is the bulk-move sentence, for the same reason —
+ * a reference moving many commits at once is now classified rather than given up
+ * on, and it is recorded against the checkout instead of against a session.
  */
 export function provenanceAmbiguityNote(item: GitProvenance): string {
   if (!item.ambiguous) return ''
-  if (item.matchMethod === 'monitor_range') {
-    return 'Several commits arrived at once (a merge or a rebase), so no single one belongs to this session.'
-  }
   if (item.matchMethod === 'command_ambiguous') {
     return 'Another commit landed in the same window and neither its message nor its time tells them apart.'
   }
