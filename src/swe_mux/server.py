@@ -73,7 +73,7 @@ from .behavioral_consumers import BehavioralConsumerService
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
-from .composer_input import note_composer_write
+from .composer_input import DEFAULT_CLEAR_KEYS, note_composer_write
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore, parse_device_report
@@ -7779,7 +7779,11 @@ def _note_composer_write(events: EventBus, session: Any, data: str | bytes, sour
     if composer is None:
         return
     text = data.decode("utf-8", "ignore") if isinstance(data, bytes) else data
-    change = note_composer_write(composer, text, time.time())
+    # Which keys empty a composer is the harness's fact, not this module's. An
+    # unregistered backend keeps the historical Ctrl+U.
+    harness = HARNESSES.get(session.record.backend)
+    clear_keys = harness.composer_clear_keys if harness else DEFAULT_CLEAR_KEYS
+    change = note_composer_write(composer, text, time.time(), clear_keys)
     if change is None:
         return
     ledger = getattr(session, "state_transitions", None)

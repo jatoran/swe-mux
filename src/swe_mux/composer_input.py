@@ -32,8 +32,16 @@ Accuracy, measured against what the keys actually do in Claude Code and Codex:
   no opening marker of its own.
 - A carriage return or newline outside a paste is a submit, whatever else rode
   the same frame.
-- `Ctrl+C`, bare `Esc`, and `Ctrl+U` discard the composer in every harness mux
-  drives, so any of them clears the count.
+- `Ctrl+C` discards the composer in every harness mux drives, so it clears the
+  count. What *else* discards it is a per-harness fact the caller supplies from
+  ``HarnessDescriptor.composer_clear_keys``, because the obvious answer is wrong
+  on the harness most people use: measured 2026-08-20 against Claude Code
+  v2.1.238 on a four-line draft, `Ctrl+U` killed one line and left the other
+  three, and a bare `Esc` did nothing to the draft at all. Only a double `Esc`
+  cleared it. This module previously counted all three as clears, so a Claude
+  operator who reached for `Ctrl+U` left the estimate reading "empty" over a
+  standing draft — the false *safe* this docstring warns about, in the one place
+  that can act on it.
 - Backspace and delete decrement it, which is what stops "typed a word, thought
   better of it" from leaving a flag standing until the next turn.
 - Cursor keys, function keys, and mode toggles (`shift+tab`) move nothing into
@@ -58,8 +66,15 @@ _OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
 _ESCAPE = re.compile(r"\x1b\[[0-9;:?<=>]*[A-Za-z@`~]|\x1b[NO][A-Za-z0-9]|\x1b[=>()#][0-9A-Za-z]?")
 
 _ERASE_KEYS = ("\x7f", "\x08")
-# Keys that discard the composer outright rather than editing it.
-_CLEAR_KEYS = ("\x03", "\x1b", "\x15")
+# Ctrl+C discards the composer in every harness mux drives. What else does is
+# per-harness and arrives as ``clear_keys``: this tuple used to also hold Esc and
+# Ctrl+U, and both were wrong for Claude Code (measured against v2.1.238 on a
+# four-line draft — Ctrl+U killed one line, a bare Esc did nothing at all).
+_CLEAR_KEYS = ("\x03",)
+# What a harness clears with when the caller does not say. Ctrl+U, which the
+# shells mux drives implement and which every consumer assumed before the harness
+# registry began declaring the answer.
+DEFAULT_CLEAR_KEYS = "\x15"
 _SUBMIT_KEYS = ("\r", "\n")
 
 
@@ -136,8 +151,20 @@ def _split_pastes(data: str, in_paste: bool) -> tuple[str, int, bool]:
     return "".join(plain), pasted, in_paste
 
 
-def classify_composer_write(data: str, in_paste: bool = False) -> ComposerWrite:
-    """Classify one write to the PTY, without touching any session state."""
+def classify_composer_write(
+    data: str,
+    in_paste: bool = False,
+    clear_keys: str = DEFAULT_CLEAR_KEYS,
+) -> ComposerWrite:
+    """Classify one write to the PTY, without touching any session state.
+
+    ``clear_keys`` is the harness's declared whole-composer clear
+    (``HarnessDescriptor.composer_clear_keys``). It is a parameter rather than a
+    constant because the constant was wrong: Ctrl+U kills a *line* in Claude
+    Code, so counting it as a clear reported an empty composer while three lines
+    of a four-line draft were still standing. That is a false "empty", which is
+    the direction this module's own docstring names as the dangerous one.
+    """
     if not data:
         return ComposerWrite("none", in_paste=in_paste)
     remainder, pasted, in_paste = _split_pastes(data, in_paste)
@@ -146,6 +173,11 @@ def classify_composer_write(data: str, in_paste: bool = False) -> ComposerWrite:
         return ComposerWrite("submit", in_paste=in_paste)
     if any(key in remainder for key in _CLEAR_KEYS):
         return ComposerWrite("clear", in_paste=in_paste)
+    # Matched against the *raw* frame rather than the stripped remainder. Claude's
+    # sequence is a double Esc, and the escape stripper above has already eaten it
+    # out of ``remainder`` — matching there would never fire.
+    if clear_keys and clear_keys in data:
+        return ComposerWrite("clear", in_paste=in_paste)
     typed = pasted + _composable_length(remainder)
     erased = sum(remainder.count(key) for key in _ERASE_KEYS)
     if not typed and not erased:
@@ -153,7 +185,12 @@ def classify_composer_write(data: str, in_paste: bool = False) -> ComposerWrite:
     return ComposerWrite("edit", typed=typed, erased=erased, in_paste=in_paste)
 
 
-def note_composer_write(state: ComposerState, data: str, now: float) -> str | None:
+def note_composer_write(
+    state: ComposerState,
+    data: str,
+    now: float,
+    clear_keys: str = DEFAULT_CLEAR_KEYS,
+) -> str | None:
     """Apply one write to ``state``.
 
     Returns ``'pending'`` or ``'cleared'`` when the composer crossed between
@@ -162,7 +199,7 @@ def note_composer_write(state: ComposerState, data: str, now: float) -> str | No
     which is what keeps this off the event bus and out of the ledger on a fast
     typist's every character.
     """
-    write = classify_composer_write(data, state.in_paste)
+    write = classify_composer_write(data, state.in_paste, clear_keys)
     state.in_paste = write.in_paste
     if write.kind == "none":
         return None

@@ -1917,6 +1917,32 @@ body {
 .mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 .mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
+/* A rail picker's drop-up. Positioned by `anchoredPopoverStyle` (the same math the
+   account and resource popovers use), which sets left/bottom/width and a max-height
+   against the space above the trigger.
+
+   The row cap is the point: five rows of list, then scroll. `--rail-dropup-rows` and
+   `--rail-dropup-row` are the whole contract, so the height can be tuned without
+   touching either drop-up's markup, and rows are a fixed height so the cap actually
+   means five of them rather than "five short ones or two long ones". */
+.rail-dropup{--rail-dropup-rows:5;--rail-dropup-row:36px;position:fixed;z-index:96;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #0009;color:var(--text)}
+.rail-dropup-open{position:sticky;top:0;z-index:1;width:100%;min-height:28px;padding:0 8px;border:0;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;text-align:left;letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
+.rail-dropup-open:hover,.rail-dropup-open:focus-visible{background:color-mix(in srgb,var(--green) 12%,var(--panel2))}
+.rail-dropup-list{max-height:calc(var(--rail-dropup-rows) * var(--rail-dropup-row));overflow-y:auto;overscroll-behavior:contain}
+.rail-dropup-row{box-sizing:border-box;width:100%;height:var(--rail-dropup-row);display:grid;align-content:center;gap:1px;padding:0 8px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);background:transparent;color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
+.rail-dropup-row:hover,.rail-dropup-row:focus-visible{background:var(--panel2)}
+.rail-dropup-row:disabled{opacity:.45;cursor:not-allowed}
+.rail-dropup-row.shadowed{opacity:.6}
+/* Both lines are single-line and ellipsized: a drop-up row that wrapped would break
+   the fixed height the five-row cap is measured in. */
+.rail-dropup-row>span,.rail-dropup-row>small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-dropup-row>span{display:flex;align-items:center;gap:5px}
+.rail-dropup-row>small{color:var(--muted);font-size:8px}
+.rail-dropup-row code{color:var(--green);font:inherit}
+.rail-dropup-row em{color:var(--muted);font-style:normal}
+.rail-dropup-empty,.rail-dropup-note{margin:0;padding:9px 8px;color:var(--muted);font:9px/1.5 'Cascadia Mono',Consolas,monospace}
+.rail-dropup-note{border-top:1px solid var(--line)}
+.terminal-action-rail .rail-dropup-open-trigger{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green)}
 /* Dismissible first-open orientation. Persistent copy lives in tooltips and the
    scope note instead of a standing paragraph. */
 .commandrail-settings .rail-intro-callout{margin:0 0 10px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--blue) 45%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}

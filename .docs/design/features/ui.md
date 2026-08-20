@@ -1338,10 +1338,10 @@ Its rules, and what each one is defending:
   chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
   placed there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
-  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, the clipboard-history picker (`Clip`), and the session's skill picker (`Skills`).
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
-  Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
+  Immediately after Up/Down, five editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, copy the composer, clear the composer, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout and the customize gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into configuration.
@@ -1494,6 +1494,17 @@ Its rules, and what each one is defending:
   is, how old the replayed content is, and — when there is none — why not, since an empty
   recovered agent pane otherwise reads as a bug rather than the deliberate exclusion it is
   (`features/session-recovery.md`).
+- **`Clip` and `Skills` open a drop-up over the rail**, not the drawer.
+  Both surfaces already exist as sections of the Actions tab, and both are reached from the drop-up's sticky first row, so nothing became less reachable - what changed is that the two-tap jobs (paste the thing I copied a minute ago; type a skill name) no longer cost a drawer trip.
+  The drop-up shows five rows and then scrolls; the cap is a height, never a slice, because capping by count would make the sticky link the only route to a sixth entry.
+  It opens upward from its trigger through `anchoredPopoverStyle`, the same placement math the account and resource popovers use, and repositions on scroll with capture because the rail is itself a horizontal scroller.
+  A row does the one obvious thing and closes: Clipboard inserts the entry, Skills inserts the invocation without submitting.
+  Reading, searching, pinning and deleting stay in the drawer section - a drop-up that also expanded rows would rebuild the surface it is a shortcut past.
+  Inserting from the ring never touches `navigator.clipboard`, which is what makes it the working paste path on a plain-HTTP tailnet client and on mobile Safari.
+- **Copy input and Clear input read the draft off the terminal grid.**
+  Nothing else can answer the question: no harness publishes its composer, and the daemon's write log deliberately keeps a character count rather than text (`features/terminal-input.md`).
+  Copy is disabled with its reason on a harness whose composer geometry has not been measured, rather than hidden - a missing button reads as "not built", a disabled one reads as "not here yet", and only the second is true.
+  Clear never depends on the read succeeding: the keys reach the CLI either way, and the status line says whether the discarded text was captured to clipboard history or only cleared.
 - Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
   rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
   most of a screen's worth of rail before the terminal keys begin — and their marks (offset

@@ -32,6 +32,17 @@ export const CopyIcon = () => <svg {...stroke}>
   <path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2" />
 </svg>
 
+/** The copy mark over an input rule: copy, but of the line being typed.
+ *
+ * A bare copy glyph is already spent on Copy reply, and the two sit close enough
+ * on a full rail to be confused. The rule underneath is the composer, which is the
+ * whole difference between them. */
+export const CopyInputIcon = () => <svg {...stroke}>
+  <rect x="10" y="2" width="12" height="12" rx="2" />
+  <path d="M6 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4" />
+  <line x1="2" y1="20" x2="16" y2="20" />
+</svg>
+
 /** A clipboard, which is what every toolbar in the world uses for paste. */
 export const PasteIcon = () => <svg {...stroke}>
   <rect x="8" y="2" width="8" height="4" rx="1" />
