@@ -1737,7 +1737,7 @@ body {
 .data-table td small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 /* The rate cluster: three numbers that only mean anything beside their own names. */
 .telemetry-rates{display:flex;gap:12px;justify-content:flex-end}.telemetry-rates>span{display:grid;justify-items:end}
-.cost-summary{grid-template-columns:repeat(4,minmax(0,1fr))}.cost-summary article{gap:3px}.cost-summary strong{font-size:15px}.cost-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.cost-summary small.warn{color:var(--amber)}
+.cost-summary{grid-template-columns:repeat(5,minmax(0,1fr))}.cost-summary article{gap:3px}.cost-summary strong{font-size:15px}.cost-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.cost-summary small.warn{color:var(--amber)}
 .automation-cost>.usage-table{margin-top:10px}
 .cost-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 /* Rank is the point of this table, and a column of near-identical small numbers does not
@@ -1774,6 +1774,9 @@ body {
 .data-table td>*{grid-column:2}
 .telemetry-rates{justify-content:flex-start}.telemetry-rates>span{display:flex;gap:5px}
 .cost-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+/* Five tiles over two columns leaves one alone on the last row; it spans rather
+   than sitting in a half-width cell beside empty space. */
+.cost-summary article:last-child:nth-child(odd){grid-column:1/-1}
 .cost-name{gap:5px}
 /* The panel subtitle is context, not content, and three wrapped lines of it at the top of a
    phone screen costs a row of the table underneath. */

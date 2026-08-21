@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from .config import Config
 from .event_bus import EventBus
 from .leaf_names import suggest_folder_name, validate_leaf_name
-from .openrouter import OpenRouterClient, OpenRouterError
+from .openrouter import OpenRouterClient, OpenRouterError, cache_stable_message
 from .path_identity import same_path
 from .projects import RESERVED_PROJECT_FOLDER_NAMES
 from .session_titles import generated_titles, record_display_name, record_run_id
@@ -2427,8 +2427,16 @@ class AssistantService:
             model=turn.resolved_model,
             input_tokens=turn.input_tokens,
             output_tokens=turn.output_tokens,
+            # Per call rather than per turn: the first round of a turn writes the
+            # cache and the rest read it, so a turn-level figure would average the
+            # write into the hit rate and hide whether the breakpoint is working.
+            cached_tokens=turn.cached_tokens,
             cost_usd=turn.cost_usd or 0,
             call_id=call_id,
+        )
+        log.debug(
+            "assistant model call turn=%s step=%d in=%d cached=%d out=%d",
+            turn_id, step, turn.input_tokens, turn.cached_tokens, turn.output_tokens,
         )
         return turn
 
@@ -2440,7 +2448,21 @@ class AssistantService:
             dialog_id, limit=self.config.assistant_context_messages
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PRIMER},
+            # The one message that is identical on every call this assistant ever
+            # makes, so it is where the cache breakpoint goes. For a provider that
+            # needs the marker the breakpoint also covers the tool definitions,
+            # which the provider orders ahead of the system prompt; for the rest
+            # `cache_stable_message` hands the plain string straight back.
+            #
+            # Nothing may be inserted ahead of this message, and its text may not
+            # be interpolated per turn: either change moves the prefix and turns
+            # every subsequent call into a cache write. The workspace snapshot is
+            # the *second* message for exactly that reason, and the per-round
+            # budget line stays trailing.
+            cache_stable_message(
+                {"role": "system", "content": SYSTEM_PRIMER},
+                model=self.config.assistant_model,
+            ),
             {
                 "role": "system",
                 "content": await self._context_message(client_context, dialog_id),
@@ -2454,7 +2476,13 @@ class AssistantService:
         messages.append({"role": "user", "content": text})
         client_id = str(client_context.get("client_id") or "")[:64]
         tools = self._tool_definitions()
-        totals = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "calls": 0}
+        totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost_usd": 0.0,
+            "calls": 0,
+        }
         display_parts: list[str] = []
         spoken_parts: list[str] = []
         sentence_index = 0
@@ -2502,6 +2530,7 @@ class AssistantService:
             )
             totals["input_tokens"] += turn.input_tokens
             totals["output_tokens"] += turn.output_tokens
+            totals["cached_tokens"] += turn.cached_tokens
             totals["cost_usd"] += float(turn.cost_usd or 0)
             totals["calls"] += 1
             if turn.content.strip():
@@ -2639,11 +2668,11 @@ class AssistantService:
         await self.store.touch_dialog(dialog_id)
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
-            "assistant turn complete dialog=%s turn=%s calls=%d in=%d out=%d "
+            "assistant turn complete dialog=%s turn=%s calls=%d in=%d cached=%d out=%d "
             "cost=%.5f elapsed=%.0fms sentences=%d cards=%d mutations=%d "
             "suppressed=%s exhausted=%s",
             dialog_id, turn_id, totals["calls"], totals["input_tokens"],
-            totals["output_tokens"], totals["cost_usd"], elapsed_ms,
+            totals["cached_tokens"], totals["output_tokens"], totals["cost_usd"], elapsed_ms,
             sentence_index, cards_opened, mutations_executed,
             suppress_speech, exhausted,
         )

@@ -80,7 +80,10 @@ class LedgerStub:
 
 
 def tool_turn(
-    content: str = "", tool_calls: list[dict[str, Any]] | None = None
+    content: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
+    *,
+    cached_tokens: int = 0,
 ) -> OpenRouterToolTurn:
     calls = tool_calls or []
     message: dict[str, Any] = {"role": "assistant", "content": content}
@@ -98,6 +101,7 @@ def tool_turn(
         output_tokens=50,
         cost_usd=0.001,
         latency_ms=300,
+        cached_tokens=cached_tokens,
     )
 
 
@@ -141,13 +145,14 @@ def make_service(
     enabled: bool = True,
     trust: str = "confirm",
     ledger: LedgerStub | None = None,
+    model: str = "test/assistant-model",
 ) -> tuple[AssistantService, list[MuxEvent], QueueStub, dict[str, Any]]:
     config = load_config(tmp_path / "config.toml")
     update_config(
         config,
         {
             "assistant_enabled": enabled,
-            "assistant_model": "test/assistant-model",
+            "assistant_model": model,
             "assistant_trust_reversible": trust,
         },
     )
@@ -1552,6 +1557,99 @@ async def test_the_model_is_told_how_many_rounds_remain(tmp_path: Path) -> None:
         assert "Tool rounds remaining" in str(second[-1]["content"])
         assert str(second[-1]["role"]) == "system"
         assert "Batch independent calls" in str(second[-1]["content"])
+    finally:
+        service.store.close()
+
+
+async def test_the_primer_carries_a_cache_breakpoint_for_a_provider_that_needs_one(
+    tmp_path: Path,
+) -> None:
+    """Anthropic caches nothing without an explicit breakpoint (Phase 15).
+
+    The marker goes on the primer because it is the one message identical on every
+    call this assistant ever makes, and the provider orders tool definitions ahead
+    of the system prompt - so one breakpoint covers both.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("", [dict(call, id="call-1")]), tool_turn("Done.")],
+        model="anthropic/claude-sonnet-4.5",
+    )
+    try:
+        await run_turn(service, "how is backend agent")
+        provider = cast(ToolProviderStub, service.provider)
+        primers = [str(json.dumps(item["messages"][0])) for item in provider.calls]
+        assert len(primers) == 2
+        first = provider.calls[0]["messages"][0]
+        assert first["role"] == "system"
+        assert isinstance(first["content"], list)
+        assert first["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert first["content"][-1]["text"].startswith("You are Mux")
+        # The whole point: byte-identical on every round, or each round is a cache
+        # write rather than a read.
+        assert len(set(primers)) == 1
+        # And the budget line stays trailing: it is appended after the first round,
+        # so every later round appends rather than shifting the prefix.
+        for item in provider.calls[1:]:
+            assert "Tool rounds remaining" in str(item["messages"][-1]["content"])
+    finally:
+        service.store.close()
+
+
+async def test_an_implicit_caching_model_still_sends_a_plain_primer(tmp_path: Path) -> None:
+    # The marked shape is only ever sent where it is understood; every other
+    # provider keeps the request it has always received.
+    service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Done.")])
+    try:
+        await run_turn(service, "hello")
+        provider = cast(ToolProviderStub, service.provider)
+        primer = provider.calls[0]["messages"][0]
+        assert isinstance(primer["content"], str)
+        assert primer["content"].startswith("You are Mux")
+    finally:
+        service.store.close()
+
+
+async def test_cached_prompt_tokens_are_recorded_per_call_in_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """Per call, not per turn: the first round writes the cache and the rest read it.
+
+    A turn-level figure would average the write into the hit rate and hide whether
+    the breakpoint is working at all.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    ledger = LedgerStub()
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [
+            tool_turn("", [dict(call, id="call-1")], cached_tokens=0),
+            tool_turn("Done.", cached_tokens=180),
+        ],
+        ledger=ledger,
+        model="anthropic/claude-sonnet-4.5",
+    )
+    try:
+        await run_turn(service, "how is backend agent")
+        assert [row["cached_tokens"] for row in ledger.spend_rows] == [0, 180]
+        assert [row["input_tokens"] for row in ledger.spend_rows] == [200, 200]
+        # The turn's own usage carries the total, so a reader of one turn sees it too.
+        assert emitted[-1].payload["usage"]["cached_tokens"] == 180
     finally:
         service.store.close()
 

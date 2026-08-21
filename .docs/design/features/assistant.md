@@ -30,7 +30,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
   The per-turn workspace snapshot (`fleet_snapshot`) carries ages derived from session records; `state_since == 0` reads as unknown, never as "just now".
   A session whose harness handed off to background agents carries `running_work_for` beside `state_age`, because `idle` with no `turn_running_for` is also the shape of a session an hour into a request, and answering "how long has that been going" from `state_age` alone reports the hand-off instead of the work (`features/status-detection.md`).
 - **Budgeted like every model feature.**
-  Calls run on the configured OpenRouter model (`assistant_model`, default `openai/gpt-5.6-terra`; tool calling verified against the live catalog), spend lands in the shared automation ledger under `builtin:assistant`, and the daily budget is checked before each call — an exhausted budget fails the turn closed.
+  Calls run on the configured OpenRouter model (`assistant_model`, default `openai/gpt-5.6-terra`; tool calling verified against the live catalog), spend lands in the shared automation ledger under `builtin:assistant` (tokens, cost, and cached prompt tokens per call), and the daily budget is checked before each call — an exhausted budget fails the turn closed.
 - Failures are typed `AssistantError` and never touch PTY, session, transcript, history, or project state.
 
 ## The turn
@@ -60,6 +60,15 @@ Interrupt cancels the running task; nothing already executed is undone.
   A trailing system line states the rounds remaining and asks the model to batch independent calls into one response rather than one per round, and not to re-read what a tool already returned; it is replaced each round rather than appended, so exactly one budget is ever in the prompt.
   Below `MODEL_CALL_WARNING_ROUNDS` that line changes to "start no new work and say what is done", so a turn lands on a sentence instead of on the ceiling.
   And exhausting the rounds appends a plain notice to the reply, marks `exhausted` on `assistant_turn_done`, and logs a warning — the notice is spoken even when speech is otherwise suppressed, because a half-finished turn is the one thing the operator must hear.
+- **The prompt is built around a cache-stable prefix, and the hit rate is measured.**
+  Every round of a turn re-sends the primer, the tool definitions, the workspace snapshot, and the dialog window, so up to fourteen rounds pay for the same prefix fourteen times.
+  Anthropic-routed models cache none of that without an explicit `cache_control` breakpoint, and the assistant sent none, so the saving was unavailable rather than merely unmeasured.
+  The breakpoint goes on the primer (`cache_stable_message`, applied only for providers in `EXPLICIT_CACHE_CONTROL_PROVIDERS`), because the primer is the one message identical on every call this assistant ever makes and the provider orders tool definitions ahead of the system prompt - so one breakpoint covers both.
+  Implicit cachers get their plain string back untouched: the marked shape is only ever sent where it is understood.
+  Two placement rules follow and are load-bearing rather than stylistic: nothing may be inserted ahead of the primer and its text may not be interpolated per turn (the workspace snapshot is the *second* message for exactly this reason), and the round-budget line stays trailing.
+  Either change moves the prefix and turns every subsequent call into a cache write billed at a premium and never read back.
+  `cached_tokens` from each call's usage payload lands in the spend ledger beside its input and output counts - per call, not per turn, because the first round writes the cache and the rest read it, and a turn-level figure would average the write into the rate.
+  It is a subset of the input tokens, never added to them, and zero is deliberately ambiguous: it means "no hit" and "this provider reports no caching" alike, which is why it is recorded rather than asserted from.
 - **Speech suppression is for a card that *is* the whole turn, not for any turn with a card.**
   Suppressing whenever a card opened also swallowed "I opened two of the three and one needs your confirmation" — information the card cannot carry.
   The rule counts: exactly one card opened and no mutation executed.
@@ -199,7 +208,8 @@ correctness does not depend on it either way, only time-to-first-word).
 ## Key files
 
 - `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution, the duplicate guard and action ledger), `AssistantStore`, `_SentenceStreamer`, `restate_action`/`action_announcement`, the tool definitions, the primer.
-- `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path.
+- `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path;
+  `needs_explicit_cache_control` / `cache_stable_message` (which message a caller marks is the caller's decision, since only it knows what is stable across calls) and `cached_prompt_tokens`, which reads either shape a provider reports the hit in.
 - `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control).
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
 - `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.

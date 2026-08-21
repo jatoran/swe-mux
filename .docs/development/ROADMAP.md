@@ -3797,14 +3797,24 @@ Today the assistant re-sends its primer plus the dialog window on every model ca
 `cache_control` anywhere, so Anthropic-routed models get zero caching and nobody can see what any
 model is hitting.
 
-- [ ] Mark the stable prefix (primer + tool definitions) with an explicit cache breakpoint when
+- [x] Mark the stable prefix (primer + tool definitions) with an explicit cache breakpoint when
   the resolved model routes to a provider that requires one (Anthropic); implicit-caching
   providers need no request change.
-- [ ] Keep the per-round budget line trailing, as it is today, so the prefix stays cache-stable
+  Shipped as `cache_stable_message` / `needs_explicit_cache_control` in `openrouter.py`, applied
+  to the primer only: the provider orders tool definitions ahead of the system prompt, so one
+  breakpoint covers both, and a second one over the per-round tail would be a cache write billed
+  at a premium and never read back.
+- [x] Keep the per-round budget line trailing, as it is today, so the prefix stays cache-stable
   across the up-to-14 rounds of one turn; treat any future prompt change that inserts ahead of
   the primer as a cache regression.
-- [ ] Record `cached_tokens` from the usage payload into the assistant spend ledger and surface
+  Both halves of that rule now have a test: the primer is asserted byte-identical across a
+  turn's rounds, and the budget line is asserted last.
+- [x] Record `cached_tokens` from the usage payload into the assistant spend ledger and surface
   the hit rate beside spend, so caching is measured rather than assumed.
+  `automation_budget_ledger.cached_tokens` (schema 9, backfilled to 0), carried through `spend()`
+  and `spend_breakdown` with `input_tokens` as the honest denominator, and drawn as a `cached`
+  column plus a `prompt cache` tile in `AutomationSpendView` - the same component the Automation
+  dashboard and Resources → Tokens both draw.
 
 ### "New conversation" by voice
 
@@ -3905,6 +3915,9 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
 
 - [ ] Anthropic-routed assistant turns show nonzero cached tokens in the spend view, and the hit
   rate is visible beside spend.
+  The breakpoint, the ledger column, and the surface are built and tested; the criterion stays
+  open until an operator reads a nonzero rate off a real Anthropic-routed turn, which no test
+  can stand in for.
 - [ ] "Mux, new conversation" clears context by voice and says so.
 - [ ] A deliberately trailed-off utterance is deferred exactly once and merges with its
   completion; the deferral appears in the log with its trigger.

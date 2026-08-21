@@ -1841,8 +1841,13 @@ content: requested and resolved model, generation, provider, finish reason, HTTP
 retryability, token and cost usage, latency, and response content type and length.
 
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
-row has `rule_id`, `calls`, `tokens`, `cost_usd`, the same three figures scoped to today, the
-requested models, and `last_at`. The daemon labels each row with `label`, `detail`, `kind`
+row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cost_usd`, the same five
+figures scoped to today, the requested models, and `last_at`.
+`cached_tokens` is the prompt-cache hit and is a *subset* of `input_tokens`, never added to it;
+`input_tokens` rides along because it is the only honest denominator for a hit rate, `tokens`
+being input plus output and output never cacheable.
+`GET /api/assistant` and every other reader of the ledger's `spend()` helper carry the same two
+figures beside `tokens` and `cost_usd`. The daemon labels each row with `label`, `detail`, `kind`
 (`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because several
 features bill the observer budget without being automation rules and a raw `rule_id` names
 neither them nor the setting that governs them.
