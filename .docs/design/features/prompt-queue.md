@@ -131,7 +131,8 @@ separately opt-in.
   retarget (to a live agent session, as a draft at the new queue's tail, with the previous
   binding recorded in `retargeted_from`), or cancel.
 - **Retention and export.** Terminal-state items (sent/failed/cancelled/stranded), deleted
-  tombstones, and their audit rows age out on `prompt_queue_retention_days` (default 90); pending items
+  tombstones, and their audit rows age out on `prompt_queue_retention_days` (default 90, edited
+  in Settings → Prompt queue → Queue history); pending items
   never do. `GET /api/queue/export` snapshots one queue; credential-shaped bodies
   (`looks_like_secret`) are redacted unless the user opts out.
 

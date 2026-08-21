@@ -288,6 +288,8 @@ only one that can bind, per `design/features/budgets.md`),
 `assistant_trust_reversible`, `assistant_stream_replies` (token streaming; off buffers the
 turn whole, which is the escape hatch if a model's provider streams tool calls badly —
 correctness does not depend on it either way, only time-to-first-word).
+All of them are edited in Settings → Voice → **Mux assistant**; `assistant_stream_replies` was
+the one that shipped without a control, so the escape hatch it exists to be was unreachable.
 `create_project` additionally reads `new_project_parent` (Settings → Projects, not an assistant knob): shape-validated at save, existence-checked at use, and empty disables assistant project creation.
 
 ## Key files

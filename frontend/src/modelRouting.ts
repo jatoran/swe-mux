@@ -101,8 +101,9 @@ export const MODEL_ROUTES: readonly ModelRoute[] = [
   },
   {
     feature: 'Project context card', key: 'project_card_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Configuration file',
-    note: 'The card has no Settings control of its own; set project_card_model in the config file to override.',
+    fallback: 'openrouter_cheap_model', where: 'Automation → Budgets and execution',
+    target: { tab: 'automation', setting: 'project_card_model' },
+    note: 'Beside the budget and the per-build token ceilings that bound one rebuild of the card.',
   },
 ]
 

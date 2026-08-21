@@ -56,6 +56,10 @@ Runtime verbosity toggle for the daemon's root logger (console + rotating
 config field is the startup default and is also applied live when the config
 file changes; this endpoint deliberately does not persist. The aiohttp request
 log is isolated in `<data_dir>/access.log` and unaffected by the level.
+Settings → Diagnostics → **Logging** edits the persisted `log_level` through the ordinary
+`PATCH /api/config` transaction rather than through this endpoint, so a level chosen there
+survives a restart; it sits beside the diagnostics bundle because that bundle carries the log
+it decides the contents of, which makes "set DEBUG, reproduce, export" one pass.
 
 ## Daemon self-restart
 

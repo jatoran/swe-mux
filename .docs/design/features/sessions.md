@@ -131,6 +131,10 @@ and reattachable browser viewports.
   never begin inside an escape sequence, and restates the alternate screen when it cut the
   child's `?1049h` off (otherwise a full-screen TUI would repaint into the client's *normal*
   buffer, growing scrollback on every frame — the exact cost the bound removes).
+  Both are edited in Settings → Terminals → Scrollback, and both apply live: the replay budget
+  is pushed down onto every session already running, because each carries its own copy and
+  reads it at attach time, so leaving them behind would be indistinguishable from the setting
+  doing nothing (`tests/test_settings_hot_apply.py`).
 - Slow subscribers receive a gap frame and deterministic bounded replay.
 - Explicit kill attempts adapter-specific graceful exit before process-tree termination.
 - **Removal is asynchronous by contract.** `DELETE /api/sessions/{id}` cannot be quick for a

@@ -47,6 +47,19 @@ The legacy `project_cards` SQLite table and generated-card implementation are re
 `GET /api/diagnostics/background` reports `project_contexts` reads, writes, creates, path, size bound, and last error.
 The retired generated-card design is archived at `../../development/archive/PROJECT_CARD_GENERATED_DESIGN.md`.
 
+The four config bounds that design left behind - `project_card_daily_budget`,
+`project_card_model`, `project_card_max_input_tokens`, `project_card_max_output_tokens` - are
+edited together in Settings → Automation → Budgets and execution, under one **Project context
+card** heading beside the budget that was already there.
+The model was the one setting in `modelRouting.ts` with no control anywhere, and two surfaces
+sent the reader looking for one that did not exist (the budget hint named Accounts; the routing
+index told them to edit the config file), which is exactly the drift a routing index exists to
+surface rather than to record.
+**Open, for an operator rather than for this doc:** nothing constructs `ProjectCardService`
+today, so those four bounds and the `builtin:project-card` spender row describe a path that does
+not run. Either the generated build comes back and they are correct, or they retire with it -
+what they must not go on being is enforced-looking settings for code nothing calls.
+
 ## Key files
 
 - Service and fixed file contract: `src/swe_mux/project_context.py`

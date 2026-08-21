@@ -227,6 +227,7 @@ test('the routing summary resolves what each feature will actually call', async 
     inherited: !!row.querySelector('.model-routing-inherited'),
     price: row.querySelector('.model-routing-price')?.textContent || '',
     where: row.querySelector('.model-routing-where button,.model-routing-where span')?.textContent || '',
+    opens: !!row.querySelector('.model-routing-where button'),
   })))
 
   expect(summary.map(row => row.feature)).toEqual([
@@ -249,11 +250,13 @@ test('the routing summary resolves what each feature will actually call', async 
   expect(assistant.model).toBe('openai/gpt-5.6-terra')
   expect(assistant.price).toBe('400K · $1.25 / $10.00 per M')
 
-  // The one model setting with no control in the panel says where it does live
-  // rather than linking nowhere.
+  // The card's model was the one row in this table with no control anywhere - it
+  // told the reader to edit the config file, which is exactly the defect the table
+  // exists to surface. Every row now opens a real control.
   const card = summary.find(row => row.feature === 'Project context card')!
-  expect(card.where).toBe('Configuration file')
+  expect(card.where).toBe('Automation → Budgets and execution')
   expect(card.inherited).toBe(true)
+  expect(summary.every(row => row.opens)).toBe(true)
 })
 
 test('a summary row opens the control that decides it, on whichever tab that is', async ({ page }) => {

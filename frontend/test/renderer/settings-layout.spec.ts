@@ -162,3 +162,45 @@ test('wide: the section list is the docked column it always was', async ({ page 
   expect(g.headingText).toContain('CONFIG::V6')
   expect(g.headingText).toContain('Settings')
 })
+
+test('every tab renders, and every marked control is really in its DOM', async ({ page }) => {
+  // `settingsCoverage.test.ts` walks from `config.py` to a control, and it reads *source*:
+  // it cannot tell a control that renders from one sitting behind a condition that is never
+  // true, or from a tab that throws before it gets there. This is the half only a browser
+  // can answer, and it is worth one pass because the coverage pass that added thirty
+  // controls added them across seven tabs at once.
+  const errors: string[] = []
+  let visiting = ''
+  // Attributed to the tab being opened, because "something threw" is unactionable across
+  // seventeen of them and the stack from a bundled build names no section.
+  page.on('pageerror', error => errors.push(`${visiting}: ${error}`))
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  await page.waitForSelector('.settings-tabs button', { state: 'attached' })
+
+  const tabs = await page.locator('.settings-tabs button').allTextContents()
+  expect(tabs.length).toBe(17)
+
+  const marked = new Set<string>()
+  for (const label of tabs) {
+    visiting = label
+    await page.locator('.settings-tabs button', { hasText: label }).first().click()
+    // Every tab renders at least one section heading; a tab that threw renders none.
+    await expect(page.locator('.settings-content h3').first()).toBeVisible()
+    for (const value of await page.locator('.settings-content [data-setting]').evaluateAll(
+      nodes => nodes.map(node => node.getAttribute('data-setting') || ''),
+    )) marked.add(value)
+  }
+  expect(errors).toEqual([])
+
+  // A sample from each tab this pass touched, so a control that stops rendering fails here
+  // rather than only when someone follows a link to it.
+  for (const setting of [
+    'attach_replay_bytes', 'session_recovery_checkpoint_bytes', 'ghost_window_sweep_enabled',
+    'status_timeline_retention_days', 'agent_interject_enabled', 'agent_message_max_chars',
+    'request_spawn_enabled', 'session_watch_max_minutes', 'prompt_queue_retention_days',
+    'openrouter_request_timeout_seconds', 'automation_queue_size', 'project_card_model',
+    'land_verify_memo_seconds', 'attention_narration_max_output_tokens',
+    'assistant_stream_replies', 'log_level',
+  ]) expect(marked, `${setting} is marked in the source but never rendered`).toContain(setting)
+})

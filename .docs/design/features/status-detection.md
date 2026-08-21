@@ -860,7 +860,8 @@ fact, including for sessions that no longer exist.
   `screen_classifier_blind`, `foreign_conversation_hook_ignored`, `transition_refused`,
   `reopen_blocked`, `observer_fault`, hook-spool records) — payloads verbatim. Same-state
   detail churn is deliberately kept (it is the evidence that a session was being
-  observed); retention bounds the volume (`status_timeline_retention_days`, default 30).
+  observed); retention bounds the volume (`status_timeline_retention_days`, default 30,
+  edited in Settings → Processes → Detection timeline and applied to the running store).
 - **Layer readings are ledgered on change.** The watchdog pass records the
   `pty_tail_state` verdict and the hook-recency bucket (`fresh`/`stale` against
   `TRANSCRIPT_STALE_SECONDS`, `never` before the first turn hook; always
