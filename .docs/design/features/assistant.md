@@ -157,7 +157,12 @@ The assistant is text-first and voice-attached, not voice-only:
 
 ## Config knobs (`config.py`)
 
-`assistant_enabled` (off by default, like every model-cost feature), `assistant_model`,
+`assistant_enabled` (off by default, like every model-cost feature), `assistant_model`
+(**pinned**, not routed: the assistant is an agentic tool-calling loop, and a model that
+only sometimes emits a well-formed call fails as a broken assistant rather than a cheap
+one, so a blank value is a validation error rather than a fall-through to the routed cheap
+model — it is edited in Settings → Voice → Mux assistant, with the assistant's other knobs,
+and indexed from Settings → Accounts → Models),
 `assistant_daily_budget_usd`, `assistant_max_output_tokens`, `assistant_context_messages`,
 `assistant_trust_reversible`, `assistant_stream_replies` (token streaming; off buffers the
 turn whole, which is the escape hatch if a model's provider streams tool calls badly —

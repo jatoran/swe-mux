@@ -9,15 +9,21 @@ import {
   graphNodeLane,
   localMeasurement,
   normalizePath,
+  groupProvenance,
+  occupancyLabel,
   parseGitGraph,
   parseGitProvenance,
+  parseGitRefMoves,
   pathTail,
   provenanceAmbiguityNote,
   provenanceRoleLabel,
+  refMoveLabel,
   sessionGitCwd,
   shortSha,
   type GitGraph,
   type GitProvenance,
+  type GitRefMove,
+  type ProvenanceGroup,
 } from './gitWorktrees'
 import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
@@ -118,6 +124,8 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const [overview,setOverview]=useState<GitWorktreeOverview|null>(null)
   const [graph,setGraph]=useState<GitGraph|null>(null)
   const [provenance,setProvenance]=useState<GitProvenance[]>([])
+  const [provenanceGroups,setProvenanceGroups]=useState<ProvenanceGroup[]>([])
+  const [refMoves,setRefMoves]=useState<GitRefMove[]>([])
   const [provenanceError,setProvenanceError]=useState('')
   const [graphLimit,setGraphLimit]=useState(GRAPH_STEP)
   const [error,setError]=useState('')
@@ -170,17 +178,17 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   },[project?.id])
 
   const refreshProvenance=useCallback(async()=>{
-    if(!project){setProvenance([]);return}
+    if(!project){setProvenance([]);setProvenanceGroups([]);setRefMoves([]);return}
     const mine=++provenanceGeneration.current
     try{
       const raw=await api<unknown>('GET',`/api/git/provenance?project_id=${encodeURIComponent(project.id)}&limit=500`)
       if(mine!==provenanceGeneration.current)return
-      setProvenance(parseGitProvenance(raw));setProvenanceError('')
+      setProvenance(parseGitProvenance(raw));setProvenanceGroups(groupProvenance(raw));setRefMoves(parseGitRefMoves(raw));setProvenanceError('')
     }catch(cause){if(mine===provenanceGeneration.current)setProvenanceError(cause instanceof Error?cause.message:String(cause))}
   },[project?.id])
 
   useEffect(()=>{
-    setOverview(null);setGraph(null);setProvenance([]);setProvenanceError('');setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
+    setOverview(null);setGraph(null);setProvenance([]);setProvenanceGroups([]);setRefMoves([]);setProvenanceError('');setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
     void refresh();void refreshProvenance()
     const changed=()=>{void refresh();void refreshProvenance()}
     window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
@@ -402,7 +410,27 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
     })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section></>}</>}
-    {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">{provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}{!provenanceError&&provenance.length===0?<p class="git-state">No session-to-commit associations recorded yet.</p>:provenance.map(item=><article key={item.id}><div><strong>{shortSha(item.commitOid)}</strong><span>{item.subject||'Commit observed without readable metadata'}</span></div><p>{provenanceSessionButton(item)}{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span></p>{item.contributedPaths.length>0&&<small class="git-provenance-paths" title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,4).join(', ')}{item.contributedPaths.length>4?` +${item.contributedPaths.length-4} more`:''}</small>}<small>{item.worktreeRoot} · observed {new Date(item.observedAt*1000).toLocaleString()}</small>{item.ambiguous&&<em>{provenanceAmbiguityNote(item)}</em>}</article>)}</section>}
+    {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">
+      {provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}
+      {!provenanceError&&provenance.length===0&&<p class="git-state">No session-to-commit associations recorded yet.</p>}
+      {/* One card per commit, not one per row. The ledger stores a row per
+          session because that is what each piece of evidence is about; read back
+          flatly, ten occupancy rows bury the one naming who made the commit. */}
+      {provenanceGroups.map(group=>{
+        const claim=(item:GitProvenance)=><p key={item.id}>{provenanceSessionButton(item)}{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small class="git-provenance-paths" title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,4).join(', ')}{item.contributedPaths.length>4?` +${item.contributedPaths.length-4} more`:''}</small>}{item.ambiguous&&<em>{provenanceAmbiguityNote(item)}</em>}</p>
+        return <article key={group.commitOid}>
+          <div><strong>{shortSha(group.commitOid)}</strong><span>{group.subject||'Commit observed without readable metadata'}</span></div>
+          {group.committer&&claim(group.committer)}
+          {group.contributors.map(claim)}
+          {group.observers.length>0&&<p class="git-provenance-occupancy"><span class="git-provenance-role observer">{occupancyLabel(group)}</span>{group.observers.slice(0,6).map(item=>provenanceSessionButton(item))}{group.observers.length>6&&<small>{`+${group.observers.length-6} more`}</small>}</p>}
+          <small>{group.worktreeRoot} · observed {new Date(group.observedAt*1000).toLocaleString()}</small>
+        </article>
+      })}
+      {/* Checkout facts, kept apart from session claims on purpose. A branch
+          landing moves every attached session's HEAD and says nothing about any
+          of them, so it belongs here rather than on each of their ledgers. */}
+      {refMoves.length>0&&<div class="git-ref-moves"><h4>Reference movements</h4>{refMoves.map(move=><article key={move.id}><div><strong>{shortSha(move.commitOid)}</strong><span>{move.subject||'Moved to a commit without readable metadata'}</span></div><p><span class={`git-ref-move-kind ${move.kind}`}>{refMoveLabel(move)}</span></p><small>{move.worktreeRoot} · from {shortSha(move.previousHead)} · observed {new Date(move.observedAt*1000).toLocaleString()}</small></article>)}</div>}
+    </section>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
     {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>
