@@ -1947,6 +1947,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             # Phase 7.9: the structural graph the blast-radius/navigation/context/
             # test-gap reads answer from, gated on the same `code_graph` opt-in.
             code_graph=code_graph_store,
+            # Phase 7.11: the scan service, read for its enablement/liveness block
+            # only. The records themselves come from the store, so the drawer and
+            # the `scan_timeline` tool answer "is this timeline stopped" from one
+            # implementation rather than two that can disagree.
+            scan_timeline_service=scan_timeline,
         ),
         reaper=reaper,
         supervisor=supervisor_client,

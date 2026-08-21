@@ -103,6 +103,50 @@ Novelty is deterministic lexical Jaccard distance against same-run semantic reco
 This is deliberately mechanical and run-local.
 Changing the algorithm later does not change the persisted field or its rollover boundary.
 
+### Trigger vocabulary
+
+The trigger stored on a record is a wider set than the event-bus triggers.
+`SCAN_TRIGGERS` names what the event bus can raise; the store additionally holds `heartbeat`, `enabled`, `manual`, and `full_session`, which reach a record by another path.
+`STORED_TRIGGERS` is the union, and anything classifying records by trigger must read that rather than `SCAN_TRIGGERS`.
+Across the live store's 379 records, 84 (22%) carry one of the four non-event triggers, so a classifier written from the event set alone silently mis-buckets every one of them.
+
+Trigger name is not a proxy for window width, either.
+Measured mean `messages_seen` per trigger ranges from 1.25 (`turn_started`) to 35.6 (`full_session`), and `heartbeat` (10.2) sits above `turn_ended`'s neighbours rather than below them.
+
+### The run-level fields and their continuity (prompt v4)
+
+`approach_status` and `dead_end` are judgments about the whole run; every other field describes the window.
+Until prompt v4 they were the only run-level fields with no run-level memory: the continuity records handed to each scan carried `summary`, `intent`, `claim`, `user_ask`, `blocked_on` and `work_phase`, and never what the observer had previously concluded about the approach.
+The observer therefore re-derived "was an approach tried and dropped in this run" from scratch roughly every five messages, having been shown six prior windows that never mentioned its own earlier verdict.
+
+v4 adds `approach_status` and `dead_end` to `CONTINUITY_FIELDS` and instructs the observer to repeat a prior verdict unless the delta shows it changed.
+A field a prior record withheld is omitted from the continuity payload rather than sent as null, so absence never reads as "previously decided: nothing".
+v3 records keep their own semantics and are not rewritten; a consumer reading `approach_status` across the boundary must tolerate both.
+
+Window width was measured as an alternative explanation and does not hold.
+`abandoned` fires at 22.6% on the wide triggers (`full_session`, `turn_ended`, `session_exited`) against 24.9% on narrow ones, so the trigger label does not separate them.
+Measured width does correlate (13.9% at `messages_seen >= 8`), but gating the fields on width has a cost the diagnosis did not predict: all five records in the live store that satisfy `abandoned` plus a non-empty `dead_end` came from narrow windows, and several of their texts are correct.
+A wide-trigger allowlist would therefore suppress the entire dead-end corpus rather than only its false positives.
+Restricting the fields by window is not scheduled; the precondition for reopening it is evidence that v4 continuity did not move the wide-window `abandoned` rate.
+
+## Agent-readable surface (Phase 7.11)
+
+The `scan_timeline` and `scan_search` MCP tools expose this substrate to agents (`mux-mcp.md`).
+Two properties are owned here rather than there.
+
+`ScanTimelineService.liveness()` is the single owner of the enablement/liveness block - `scanning`, `last_scan_at`, `skip_reason`, `run_decided`, `run_enabled`, `project_enabled`, `auto_enable`, and the closest-to-binding gate.
+The drawer's `snapshot()` and the MCP tool both read it, so the two surfaces cannot disagree about whether a timeline is stopped.
+It serves an **ended** session as well: records outlive their session, and reviewing a finished sibling is the read the tool exists for.
+An ended session reports `session_live: false`, and its Project-context-derived fields report unknown rather than `false`, because a context that cannot be resolved is not an opt-in that is off.
+
+`AutomationStore.scan_records` filters in SQL, including the semantic fields through `json_extract`.
+A bounded page therefore means "rows returned" rather than "rows scanned": a `blocked_only` page filtered in Python after the read would come back short of its limit, and a caller could not tell that from the end of the run.
+`since_t1` is exclusive so it composes as a monitoring cursor - feeding back the newest `t1` already seen returns strictly newer records and never repeats the boundary one.
+The default ordering stays oldest-first because the derivations in `scan_consumers.py` require it; `newest_first` is what a bounded read asks for.
+
+No scan or backfill trigger is exposed through MCP.
+Reads cost nothing; a scan spends the human's gated budget against caps set in Settings → Automation → Scan timeline.
+
 ## Budgets and visibility
 
 **Scan timeline is a continuous sampler, and it is budgeted as one.**
@@ -204,11 +248,21 @@ GET  /api/history/scan-search?q=&run_id=|project_id=
 The last three are the Phase 7.7 pull consumers; each returns `enabled: false` rather than a fake
 empty when its Project opt-in is off.
 
+Agents reach the timeline through the `scan_timeline` and `scan_search` MCP tools, never through
+these endpoints, and the two write endpoints (`.../scan`, `.../backfill`) are not exposed to them
+at all.
+The `catch-me-up` digest is bounded (`DIGEST_MAX_*` in `scan_consumers.py`): `progress` keeps the
+most recent phase segments and every line is length-capped, with `phase_segments_omitted` and
+`claims_omitted` reporting what was dropped.
+Unbounded, a 230-record run rendered a 17 KB digest, which is not a digest.
+
 ## Key files
 
 - `src/swe_mux/scan_timeline.py`
 - `src/swe_mux/behavioral_consumers.py` (Phase 7.7 adaptive title + phase-transition signals)
-- `src/swe_mux/scan_consumers.py` (Phase 7.7 handoff/catch-me-up/live-blockers/search derivations)
+- `src/swe_mux/scan_consumers.py` (Phase 7.7 handoff/catch-me-up/live-blockers/search
+  derivations; Phase 7.11 compact projection, digest bounds, repair classifier)
+- `src/swe_mux/mcp.py` (the `scan_timeline` / `scan_search` tools)
 - `src/swe_mux/automation.py` (`TranscriptSliceService.build_forward`, `tool_input_digest`)
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/server.py`
@@ -216,10 +270,12 @@ empty when its Project opt-in is off.
 - `frontend/src/ScanTimelineTab.tsx`
 - `frontend/src/ProjectContextEditor.tsx`, `frontend/src/ProjectsManager.tsx`
 - `tests/test_scan_timeline.py`
+- `tests/test_mcp_scan_timeline.py`
 - `tests/test_transcript_forward_slice.py`
 
 ## Related design
 
+- `mux-mcp.md`
 - `automation-enablement.md`
 - `tier0-facts.md`
 - `project-card.md`

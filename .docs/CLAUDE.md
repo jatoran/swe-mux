@@ -194,10 +194,17 @@
   (grammar bundling), `design/interfaces.md`
 - Changing the user-owned Project context card (its fixed file, editor, bounds, revision contract, setup prompt, or scan prefix): `design/features/project-card.md`, `design/features/automation-enablement.md`, `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing the scan timeline, per-run scan grant, rollover boundary, scan budgets, source
-  rehydration, or dead-end extraction: `design/features/scan-timeline.md`,
+  rehydration, dead-end extraction, or the agent-readable scan surface
+  (`scan_timeline`/`scan_search`, the record projection, the digest bounds):
+  `design/features/scan-timeline.md`, `design/features/mux-mcp.md`,
   `design/features/automation-enablement.md`, `design/features/automation.md`,
   `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`,
-  `technical/backend/sqlite.md`, `technical/frontend/packages.md`
+  `technical/backend/sqlite.md`, `technical/frontend/packages.md`.
+  Two rules the split exists to enforce: `ScanTimelineService.liveness()` is the single owner
+  of the enablement/liveness block, because a scanner stopped by a budget cap and a quiet
+  session both return an empty tail and two implementations would eventually disagree about
+  which one you are looking at; and no scan or backfill trigger is reachable from MCP, because
+  a read costs nothing while a scan spends the human's gated budget.
 - Changing the agent MCP surface (endpoint, tools, per-session tokens, CLI registration):
   `design/features/mux-mcp.md`, `design/interfaces.md`, `technical/backend/packages.md`
 - Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,

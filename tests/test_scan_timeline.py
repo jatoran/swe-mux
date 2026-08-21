@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +17,12 @@ from swe_mux.openrouter import OpenRouterError, OpenRouterResult
 from swe_mux.scan_timeline import (
     CATCHUP_CHAIN_LIMIT,
     DEFAULT_SCAN_MODEL,
+    HEARTBEAT_TRIGGERS,
     MAX_INPUT_BYTES,
+    NON_EVENT_TRIGGERS,
+    PROMPT_VERSION,
+    SCAN_TRIGGERS,
+    STORED_TRIGGERS,
     TOOL_INPUT_CHARS,
     ScanContext,
     ScanTimelineService,
@@ -1054,3 +1060,164 @@ def test_novelty_is_mechanical_and_run_local() -> None:
     assert mechanical_novelty(first, []) == 1.0
     assert mechanical_novelty(same, [first]) == 0.0
     assert mechanical_novelty(different, [first]) == 1.0
+
+
+# ------------------------------------------------------- Phase 7.11 additions
+
+
+def vary_slices(service: ScanTimelineService) -> None:
+    """Give each scan a distinct input hash so a second one is not deduped."""
+    counter = {"n": 0}
+
+    async def build(*_args: Any, **_kwargs: Any) -> TranscriptSlice:
+        counter["n"] += 1
+        index = counter["n"]
+        return TranscriptSlice(
+            "since_event",
+            (
+                {
+                    "role": "assistant",
+                    "ts": 100.0 + index,
+                    "content": [{"type": "text", "text": f"step {index}"}],
+                },
+            ),
+            120,
+            30,
+            False,
+            f"input-hash-{index}",
+        )
+
+    service.slices.build = build  # type: ignore[method-assign]
+    service.slices.build_forward = build  # type: ignore[method-assign]
+
+
+@pytest.mark.asyncio
+async def test_continuity_carries_the_run_level_verdict_forward(tmp_path: Path) -> None:
+    # The one run-level field in the schema used to be the one field with no
+    # run-level memory: the observer re-decided "was an approach dropped in this
+    # run" every ~5 messages from six prior windows that never said what it had
+    # already concluded. Carrying the verdict forward is what v4 changed.
+    service, store, provider, _sessions = await build_service(tmp_path, abandoned=True)
+    vary_slices(service)
+    try:
+        await service.set_enabled("session-1", True)
+        await service.scan_now("session-1", "test")
+        await service.scan_now("session-1", "test")
+        assert len(provider.calls) >= 2
+        second = json.loads(str(provider.calls[1]["messages"][1]["content"]))
+        continuity = second["continuity_same_run"]
+        assert continuity, "the second scan must see the first record"
+        assert continuity[-1]["approach_status"] == "abandoned"
+        assert continuity[-1]["dead_end"]
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_continuity_omits_a_field_a_record_withheld(tmp_path: Path) -> None:
+    # An absent field must not arrive as a null the model reads as "previously
+    # decided: nothing". Absence and a decision are different inputs.
+    service, store, provider, _sessions = await build_service(tmp_path)
+    vary_slices(service)
+    try:
+        await service.set_enabled("session-1", True)
+        await service.scan_now("session-1", "test")
+        await service.scan_now("session-1", "test")
+        continuity = json.loads(
+            str(provider.calls[1]["messages"][1]["content"])
+        )["continuity_same_run"]
+        # The fake provider returns an empty claim and dead_end.
+        assert "claim" not in continuity[-1]
+        assert "dead_end" not in continuity[-1]
+        assert continuity[-1]["approach_status"] == "active"
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_prompt_version_is_stamped_on_the_record(tmp_path: Path) -> None:
+    service, store, _provider, _sessions = await build_service(tmp_path)
+    try:
+        await service.set_enabled("session-1", True)
+        record = await service.scan_now("session-1", "test")
+        assert record is not None
+        # v3 records keep their own semantics; a consumer reading
+        # approach_status across the boundary must tolerate both.
+        assert record["prompt_version"] == PROMPT_VERSION
+        assert PROMPT_VERSION >= 4
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_liveness_serves_an_ended_session_without_claiming_it_is_off(
+    tmp_path: Path,
+) -> None:
+    service, store, _provider, sessions = await build_service(tmp_path)
+    try:
+        await service.set_enabled("session-1", True)
+        await service.scan_now("session-1", "test")
+        live = await service.liveness("session-1")
+        assert live["session_live"] is True
+        assert live["run_enabled"] is True
+        assert live["last_scan_at"] is not None
+
+        sessions.sessions.pop("session-1")
+        ended = await service.liveness("session-1", agent_run_id="run-1")
+        assert ended["session_live"] is False
+        assert ended["run_enabled"] is True
+        assert ended["last_scan_at"] is not None
+        # A context that cannot be resolved is not the same as an opt-in that is
+        # off, so these report unknown rather than false.
+        assert ended["project_enabled"] is None
+        assert ended["auto_enable"] is None
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_liveness_names_the_closest_gate_and_the_snapshot_agrees(
+    tmp_path: Path,
+) -> None:
+    service, store, _provider, _sessions = await build_service(tmp_path)
+    try:
+        await service.set_enabled("session-1", True)
+        await service.scan_now("session-1", "test")
+        live = await service.liveness("session-1")
+        gate = live["closest_gate"]
+        assert gate is not None
+        assert 0.0 <= gate["fraction_used"] <= 1.0
+        # One implementation, so the drawer and the MCP tool can never disagree
+        # about whether a timeline is stopped.
+        snapshot = await service.snapshot("session-1")
+        for field in (
+            "scanning",
+            "run_decided",
+            "run_enabled",
+            "skip_reason",
+            "last_scan_at",
+            "closest_gate",
+        ):
+            assert snapshot[field] == live[field]
+        # The closest gate is the one nearest to binding, not the first listed.
+        ratios = [
+            float(item["used"]) / float(item["limit"])
+            for item in snapshot["gates"]
+            if float(item["limit"] or 0) > 0
+        ]
+        assert gate["fraction_used"] == pytest.approx(max(ratios), abs=1e-4)
+    finally:
+        await service.stop()
+        store.close()
+
+
+def test_the_stored_trigger_vocabulary_is_wider_than_the_event_triggers() -> None:
+    # A classifier written from SCAN_TRIGGERS alone silently mis-buckets every
+    # heartbeat, manual, enabled and full-session record - 22% of the live store.
+    assert NON_EVENT_TRIGGERS.isdisjoint(SCAN_TRIGGERS)
+    assert STORED_TRIGGERS == frozenset(SCAN_TRIGGERS) | NON_EVENT_TRIGGERS
+    assert HEARTBEAT_TRIGGERS <= STORED_TRIGGERS

@@ -50,7 +50,17 @@ _PROVENANCE_EXCLUSIONS: dict[str, str] = {
 }
 PROVENANCE_HARNESSES = [h for h in AUTO_HARNESSES if h not in _PROVENANCE_EXCLUSIONS]
 ALL_MEMORY_AUTOMATIONS = frozenset(
-    {"provenance_graph", "declared_vs_verified", "dead_end_memory", "prior_resolutions"}
+    {
+        "provenance_graph",
+        "declared_vs_verified",
+        "dead_end_memory",
+        "prior_resolutions",
+        # Phase 7.11: the two scan-timeline reads share this tier's reason for
+        # existing - their producer is the OpenRouter observer, so only the read
+        # side can be proved offline against a real store.
+        "scan_reads",
+        "semantic_history_search",
+    }
 )
 _FILENAME = "calc.py"
 # One physical line, no embedded newlines: codex and pi launch through a `.cmd`
@@ -338,6 +348,104 @@ async def test_dead_ends_and_prior_resolutions_read_a_real_store(tmp_path: Path)
         )
         assert weak["resolutions"] == [], weak
         assert weak["low_confidence_suppressed"] == 1, weak
+    finally:
+        store.close()
+        tier0.close()
+
+
+async def test_scan_reads_serve_a_real_store_with_run_attribution(tmp_path: Path) -> None:
+    """`scan_timeline` and `scan_search` against a real `AutomationStore`.
+
+    Same reason as the dead-end round-trip: the producer is the OpenRouter
+    observer, so the read side is what can be proved offline. This pins the two
+    things a stub cannot - the SQL filters and the `since_t1` cursor really run
+    in SQLite, and a hit really carries the run it came from.
+    """
+    tier0 = Tier0Store(tmp_path / "tier0.db")
+    store = AutomationStore(tmp_path / "automation.db")
+    try:
+        summaries = (
+            "read the observation parser",
+            "rewrote the marker detection",
+            "ran the observation tests",
+        )
+        for index, summary in enumerate(summaries):
+            await store.save_scan_record(
+                session_id="s-live",
+                agent_run_id="s-live",
+                project_id="p1",
+                t0=100.0 + index,
+                t1=101.0 + index,
+                trigger="tool_result",
+                record={
+                    "work_phase": "implementation",
+                    "blocked_on": "tool_error" if index == 1 else "none",
+                    "approach_status": "active",
+                    "dead_end": "",
+                    "intent": "fix observation",
+                    "summary": summary,
+                    "confidence": 0.9,
+                    "behavior": ["executing"],
+                    "target": ["src/swe_mux/observation.py"],
+                    "coverage": {"messages_seen": 3, "truncated": False},
+                    "repairs": ["behavior repeated a label"],
+                    "evidence_refs": [{"kind": "transcript", "ts": 1.0}],
+                    "tier0_fact_ids": ["f1"],
+                    "prompt_version": 4,
+                },
+                input_hash=f"h{index}",
+                requested_model="m",
+                resolved_model="m",
+                generation_id=None,
+                input_tokens=1,
+                output_tokens=1,
+                cost_usd=0.0,
+            )
+
+        caller = live_session("caller", token="tok", project_id="p1", scope_id="scope-1")
+        target = live_session("s-live", token="tok2", project_id="p1", scope_id="scope-1")
+        service = McpService(
+            manager_for(caller, target),
+            HistoryStub(),
+            automation_store=store,
+            projects=_projects(str(tmp_path)),
+            tier0=tier0,
+            automation_gate=_gate(),
+        )
+
+        page = await service.scan_timeline(
+            caller, {"session_id": "s-live", "detail": "records"}
+        )
+        assert len(page["records"]) == 3, page
+        assert page["records"][0]["repaired_fields"] == ["behavior"], page
+        assert "evidence_refs" not in page["records"][0], page
+
+        # The cursor really narrows the SQL rather than a decoded page.
+        tail = await service.scan_timeline(
+            caller,
+            {"session_id": "s-live", "detail": "records", "since_t1": 102.0},
+        )
+        assert [item["t1"] for item in tail["records"]] == [103.0], tail
+        blocked = await service.scan_timeline(
+            caller,
+            {"session_id": "s-live", "detail": "records", "blocked_only": True},
+        )
+        assert len(blocked["records"]) == 1, blocked
+        assert blocked["records"][0]["blocked_on"] == "tool_error", blocked
+
+        digest = await service.scan_timeline(caller, {"session_id": "s-live"})
+        assert digest["digest"]["agent_run_id"] == "s-live", digest
+        assert digest["digest"]["record_count"] == 3, digest
+        # This daemon runs no scan service, and the liveness block says exactly
+        # that rather than reporting an all-false state a reader would take for
+        # "scanning is off".
+        assert digest["scan_state"]["available"] is False, digest
+        assert "scanning" not in digest["scan_state"], digest
+
+        hits = await service.scan_search(caller, {"query": "marker detection"})
+        assert len(hits["results"]) == 1, hits
+        assert hits["results"][0]["agent_run_id"] == "s-live", hits
+        assert hits["results"][0]["run"]["run_relation"] == "sibling_run", hits
     finally:
         store.close()
         tier0.close()

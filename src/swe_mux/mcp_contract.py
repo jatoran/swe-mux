@@ -26,6 +26,14 @@ READ_TOOL_NAMES = (
     # re-derived from each doc's "Key files" section and gated on the doc-debt
     # detector's own per-Project opt-in.
     "doc_debt",
+    # Phase 7.11: the scan timeline as an agent-readable surface. `scan_timeline`
+    # is session-scoped and gated on that session's Project opting into
+    # `scan_reads`; `scan_search` is the already-shipped semantic query over
+    # distilled records, gated on `semantic_history_search`. Reads only - no scan
+    # or backfill is reachable through MCP, because a scan spends the human's
+    # gated budget.
+    "scan_timeline",
+    "scan_search",
     # Phase 7.9 code-structure graph reads (deterministic, model-free). Pull-only:
     # the agent consults them on its own initiative, nothing is pushed. Each is
     # gated on the per-Project `code_graph` opt-in and returns empty rather than a

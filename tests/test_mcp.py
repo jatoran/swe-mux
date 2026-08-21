@@ -1248,8 +1248,9 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
     # A closed allowlist: Phase 5.6 adds only situational-awareness reads to the
     # two bounded Phase 5 writes,
     # neither of which delivers or spawns anything by itself. Phase 7.5 adds four
-    # cross-session memory reads, and Phase 7.10 adds the doc_debt read. A new
-    # tool must be added here deliberately.
+    # cross-session memory reads, Phase 7.10 adds the doc_debt read, and Phase
+    # 7.11 adds the two scan-timeline reads. A new tool must be added here
+    # deliberately.
     assert names == {
         "list_sessions",
         "get_session",
@@ -1260,6 +1261,8 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "prior_resolutions",
         "dead_ends",
         "doc_debt",
+        "scan_timeline",
+        "scan_search",
         "blast_radius",
         "find_definition",
         "find_callers",

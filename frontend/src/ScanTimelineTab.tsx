@@ -7,8 +7,10 @@ type Coverage = {messages_seen:number;facts_seen:number;truncated:boolean;remain
 type TimelineRecord = {
   id:string;agent_run_id:string;t0:number;t1:number;lifecycle_state:string
   behavior:string[];work_phase:string;target:string[];intent:string;claim:string
-  user_ask:string;blocked_on:string;summary:string;approach_status:string
-  dead_end:string;novelty:number;confidence:number;trigger:string;observer_model:string
+  // `approach_status` and `dead_end` are judgments about the whole run rather than
+  // this window, so a record may withhold them. Absent is not `unknown`.
+  user_ask:string;blocked_on:string;summary:string;approach_status?:string
+  dead_end?:string;novelty:number;confidence:number;trigger:string;observer_model:string
   coverage?:Coverage;repairs?:string[]
 }
 type Boundary = {id:string;previous_run_id:string;next_run_id:string;reason:string;created_at:number}
