@@ -34,13 +34,31 @@ class Automation:
     # from the same source as the dependency edges rather than restated in the
     # browser, where it would drift.
     spends: bool = False
+    # True when this automation cannot do its job without a language model.
+    #
+    # Kept apart from `spends` even though the two coincide exactly today,
+    # because they answer different questions and a bring-your-own endpoint is
+    # precisely where they come apart: a model running on the operator's own
+    # machine needs the provider and costs nothing. `spends` is a *disclosure*
+    # ("this can bill you"); this is a *predicate* ("there is a dependency
+    # outside the DAG"), and it is what `resolve` consults to decide the switch
+    # is inert. `_validate_registry` holds spends ⊆ needs_llm, since every way of
+    # spending money in swe-mux is a model call.
+    needs_llm: bool = False
 
 
 _AUTOMATIONS: tuple[Automation, ...] = (
     # Substrate.
     Automation("raw_store", SUBSTRATE, "Raw transcript store"),
     Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",)),
-    Automation("scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store"), spends=True),
+    Automation(
+        "scan_timeline",
+        SUBSTRATE,
+        "Scan timeline",
+        ("tier0", "raw_store"),
+        spends=True,
+        needs_llm=True,
+    ),
     # Consumers. The deterministic four (control-plane step 3) are model-free
     # queries over Tier 0 and ship together; everything below them needs a layer
     # that does not exist yet and is marked unimplemented rather than toggleable.
@@ -79,6 +97,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Adaptive session title",
         ("scan_timeline",),
         spends=True,
+        needs_llm=True,
     ),
     Automation(
         "cross_session_interlocks",
@@ -144,7 +163,12 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # "why" over items ranking has already produced, so it depends on ranking
     # rather than on the detectors: with ranking off there is nothing to narrate.
     Automation(
-        "model_narration", CONSUMER, "Model narration", ("attention_ranking",), spends=True
+        "model_narration",
+        CONSUMER,
+        "Model narration",
+        ("attention_ranking",),
+        spends=True,
+        needs_llm=True,
     ),
     # Keep the persisted id for settings compatibility. The human observation
     # inbox UI is retired; this now names review of agent spawn requests in the
@@ -184,6 +208,12 @@ def _validate_registry() -> None:
     for automation in REGISTRY.values():
         if automation.kind not in {SUBSTRATE, CONSUMER}:
             raise ValueError(f"{automation.id} has unknown kind {automation.kind}")
+        if automation.spends and not automation.needs_llm:
+            # Every way of spending money here is a model call, so an automation
+            # that claims to spend and denies needing the provider would sit
+            # outside the verified-provider gate while still billing - the exact
+            # silent downstream failure that gate exists to remove.
+            raise ValueError(f"{automation.id} spends money but does not need a model")
         for dependency in automation.requires:
             if dependency not in REGISTRY:
                 raise ValueError(f"{automation.id} requires unknown automation {dependency}")
@@ -237,10 +267,17 @@ class Resolution:
     `enabled` are automations whose full dependency closure is opted in.
     `blocked` maps a requested automation to the dependencies it still needs,
     so the UI can prompt to enable them when a consumer is toggled on.
+    `unverified` holds the ones held back by something *outside* the DAG - a
+    language-model provider that is not proven - which is deliberately a
+    separate field rather than a `blocked` entry: `blocked` values are automation
+    ids a grant can switch on, and there is no automation id whose enabling
+    fixes an unverified endpoint. Merging them would produce a gate offering to
+    turn on nothing.
     """
 
     enabled: frozenset[str]
     blocked: dict[str, tuple[str, ...]]
+    unverified: frozenset[str] = frozenset()
 
     def is_enabled(self, automation_id: str) -> bool:
         return automation_id in self.enabled
@@ -259,7 +296,21 @@ def requested_from_config(
     return {key for key, value in merged.items() if value and key in REGISTRY}
 
 
-def resolve(requested: set[str]) -> Resolution:
+def resolve(requested: set[str], *, llm_ready: bool = True) -> Resolution:
+    """Resolve one Project's opt-in set into what actually runs.
+
+    `llm_ready` is the install-wide answer to "is there a proven model provider",
+    and it subtracts from `enabled` rather than from `requested`. That ordering
+    is the whole design: an automation that needs a model goes inert and *says
+    so*, while the free consumers layered over it keep resolving normally and go
+    on reading the records that already exist. Failing the whole subtree would
+    switch off `catch_me_up` and `live_blockers` - which never call anything -
+    the moment somebody rotated a key.
+
+    It defaults to `True` so that resolution stays a pure function of the DAG for
+    every caller that has no provider to consult (the registry payload, the
+    fleet matrix, the tests). The daemon's one gate passes the real answer.
+    """
     known = {automation_id for automation_id in requested if automation_id in REGISTRY}
     enabled: set[str] = set()
     blocked: dict[str, tuple[str, ...]] = {}
@@ -275,14 +326,34 @@ def resolve(requested: set[str]) -> Resolution:
             blocked[automation_id] = missing
         else:
             enabled.add(automation_id)
-    return Resolution(frozenset(enabled), blocked)
+    unverified: frozenset[str] = frozenset()
+    if not llm_ready:
+        unverified = frozenset(item for item in enabled if REGISTRY[item].needs_llm)
+        enabled -= unverified
+    return Resolution(frozenset(enabled), blocked, unverified)
 
 
 def resolve_config(
     project_map: dict[str, bool] | None,
     defaults: dict[str, bool] | None = None,
+    *,
+    llm_ready: bool = True,
 ) -> Resolution:
-    return resolve(requested_from_config(project_map, defaults))
+    return resolve(requested_from_config(project_map, defaults), llm_ready=llm_ready)
+
+
+def llm_dependent_ids() -> frozenset[str]:
+    """Every automation that cannot run without a language-model provider."""
+    return frozenset(item.id for item in REGISTRY.values() if item.needs_llm)
+
+
+def needs_llm(automation_ids_wanted: Iterable[str]) -> bool:
+    """Whether enabling these (with their closure) requires a model provider.
+
+    Asked of the closure for the same reason `spends_money` is: `catch_me_up`
+    calls nothing and cannot be switched on without `scan_timeline`, which does.
+    """
+    return any(REGISTRY[item].needs_llm for item in enabling_closure(automation_ids_wanted))
 
 
 def enabling_closure(automation_ids_wanted: Iterable[str]) -> frozenset[str]:

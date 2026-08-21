@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 9
+AUTOMATION_SCHEMA_VERSION = 10
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -151,6 +151,21 @@ CREATE INDEX IF NOT EXISTS idx_attention_feedback_class
 CREATE TABLE IF NOT EXISTS automation_model_cache (
   id INTEGER PRIMARY KEY CHECK(id=1), models_json TEXT NOT NULL,
   fetched_at REAL NOT NULL, error TEXT
+);
+-- One row per configured LLM provider, holding the last completion that proved it.
+--
+-- `fingerprint` is a digest of the whole endpoint triple (base URL, model, key),
+-- never compared as a string by a caller: readers recompute the live fingerprint
+-- and compare. That is what makes editing the endpoint un-verify it *by
+-- construction* rather than by every write path remembering to clear this row -
+-- including an edit made by hand in config.toml while the daemon was not running.
+-- `sample` is the model's own reply, bounded, because the point of verifying is
+-- that a person read what came back.
+CREATE TABLE IF NOT EXISTS llm_provider_verification (
+  provider TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, base_url TEXT NOT NULL,
+  model TEXT NOT NULL, resolved_model TEXT NOT NULL DEFAULT '',
+  sample TEXT NOT NULL DEFAULT '', latency_ms INTEGER NOT NULL DEFAULT 0,
+  verified_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS project_cards (
   project_id TEXT PRIMARY KEY, project_root TEXT NOT NULL,
@@ -1836,6 +1851,87 @@ class AutomationStore:
             }
 
         return await self._run(op)
+
+    async def record_provider_verification(
+        self,
+        *,
+        provider: str,
+        fingerprint: str,
+        base_url: str,
+        model: str,
+        resolved_model: str,
+        sample: str,
+        latency_ms: int,
+    ) -> dict[str, Any]:
+        """Persist the completion that proved one provider, replacing any earlier one.
+
+        One row per provider rather than a history: the question this answers is
+        "is the endpoint as it stands right now proven", and a log of superseded
+        fingerprints would only make that harder to read. What actually happened
+        stays recoverable from the daemon log and the spend ledger.
+        """
+        verified_at = time.time()
+
+        def op() -> dict[str, Any]:
+            self._db.execute(
+                "INSERT INTO llm_provider_verification"
+                "(provider,fingerprint,base_url,model,resolved_model,sample,latency_ms,"
+                "verified_at) VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(provider) DO UPDATE SET fingerprint=excluded.fingerprint,"
+                "base_url=excluded.base_url,model=excluded.model,"
+                "resolved_model=excluded.resolved_model,sample=excluded.sample,"
+                "latency_ms=excluded.latency_ms,verified_at=excluded.verified_at",
+                (
+                    provider,
+                    fingerprint,
+                    base_url,
+                    model,
+                    resolved_model,
+                    sample[:1000],
+                    int(latency_ms),
+                    verified_at,
+                ),
+            )
+            self._db.commit()
+            return {
+                "provider": provider,
+                "fingerprint": fingerprint,
+                "base_url": base_url,
+                "model": model,
+                "resolved_model": resolved_model,
+                "sample": sample[:1000],
+                "latency_ms": int(latency_ms),
+                "verified_at": verified_at,
+            }
+
+        return await self._run(op)
+
+    async def provider_verification(self, provider: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM llm_provider_verification WHERE provider=?", (provider,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(op)
+
+    async def clear_provider_verification(self, provider: str) -> None:
+        """Drop a provider's record outright.
+
+        Not the mechanism that un-verifies an edited endpoint - the fingerprint
+        comparison already does that, and does it for edits this daemon never
+        saw. This is for the deliberate acts where keeping the row would be
+        misleading in a different way: clearing the stored key, or switching a
+        provider off entirely.
+        """
+
+        def op() -> None:
+            self._db.execute(
+                "DELETE FROM llm_provider_verification WHERE provider=?", (provider,)
+            )
+            self._db.commit()
+
+        await self._run(op)
 
     async def set_checkpoint(self, key: str, value: dict[str, Any]) -> None:
         def op() -> None:

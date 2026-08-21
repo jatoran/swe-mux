@@ -34,10 +34,16 @@ class SecretStoreStub:
     def status(self, name: str) -> dict[str, Any]:
         return {"configured": False, "source": "none", "persistent": False}
 
+    def get(self, name: str) -> str | None:
+        return None
+
 
 class AutomationStoreStub:
     async def model_cache(self) -> dict[str, Any]:
         return {"models": [], "stale": True}
+
+    async def provider_verification(self, provider: str) -> dict[str, Any] | None:
+        return None
 
 
 class UsageStub:

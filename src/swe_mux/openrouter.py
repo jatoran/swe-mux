@@ -12,10 +12,27 @@ from typing import Any, cast
 
 import aiohttp
 
+from .llm_endpoint import (
+    OPENROUTER_ORIGIN,
+    CachePolicy,
+    LlmEndpoint,
+    openrouter_endpoint,
+)
 from .secret_store import SecretStore
 from .text_safety import utf8_safe_value
 
-OPENROUTER_ORIGIN = "https://openrouter.ai/api/v1"
+__all__ = [
+    "OPENROUTER_ORIGIN",
+    "OpenRouterClient",
+    "OpenRouterError",
+    "OpenRouterResult",
+    "OpenRouterToolTurn",
+    "OpenRouterVerification",
+    "cache_stable_message",
+    "cached_prompt_tokens",
+    "needs_explicit_cache_control",
+]
+
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
 # A rate limit is the common failure here, not a transient network blip: several
@@ -55,6 +72,10 @@ SECRET_SHAPED = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE)
 # "send a marker it may reject" — the safe direction is a missed hit, never a
 # rejected request.
 EXPLICIT_CACHE_CONTROL_PROVIDERS = frozenset({"anthropic"})
+# How much of a verification reply is kept. Enough to read a sentence and spot a
+# chat template leaking its scaffolding; not enough to become a place model output
+# accumulates in the database.
+VERIFY_SAMPLE_CHARS = 400
 log = logging.getLogger(__name__)
 
 
@@ -255,6 +276,28 @@ class _ToolStreamAccumulator:
 
 
 @dataclass(slots=True, frozen=True)
+class OpenRouterVerification:
+    """One proving completion against a configured endpoint.
+
+    `output` is the model's own words, kept because the whole point of a verify
+    action is that a person reads what came back: an endpoint that answers with
+    an empty string, a refusal, or a chat template's raw scaffolding is
+    *reachable* and still not usable, and only the text distinguishes those from
+    a good reply.
+    """
+
+    provider: str
+    origin: str
+    requested_model: str
+    resolved_model: str
+    output: str
+    latency_ms: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float | None
+
+
+@dataclass(slots=True, frozen=True)
 class _ModelCapabilities:
     supported_parameters: frozenset[str]
     reasoning_efforts: frozenset[str] | None
@@ -262,7 +305,26 @@ class _ModelCapabilities:
 
 
 class OpenRouterClient:
-    """Fixed-origin, bounded OpenRouter client. No caller-controlled URLs are accepted."""
+    """Bounded chat-completions client for one configured endpoint.
+
+    The origin is **install configuration**, never a caller parameter. It was a
+    module constant until a bring-your-own endpoint needed to exist; the
+    substitution that replaced it is `endpoint`, resolved from `Config` by
+    `llm_endpoint.resolve_endpoint`, and no method here accepts a URL. An agent,
+    an MCP tool, or an HTTP body still cannot reach a destination the operator
+    did not type into Settings, which is the property the old constant was
+    protecting and the reason arbitrary network destinations remain on the
+    decision-gated list.
+
+    `endpoint` may be a callable so the answer is re-read per request: switching
+    provider or fixing a typo'd base URL then takes effect on the next call
+    rather than on the next daemon restart, which matters because the call that
+    proves the fix is the verify action itself.
+
+    The class keeps its name. It is the seam every model-backed feature already
+    imports, and renaming it would have touched nine modules to say the same
+    thing this docstring says.
+    """
 
     def __init__(
         self,
@@ -271,6 +333,7 @@ class OpenRouterClient:
         timeout_seconds: float = 30,
         session: aiohttp.ClientSession | None = None,
         retry_base_seconds: float = RETRY_BASE_SECONDS,
+        endpoint: LlmEndpoint | Callable[[], LlmEndpoint] | None = None,
     ) -> None:
         self.secrets = secrets
         self.timeout_seconds = timeout_seconds
@@ -278,6 +341,33 @@ class OpenRouterClient:
         self._session = session
         self._owned_session = False
         self._model_capabilities: dict[str, _ModelCapabilities] = {}
+        self._endpoint = endpoint
+
+    @property
+    def endpoint(self) -> LlmEndpoint:
+        """The endpoint this call goes to, re-resolved every time it is asked."""
+        if self._endpoint is None:
+            return openrouter_endpoint()
+        if callable(self._endpoint):
+            return self._endpoint()
+        return self._endpoint
+
+    def _auth_headers(self, endpoint: LlmEndpoint, key: str | None) -> dict[str, str]:
+        """Headers for one request, refusing only where a key is actually required.
+
+        A custom endpoint with no key is the normal case, not a misconfiguration:
+        llama.cpp and Ollama serve `/v1/chat/completions` unauthenticated, and
+        demanding a placeholder token would make the common local setup fail with
+        a message about a credential the server does not want. OpenRouter still
+        refuses without one, because there every call is billed to a key.
+        """
+        token = key or self.secrets.get(endpoint.secret_name)
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        elif endpoint.is_openrouter:
+            raise OpenRouterError("OpenRouter key is not configured")
+        return headers
 
     async def close(self) -> None:
         if self._owned_session and self._session:
@@ -295,26 +385,26 @@ class OpenRouterClient:
     async def _request(
         self,
         method: str,
-        endpoint: str,
+        path: str,
         *,
         key: str | None = None,
         json_body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
+        endpoint: LlmEndpoint | None = None,
     ) -> dict[str, Any]:
-        token = key or self.secrets.get("openrouter_api_key")
-        if not token:
-            raise OpenRouterError("OpenRouter key is not configured")
+        target = endpoint if endpoint is not None else self.endpoint
+        headers = self._auth_headers(target, key)
+        name = target.label
         # Held across attempts so the final raise can report the provider's own words
         # rather than the bare status the last attempt happened to see.
         detail = ""
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         client = await self._client()
         last_attempt = RETRY_ATTEMPTS - 1
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 async with client.request(
                     method,
-                    f"{OPENROUTER_ORIGIN}{endpoint}",
+                    f"{target.origin}{path}",
                     headers=headers,
                     json=json_body,
                     params=params,
@@ -324,7 +414,7 @@ class OpenRouterClient:
                     async for chunk in response.content.iter_chunked(65536):
                         body.extend(chunk)
                         if len(body) > MAX_RESPONSE_BYTES:
-                            raise OpenRouterError("OpenRouter response exceeded the size limit")
+                            raise OpenRouterError(f"{name} response exceeded the size limit")
                     retry_after = _retry_after(response)
                     if response.status in SAFE_ERROR_DETAIL_STATUSES:
                         # Auth failures are deliberately excluded: their body can echo
@@ -339,7 +429,7 @@ class OpenRouterClient:
                         continue
                     if response.status >= 400:
                         raise OpenRouterError(
-                            f"OpenRouter request failed with HTTP {response.status}"
+                            f"{name} request failed with HTTP {response.status}"
                             + (f": {detail}" if detail else ""),
                             status=response.status,
                             retryable=_retryable_http_error(response.status, detail),
@@ -349,13 +439,13 @@ class OpenRouterClient:
                         value = json.loads(body)
                     except json.JSONDecodeError as exc:
                         raise OpenRouterError(
-                            "OpenRouter returned invalid JSON",
+                            f"{name} returned invalid JSON",
                             status=response.status,
                             retryable=True,
                         ) from exc
                     if not isinstance(value, dict):
                         raise OpenRouterError(
-                            "OpenRouter returned an invalid response envelope",
+                            f"{name} returned an invalid response envelope",
                             status=response.status,
                             retryable=True,
                         )
@@ -365,12 +455,12 @@ class OpenRouterClient:
                     await asyncio.sleep(self._retry_delay(attempt, None))
                     continue
                 raise OpenRouterError(
-                    f"OpenRouter request failed: {type(exc).__name__}", retryable=True
+                    f"{name} request failed: {type(exc).__name__}", retryable=True
                 ) from exc
         # Only reachable when every attempt drew a retryable status, so the caller's
         # longer-horizon retry is exactly the right next move.
         raise OpenRouterError(
-            "OpenRouter request failed" + (f": {detail}" if detail else ""), retryable=True
+            f"{name} request failed" + (f": {detail}" if detail else ""), retryable=True
         )
 
     def _retry_delay(self, attempt: int, retry_after: float | None) -> float:
@@ -385,9 +475,75 @@ class OpenRouterClient:
         ceiling = min(self.retry_base_seconds * (2**attempt), MAX_RETRY_SLEEP_SECONDS)
         return float(ceiling * (0.5 + random.random() * 0.5))
 
-    async def test_key(self, candidate: str | None = None) -> dict[str, Any]:
-        payload = await self._request("GET", "/models", key=candidate)
+    async def test_key(
+        self, candidate: str | None = None, *, endpoint: LlmEndpoint | None = None
+    ) -> dict[str, Any]:
+        payload = await self._request("GET", "/models", key=candidate, endpoint=endpoint)
         return {"ok": True, "models": len(payload.get("data") or [])}
+
+    async def verify(
+        self,
+        *,
+        endpoint: LlmEndpoint | None = None,
+        model: str = "",
+        max_tokens: int = 32,
+    ) -> OpenRouterVerification:
+        """Prove an endpoint by asking it one tiny question and keeping the answer.
+
+        Deliberately the *plain* completion shape - no `response_format`, no
+        `tools`, no routing block - because this call has one job: establish that
+        the URL resolves, the credential is accepted, the model name exists, and
+        something model-shaped comes back. A verify that also demanded structured
+        output would fail on endpoints that work perfectly well for the assistant,
+        and a verify that failed for two possible reasons is not a verify.
+
+        The reply text is returned rather than reduced to a boolean. A server
+        that answers with an empty string, a chat template leaking its own
+        scaffolding, or a refusal is reachable and unusable at once, and only a
+        person reading the words can tell those apart.
+        """
+        target = endpoint if endpoint is not None else self.endpoint
+        effective = target.resolve_model(model)
+        if not effective:
+            raise OpenRouterError("an exact model id is required to verify an endpoint")
+        started = time.monotonic()
+        body: dict[str, Any] = {
+            "model": effective,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Reply with exactly this sentence and nothing else: "
+                        "swe-mux endpoint check ok."
+                    ),
+                }
+            ],
+            "stream": False,
+            "max_tokens": max(1, int(max_tokens)),
+        }
+        payload = await self._request(
+            "POST", "/chat/completions", json_body=body, endpoint=target
+        )
+        choices = payload.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        message = choice.get("message") if isinstance(choice, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(message, dict):
+            raise OpenRouterError(
+                f"{target.label} returned no assistant message", status=200, retryable=True
+            )
+        usage = payload.get("usage") or {}
+        return OpenRouterVerification(
+            provider=target.provider,
+            origin=target.origin,
+            requested_model=effective,
+            resolved_model=str(payload.get("model") or effective),
+            output=(content if isinstance(content, str) else "").strip()[:VERIFY_SAMPLE_CHARS],
+            latency_ms=int((time.monotonic() - started) * 1000),
+            input_tokens=int(usage.get("prompt_tokens") or 0),
+            output_tokens=int(usage.get("completion_tokens") or 0),
+            cost_usd=_number(usage.get("cost")),
+        )
 
     def set_model_catalog(self, models: list[dict[str, Any]]) -> None:
         """Replace the capability cache used to shape completion requests.
@@ -404,8 +560,32 @@ class OpenRouterClient:
             capabilities[str(item["id"])] = _model_capabilities(item)
         self._model_capabilities = capabilities
 
-    async def models(self) -> list[dict[str, Any]]:
-        payload = await self._request("GET", "/models")
+    async def models(self, *, endpoint: LlmEndpoint | None = None) -> list[dict[str, Any]]:
+        target = endpoint if endpoint is not None else self.endpoint
+        payload = await self._request("GET", "/models", endpoint=target)
+        if not target.supports_model_catalog:
+            # An OpenAI-compatible `/models` is a list of ids and nothing else: no
+            # pricing, no `supported_parameters`, no modality. Running the filter
+            # below over it would drop every entry - "does not advertise
+            # response_format" is indistinguishable from "advertises nothing" -
+            # and report an endpoint with a loaded model as having none. So the
+            # ids come back bare, and the capability question is answered by the
+            # verify action actually calling the thing instead.
+            bare: list[dict[str, Any]] = [
+                {
+                    "id": str(item["id"]),
+                    "name": str(item.get("id")),
+                    "context_length": 0,
+                    "prompt_price": None,
+                    "completion_price": None,
+                    "supported_parameters": [],
+                }
+                for item in payload.get("data") or []
+                if isinstance(item, dict) and item.get("id")
+            ]
+            # Not cached into `_model_capabilities`: an empty capability set would
+            # make `_completion_profiles` believe it had been told something.
+            return bare
         result: list[dict[str, Any]] = []
         for item in payload.get("data") or []:
             if not isinstance(item, dict) or not item.get("id"):
@@ -446,8 +626,14 @@ class OpenRouterClient:
         max_tokens: int,
         reasoning_enabled: bool | None = None,
     ) -> OpenRouterResult:
+        endpoint = self.endpoint
+        # Resolved before the guard, not after: a custom endpoint serves one model
+        # and supplies it here, so a feature whose own model slot is blank (or
+        # holds an OpenRouter id that local server has never heard of) still runs.
+        # Guarding on the caller's raw value first would refuse every such call.
+        model = endpoint.resolve_model(model)
         if not model:
-            raise OpenRouterError("an exact OpenRouter model id is required")
+            raise OpenRouterError("an exact model id is required")
         started = time.monotonic()
         # Last line of defence, for every caller rather than each one separately.
         # A lone surrogate anywhere in the prompt makes the whole request
@@ -467,12 +653,18 @@ class OpenRouterClient:
             # DeepInfra while five other providers served the same model. There
             # is no fallback to a *different model* here, so the answer cannot
             # silently change quality; only which host produced it.
-            "provider": {"require_parameters": True, "allow_fallbacks": True},
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
         }
+        # `provider` is OpenRouter's own vocabulary for choosing between hosts of
+        # one model. A single-origin endpoint has no hosts to choose between, and
+        # sending it there would be asking a server that never made the promise to
+        # keep it - the field is either ignored (noise in every request) or
+        # rejected (a working endpoint that refuses every structured call).
+        if endpoint.supports_provider_routing:
+            request_body["provider"] = {"require_parameters": True, "allow_fallbacks": True}
         profiles = _completion_profiles(
             self._model_capabilities.get(model),
             max_tokens=max_tokens,
@@ -486,6 +678,7 @@ class OpenRouterClient:
                     "POST",
                     "/chat/completions",
                     json_body=candidate,
+                    endpoint=endpoint,
                 )
                 break
             except OpenRouterError as exc:
@@ -581,10 +774,12 @@ class OpenRouterClient:
         stays unstreamed, because a buffered response is simpler to retry and
         nothing is waiting on the first token.
         """
+        endpoint = self.endpoint
+        model = endpoint.resolve_model(model)
         if not model:
-            raise OpenRouterError("an exact OpenRouter model id is required")
+            raise OpenRouterError("an exact model id is required")
         if max_tokens <= 0:
-            raise OpenRouterError("OpenRouter max_tokens must be greater than zero")
+            raise OpenRouterError("max_tokens must be greater than zero")
         started = time.monotonic()
         safe_messages = cast(list[dict[str, Any]], utf8_safe_value(messages))
         body: dict[str, Any] = {
@@ -594,22 +789,26 @@ class OpenRouterClient:
             "tools": tools,
             "tool_choice": "auto",
             "max_tokens": max_tokens,
-            "provider": {"require_parameters": True, "allow_fallbacks": True},
         }
+        if endpoint.supports_provider_routing:
+            body["provider"] = {"require_parameters": True, "allow_fallbacks": True}
         if on_content is not None:
             payload = await self._stream_tool_completion(
                 dict(body, stream=True, stream_options={"include_usage": True}),
                 on_content,
                 model=model,
+                endpoint=endpoint,
             )
         else:
-            payload = await self._request("POST", "/chat/completions", json_body=body)
+            payload = await self._request(
+                "POST", "/chat/completions", json_body=body, endpoint=endpoint
+            )
         choices = payload.get("choices")
         choice = choices[0] if isinstance(choices, list) and choices else None
         message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
             raise OpenRouterError(
-                "OpenRouter returned no assistant message", status=200, retryable=True
+                f"{endpoint.label} returned no assistant message", status=200, retryable=True
             )
         usage = payload.get("usage") or {}
         raw_calls = message.get("tool_calls")
@@ -643,6 +842,7 @@ class OpenRouterClient:
         on_content: Callable[[str], Awaitable[None]],
         *,
         model: str,
+        endpoint: LlmEndpoint | None = None,
     ) -> dict[str, Any]:
         """Consume an SSE completion and rebuild the ordinary response envelope.
 
@@ -653,14 +853,9 @@ class OpenRouterClient:
         falling back to the unstreamed request when streaming itself is what the
         provider will not do.
         """
-        token = self.secrets.get("openrouter_api_key")
-        if not token:
-            raise OpenRouterError("OpenRouter key is not configured")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-        }
+        target = endpoint if endpoint is not None else self.endpoint
+        name = target.label
+        headers = {**self._auth_headers(target, None), "Accept": "text/event-stream"}
         client = await self._client()
         last_attempt = RETRY_ATTEMPTS - 1
         detail = ""
@@ -669,7 +864,7 @@ class OpenRouterClient:
             try:
                 async with client.request(
                     "POST",
-                    f"{OPENROUTER_ORIGIN}/chat/completions",
+                    f"{target.origin}/chat/completions",
                     headers=headers,
                     json=body,
                     allow_redirects=False,
@@ -695,7 +890,7 @@ class OpenRouterClient:
                             # the latency streaming exists to save.
                             raise _StreamUnsupported(detail)
                         raise OpenRouterError(
-                            f"OpenRouter request failed with HTTP {response.status}"
+                            f"{name} request failed with HTTP {response.status}"
                             + (f": {detail}" if detail else ""),
                             status=response.status,
                             retryable=_retryable_http_error(response.status, detail),
@@ -708,7 +903,7 @@ class OpenRouterClient:
                         total += len(chunk)
                         if total > MAX_RESPONSE_BYTES:
                             raise OpenRouterError(
-                                "OpenRouter response exceeded the size limit"
+                                f"{name} response exceeded the size limit"
                             )
                         buffer.extend(chunk)
                         # unsupervised-loop-ok: splits the chunk just received;
@@ -733,34 +928,47 @@ class OpenRouterClient:
             except (aiohttp.ClientError, TimeoutError) as exc:
                 if delivered:
                     raise OpenRouterError(
-                        f"OpenRouter stream broke mid-reply: {type(exc).__name__}",
+                        f"{name} stream broke mid-reply: {type(exc).__name__}",
                         retryable=False,
                     ) from exc
                 if attempt < last_attempt:
                     await asyncio.sleep(self._retry_delay(attempt, None))
                     continue
                 raise OpenRouterError(
-                    f"OpenRouter request failed: {type(exc).__name__}", retryable=True
+                    f"{name} request failed: {type(exc).__name__}", retryable=True
                 ) from exc
             except _StreamUnsupported as exc:
                 if delivered:
                     raise OpenRouterError(
-                        "OpenRouter ended the stream mid-reply", retryable=False
+                        f"{name} ended the stream mid-reply", retryable=False
                     ) from exc
                 log.info(
-                    "openrouter streaming unavailable model=%s reason=%s; "
+                    "llm streaming unavailable provider=%s model=%s reason=%s; "
                     "falling back unstreamed",
-                    model, str(exc)[:200],
+                    target.provider, model, str(exc)[:200],
                 )
                 return await self._request(
-                    "POST", "/chat/completions", json_body=dict(body, stream=False)
+                    "POST",
+                    "/chat/completions",
+                    json_body=dict(body, stream=False),
+                    endpoint=target,
                 )
         raise OpenRouterError(
-            "OpenRouter request failed" + (f": {detail}" if detail else ""), retryable=True
+            f"{name} request failed" + (f": {detail}" if detail else ""), retryable=True
         )
 
     async def generation_cost(self, generation_id: str) -> float | None:
-        payload = await self._request("GET", "/generation", params={"id": generation_id})
+        endpoint = self.endpoint
+        if not endpoint.supports_generation_cost:
+            # `/generation` is an OpenRouter accounting API, not part of the
+            # OpenAI-compatible surface. `None` here already means "unknown cost"
+            # to every caller, which is the truthful answer for an endpoint that
+            # bills nothing and for a proxy that bills without saying so alike -
+            # and is why nothing downstream records an unpriced call as free.
+            return None
+        payload = await self._request(
+            "GET", "/generation", params={"id": generation_id}, endpoint=endpoint
+        )
         data = payload.get("data") or {}
         return _number(data.get("total_cost") or data.get("usage"))
 
@@ -980,7 +1188,9 @@ def cached_prompt_tokens(usage: Any) -> int:
     return max(0, _integer(usage.get("cached_tokens")))
 
 
-def needs_explicit_cache_control(model: str) -> bool:
+def needs_explicit_cache_control(
+    model: str, *, cache_policy: CachePolicy = "by_model"
+) -> bool:
     """Whether this model's provider caches only where a breakpoint says to.
 
     Anthropic-routed models cache nothing without an explicit `cache_control`
@@ -988,25 +1198,39 @@ def needs_explicit_cache_control(model: str) -> bool:
     cachers ignore the marker and cache a repeated prefix on their own. The
     routing prefix of an OpenRouter model id is the whole question - a variant
     suffix (`:beta`, `:floor`) rides on the same provider.
+
+    That reading only works while the id *is* an OpenRouter route. A custom
+    endpoint's model id is whatever its operator loaded - `qwen2.5-coder:7b`, a
+    filesystem path, or, quite legitimately, `anthropic/claude-sonnet-4.5`
+    proxied by something that has never heard of `cache_control`. So the prefix
+    is not consulted at all under `cache_policy="unknown"`: no breakpoint is
+    sent, and - the half that would otherwise fail silently - no implicit hit is
+    assumed either, so a zero in the ledger reads as unmeasured rather than as a
+    caching regression somebody should go and investigate.
     """
+    if cache_policy == "unknown":
+        return False
     return str(model).split("/", 1)[0].strip().lower() in EXPLICIT_CACHE_CONTROL_PROVIDERS
 
 
-def cache_stable_message(message: dict[str, Any], *, model: str) -> dict[str, Any]:
+def cache_stable_message(
+    message: dict[str, Any], *, model: str, cache_policy: CachePolicy = "by_model"
+) -> dict[str, Any]:
     """Mark one message as the end of the request's cache-stable prefix.
 
-    Returns the message unchanged for providers that cache implicitly, so the
-    marked prompt is only ever sent where it is understood. The breakpoint
-    covers everything *before* it too - for Anthropic that ordering is tools,
-    then system, then messages, so marking the primer caches the tool
-    definitions with it and no second breakpoint is needed for them.
+    Returns the message unchanged for providers that cache implicitly and for
+    providers whose caching is unknown, so the marked prompt is only ever sent
+    where it is understood. The breakpoint covers everything *before* it too -
+    for Anthropic that ordering is tools, then system, then messages, so marking
+    the primer caches the tool definitions with it and no second breakpoint is
+    needed for them.
 
     Marking is deliberately the caller's choice rather than this module's: only
     the caller knows which of its messages is stable across calls, and a
     breakpoint placed above something that changes every round is a cache write
     billed at a premium that is never read back.
     """
-    if not needs_explicit_cache_control(model):
+    if not needs_explicit_cache_control(model, cache_policy=cache_policy):
         return message
     content = message.get("content")
     if isinstance(content, str) and content:

@@ -18,6 +18,8 @@ from .harness import (
 )
 from .host_platform import IS_MACOS, IS_WINDOWS, platform_key
 from .keybindings import is_command
+from .llm_endpoint import LLM_PROVIDERS, base_url_error
+from .llm_endpoint import model_error as llm_model_error
 
 
 def default_data_dir() -> Path:
@@ -890,6 +892,20 @@ class Config:
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
+    # Phase 15 bring-your-own endpoint. STT and TTS already run on this machine;
+    # this is the language model catching up. `openrouter` is the default and is
+    # what every existing install keeps without touching anything.
+    #
+    # `custom` is one OpenAI-compatible `/chat/completions` - llama.cpp, Ollama,
+    # vLLM, and LM Studio all present that shape - described by exactly three
+    # values, with the key in the secret store rather than here. The model is a
+    # *pin* rather than an override (`modelRouting.ts` vocabulary): blank is a
+    # validation error, because there is no routed default a local server could
+    # inherit and every other model setting in this file names an OpenRouter id
+    # it has never heard of. See `llm_endpoint.py`.
+    llm_provider: str = "openrouter"
+    custom_llm_base_url: str = ""
+    custom_llm_model: str = ""
     # Phase 10.6 Mux assistant: the conversational operator behind the voice
     # grammar's tier-3 fallback and the workspace chat surface. Off by default
     # like every model-cost feature; the model slot is configurable with a
@@ -1371,6 +1387,17 @@ def _validate(config: Config) -> None:
         errors["attention_narration_max_output_tokens"] = "must be between 32 and 2048"
     if not 1 <= config.openrouter_request_timeout_seconds <= 120:
         errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
+    if config.llm_provider not in LLM_PROVIDERS:
+        errors["llm_provider"] = "must be " + " or ".join(LLM_PROVIDERS)
+    elif config.llm_provider == "custom":
+        # Only validated while it is the selected provider. A half-filled custom
+        # endpoint left behind after switching back to OpenRouter is inert
+        # configuration, and refusing to save the whole settings form over it
+        # would make switching away from a broken endpoint impossible.
+        if error := base_url_error(config.custom_llm_base_url):
+            errors["custom_llm_base_url"] = error
+        if error := llm_model_error(config.custom_llm_model):
+            errors["custom_llm_model"] = error
     if not config.assistant_model.strip() or len(config.assistant_model) > 200:
         errors["assistant_model"] = "must be an exact OpenRouter model id"
     if not 0 <= config.assistant_daily_budget_usd <= 1_000:

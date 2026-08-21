@@ -34,6 +34,7 @@ from swe_mux.assistant import (
 )
 from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
+from swe_mux.llm_endpoint import openrouter_endpoint
 from swe_mux.models import MuxEvent, ProjectRecord, SessionRecord
 from swe_mux.openrouter import OpenRouterToolTurn
 
@@ -124,6 +125,9 @@ class ToolProviderStub:
     def __init__(self, turns: list[OpenRouterToolTurn]) -> None:
         self.turns = list(turns)
         self.calls: list[dict[str, Any]] = []
+        # The assistant reads the endpoint to decide whether a cache breakpoint
+        # is understood at all, so a provider stub has to carry one.
+        self.endpoint = openrouter_endpoint()
 
     async def complete_tools(self, **kwargs: Any) -> OpenRouterToolTurn:
         recorded = dict(kwargs)
@@ -2008,6 +2012,7 @@ async def test_a_streamed_reply_speaks_sentence_by_sentence(tmp_path: Path) -> N
         def __init__(self, chunks: list[str]) -> None:
             self.chunks = chunks
             self.calls: list[dict[str, Any]] = []
+            self.endpoint = openrouter_endpoint()
 
         async def complete_tools(self, **kwargs: Any) -> OpenRouterToolTurn:
             self.calls.append(kwargs)

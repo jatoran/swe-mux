@@ -3347,6 +3347,10 @@ class AssistantService:
             cache_stable_message(
                 {"role": "system", "content": SYSTEM_PRIMER},
                 model=self.config.assistant_model,
+                # A custom endpoint's model id is not an OpenRouter route, so the
+                # prefix cannot answer the caching question and the honest reading
+                # is "unknown" - no breakpoint, and no implicit hit assumed either.
+                cache_policy=self.provider.endpoint.cache_policy,
             ),
             {
                 "role": "system",

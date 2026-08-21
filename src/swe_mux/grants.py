@@ -28,7 +28,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .automation_registry import REGISTRY, enabling_closure, spends_money
+from .automation_registry import REGISTRY, enabling_closure, needs_llm, spends_money
 
 # Install-wide switches a gate may turn on.
 #
@@ -71,6 +71,14 @@ SPENDING_INSTALL_KEYS: frozenset[str] = frozenset(
     {"automation_enabled", "scan_timeline_enabled"}
 )
 
+# Install switches whose feature is a model call and nothing else. Identical to
+# `SPENDING_INSTALL_KEYS` today and kept separate for the same reason
+# `Automation.needs_llm` is kept apart from `Automation.spends`: one is a cost
+# disclosure, the other is a dependency on a provider that may be free and local.
+LLM_INSTALL_KEYS: frozenset[str] = frozenset(
+    {"automation_enabled", "scan_timeline_enabled"}
+)
+
 
 class GrantRefusal(Exception):
     """A grant that will not be attempted, with the machine code the browser branches on."""
@@ -96,6 +104,16 @@ class GrantPlan:
 
     spends: bool
     """Whether applying this can cost money, closure included."""
+
+    needs_llm: bool
+    """Whether anything here is inert without a verified model provider.
+
+    Disclosed on the gate beside `spends`, and asked of the closure the same way.
+    A grant is still applied when this is true and the provider is not ready -
+    the opt-in is a real permission and withholding it would mean the operator
+    had to grant twice - but a gate that stayed quiet would hand back a switch
+    that reads on and does nothing, which is the failure this phase removes.
+    """
 
     @property
     def empty(self) -> bool:
@@ -182,11 +200,14 @@ def plan_grant(
     # adds a consumer over it, and the operator is entitled to read that either way.
     spends = bool(wanted) and spends_money(closure)
     spends = spends or bool(SPENDING_INSTALL_KEYS & set(planned_install))
+    wants_model = bool(wanted) and needs_llm(closure)
+    wants_model = wants_model or bool(LLM_INSTALL_KEYS & set(planned_install))
     return GrantPlan(
         install=planned_install,
         automations=planned_automations,
         values=planned_values,
         spends=spends,
+        needs_llm=wants_model,
     )
 
 

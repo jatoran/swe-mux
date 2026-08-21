@@ -27,7 +27,13 @@ class PlatformSecretStore:
     differs, and that is `secret_backends.resolve_backend`'s answer.
     """
 
-    ENV_NAMES = {"openrouter_api_key": "OPENROUTER_API_KEY"}
+    ENV_NAMES = {
+        "openrouter_api_key": "OPENROUTER_API_KEY",
+        # A custom endpoint frequently needs no key at all (llama.cpp and Ollama
+        # serve unauthenticated), so this is an override for the case where it
+        # does and the operator would rather keep it out of the credential store.
+        "custom_llm_api_key": "SWE_MUX_CUSTOM_LLM_API_KEY",
+    }
 
     def __init__(self, path: Path, backend: SecretBackend | None = None) -> None:
         self.path = path

@@ -136,6 +136,10 @@ from .launchers import (
 )
 from .layouts import attach_leaf, attach_terminal, stack_leaf
 from .lifecycle import HEARTBEAT_INTERVAL_SECONDS, daemon_clean_exit, daemon_started, heartbeat
+from .llm_endpoint import LLM_PROVIDERS, LlmEndpoint, LlmReadiness
+from .llm_endpoint import readiness as llm_readiness
+from .llm_endpoint import resolve_endpoint as resolve_llm_endpoint
+from .llm_endpoint import verification_state as llm_verification_state
 from .logsetup import current_log_level, set_log_level
 from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
@@ -744,6 +748,7 @@ def create_app(
             web.get("/api/annotations", list_annotations),
             web.get("/api/automation/provider", automation_provider_status),
             web.post("/api/automation/provider/key", automation_provider_key),
+            web.post("/api/automation/provider/verify", verify_automation_provider),
             web.post("/api/automation/provider/models/refresh", refresh_automation_models),
             web.get("/api/automation/notifications", automation_notifications),
             web.patch("/api/automation/notifications", patch_automation_notifications),
@@ -1326,7 +1331,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     automation_store = AutomationStore(config.database_path)
     secret_store = PlatformSecretStore(config.data_dir / "automation.secrets.json")
     openrouter = OpenRouterClient(
-        secret_store, timeout_seconds=config.openrouter_request_timeout_seconds
+        secret_store,
+        timeout_seconds=config.openrouter_request_timeout_seconds,
+        # A callable, not a value: `config` is mutated in place by the settings
+        # write and by the file watcher, so re-resolving per request is what lets
+        # a corrected base URL take effect on the very next call - which is the
+        # verify press itself, and would otherwise need a daemon restart to test.
+        endpoint=lambda: resolve_llm_endpoint(config),
     )
     openrouter.set_model_catalog((await automation_store.model_cache())["models"])
     automation = AutomationEngine(
@@ -1417,19 +1428,60 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
     app["automation_gate_cache"] = automation_gate_cache
+    # The install-wide half of the gate, cached beside the per-Project half and on
+    # the same clock. Its input is a config read plus one SQLite row, which is
+    # cheap but not free, and `_enabled_automations` runs on every Tier 0 write.
+    llm_readiness_cache: dict[str, tuple[float, LlmReadiness]] = {}
+    app["llm_readiness_cache"] = llm_readiness_cache
+
+    async def _llm_ready() -> LlmReadiness:
+        """Whether a proven model provider exists, and the sentence saying why not.
+
+        Recomputed from the live config and the durable verification row rather
+        than cached as a boolean at startup: an endpoint is edited and verified
+        while the daemon runs, and a readiness answer that needed a restart would
+        make the verify button appear to do nothing.
+        """
+        now = time.monotonic()
+        cached = llm_readiness_cache.get("current")
+        if cached and now - cached[0] < 5.0:
+            return cached[1]
+        endpoint = resolve_llm_endpoint(config)
+        record = (
+            await automation_store.provider_verification(endpoint.provider)
+            if endpoint.requires_verification
+            else None
+        )
+        answer = llm_readiness(
+            endpoint,
+            api_key=secret_store.get(endpoint.secret_name),
+            verified_fingerprint=str((record or {}).get("fingerprint") or "") or None,
+        )
+        llm_readiness_cache["current"] = (now, answer)
+        return answer
+
+    app["llm_ready"] = _llm_ready
 
     async def _enabled_automations(root: str) -> frozenset[str]:
         """Per-project opt-in closure, resolved off-loop with a short TTL cache.
 
         Shared by Tier 0 capture and the deterministic consumers so a project can
         never have one running under a stale answer the other already refreshed.
+
+        The provider check joins the resolution here rather than at each call
+        site, so an unverified endpoint makes exactly the model-backed
+        automations inert - through the same DAG, at the same chokepoint - and
+        leaves the free consumers over them running on the records they already
+        have. `Resolution.unverified` carries which ones and the status endpoint
+        carries why, so the switch reads as held back rather than as broken.
         """
         now = time.monotonic()
         cached = automation_gate_cache.get(root)
         if cached and now - cached[0] < 5.0:
             return cached[1]
         project_map = await asyncio.to_thread(project_automations, root)
-        enabled = resolve_automation_config(project_map).enabled
+        ready = await _llm_ready()
+        enabled = resolve_automation_config(project_map, llm_ready=ready.ready).enabled
         automation_gate_cache[root] = (now, enabled)
         return enabled
 
@@ -2339,8 +2391,31 @@ async def _watch_config(app: web.Application) -> None:
                 )
 
 
+#: Config fields that change which endpoint a completion goes to, or whether the
+#: one it goes to is still the one that was proven. Editing any of them must drop
+#: both cached answers immediately: the readiness verdict, and the per-Project
+#: gate that was resolved under it.
+LLM_ENDPOINT_FIELDS = frozenset({"llm_provider", "custom_llm_base_url", "custom_llm_model"})
+
+
+def forget_llm_readiness(app: web.Application) -> None:
+    """Drop the cached provider verdict and every gate answer resolved under it.
+
+    Called on an endpoint edit, a key write, and a verification - the three acts
+    that can flip readiness. Without the second half a Project would keep running
+    under a five-second-old closure computed against the previous verdict, which
+    is exactly long enough for a verify press to look like it did nothing.
+    """
+    if cache := app.get("llm_readiness_cache"):
+        cache.clear()
+    if gate_cache := app.get("automation_gate_cache"):
+        gate_cache.clear()
+
+
 def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     config: Config = app["config"]
+    if changed & LLM_ENDPOINT_FIELDS:
+        forget_llm_readiness(app)
     if "log_level" in changed:
         with suppress(ValueError):  # _validate already constrains the value
             set_log_level(config.log_level)
@@ -3728,18 +3803,104 @@ async def list_annotations(request: web.Request) -> web.Response:
     )
 
 
+async def _llm_readiness(request: web.Request) -> LlmReadiness:
+    """The install's provider verdict, through the app's cache when it has one.
+
+    An app with no provider wiring at all - a partial harness answering a
+    dependency-graph question, never the daemon - reports `unknown` rather than
+    raising. The alternative is a `KeyError` turning a perfectly answerable
+    question about the DAG into a 404, and `unknown` is honest: it says nobody
+    was asked, which is different from both verdicts. The daemon installs
+    `llm_ready` in `create_app`, so no real request reaches this branch.
+    """
+    resolver = request.app.get("llm_ready")
+    if resolver is not None:
+        return cast(LlmReadiness, await resolver())
+    config = request.app.get("config")
+    store = request.app.get("secret_store")
+    automation_store = request.app.get("automation_store")
+    if config is None or store is None or automation_store is None:
+        return LlmReadiness(
+            True, "openrouter", "unknown", "No model provider is wired into this daemon."
+        )
+    endpoint = resolve_llm_endpoint(config)
+    record = await automation_store.provider_verification(endpoint.provider)
+    return llm_readiness(
+        endpoint,
+        api_key=store.get(endpoint.secret_name),
+        verified_fingerprint=str((record or {}).get("fingerprint") or "") or None,
+    )
+
+
 async def _provider_status(request: web.Request) -> dict[str, Any]:
+    """Everything Settings → Accounts needs to describe the model provider.
+
+    `secret` stays keyed to OpenRouter for compatibility - the browser's existing
+    key controls read it - and `providers` is the per-provider view that replaces
+    it: each configured endpoint with its own key status, its verification, and
+    the reason it is not usable when it is not. `llm` is the resolved verdict for
+    the *active* one, which is what every gate in the app renders.
+    """
+    config: Config = request.app["config"]
+    store: PlatformSecretStore = request.app["secret_store"]
+    automation_store: AutomationStore = request.app["automation_store"]
+    active = resolve_llm_endpoint(config)
+    providers: list[dict[str, Any]] = []
+    for name in LLM_PROVIDERS:
+        endpoint = (
+            active
+            if name == active.provider
+            else resolve_llm_endpoint(replace(config, llm_provider=name))
+        )
+        api_key = store.get(endpoint.secret_name)
+        record = await automation_store.provider_verification(name)
+        providers.append(
+            {
+                "id": name,
+                "label": endpoint.label,
+                "active": name == active.provider,
+                "origin": endpoint.origin,
+                "model": endpoint.model_override,
+                "requires_verification": endpoint.requires_verification,
+                "cache_policy": endpoint.cache_policy,
+                "secret": store.status(endpoint.secret_name),
+                "verification": llm_verification_state(
+                    endpoint, api_key=api_key, record=record
+                ),
+                "readiness": llm_readiness(
+                    endpoint,
+                    api_key=api_key,
+                    verified_fingerprint=str((record or {}).get("fingerprint") or "") or None,
+                ).as_dict(),
+            }
+        )
     return {
-        "secret": request.app["secret_store"].status("openrouter_api_key"),
-        "models": await request.app["automation_store"].model_cache(),
-        "origin": "https://openrouter.ai/api/v1",
-        "cheap_model": request.app["config"].openrouter_cheap_model,
-        "standard_model": request.app["config"].openrouter_standard_model,
+        "secret": store.status("openrouter_api_key"),
+        "models": await automation_store.model_cache(),
+        "origin": active.origin,
+        "cheap_model": config.openrouter_cheap_model,
+        "standard_model": config.openrouter_standard_model,
+        "provider": active.provider,
+        "providers": providers,
+        "llm": (await _llm_readiness(request)).as_dict(),
     }
 
 
 async def automation_provider_status(request: web.Request) -> web.Response:
     return json_response(await _provider_status(request))
+
+
+def _requested_endpoint(request: web.Request, body: dict[str, Any]) -> LlmEndpoint:
+    """The endpoint a provider request names, defaulting to the active one."""
+    config: Config = request.app["config"]
+    name = str(body.get("provider") or "").strip()
+    if not name:
+        return resolve_llm_endpoint(config)
+    if name not in LLM_PROVIDERS:
+        raise ValueError("provider must be " + " or ".join(LLM_PROVIDERS))
+    if name == config.llm_provider:
+        return resolve_llm_endpoint(config)
+    return resolve_llm_endpoint(replace(config, llm_provider=name))
 
 
 async def automation_provider_key(request: web.Request) -> web.Response:
@@ -3748,23 +3909,114 @@ async def automation_provider_key(request: web.Request) -> web.Response:
     value = body.get("key")
     store: PlatformSecretStore = request.app["secret_store"]
     provider: OpenRouterClient = request.app["openrouter"]
+    automation_store: AutomationStore = request.app["automation_store"]
     try:
+        endpoint = _requested_endpoint(request, body)
+        secret_name = endpoint.secret_name
         if operation == "test":
-            result = await provider.test_key(str(value) if value else None)
-            return json_response({**result, "status": store.status("openrouter_api_key")})
+            result = await provider.test_key(
+                str(value) if value else None, endpoint=endpoint
+            )
+            return json_response({**result, "status": store.status(secret_name)})
         if operation in {"set", "replace"}:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("key is required")
             if body.get("test", True):
-                await provider.test_key(value)
-            store.set("openrouter_api_key", value)
-            return json_response({"ok": True, "status": store.status("openrouter_api_key")})
+                await provider.test_key(value, endpoint=endpoint)
+            store.set(secret_name, value)
+            # The key is part of the verified fingerprint, so a replacement
+            # un-verifies the endpoint on its own. Dropping the row as well keeps
+            # the surface from showing a sample reply that a different credential
+            # produced, which reads as reassurance for a state nobody proved.
+            await automation_store.clear_provider_verification(endpoint.provider)
+            forget_llm_readiness(request.app)
+            return json_response({"ok": True, "status": store.status(secret_name)})
         if operation == "clear":
-            store.clear("openrouter_api_key")
-            return json_response({"ok": True, "status": store.status("openrouter_api_key")})
+            store.clear(secret_name)
+            await automation_store.clear_provider_verification(endpoint.provider)
+            forget_llm_readiness(request.app)
+            return json_response({"ok": True, "status": store.status(secret_name)})
         raise ValueError("operation must be test, set, replace, or clear")
     except (OpenRouterError, SecretStoreError) as exc:
-        return json_response({"error": str(exc), "status": store.status("openrouter_api_key")}, 422)
+        return json_response(
+            {"error": str(exc), "status": store.status("openrouter_api_key")}, 422
+        )
+
+
+async def verify_automation_provider(request: web.Request) -> web.Response:
+    """Prove one configured endpoint with a single completion, and record it.
+
+    The output comes back rather than a bare ok, because "reachable" and "usable"
+    are different findings and only the words separate them - a chat template
+    echoing its own scaffolding, or a model answering in the wrong language,
+    passes every check a boolean could make.
+
+    A failure records nothing. The previous verification, if any, is left exactly
+    as it was: an endpoint that worked yesterday and is unreachable this minute
+    has not been disproven, and deleting the record here would turn a network
+    blip into a Project-wide switch-off.
+    """
+    body = await request.json() if request.can_read_body else {}
+    provider: OpenRouterClient = request.app["openrouter"]
+    store: PlatformSecretStore = request.app["secret_store"]
+    automation_store: AutomationStore = request.app["automation_store"]
+    endpoint = _requested_endpoint(request, body)
+    try:
+        result = await provider.verify(endpoint=endpoint)
+    except (OpenRouterError, ValueError) as exc:
+        record = await automation_store.provider_verification(endpoint.provider)
+        return json_response(
+            {
+                "ok": False,
+                "provider": endpoint.provider,
+                "error": str(exc),
+                "verification": llm_verification_state(
+                    endpoint, api_key=store.get(endpoint.secret_name), record=record
+                ),
+                "llm": (await _llm_readiness(request)).as_dict(),
+            },
+            422,
+        )
+    stored = await automation_store.record_provider_verification(
+        provider=endpoint.provider,
+        fingerprint=endpoint.fingerprint(store.get(endpoint.secret_name)),
+        base_url=endpoint.origin,
+        model=result.requested_model,
+        resolved_model=result.resolved_model,
+        sample=result.output,
+        latency_ms=result.latency_ms,
+    )
+    forget_llm_readiness(request.app)
+    await request.app["events"].emit(
+        "llm_provider_verified",
+        source="user",
+        provider=endpoint.provider,
+        model=result.requested_model,
+    )
+    log.info(
+        "llm provider verified provider=%s origin=%s model=%s latency_ms=%s",
+        endpoint.provider,
+        endpoint.origin,
+        result.requested_model,
+        result.latency_ms,
+    )
+    return json_response(
+        {
+            "ok": True,
+            "provider": endpoint.provider,
+            "output": result.output,
+            "requested_model": result.requested_model,
+            "resolved_model": result.resolved_model,
+            "latency_ms": result.latency_ms,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "cost_usd": result.cost_usd,
+            "verification": llm_verification_state(
+                endpoint, api_key=store.get(endpoint.secret_name), record=stored
+            ),
+            "llm": (await _llm_readiness(request)).as_dict(),
+        }
+    )
 
 
 async def refresh_automation_models(request: web.Request) -> web.Response:
@@ -5183,13 +5435,28 @@ def _automation_registry_payload() -> list[dict[str, Any]]:
             # by every gate that offers it, so "free" and "spends" are one fact from
             # one source rather than a claim each surface makes for itself.
             "spends": automation.spends,
+            # Whether it is inert without a proven model provider. Separate from
+            # `spends` because a local endpoint is a dependency without a bill.
+            "needs_llm": automation.needs_llm,
         }
         for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
     ]
 
 
-async def _project_automation_state(project) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    """One project's opt-in table, resolved against the registry DAG."""
+async def _project_automation_state(  # type: ignore[no-untyped-def]
+    project,
+    *,
+    llm: LlmReadiness | None = None,
+) -> dict[str, Any]:
+    """One project's opt-in table, resolved against the registry DAG.
+
+    `llm` is the install-wide provider verdict. It is threaded in rather than
+    fetched here so the fleet matrix resolves every Project against one reading
+    instead of asking the same question per row, and so the payload can carry
+    the reason verbatim: `unverified` says which switches are held back, and
+    `llm.reason` is the sentence the surface renders instead of leaving them
+    looking simply off.
+    """
     identity = _registered_identity(project)
     config = await read_project_config(project.root, project=identity)
     values = config["values"] if config["status"] in {"ready", "read-only"} else {}
@@ -5198,7 +5465,9 @@ async def _project_automation_state(project) -> dict[str, Any]:  # type: ignore[
         for key, value in (values.get("automations") or {}).items()
         if key in AUTOMATION_REGISTRY
     }
-    resolution = resolve_automation_config(requested)
+    resolution = resolve_automation_config(
+        requested, llm_ready=llm.ready if llm is not None else True
+    )
     return {
         "project_id": project.id,
         "revision": config["revision"],
@@ -5206,6 +5475,8 @@ async def _project_automation_state(project) -> dict[str, Any]:  # type: ignore[
         "requested": requested,
         "enabled": sorted(resolution.enabled),
         "blocked": {key: list(value) for key, value in resolution.blocked.items()},
+        "unverified": sorted(resolution.unverified),
+        "llm": llm.as_dict() if llm is not None else None,
         "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
     }
 
@@ -5220,7 +5491,7 @@ async def get_project_automations(request: web.Request) -> web.Response:
     a placeholder as ready to switch on.
     """
     project = _observations_project(request)
-    state = await _project_automation_state(project)
+    state = await _project_automation_state(project, llm=await _llm_readiness(request))
     return json_response({**state, "automations": _automation_registry_payload()})
 
 
@@ -5234,9 +5505,10 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
     design: the write path stays the revision-checked per-Project route, so this
     surface can never race an open Project editor.
     """
+    llm = await _llm_readiness(request)
     rows = [
         {
-            **await _project_automation_state(project),
+            **await _project_automation_state(project, llm=llm),
             "project_name": project.name,
         }
         for project in request.app["projects"].ordered_projects()
@@ -5331,6 +5603,10 @@ async def describe_grants(request: web.Request) -> web.Response:
             },
             "automations": _automation_registry_payload(),
             "recommended_project_automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
+            # So a gate can disclose "and this needs a model provider you have not
+            # proven yet" before the press, from the same read that tells it what
+            # it may grant at all.
+            "llm": (await _llm_readiness(request)).as_dict(),
         }
     )
 
@@ -5483,11 +5759,17 @@ async def apply_grants(request: web.Request) -> web.Response:
             "values": applied_values,
         },
         "spends": plan.spends,
+        # Reported alongside the verdict rather than instead of it: the grant did
+        # land, and the switch is still inert until a provider is proven. A gate
+        # that reported only success would hand back exactly the enabled-and-does-
+        # nothing state the whole enablement design exists to prevent.
+        "needs_llm": plan.needs_llm,
+        "llm": (await _llm_readiness(request)).as_dict(),
         "config": config.public_dict(),
     }
     if project is not None:
         result["project"] = {
-            **await _project_automation_state(project),
+            **await _project_automation_state(project, llm=await _llm_readiness(request)),
             "automations": _automation_registry_payload(),
         }
     return json_response(result)
