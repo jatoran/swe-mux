@@ -1842,9 +1842,15 @@ body {
 .budget-control{border:1px solid var(--line);background:var(--bg);padding:8px 10px 9px;margin:0 0 9px;display:grid;gap:6px}
 .budget-control>legend{padding:0 4px;color:var(--muted)}
 .budget-hint,.budget-mode-hint{margin:0;color:var(--muted)}
-.budget-modes{display:flex;flex-wrap:wrap;gap:10px}
-.budget-mode{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
-.budget-mode>input{margin:0}
+.budget-modes{display:flex;flex-wrap:wrap;gap:5px}
+/* Scoped under .budget-control on purpose: .automation-panel label and
+   .settings-panel label both out-specify a bare .budget-mode and re-grid the
+   label, tearing each radio from its text (radios on one row, words on the
+   next, spread across a phone). grid-template-columns:none neutralizes the
+   automation panel's two-column template; padding/margin/color reset theirs. */
+.budget-control .budget-mode{display:inline-flex;grid-template-columns:none;align-items:center;gap:6px;margin:0;padding:3px 10px;min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;white-space:nowrap}
+.budget-control .budget-mode>input{margin:0}
+.budget-control .budget-mode:has(>input:checked){border-color:var(--green);background:var(--bg);color:var(--text)}
 .budget-axes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .budget-axis{display:grid;gap:3px}
 .budget-axis>input{width:100%}
