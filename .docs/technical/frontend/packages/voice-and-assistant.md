@@ -10,7 +10,8 @@ Design: `../../../design/features/voice.md`, `../../../design/features/assistant
 `voiceCommandReference.ts`, `conversationTarget.ts`, `conversation.ts`, `voiceIntents.ts`, `voiceQueries.ts`,
 `fleetStatus.ts`, `insertTarget.ts`, `audioFrames.ts`, `speechGate.ts`, `utteranceCompleteness.ts`,
 `utteranceDeferral.ts`, `sileroVad.ts`, `voiceCaptureWorklet.ts`, `voiceLatency.ts`, `wakeWordTest.ts`,
-`VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoicePlayer.tsx`, `voice.ts`, `mobileVoice.ts`
+`VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoicePlayer.tsx`, `VoiceReadTab.tsx`, `voiceDock.ts`,
+`voice.ts`, `mobileVoice.ts`
 
 Scope: app-owned capture, draft, and history; a pane-attached floating view with a top fallback; follow and pin targets; registry-backed commands; typed fleet, help, and reply queries; guarded approvals; confirmed-speech barge-in; segmented playback; session-scoped Voice Comms; mobile HTTPS.
 
@@ -44,6 +45,7 @@ The worklet, resampler and framer, Silero, and the frame-counted gate remain sep
 - Every stop switch suppresses the whole claim map rather than the audible stream alone, **because a claim outlives its clip**.
 - Autoplay is additionally focus-driven and global (`setPlaybackFocus`/`sessionPlaysHere`): the focused session plays here, and every other session's clip is **held** (bounded, newest kept), surfaced as ready-to-play by `VoicePlayer` and the command palette.
   A held clip is never started by a focus move, is dropped by every stop switch, and is overridden only by a Voice Comms pin (`setPinnedPlaybackSession`).
+- `voice.ts` also keeps the **per-device** half of a clip's state - held, playing, played (heard to the end, never merely started), dismissed - bounded and unpersisted, because a clip played on the phone is unplayed on the desktop and the daemon's row must not claim either. `VoiceReadTab.tsx` renders it over the daemon's `synthesizing`/`ready`/`failed`.
 
 ### Diagnostics
 
@@ -83,4 +85,5 @@ The conversation a new-dialog cleared is stashed into a collapsed `previous conv
 `earcons.ts` synthesizes the acknowledgment blips in WebAudio, with no assets and no fetch.
 
 `App.tsx` owns the tier wiring in the `voice.query` catch-all, the UI-action executor that resolves dispatched `run_ui_command` labels against the live registry and reports back, and the shared surface placement.
-`ConversationControl.tsx` owns the `talk`/`chat` mode toggle and the follow-up routing inside `handleTranscript`.
+`ConversationControl.tsx` owns the `talk`/`chat`/`tts` tab strip and the follow-up routing inside `handleTranscript`.
+It also owns `VoiceControl`, the single top-bar voice button whose plain click toggles the panel and whose ctrl+click or 550 ms hold toggles capture, with the lit state bound to capture alone (`../../../design/features/voice.md`).

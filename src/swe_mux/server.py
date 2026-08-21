@@ -4190,6 +4190,28 @@ async def _annotation_session_run_ids(app: web.Application, session_id: str) -> 
     return sorted(run_ids)
 
 
+def _mark_unsupported(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Retract, at read time, findings whose own evidence no longer supports them.
+
+    A stored finding is a record of what a detector concluded and is never edited
+    or deleted to change that record. What *can* change is whether a reader is
+    told it stands: the loop detector now refuses to seed on a fact carrying no
+    target and no content hash, and the same rule applied here withdraws the 390
+    of 397 historical findings that rest on exactly those facts
+    (`deterministic_consumers.loop_finding_unsupported`). The row keeps saying
+    what it said; the read says why it does not hold.
+    """
+    from .deterministic_consumers import LOOP_UNSUPPORTED_REASON, loop_finding_unsupported
+
+    for item in items:
+        if item.get("tag") != "loop-detected":
+            continue
+        if loop_finding_unsupported(item.get("evidence_json")):
+            item["unsupported"] = True
+            item["unsupported_reason"] = LOOP_UNSUPPORTED_REASON
+    return items
+
+
 async def list_annotations(request: web.Request) -> web.Response:
     """Findings read: annotations filtered by tag, project, session, run, and time.
 
@@ -4214,14 +4236,14 @@ async def list_annotations(request: web.Request) -> web.Response:
     )
     return json_response(
         {
-            "items": await store.annotations(
+            "items": _mark_unsupported(await store.annotations(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,
                 project_id=project_id,
                 tag=tag,
                 since=since,
                 limit=int(query.get("limit", 200)),
-            ),
+            )),
             "tag_counts": await store.annotation_tag_counts(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,
@@ -12699,10 +12721,23 @@ async def voice_generate(request: web.Request) -> web.Response:
     content_mode = body.get("content_mode")
     if content_mode is not None and content_mode not in {"summary", "verbatim"}:
         raise ValueError("content_mode must be summary or verbatim")
+    # `message_id` names one reply in the reader rather than "the newest": the
+    # Transcript tab plays any message through this same pipeline, and naming the
+    # message is also what lets an existing clip answer the request instead of a
+    # second synthesis of identical audio (`design/features/voice.md`).
+    message_id = body.get("message_id")
+    if message_id is not None and not isinstance(message_id, str):
+        raise ValueError("message_id must be a string")
     try:
         options: dict[str, Any] = {"trigger": "manual", "content_mode": content_mode}
         if body.get("stream_id") is not None:
             options["stream_id"] = body["stream_id"]
+        if message_id:
+            options["message_id"] = message_id
+            # `regenerate` is the deliberate override for a clip whose text the
+            # operator no longer trusts; it is never the default, because the
+            # default request is "let me hear this" and the audio already exists.
+            options["reuse"] = not bool(body.get("regenerate"))
         clip = await voice.generate(session.record.id, **options)
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
@@ -12742,9 +12777,14 @@ async def list_voice_clips(request: web.Request) -> web.Response:
     session_id = request.query.get("session") or None
     if session_id:
         session_id = request.app["sessions"].resolve(session_id).record.id
+    content_mode = request.query.get("kind") or None
+    if content_mode is not None and content_mode not in {"summary", "verbatim"}:
+        raise ValueError("kind must be summary or verbatim")
     rows = await store.clips(
         session_id=session_id,
         agent_run_id=request.query.get("run") or None,
+        message_anchor=request.query.get("anchor") or None,
+        content_mode=content_mode,
         limit=int(request.query.get("limit") or 20),
     )
     return json_response({"items": [clip_snapshot(row) for row in rows]})
@@ -14451,11 +14491,14 @@ async def list_land_requests(request: web.Request) -> web.Response:
 
 
 async def request_land(request: web.Request) -> web.Response:
-    """Enqueue an operator-initiated land.
+    """Enqueue an operator-initiated land, or a verify-only run of the same pipeline.
 
     The operator *is* the authority the grant defers to, so this does not consult
     it - but it consults nothing else differently either: the same preconditions,
     the same fixed vocabulary, the same serialisation.
+
+    `kind` defaults to `"land"`, so a caller written before verify-only existed asks
+    for exactly what it always asked for.
     """
     body = await request.json()
     project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
@@ -14464,11 +14507,15 @@ async def request_land(request: web.Request) -> web.Response:
     worktree_root = str(body.get("worktree_root") or "").strip()
     if not worktree_root:
         raise ValueError("worktree_root is required")
+    kind = str(body.get("kind") or "land").strip()
+    if kind not in ("land", "verify"):
+        raise ValueError("kind must be 'land' or 'verify'")
     try:
         row = await request.app["land_queue"].request(
             project_id=project.id,
             project_root=project.root,
             worktree_root=worktree_root,
+            kind=kind,
             origin="operator",
         )
     except LandRefusal as exc:

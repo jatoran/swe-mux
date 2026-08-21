@@ -231,8 +231,20 @@ export interface VoiceClip {
   id:string; session_id:string; agent_run_id?:string|null; created_at:number
   trigger:'auto'|'manual'|'system'; content_mode:'summary'|'verbatim'; engine:string; voice:string
   text:string; format:string; size_bytes:number; duration_hint_s?:number|null
-  status:'ready'|'failed'; error?:string|null; model?:string|null; cost_usd?:number|null
+  /** The daemon's half of a clip's life. `held`, `played` and `dismissed` are NOT
+   *  here: those are per-device facts (a clip played on the phone is unplayed on
+   *  the desktop), overlaid by `voice.ts` rather than stored on the row. */
+  status:'synthesizing'|'ready'|'failed'; error?:string|null; model?:string|null; cost_usd?:number|null
+  /** When the message this clip speaks *arrived*, epoch seconds — null for
+   *  application speech and for clips made before the anchor existed. Ordering a
+   *  held backlog by synthesis time is exactly wrong, which is why it is captured. */
+  source_ts?:number|null
+  /** The `message_id` of the reply this clip renders, so the reader can find the
+   *  audio for a message instead of generating it a second time. */
+  message_anchor?:string|null
   stream_id?:string; segment_count?:number
+  /** Set by the daemon when an existing clip answered a per-message request. */
+  reused?:boolean
 }
 
 export interface KokoroModelStatus {

@@ -217,8 +217,17 @@ def evaluate_preconditions(
     *,
     branch: str,
     busy_sessions: tuple[str, ...] = (),
+    lands: bool = True,
 ) -> PreconditionResult:
-    """Decide whether the pipeline may touch these two checkouts right now."""
+    """Decide whether the pipeline may touch these two checkouts right now.
+
+    ``lands`` is whether this request will end by moving the trunk. Every check here
+    guards the *worktree* except the last, which guards the trunk's own uncommitted
+    work; a verify-only request never writes the trunk, so holding it on that check
+    would make it wait forever for a hazard it cannot cause. Nothing else is relaxed -
+    the trunk still has to be identifiable and the worktree still has to be quiet and
+    clean, because the reconcile writes into it either way.
+    """
     if not facts.readable:
         # Unreadable is a hold, not a refusal: a transient lock or a slow filesystem
         # is the common cause, and refusing would turn a hiccup into a handback.
@@ -269,6 +278,10 @@ def evaluate_preconditions(
             f"the worktree has {len(facts.worktree_dirty)} uncommitted change(s)",
             {"paths": list(facts.worktree_dirty[:20])},
         )
+    if not lands:
+        # A verify-only request stops at the gate, so the trunk's own uncommitted work
+        # is not a hazard it can reach and not a reason to make it wait.
+        return PreconditionResult("ready")
     # **Only the paths a fast-forward would actually touch.** A dirty file the merge
     # will not write cannot make the merge unsafe, and `--ff-only` refuses precisely
     # on the ones that would be - so a whole-checkout test is not a stricter safety

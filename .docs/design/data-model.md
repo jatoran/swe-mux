@@ -163,6 +163,11 @@
   pass/fail counts and failing-test ids inside the bounded detail. Command text is never
   stored beyond bounded detail, and that detail is bounded per value so the row always
   re-parses. Per-project opt-in and gated; see `features/tier0-facts.md`.
+  `call_id` plus `call_side` (`call` | `result`) is the identity of **one tool call**, and one
+  call is one fact per side however many observers report it: a hook and a transcript both
+  see the same call, and the richer record wins whichever arrives first.
+  Both columns are additive migrations (schema version 2) and are NULL for facts recorded
+  before them and for facts that are not tool calls.
 - Project context has no SQLite entity.
   Its source of truth is the bounded user-owned `<project>/.swe-mux/project-context.md` file with content-derived revisions (`features/project-card.md`).
 - `project_cards` is a retained legacy table from the retired generated-card implementation.
@@ -361,12 +366,18 @@
   `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
   the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
   an originating session to attribute it to.
-  A request also carries `verify_gate` - `''`, `full`, or `docs_only` - which is **which gate it
-  ran**, decided from the change set's paths against a closed documentation allowlist. It is
-  persisted rather than left in the event trail alone because a skipped gate must be visible
-  wherever the row is drawn: a documentation-only land never enters `verifying`, so its states
-  read identically to one that passed the full gate. `''` means "never classified" and is never
-  collapsed into `full`, at either end.
+  A request also carries `verify_gate` - `''`, `full`, `docs_only`, or `reused` - which is
+  **which gate it ran**: `docs_only` is decided from the change set's paths against a closed
+  documentation allowlist, `reused` means a queue-executed verdict already stood over this exact
+  content. It is persisted rather than left in the event trail alone because a skipped gate must
+  be visible wherever the row is drawn: neither a documentation-only land nor a reusing one ever
+  enters `verifying`, so their states read identically to one that passed the full gate. `''`
+  means "never classified" and is never collapsed into `full`, at either end.
+  And it carries `kind` - `land` or `verify` - which decides **exactly one thing**: whether the
+  fast-forward happens. A `verify` request runs every earlier step identically (which is what
+  makes its verdict reusable by a land) and settles as `verified`, its own terminal state rather
+  than `landed`, because nothing moved and this ledger's purpose is recording which OID moved
+  what.
 - `land_verify_plans` (same database): what a verification gate's steps were the last time these
   **exact bytes passed**, keyed by `(project_root, digest)` with the step names and the run's
   duration. It is what lets a running gate say "step 3 of 7" instead of an opaque "verifying",
@@ -379,6 +390,18 @@
   The *live* reading of a gate that is running right now is deliberately **not** stored - it is a
   fact about a process, and a daemon restart returns the step to `queued` and re-runs it from
   scratch, so a persisted half-progress would describe a run that no longer exists.
+- `land_verify_memos` (same database): a gate verdict that **already stands**, keyed by
+  `(project_root, tree_oid, digest)` - the git tree the gate ran over and the digest of the
+  command that ran, which are the whole of what decides a verdict. The tree rather than the
+  commit, because a reconcile that merged an unchanged trunk produces a new commit over identical
+  content, which is exactly the case a commit-keyed row would miss. A later request whose
+  post-reconcile tree matches skips the gate and records the reuse with this key.
+  **Only a run the queue executed writes one**, and there is no route that accepts a result from
+  anywhere else: an agent's own shell run is self-reported, and a self-report can be produced by
+  running modified bytes and restoring the approved file, so it proves nothing about the approved
+  gate (`features/land-queue.md`). Reads are bounded by `land_verify_memo_seconds`, because a tree
+  hash is a claim about *content* while the verdict also depends on the machine underneath -
+  an installed dependency, a toolchain, an OS update, none of which changes the tree.
 - **Session-settle watches have no table, deliberately** (`features/mux-mcp.md`). A watch is a
   promise made to one live conversation about another live session, and both halves of that are
   process state: it is dropped when the watcher session ends and when the watcher's conversation

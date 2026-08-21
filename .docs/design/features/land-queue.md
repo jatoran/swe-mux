@@ -18,14 +18,27 @@ Git refuses it on divergence and refuses to overwrite overlapping local changes,
 That is the same property that already makes it the one merge shape permitted outside a worktree.
 A refusal is a reported failure and never a retried force.
 
+## The two kinds of request
+
+A request asks for one of two things, and the kind decides **exactly one thing**: whether the last step happens.
+
+- **`land`** runs the whole pipeline and ends by moving the trunk.
+- **`verify`** runs everything except that and reports the verdict back to the session that asked.
+
+Every step before the last is identical, and that is what makes a verify-only verdict worth anything: it is the verdict a land would have produced, over the same reconciled content, under the same approved bytes.
+A verdict that came from a different pipeline would be a different claim.
+
+Both kinds share one claim on a branch (`land_requests_active`), so a branch has one request in flight whatever it asked for - two would reconcile one worktree twice and run one gate twice over.
+Both count against the same per-origin budget, because the budget bounds wall-clock and the gate costs the same minutes whichever step follows it.
+
 ## The steps
 
 | Step | What it does | Failure |
 |---|---|---|
 | `reconcile` | Merges the trunk ref into the branch, inside the branch's worktree. | A conflict aborts the merge, leaving the worktree exactly as it was found, and hands the request back with the conflicting paths. |
 | `classify` | Matches the paths the trunk would gain against a closed documentation allowlist, and decides which gate the next step runs. | It cannot fail. Every question it cannot answer - an unreadable diff, an unrecognised status or file mode - answers "the full gate". |
-| `verify` | Runs the repository's declared verification command in the worktree and records the commit OID that passed, unless `classify` said the change set was documentation only. | A nonzero exit hands the request back with the output tail. An unapproved or absent gate refuses instead: neither is a branch problem. |
-| `land` | Fast-forwards the trunk in the primary checkout. | Divergence, a dirty checkout, or a branch that moved past the verified OID refuses. |
+| `verify` | Runs the repository's declared verification command in the worktree and records the commit OID that passed, unless `classify` said the change set was documentation only or a queue-executed verdict already stands over this exact content. | A nonzero exit hands the request back with the output tail. An unapproved or absent gate refuses instead: neither is a branch problem. |
+| `land` | Fast-forwards the trunk in the primary checkout. **A `verify` request stops before this step**, settling as `verified`. | Divergence, a dirty checkout, or a branch that moved past the verified OID refuses. |
 
 `verify` is the step that takes minutes, and it reports on itself while it runs.
 See "What a running gate says about itself" below.
@@ -36,9 +49,10 @@ A branch already reachable from the trunk skips all three: there is nothing to l
 After each successful land the next queued item runs from `reconcile` against the new trunk, so one landing never strands another agent's now-stale reconcile.
 That is the `advance` rule, and it is the queue's ordinary behaviour rather than a separate step.
 
-Re-verification is skipped in exactly two cases, and both are "the gate would prove nothing", never "the gate is probably unnecessary".
+Re-verification is skipped in exactly three cases, and each is "the gate would prove nothing", never "the gate is probably unnecessary".
 The first is a reconcile that reported nothing to merge, on a request whose verified OID still stands.
 The second is a change set every path of which is documentation, which is the fast path below.
+The third is a queue-executed verdict that already stands over this exact tree with these exact bytes, which is "verifying without landing" below.
 
 ## Preconditions, checked before every mutation
 
@@ -144,6 +158,60 @@ The manual triage rule in `CLAUDE.md` has always made exactly this bet; the fast
 The mitigations are the fail-closed direction (a needless three-minute gate costs three minutes, a wrongly-skipped one costs an innocent handback) and the audit trail, which is what makes such an incident diagnosable in one read instead of being a mystery about a bystander branch.
 Narrowing the gate to "just the doc tests" is **not** the fix and is not available: the queue may only run bytes a human approved, so a subset is a different command needing its own approval.
 
+### Verifying without landing, and never running one gate twice
+
+The gate is the expensive thing in this repository - minutes of pytest - and it was being spent twice over the same bytes.
+Observed 2026-08-21: a session ran `.worktree-verify` itself, confirmed it was green, asked to land, and the queue immediately ran the identical command over the identical content.
+Neither run was wrong; the second one just proved what the first had already proved.
+
+Two halves fix that, and they are one design rather than two features.
+
+**The first half is a verify-only request.**
+An agent asks the queue to run the gate instead of running it by hand, and gets the verdict back on the handback channel.
+That is a better place for the gate to run than an agent's own shell for three reasons that hold independently: it is serialised with everything else the queue does, it runs under the daemon's own environment rather than an agent shell (which is where `.worktree-verify`'s known intermittent false failure lives), and - the load-bearing one - **its result is the only kind this queue will ever reuse**.
+
+**The second half is that a green verdict is kept.**
+It is keyed by the **git tree** the gate ran over and the **digest of the command that ran**, because those two are the whole of what decides the verdict.
+The tree rather than the commit: a reconcile that merged an unchanged trunk produces a new commit over identical content, which is exactly the case a commit-keyed record would miss.
+The digest is the same one the approval model already computes, so a command that was edited has no verdict standing rather than an old one.
+
+A later `request_land` whose post-reconcile tree matches a standing verdict **skips the gate**, and records the reuse and its key in the event trail.
+If the trunk moved in between, the reconcile produced a tree nothing has ever verified and the gate runs again - **that is correct rather than a miss**, and it is the same reasoning the classifier's fail-closed direction runs on.
+
+**Only a run this queue executed is ever kept.**
+There is no route that accepts a result from anywhere else, and the absence is the trust boundary rather than an omission.
+An agent's own shell run is self-reported, and self-reporting here has a file-swap loophole: run modified bytes, restore the approved file, report a pass.
+Every one of the queue's own runs, by contrast, resolved the command, checked its digest against the approval, and watched the process exit - so what is recorded is a fact the daemon observed rather than a claim it was handed.
+A landing's own passing gate is kept on the same terms and for the same reason: it is the same fact, produced the same way.
+
+**The verdict is bounded in time, and the bound is not hygiene.**
+A tree hash is a claim about *content*, and the gate's verdict also depends on the machine underneath it - an installed dependency, a toolchain version, an OS update - none of which changes the tree.
+So a verdict stands for `land_verify_memo_seconds` (24 hours by default, and `0` disables reuse entirely), after which the gate runs again.
+The direction is the fail-closed one everything else here uses: a needless run costs minutes, a wrongly reused verdict costs a trunk.
+The records are machine-local like every other row here, so a green from another machine is not merely unwanted, it is unreachable.
+
+**What this trades away, stated rather than discovered later.**
+The verdict is a claim about a *tree*, not about a checkout, so a land from worktree B can reuse a verdict produced in worktree A when both hold the same content.
+Their untracked state may differ - one bootstrapped, one stale - and a gate that would have failed in B is skipped.
+That is deliberate: what reaches the trunk is the tree, and the tree was proven; B's local install being stale is a fact about B rather than about what lands.
+The mitigation is the same one the documentation fast path has - the reuse is in the trail with its key, so an incident is one read rather than a mystery about a bystander branch.
+
+**A skipped gate is never silent**, on this path exactly as on the documentation one.
+The `verify` step is present in the trail with an outcome of `reused`, carrying the tree, the digest, and which request produced the verdict; and the row's `verify_gate` reads `reused` rather than `full`.
+The two skips are drawn differently on purpose: `documentation only · verification skipped` means nobody has ever run this content through the suite, and `verified earlier · gate reused` means this queue ran exactly it.
+A reader deciding whether to trust a row needs those apart.
+
+**Why an agent cannot simply land itself when its own run is green.**
+This is the obvious shortcut and it is worse than it looks, because a green gate is only one of the things a land needs.
+Landing from the agent's own shell puts a **second writer on the primary checkout** - the queue's whole serialisation is a property of its schema (`land_requests_inflight`), and a writer outside the schema is outside the serialisation.
+It also skips the preconditions, which are re-checked before *every* mutation and not once at enqueue: whether the trunk is the main tree, whether the branch moved, whether the primary checkout has local changes to a file this land would overwrite.
+And it produces no `land_events` row, no Tier 0 fact, and no ledger entry naming which OID moved what - so provenance attributes the movement to nobody (`provenance.md`), and the audit that makes an incident diagnosable simply has a hole in it where that land was.
+The gate is the expensive part, not the authoritative part; reusing the expensive part is the whole of what this section grants.
+
+**Verify-only runs need not serialise with landings** - they mutate no trunk, and verification is measured parallel-safe across worktrees.
+They do serialise today, because they share the runner, and the queue advances one request at a time per trunk.
+That is the same "the store's shape permits a later ceiling; v1 is strictly serial" the durability section already states, and lifting it is a change to the worker rather than to the schema.
+
 ### Editing it
 
 The resolved command, which of the two mechanisms produced it, its approval standing, and an editor for the override are drawn together in the landing strip at the head of the worktree map - **once for the Project, not once per worktree**.
@@ -211,6 +279,10 @@ Plans are durable (`land_verify_plans`, keyed by trunk root and digest) because 
 - **Per-Project** the `land_queue` automation must be opted in (`automation-enablement.md`). It gates a capability rather than a read, so it depends on no substrate and is off by default.
 - **Per-Project** `land_grant` is `off` / `draft` / `granted`, defaulting to `draft`.
   Its own field rather than a level of `session_control_grant` for the same reason it is its own automation: session control acts on a *session*, this moves a *repository's trunk*.
+  **It means something narrower for a verify-only request, and the reason is what the grant is about.**
+  `off` refuses both, because `off` is the operator saying agents do not drive this machinery here.
+  `draft` drafts a *land* - a human decides before a trunk moves - and enqueues a *verify*, because a verify-only run moves nothing: it merges the trunk into the requester's own branch, in the requester's own worktree, and runs bytes a human already approved.
+  There is nothing for a human to decide in advance about that, and drafting it would put the cheap half of the pipeline behind the approval the expensive half exists to protect - which is precisely how a gate ends up being run by hand instead.
 - **Per-origin** `land_hourly_budget` bounds a runaway requester. A land costs wall-clock rather than tokens, so the cap is about a request loop, not spend.
 
 An operator request bypasses the grant, because the operator is the authority the grant defers to.
@@ -234,6 +306,11 @@ A drafted request writes an inert `land_request` observation that appears as a F
 ## The handback
 
 A conflict, a verification failure, or an expired hold returns the request to the originating session through the ordinary Phase 5 prompt queue as `sender_kind: "rule"` - a bounded deterministic template, not a new agent-to-agent path.
+
+**A verify-only request's *pass* rides the same channel**, and has to.
+A land announces itself by the trunk moving; a verify-only run leaves no such evidence, so the message *is* the result.
+It is the same authority under every one of the same bounds - the request is the consent, the target is the request's own origin, the template is fixed - and it spends the same single armed reply, which is why one request cannot both report a pass and hand back.
+The body says what was proven, says that **nothing was landed**, says that the trunk was merged into the branch to verify it, and says that a later land of this tree will reuse the result rather than spend the gate again.
 
 ### It arrives armed, because the request is the consent
 
@@ -317,8 +394,14 @@ Every step re-checks the repository from scratch, so re-running one is safe and 
 
 `land_events` is the authoritative per-step trail: request, reconcile, classify, verify, land, and every refusal, handback, and orphan, each with its reason and detail.
 A handback additionally records whether its message was **armed**, and when it was not, why not - a draft nobody delivered is otherwise indistinguishable in the trail from an answer that arrived, which is the defect the arming rule exists to fix.
-`classify` is written on both of its outcomes and `verify` is written even when it was skipped, so "which gate ran" is answerable from the trail alone for every request that reached the gate.
+`classify` is written on both of its outcomes and `verify` is written even when it was skipped - as `skipped` for a documentation-only change set, and as `reused` *with its key* (the tree, the digest, and the request whose run produced the verdict) when a standing verdict was accepted - so "which gate ran" is answerable from the trail alone for every request that reached the gate, and a reused verdict is checkable rather than merely asserted.
+A verify-only request's result additionally records a `verify`/`reported` row carrying whether its answer reached its author armed, for the same reason a handback does.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
+
+**A gate that ran is recorded as a `test_result` fact**, not only as a land event.
+The gate is the only test run most branches ever get and it runs out-of-band - the daemon executes it, so no tool call and no transcript records it - which left the substrate holding one `test_result` fact against 4,485 `command_result` facts in a measured 24-hour window and made declared-vs-verified a statement about capture rather than about an agent (`tier0-facts.md`, `deterministic-consumers.md`).
+Only `passed` and `failed` become facts: `not_configured`, `unapproved` and `timed_out` are statements about the setup or about a run that never finished, and recording them as a failed test run would put a verdict on the branch that nothing ever tested.
+A failed gate states a failure count and **omits** `failing_tests` unless the output named tests, because an empty list reads everywhere as "nothing is failing".
 
 ## Surface
 
@@ -332,7 +415,9 @@ So the map holds both halves, split by **what each part is a property of**:
 - **The row owns the act**, and only the act. Expanding a worktree shows that branch's Land button, its live land state (including the running gate's own reading of itself), a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths, a refusal's reason, which are facts about *this* branch.
   A land that **skipped** the gate says so here and in the strip's queue and history, because it is the one thing about a finished land that the states cannot show: a documentation-only row goes from merging the trunk straight to fast-forwarding, never passing through `Verifying`, and afterwards reads exactly like a land that passed three minutes of pytest.
   A *full* gate is deliberately not labelled, because it is what every land does and the states already narrate it; drawing both would put a redundant chip on every row and bury the one that matters.
+  A **verify-only** row is labelled on exactly the same grounds and in exactly the same place: it moves through `Merging trunk` and `Verifying` in a landing's own words and stops one step early, which is when nobody is still watching, so `verify only` is drawn beside the branch - before the states it qualifies - and its green reads `Verified` rather than `Landed`.
   The main tree is the trunk these land *onto* and is never offered; a detached worktree states why rather than offering a button that would be refused.
+  There is deliberately **no operator button for a verify-only run**: an operator with a worktree open has a terminal in it, and the value the queue adds here is the reusable verdict, which their next Land consumes without being asked. Verify-only rows still appear in the strip's queue and history like any other, so nothing is hidden - only unstartable from the map.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
 
 Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.
@@ -348,7 +433,8 @@ The summary line picks the most interesting row, and a handed-back or refused re
 Nothing ever closed one: an agent's redo is a **new** request with a new id, so the bounced row sits in the history for good and the summary resurrects it forever.
 Observed 2026-08-21 - the collapsed strip read `worktree-watch-session-settle · returned to agent` for hours after that very branch's redo had landed, through several unrelated landings, which is the queue reporting a state it had already left.
 
-The supersession rule is therefore: a bounced request stops being the queue's headline the moment a **later** request for the same branch reaches a state that answered the branch (`landed`, `already_landed`, `refused`, or another `handed_back`).
+The supersession rule is therefore: a bounced request stops being the queue's headline the moment a **later** request for the same branch reaches a state that answered the branch (`landed`, `verified`, `already_landed`, `refused`, or another `handed_back`).
+`verified` counts, and has to: the redo loop a handback asks for now often runs through a verify-only request first, so leaving it out would reproduce the exact defect this rule was written for, one request kind over.
 `cancelled` deliberately does not supersede, because withdrawing a re-request is not an answer about the branch and the earlier handback is still the standing fact about it.
 Ties do not supersede either: two rows created in the same second are not ordered by anything the reading can see, and the safe direction for a row whose whole job is asking for attention is to keep asking.
 
@@ -356,6 +442,7 @@ It is **derived at the reading, not written back onto the row**, and that is the
 The handback really did happen, and `land_events` and the history disclosure are an audit that must go on saying so - what was wrong was never the record, only which row spoke for the queue.
 A "closed" column would also be a second writer's opinion about a terminal row, in a store whose serialization is a property of its schema.
 With nothing left to report, the strip renders an idle summary carrying what recently landed (`nothing queued · 3 landed recently`) rather than the stalest historical row; the count is `landed` only, inside a 24-hour window, over the newest 100 rows `GET /api/land` returns, so it is a floor and is drawn only where the alternative is a bare "nothing queued".
+`verified` is not counted there, because nothing moved and the line says *landed*.
 
 Queue order is oldest-first - the order the pipeline will actually reach them.
 The daemon lists newest-first because that is what a history read wants; read backwards, the request about to run sat at the bottom.
@@ -371,7 +458,7 @@ Nothing in the surface lands anything: the daemon's own supervised sweep is the 
 
 ```text
 GET    /api/land?project_id=                      # the queue and its bounds
-POST   /api/land            {project_id, worktree_root}
+POST   /api/land            {project_id, worktree_root, kind?}   # kind: "land" (default) | "verify"
 DELETE /api/land/{request_id}                     # cancel a queued or waiting request
 GET    /api/land/{request_id}/events              # the per-step audit trail
 GET    /api/land/verify-command?project_id=&worktree_root=
@@ -380,8 +467,12 @@ POST   /api/land/verify-command/approve  {project_id, worktree_root, digest}
 ```
 
 `GET /api/land` attaches `verify_progress` to a row that is `verifying` under this daemon, and `null` to every other row.
-Every row also carries `verify_gate`: `""` until it is classified, then `"full"` or `"docs_only"`.
+Every row also carries `verify_gate`: `""` until it is classified, then `"full"`, `"docs_only"`, or `"reused"`.
 The empty value is not collapsed into `"full"`, at either end - a row that claims a classification nothing recorded is the wrong direction for a field whose entire job is making a skip visible - and the client reads any value it does not recognise as `""` rather than as a skip.
+
+Every row also carries `kind`: `"land"` or `"verify"`.
+`POST /api/land` takes it too and defaults it to `"land"`, so a caller written before verify-only existed asks for exactly what it always asked for; an unrecognised value is a `400` rather than a silent land.
+The client reads an unrecognised value as `"land"`, which is what every row written before this existed actually was, and which is the smaller lie of the two directions: a verify-only run drawn as a land under-claims, a land drawn as a verify-only run tells a reader a trunk did not move when it did.
 
 `GET /api/land/verify-command` additionally reports the editable half (`config_command`, `config_revision`, `config_status`, `config_path`), which convention applies (`script_name`, `script_present`), and the `plan` a byte-identical passing run recorded, if any.
 
@@ -391,8 +482,12 @@ Both leave an audit record (`land_verify_command_changed`, `land_verify_approved
 
 ## The agent surface
 
-`request_land` (`mux-mcp.md`), a caller over the same service.
-It has **no target argument**: the checkout comes from the caller's own live cwd, so "an agent lands the checkout it is working in, and no other" is true by construction rather than by a check something could be routed around.
+`request_land` and `request_verify` (`mux-mcp.md`), two callers over the same service.
+Neither has a **target argument**: the checkout comes from the caller's own live cwd, so "an agent acts on the checkout it is working in, and no other" is true by construction rather than by a check something could be routed around.
+
+They are **two tools rather than one tool with a flag**, and the reason is which call is the default spelling.
+A flag would make the request that moves a repository's trunk the plain form of the request that moves nothing, so a caller that omitted it would land; and it would put both under one grant, when the grant exists for the trunk.
+Two tools make the safe call the short one and let the grant say different things about each.
 
 ## Configuration
 
@@ -402,14 +497,15 @@ It has **no target argument**: the checkout comes from the caller's own live cwd
 | `land_hourly_budget` | global | Requests per origin session per hour. |
 | `land_hold_timeout_seconds` | global | How long a busy worktree holds before handing back. |
 | `land_retry_verification` | global | Whether a failed gate is retried once. |
+| `land_verify_memo_seconds` | global | How long a queue-executed green verdict stands for its (tree, digest). `0` disables reuse. |
 | `land_queue` | `<project>/.swe-mux/config.toml` `automations` | Per-Project opt-in. |
 | `land_grant` | `<project>/.swe-mux/config.toml` | `off` / `draft` / `granted`, default `draft`. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
 
 ## Key files
 
-- Service, pipeline, handbacks: `src/swe_mux/land_queue.py`
-- Durable rows, the audit trail, and recorded gate plans: `src/swe_mux/land_store.py`
+- Service, pipeline, handbacks, verdict reuse: `src/swe_mux/land_queue.py`
+- Durable rows, the audit trail, recorded gate plans, and standing gate verdicts: `src/swe_mux/land_store.py`
 - Precondition reads and their dispositions: `src/swe_mux/land_preconditions.py`
 - The closed documentation allowlist and the raw-diff parser behind it: `src/swe_mux/land_classify.py`
 - The gate, its approval store, and its runner: `src/swe_mux/worktree_verify.py`

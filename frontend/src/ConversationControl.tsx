@@ -37,7 +37,7 @@ import {
   canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, voiceBodyVariant,
 } from './voiceDock'
 import type { VoiceDockState, VoicePanelMode } from './voiceDock'
-import type { ComponentChildren } from 'preact'
+import type { ComponentChildren, JSX } from 'preact'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -939,86 +939,110 @@ function MicIcon({slashed}:{slashed:boolean}){
   </svg>
 }
 
-/**
- * The workspace-level Talk toggle. App places it immediately before Run in each toolbar.
- *
- * Icon only, and lit only while capture is actually running. It used to wear the
- * green chip in every state, which made the one thing a microphone control has to
- * answer - "is this listening to me right now?" - unreadable from the button, and
- * "Talk" alongside the mic said nothing the mic did not. Off is the same recessed
- * treatment as the unconfigured state, because both mean "not listening"; the
- * slashed glyph is what distinguishes off from on, and `aria-pressed` plus the
- * label carry it for anyone not reading the glyph.
- */
-export function ConversationToggle({
-  conversation,
-  configured,
-}:{
-  conversation:Conversation
-  configured:boolean
-}){
-  const active=conversation.phase!=='off'
-  const label=!configured
-    ? 'Set up hands-free conversation'
-    : active
-      ? 'Stop hands-free conversation'
-      : 'Start hands-free conversation'
-  return <button
-    class={`conversation-talk-toggle ${active?'active':'off'}${configured?'':' setup'}`}
-    aria-label={label}
-    aria-pressed={configured?active:undefined}
-    title={!configured
-      ? 'Microphone conversation is disabled - open Voice settings'
-      : `${label}${conversation.target?` - target: ${conversation.target.label}`:' - focus an agent or text surface to choose a target'}`}
-    // Unconfigured, the toggle's job is to reach the microphone switch itself rather than
-    // the Voice tab it sits several sections down in.
-    onClick={configured?()=>conversation.toggle():()=>requestSetting('voice.stt')}
-  ><MicIcon slashed={!active}/></button>
-}
+/** How long a finger has to stay down before the mic reads it as "start capture". */
+const CAPTURE_HOLD_MS=550
+/** How far it may drift first; past this the gesture is a scroll, not a hold. */
+const CAPTURE_HOLD_SLOP_PX=10
 
 /**
- * The voice dock's collapsed state, and the one control that is always on screen.
+ * The one voice control in the top bar: click opens the panel, ctrl+click listens.
  *
- * It sits beside the microphone in the top bar and is deliberately NOT the microphone:
- * that button starts and stops capture, this one opens and closes the panel, and neither
- * does the other's job. Collapsing the dock to this chip leaves everything running -
- * turns arrive, replies are spoken, confirmation cards open - which is why the chip
- * carries what is waiting rather than only an arrow.
+ * It used to be two buttons - a microphone and a panel chip beside it - on the theory
+ * that a control should do one thing. In use that read as two voice buttons whose
+ * difference had to be remembered, on the row with the least space in the app. So the
+ * chip is gone and this is both, with the two jobs separated by the modifier rather than
+ * by the button:
+ *
+ * - **Plain click toggles the panel** and never touches capture. That is the common
+ *   action, so it is the unmodified one.
+ * - **Ctrl/Cmd+click toggles capture**, as does a long press, which is what a phone has
+ *   instead of a modifier (the same 550 ms hold the sidebar and rail use). The panel's
+ *   own mic button is the primary capture control on touch; this is the shortcut.
+ * - **The colour means one thing: capture is live.** Opening or closing the panel never
+ *   changes it. A control that lit up for two different reasons could not answer the one
+ *   question a microphone has to answer - "is this listening to me right now?" - which is
+ *   why the lit state is bound to `conversation.phase` and to nothing else. Off is the
+ *   same recessed treatment as the unconfigured state, because both mean "not listening";
+ *   the slashed glyph, `aria-pressed`, and the label carry the difference.
+ *
+ * It also carries what is waiting behind a collapsed panel - a count while confirmation
+ * cards are open, a dot when a reply landed - because it is now the only way back to a
+ * dock that is streaming, speaking, and opening cards from the chip.
  */
-export function VoiceDockChip({
-  state,talkActive,pendingActions,unseen,onToggle,
+export function VoiceControl({
+  conversation,configured,dock,pendingActions,unseen,onToggleDock,
 }:{
-  state:VoiceDockState
-  /** Capture is live, so there is dictation or an addressee behind the chip. */
-  talkActive:boolean
+  conversation:Conversation
+  /** `stt_enabled`: without it there is a panel to open but no capture to start. */
+  configured:boolean
+  dock:VoiceDockState
   /** Open confirmation cards. They expire, so they outrank an unread reply. */
   pendingActions:number
   /** A reply landed while the dock was collapsed. */
   unseen:boolean
-  onToggle:()=>void
+  onToggleDock:()=>void
 }){
-  const collapsed=state==='chip'
+  const active=conversation.phase!=='off'
+  const collapsed=dock==='chip'
+  const holdRef=useRef<{timer:number;x:number;y:number}|null>(null)
+  // A hold that fired must not also open the panel when the finger lifts: the click
+  // follows the pointer sequence, so it is swallowed once rather than prevented.
+  const heldRef=useRef(false)
+  const toggleCapture=()=>{
+    if(!configured){requestSetting('voice.stt');return}
+    conversation.toggle()
+  }
+  const clearHold=()=>{
+    if(holdRef.current)clearTimeout(holdRef.current.timer)
+    holdRef.current=null
+  }
+  const beginHold=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    heldRef.current=false
+    if(event.pointerType==='mouse')return
+    const x=event.clientX,y=event.clientY
+    holdRef.current={x,y,timer:window.setTimeout(()=>{
+      holdRef.current=null
+      heldRef.current=true
+      toggleCapture()
+    },CAPTURE_HOLD_MS)}
+  }
+  const moveHold=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    const hold=holdRef.current
+    if(!hold)return
+    if(Math.abs(event.clientX-hold.x)>CAPTURE_HOLD_SLOP_PX||Math.abs(event.clientY-hold.y)>CAPTURE_HOLD_SLOP_PX)clearHold()
+  }
+  const captureLabel=!configured
+    ? 'Set up hands-free conversation'
+    : active?'Stop listening':'Start listening'
   const detail=pendingActions
     ?`${pendingActions} confirmation${pendingActions===1?'':'s'} waiting`
     :unseen
       ?'a reply you have not read'
-      :talkActive?'the microphone is live':'nothing waiting'
+      :active?'the microphone is live':'nothing waiting'
   return <button
-    class={`voice-dock-chip ${collapsed?'collapsed':'open'}${talkActive?' talking':''}${pendingActions?' pending':''}`}
+    class={`conversation-talk-toggle ${active?'active':'off'}${configured?'':' setup'}${collapsed?'':' dock-open'}${pendingActions?' pending':''}`}
     aria-label={collapsed?'Open the voice panel':'Collapse the voice panel to the top bar'}
     aria-expanded={!collapsed}
-    title={`${collapsed?'Open':'Collapse'} the voice panel - ${detail}. The microphone beside it is a separate control and keeps running either way.`}
-    onClick={onToggle}
+    // Pressed is capture, matching the colour. The panel's state is `aria-expanded`,
+    // so the two are never confused by a screen reader either.
+    aria-pressed={configured?active:undefined}
+    title={`${collapsed?'Open':'Collapse'} the voice panel - ${detail}.\nCtrl+click (or hold) to ${captureLabel.toLowerCase()}.${
+      conversation.target?`\nTarget: ${conversation.target.label}`:''}`}
+    onPointerDown={beginHold}
+    onPointerMove={moveHold}
+    onPointerUp={clearHold}
+    onPointerCancel={()=>{clearHold();heldRef.current=false}}
+    onClick={event=>{
+      if(heldRef.current){heldRef.current=false;return}
+      if(event.ctrlKey||event.metaKey){toggleCapture();return}
+      onToggleDock()
+    }}
   >
-    <ChatIcon/>
+    <MicIcon slashed={!active}/>
     {pendingActions>0
       ?<i class="voice-dock-badge">{pendingActions>9?'9+':pendingActions}</i>
       :unseen?<i class="voice-dock-dot" aria-hidden="true"/>:null}
   </button>
-}
-
-function ChatIcon(){
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10.5H10l-5.5 3.5z"/></svg>
 }
 
 /**
@@ -1027,12 +1051,16 @@ function ChatIcon(){
  *
  * Three things are kept apart here on purpose, having previously been one:
  *
- * - **Capture** is `conversation.phase`, owned by the microphone in the top bar. The dock
- *   never starts or stops it. Before the split, this surface existed only while capture
- *   ran, so the only way to clear it off the workspace was to stop the microphone.
- * - **The addressee** is `mode`, the talk/chat tabs. It decides which body is drawn and
- *   who plain speech reaches; it says nothing about how much of the dock is on screen.
- * - **Size** is `dock` (`voiceDock.ts`): full, a one-row peek, or collapsed to the chip.
+ * - **Capture** is `conversation.phase`. Its primary control is the mic button in this
+ *   header; the top-bar control reaches the same toggle behind ctrl+click or a hold.
+ *   Opening or closing the dock never starts or stops it. Before the split, this surface
+ *   existed only while capture ran, so the only way to clear it off the workspace was to
+ *   stop the microphone.
+ * - **The body** is `mode`, the talk/chat/tts tabs: the dictation draft, the assistant, or
+ *   read aloud's operational panel. It decides what is drawn, and - for the two
+ *   conversational bodies - who plain speech reaches. It says nothing about how much of
+ *   the dock is on screen.
+ * - **Size** is `dock` (`voiceDock.ts`): full, a one-row peek, or collapsed to the top bar.
  *
  * It floats rather than taking a workspace track for the same reason the read-aloud strip
  * does: a pane whose row count changes with a voice toggle resizes the PTY under a live
@@ -1044,7 +1072,8 @@ function ChatIcon(){
  * inside it (`AssistantPanel.tsx`).
  */
 export function VoiceDock({
-  conversation,commands,configuredCommands,onOpenSettings,mode,onMode,assistantView,dock,onDock,
+  conversation,commands,configuredCommands,onOpenSettings,mode,onMode,assistantView,readView,
+  captureConfigured,dock,onDock,
 }:{
   conversation:Conversation
   commands:Command[]
@@ -1054,6 +1083,10 @@ export function VoiceDock({
   onMode:(mode:VoicePanelMode)=>void
   /** The assistant conversation view, mounted once by App. */
   assistantView:ComponentChildren
+  /** The read-aloud panel, mounted once by App for the same reason. */
+  readView:ComponentChildren
+  /** `stt_enabled`. Without it the panel still works; only capture is unavailable. */
+  captureConfigured:boolean
   dock:VoiceDockState
   onDock:(step:'expand'|'collapse')=>void
 }){
@@ -1064,6 +1097,10 @@ export function VoiceDock({
   const talkActive=conversation.phase!=='off'
   const effectiveMode=effectiveVoicePanelMode(mode,talkActive)
   const chat=effectiveMode==='chat'
+  const read=effectiveMode==='read'
+  // The draft's controls belong to the draft. `!chat` meant that while there were
+  // two tabs; with a third it would put send/undo/comms on the read-aloud panel.
+  const dictating=effectiveMode==='dictation'
   const talkVariant=voiceBodyVariant(dock,effectiveMode,'dictation')
   // Whisper returns whole utterances, never partial words, so there is no stream to
   // animate. A brief flash is the honest signal that something arrived.
@@ -1115,15 +1152,15 @@ export function VoiceDock({
   })
   const send=()=>conversation.send()
   const draftPreview=conversation.draft.trim().replace(/\s+/g,' ')
-  const phaseHint=chat
-    ? `${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`
+  const phaseHint=!dictating
+    ? `${conversation.detail?conversation.detail+' · ':''}The dictation draft is not on screen, so the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the draft. Wake-word commands keep their normal meaning.`
     : `${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null
       ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
       : conversation.detector==='silero'
         ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
         : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}`
   return <section
-    class={`voice-dock ${dock} ${chat?'chat-mode':'talk-mode'} ${conversation.phase}${landed?' landed':''}`}
+    class={`voice-dock ${dock} ${read?'read-mode':chat?'chat-mode':'talk-mode'} ${conversation.phase}${landed?' landed':''}`}
     aria-label="Voice panel"
     aria-hidden={dock==='chip'?'true':undefined}
   >
@@ -1147,29 +1184,41 @@ export function VoiceDock({
           onClick={()=>onDock('expand')}
         >▾</button>
       </div>
+      {/* The panel's own microphone, and the primary capture control: on touch there
+          is no ctrl+click, so the top-bar mic's hold is a shortcut and this is the
+          button. It carries the same one meaning as that one - lit means listening -
+          and it is the only thing in this header that touches capture. */}
+      <button
+        class={`voice-dock-mic ${talkActive?'active':'off'}${captureConfigured?'':' setup'}`}
+        aria-label={captureConfigured?(talkActive?'Stop listening':'Start listening'):'Set up hands-free conversation'}
+        aria-pressed={captureConfigured?talkActive:undefined}
+        title={captureConfigured
+          ?(talkActive?'Stop listening and release the microphone':'Start listening')
+          :'Microphone conversation is disabled - open its switch'}
+        onClick={captureConfigured?()=>conversation.toggle():()=>requestSetting('voice.stt')}
+      ><MicIcon slashed={!talkActive}/></button>
       <div class="voice-mode-toggle" role="tablist" aria-label="Voice panel mode">
-        <button role="tab" aria-selected={!chat} class={chat?'':'active'} disabled={!talkActive} title={talkActive?'Dictation draft and Talk history':'Start Talk to dictate'} onClick={()=>onMode('dictation')}>talk</button>
+        <button role="tab" aria-selected={effectiveMode==='dictation'} class={effectiveMode==='dictation'?'active':''} disabled={!talkActive} title={talkActive?'Dictation draft and Talk history':'Start listening to dictate'} onClick={()=>onMode('dictation')}>talk</button>
         <button role="tab" aria-selected={chat} class={chat?'active':''} title="Converse with the Mux assistant" onClick={()=>onMode('chat')}>chat</button>
+        <button role="tab" aria-selected={read} class={read?'active':''} title="Read aloud: what speaks, for which session, and every clip waiting" onClick={()=>onMode('read')}>tts</button>
       </div>
       {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={phaseHint}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
-      {talkActive&&chat&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
+      {/* Stated, never silent: any body but the draft leaves the assistant as the
+          addressee, so the header says where speech is going. */}
+      {talkActive&&!dictating&&<span class="dictation-mic-note" title="The dictation draft is not on screen, so plain speech goes to the assistant">mic→assistant</span>}
       {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
       {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
       <span class="sr-only" role="status" aria-live="polite">{conversation.detail}</span>
-      {!chat&&conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
+      {dictating&&conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">
-        {!chat&&<button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>}
-        {!chat&&<button title="Append the draft to the target without submitting" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>append</button>}
-        {!chat&&<button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>}
-        {!chat&&<button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>}
-        {!chat&&talkActive&&<button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>}
-        {!chat&&<button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>}
+        {dictating&&<button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>}
+        {dictating&&<button title="Append the draft to the target without submitting" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>append</button>}
+        {dictating&&<button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>}
+        {dictating&&<button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>}
+        {dictating&&talkActive&&<button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>}
+        {dictating&&<button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>}
         {chat&&talkActive&&conversation.hold&&<button class="dictation-stop" title="Send the buffered brainstorm to the assistant now" onClick={()=>conversation.releaseHold()}>go ahead</button>}
         {chat&&talkActive&&conversation.hold&&<button class="dictation-stop" title="Discard the buffered brainstorm and leave hold" onClick={()=>conversation.discardHold()}>discard</button>}
-        {/* Stops capture and nothing else. It is the microphone's control living beside
-            the microphone's readout; the dock's own size controls are at the other end
-            of the header, and neither button reaches the other's state. */}
-        {talkActive&&<button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop mic</button>}
         <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
@@ -1233,5 +1282,9 @@ export function VoiceDock({
         </>}
     </div>
     <div class="voice-dock-body voice-dock-chat" hidden={chat?undefined:true}>{assistantView}</div>
+    {/* Hidden rather than dropped, for the same reason as the assistant body: the panel
+        subscribes to clip events and holds the list it has already fetched, and a
+        remount would re-request every clip on each tab switch. */}
+    <div class="voice-dock-body voice-dock-read" hidden={read?undefined:true}>{readView}</div>
   </section>
 }

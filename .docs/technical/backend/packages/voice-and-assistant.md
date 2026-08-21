@@ -12,6 +12,10 @@ Completed-reply, manual, and application-text TTS streams with a coherent senten
 Open application-speech streams are `SpeechStream`, one worker per stream so clip indices stay monotonic, with a tighter opening clip because that clip *is* time-to-first-sound.
 Also one-shot summary and verbatim overrides, bounded Whisper STT with GPU-to-CPU fallback, temporary audio lifecycle, compatibility voice-submit idempotency, and one-use approval challenges bound to the current screen fingerprint.
 
+Every clip is anchored to the assistant message it renders (`message_anchor`, `source_ts`), captured from the same `transcript_view` reduction the reader tab shows, and `VoiceStore` is what those two columns buy: arrival-ordered listing and a `(run, anchor, kind)` lookup that answers a repeat request from the store instead of a second summary call.
+`generate(message_id=...)` speaks a *named* reply rather than the newest one, which is what the Transcript tab's per-message playback is; a message that is not an assistant reply in the readable window is a `VoiceError`, never a silent fall back.
+A clip's row is inserted `synthesizing` before the engine runs and updated by whichever path leaves synthesis, so a backlog is visible while it is being made and no path can leave a row claiming work that stopped.
+
 STT and TTS subprocesses and local models stay off the event loop.
 Incoming WAV duration, encoding, and bytes are validated before transcription; Whisper decodes validated PCM from memory.
 The optional legacy SAPI recognizer deletes its bounded temporary WAV and text files after the request, and sweeps stale files left by an abandoned recognizer.

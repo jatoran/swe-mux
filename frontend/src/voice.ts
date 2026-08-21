@@ -87,6 +87,10 @@ function ensureAudio(): HTMLAudioElement {
   audio.addEventListener('pause', () => { if (!unlocking) setState({ playing: false }) })
   audio.addEventListener('ended', () => {
     if (unlocking) { unlocking = false; return }
+    // Played means heard to the end. A clip cut off by a barge-in or superseded
+    // mid-sentence is deliberately not marked: the TTS tab's whole job is to say
+    // which of a backlog you actually got, and "started" is not that.
+    if (currentClipId) remember(playedClips, currentClipId)
     setState({ playing: false })
     const next = queue.shift()
     if (next) void playQueuedClip(next).catch(() => { /* autoplay chain stops on error */ })
@@ -288,6 +292,38 @@ export function sessionPlaysHere(sessionId: string | null): boolean {
   return focusedSessionId === sessionId
 }
 
+// ------------------------------------------------------- per-device clip state
+//
+// A clip's `status` on the daemon is synthesis: synthesizing, ready, failed. What
+// happened to it *here* is a different question with a different answer on every
+// device - a clip played on the phone is unplayed on the desktop, and dismissing
+// a backlog is a decision about this browser's speakers. So the three device
+// states live in this module, keyed by clip id, and the TTS tab renders them over
+// the daemon's row rather than asking the daemon to store them.
+//
+// Bounded and deliberately not persisted: they describe one page's session with
+// the audio element, and a "played" mark surviving a reload would claim the
+// operator heard something in a tab that no longer exists.
+const CLIP_MEMORY = 400
+const playedClips = new Set<string>()
+const dismissedClips = new Set<string>()
+
+/** Where a clip stands on this device, over and above what the daemon says. */
+export type ClipDeviceState = 'held' | 'playing' | 'played' | 'dismissed' | null
+
+function remember(set: Set<string>, clipId: string): void {
+  set.add(clipId)
+  while (set.size > CLIP_MEMORY) set.delete(set.values().next().value as string)
+}
+
+export function clipDeviceState(clipId: string): ClipDeviceState {
+  if (currentClipId === clipId) return 'playing'
+  for (const items of heldClips.values()) if (items.some(item => item.clipId === clipId)) return 'held'
+  if (playedClips.has(clipId)) return 'played'
+  if (dismissedClips.has(clipId)) return 'dismissed'
+  return null
+}
+
 export function heldClipsFor(sessionId: string): HeldClip[] { return heldClips.get(sessionId) || [] }
 
 export function heldClipTotal(): number {
@@ -335,7 +371,14 @@ export function playHeldClips(sessionId: string): void {
 export function playAllHeldClips(): void { for (const sessionId of heldClipSessions()) playHeldClips(sessionId) }
 
 export function dismissHeldClips(sessionId: string): void {
-  if (heldClips.delete(sessionId)) notify()
+  const items = heldClips.get(sessionId)
+  if (!items) return
+  // Recorded rather than forgotten, so the global list can say "you dismissed
+  // this" instead of showing a durable clip with no explanation for why it is
+  // no longer offered anywhere.
+  for (const item of items) remember(dismissedClips, item.clipId)
+  heldClips.delete(sessionId)
+  notify()
 }
 
 export function enqueueAutoplay(clipId: string, streamId: string | null = null, sessionId: string | null = null): void {

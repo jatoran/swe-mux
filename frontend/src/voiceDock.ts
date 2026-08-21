@@ -18,27 +18,52 @@
 export type VoiceDockState = 'chip' | 'peek' | 'full'
 
 /**
- * Who plain speech reaches, and therefore which body the dock draws. It is the addressee
- * axis, not a visibility one: changing it never opens or closes the dock, and collapsing
- * the dock never changes it — a chat-addressed microphone keeps feeding the assistant
- * from the chip.
+ * Which body the dock draws, and — for the two conversational ones — who plain speech
+ * reaches. It is not a visibility axis: changing it never opens or closes the dock, and
+ * collapsing the dock never changes it — a chat-addressed microphone keeps feeding the
+ * assistant from the chip.
+ *
+ * `read` is the third body and the operational home of read aloud: the master switch, the
+ * focused session's participation and content mode, this device's autoplay, and the global
+ * clip list. It is a control panel rather than a correspondent, which is what
+ * `voiceAddressee` below turns on.
  */
-export type VoicePanelMode = 'dictation' | 'chat'
+export type VoicePanelMode = 'dictation' | 'chat' | 'read'
+
+export const isVoicePanelMode = (value: unknown): value is VoicePanelMode =>
+  value === 'dictation' || value === 'chat' || value === 'read'
 
 /**
  * With capture off there is no draft to dictate into, so the dock shows the assistant
- * whatever the stored addressee says. The stored value is left alone: turning the
- * microphone back on returns to the mode the operator chose.
+ * whatever the stored mode says. The stored value is left alone: turning the microphone
+ * back on returns to the tab the operator chose. `read` is unaffected either way - it
+ * needs no microphone and says nothing about one.
  */
 export const effectiveVoicePanelMode = (mode: VoicePanelMode, talkActive: boolean): VoicePanelMode =>
-  talkActive ? mode : 'chat'
+  mode === 'dictation' && !talkActive ? 'chat' : mode
+
+/**
+ * Who plain speech reaches while capture runs.
+ *
+ * Exactly one body is a correspondent for dictation: the draft has no other surface, so
+ * speech may only land there while the draft is the body on screen. Every other body -
+ * the assistant, and the read-aloud panel, which is a control surface with no
+ * conversation behind it - leaves the assistant as the addressee. That is a strict
+ * generalization of the shipped rule (chat means the assistant), not a new one, and the
+ * dock states it in the header rather than redirecting speech silently.
+ */
+export const voiceAddressee = (
+  mode: VoicePanelMode,
+  talkActive: boolean,
+): 'dictation' | 'assistant' =>
+  effectiveVoicePanelMode(mode, talkActive) === 'dictation' ? 'dictation' : 'assistant'
 
 /** How much of a dock body a given dock state draws. */
 export type VoiceBodyVariant = 'full' | 'peek' | 'hidden'
 
 /**
- * A body is drawn only when the dock is open *and* that body is the addressee. Both
- * bodies stay mounted either way — `hidden` is a rendering, not an unmount — because the
+ * A body is drawn only when the dock is open *and* that body is the selected one. Every
+ * body stays mounted either way — `hidden` is a rendering, not an unmount — because the
  * assistant's event listener, speech streams, and announced-card set live inside it.
  */
 export const voiceBodyVariant = (

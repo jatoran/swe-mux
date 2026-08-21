@@ -56,6 +56,14 @@ These are written as annotations only, never a PTY write, and render in the Phas
   No standalone code-graph tool can produce this because none observe the agent's reads.
 - **Structural findings.** Dead-code candidates (files with no inbound reference), god nodes (high inbound fan-in), and import cycles, each a project-scoped annotation deduped to one row and bounded per pass.
 
+**A dead-code candidate must be a path the graph could have linked.**
+Admission comes first and orphan-hood second (`is_dead_code_candidate`): outside the Project root (`is_project_relative`), under a generated, vendored, or hidden directory (`is_indexable_path`), served or generated output (`assets/`, `static/`, `public/`), or a test module or harness (`tests/`, `**/test/**`, `*.spec.*`, `*.test.*`, `*harness.tsx`, `conftest.py`).
+In each case the absence of an inbound edge is a property of the graph's boundary or of how a runner discovers the file, and says nothing about whether the code is dead.
+Every one of the 76 `dead-code` findings in a measured 24-hour window was one of those four classes (2026-08-21): 51 agent scratchpad scripts under a temp directory, 11 hashed bundle assets that a fresh `npm run build` mints again, 14 test modules and Playwright harnesses.
+Their volume also **starved the accurate rules**, because `CODE_STRUCTURE_MAX_PER_PASS` is spent dead-code-first in path order - god-node got 2 findings in that window and import-cycle got 0.
+The admitted rows are counted against the query limit rather than the raw ones, because a `LIMIT` applied before the predicate spends the whole budget on scratchpad paths and then reports "no other orphans" as if it had looked.
+What survives is still only a candidate: a dynamic caller is exactly what the graph cannot rule out, which is why the annotation says so.
+
 ## Surface 3 — the per-session change map
 
 `GET /api/sessions/{sid}/change-map?scope=<session|branch|project>&hops=<int>` returns a bounded, server-side subgraph for a WebGL renderer.
@@ -139,6 +147,7 @@ The pane is the utility drawer's **Activity → Changes** segment and a poppable
 - Dead-code / orphan, import-cycle, and god-node detection ride the same graph as ordinary annotations (Surface 2).
 - **Doc-debt precision upgrade.** When the graph is enabled, a doc that owns a *dependent* of a changed file also owes an update, because changing a file can invalidate the documentation of the code that calls it.
   This is an additive, optional refinement over the existing doc-debt ledger and is off when the graph is absent.
+  It is bounded by the same hub rule as direct ownership: a changed file reaching more than `DOC_REACH_DEPENDENT_LIMIT` dependents, or a reach resolving to more than `DOC_HUB_OWNER_LIMIT` docs, carries no ownership signal at all (`deterministic-consumers.md`).
 
 ## Packaging
 

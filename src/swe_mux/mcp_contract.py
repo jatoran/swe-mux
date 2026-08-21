@@ -85,6 +85,14 @@ WRITE_TOOL_NAMES = (
     # inert request a human approves. Deliberately session-scoped with no target
     # argument: an agent lands the checkout it is working in, never another one.
     "request_land",
+    # Phase 2a: the same pipeline stopped before its last step. It moves no trunk, so
+    # the `draft` grant enqueues it rather than drafting it - there is nothing for a
+    # human to decide in advance about merging the trunk into the requester's own
+    # branch and running bytes a human already approved. `off` still refuses it. It is
+    # a separate tool rather than a flag on `request_land` so the dangerous call is
+    # never the default spelling of the safe one, and it carries the same
+    # by-construction scoping: no target argument at all.
+    "request_verify",
 )
 
 

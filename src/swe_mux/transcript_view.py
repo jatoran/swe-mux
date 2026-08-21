@@ -1613,10 +1613,49 @@ def conversation_view_cached(
     return result
 
 
-def final_exchange(
+@dataclass(frozen=True, slots=True)
+class SpokenExchange:
+    """One agent reply, what it was answering, and where in the conversation it sits.
+
+    ``message_id`` and ``ts`` are the *reply's* own identity, not the exchange's:
+    a spoken clip is a rendering of one assistant message, so that message is what
+    a clip is anchored to and what a second request for the same audio looks up.
+    ``ts_epoch`` is the same instant as a number, because ordering a held backlog
+    is the whole reason the anchor is captured - a dialect's native ``ts`` is an
+    ISO string in one harness and a float in another.
+    """
+
+    prompt: str
+    reply: str
+    message_id: str
+    ts: Any
+    ts_epoch: float | None
+
+
+_EMPTY_EXCHANGE = SpokenExchange(prompt="", reply="", message_id="", ts=None, ts_epoch=None)
+
+
+def _exchange_at(messages: list[dict[str, Any]], index: int) -> SpokenExchange:
+    """The assistant message at ``index`` plus the user message before it."""
+    reply = messages[index]
+    prompt = ""
+    for earlier in reversed(messages[:index]):
+        if earlier.get("role") == "user":
+            prompt = str(earlier.get("text") or "")
+            break
+    return SpokenExchange(
+        prompt=prompt,
+        reply=str(reply.get("text") or ""),
+        message_id=str(reply.get("message_id") or ""),
+        ts=reply.get("ts"),
+        ts_epoch=_timestamp_key(reply.get("ts")),
+    )
+
+
+def final_exchange_record(
     path: Path | None, backend: str, *, native_id: str | None = None
-) -> tuple[str, str]:
-    """``(prompt, reply)``: the agent's latest reply and what it was answering.
+) -> SpokenExchange:
+    """The agent's latest reply, what it was answering, and the reply's anchor.
 
     Deliberately the same reduction the reader tab renders, and not a second walk
     with its own idea of where a reply starts. "Copy reply copies the last agent
@@ -1624,22 +1663,46 @@ def final_exchange(
     construction rather than by two implementations agreeing, and the reader is
     where a doubt about what was copied gets settled.
 
-    Either half is ``""`` when the conversation does not have it yet. Sharing the
-    cached view is also why this is cheap enough to call on the turn boundary
+    Every field is empty when the conversation does not have a reply yet. Sharing
+    the cached view is also why this is cheap enough to call on the turn boundary
     that prefetches the clipboard: the tab has usually just paid for it.
     """
-    prompt = ""
-    reply = ""
-    view = conversation_view_cached(path, backend, native_id=native_id)
-    for message in reversed(view["messages"]):
-        if not reply:
-            if message["role"] == "assistant":
-                reply = str(message["text"])
+    messages = conversation_view_cached(path, backend, native_id=native_id)["messages"]
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "assistant":
+            return _exchange_at(messages, index)
+    return _EMPTY_EXCHANGE
+
+
+def message_exchange(
+    path: Path | None, backend: str, message_id: str, *, native_id: str | None = None
+) -> SpokenExchange:
+    """One *named* assistant message and what it was answering.
+
+    The per-message read-aloud path (`design/features/voice.md`): the reader can
+    ask for any reply, not only the newest, and it names the one it means by the
+    same ``message_id`` it renders. Returns an empty exchange when the id is not
+    in the readable window - a message that scrolled out of the conversation view,
+    or a user message, is not a reply and has no audio to make.
+    """
+    if not message_id:
+        return _EMPTY_EXCHANGE
+    messages = conversation_view_cached(path, backend, native_id=native_id)["messages"]
+    for index, message in enumerate(messages):
+        if str(message.get("message_id") or "") != message_id:
             continue
-        if message["role"] == "user":
-            prompt = str(message["text"])
-            break
-    return prompt, reply
+        if message.get("role") != "assistant":
+            return _EMPTY_EXCHANGE
+        return _exchange_at(messages, index)
+    return _EMPTY_EXCHANGE
+
+
+def final_exchange(
+    path: Path | None, backend: str, *, native_id: str | None = None
+) -> tuple[str, str]:
+    """``(prompt, reply)``: the agent's latest reply and what it was answering."""
+    record = final_exchange_record(path, backend, native_id=native_id)
+    return record.prompt, record.reply
 
 
 def final_reply_text(path: Path | None, backend: str, *, native_id: str | None = None) -> str:

@@ -5,7 +5,7 @@ import test from 'node:test'
 
 import {
   DEFAULT_VOICE_DOCK, canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode,
-  reduceVoiceDock, voiceBodyVariant, voiceDockPersistable,
+  isVoicePanelMode, reduceVoiceDock, voiceAddressee, voiceBodyVariant, voiceDockPersistable,
 } from '../src/voiceDock.ts'
 import type { VoiceDockModel } from '../src/voiceDock.ts'
 
@@ -16,6 +16,7 @@ const dir = join(import.meta.dirname, '..', 'src')
 // turns a scoped slice into "the rest of the file".
 const read = (name: string) => readFileSync(join(dir, name), 'utf8').replace(/\r\n/g, '\n')
 const control = read('ConversationControl.tsx')
+const readTab = read('VoiceReadTab.tsx')
 const panel = read('AssistantPanel.tsx')
 const app = read('App.tsx')
 const css = read('style.css')
@@ -96,15 +97,36 @@ test('only the operator’s own dock is persisted', () => {
   assert.equal(DEFAULT_VOICE_DOCK.state, 'chip')
 })
 
-test('a body is drawn only when the dock is open and it is the addressee', () => {
+test('a body is drawn only when the dock is open and it is the selected one', () => {
   assert.equal(voiceBodyVariant('chip', 'chat', 'chat'), 'hidden')
   assert.equal(voiceBodyVariant('peek', 'chat', 'chat'), 'peek')
   assert.equal(voiceBodyVariant('full', 'chat', 'chat'), 'full')
   assert.equal(voiceBodyVariant('full', 'dictation', 'chat'), 'hidden')
   assert.equal(voiceBodyVariant('full', 'dictation', 'dictation'), 'full')
+  assert.equal(voiceBodyVariant('full', 'read', 'read'), 'full')
+  assert.equal(voiceBodyVariant('full', 'read', 'chat'), 'hidden')
   // With capture off there is no draft to dictate into, so the dock shows the assistant.
   assert.equal(effectiveVoicePanelMode('dictation', false), 'chat')
   assert.equal(effectiveVoicePanelMode('dictation', true), 'dictation')
+  // Read aloud's panel needs no microphone and says nothing about one, so capture
+  // never moves it in either direction.
+  assert.equal(effectiveVoicePanelMode('read', false), 'read')
+  assert.equal(effectiveVoicePanelMode('read', true), 'read')
+  assert.ok(isVoicePanelMode('read'))
+  assert.ok(!isVoicePanelMode('tts'))
+})
+
+test('only the dictation draft is ever the addressee', () => {
+  // The draft has no surface but its own, so speech may only land there while it is
+  // the body on screen. Every other body - the assistant, and the read-aloud panel,
+  // which is a control surface with no conversation behind it - leaves the assistant
+  // as the addressee. That is the shipped chat rule generalized, not a new one, and
+  // the dock's header states it rather than redirecting speech silently.
+  assert.equal(voiceAddressee('dictation', true), 'dictation')
+  assert.equal(voiceAddressee('dictation', false), 'assistant')
+  assert.equal(voiceAddressee('chat', true), 'assistant')
+  assert.equal(voiceAddressee('read', true), 'assistant')
+  assert.match(control, /talkActive&&!dictating&&<span class="dictation-mic-note"/)
 })
 
 test('collapsing the dock hides it in CSS rather than unmounting the conversation', () => {
@@ -123,30 +145,84 @@ test('collapsing the dock hides it in CSS rather than unmounting the conversatio
   assert.match(app, /<div class="voice-dock-anchor">\s*\n\s*<VoiceDock/)
 })
 
-test('the dock control and the microphone control are separate buttons', () => {
-  const chip = control.slice(control.indexOf('export function VoiceDockChip'), control.indexOf('function ChatIcon'))
-  // The chip moves the dock and nothing else: no capture call anywhere in it.
-  assert.match(chip, /onClick=\{onToggle\}/)
-  assert.doesNotMatch(chip, /conversation\./)
-  // The talk toggle moves capture and nothing else: no dock state anywhere in it. Cut at
-  // the chip's own doc comment rather than its `export`, or the prose about the dock in
-  // that comment lands inside the slice.
+test('one top-bar control: click is the panel, ctrl+click is capture', () => {
+  // This deliberately REVERSES the rule that shipped with the dock, which was that the
+  // panel chip and the microphone are separate buttons with separate jobs. In use that
+  // read as two voice buttons whose difference had to be remembered, on the row with the
+  // least space in the app. The separation survives as the modifier rather than as the
+  // button, and the assertion below is what stops it collapsing into one ambiguous tap.
   const toggle = control.slice(
-    control.indexOf('export function ConversationToggle'),
-    control.indexOf("/**\n * The voice dock's collapsed state"),
+    control.indexOf('export function VoiceControl'),
+    control.indexOf("/**\n * The one voice surface"),
   )
   assert.ok(toggle.length > 0 && toggle.includes('conversation-talk-toggle'))
-  assert.doesNotMatch(toggle, /dock/i)
-  // Both live in both top bars, beside each other.
+  // Unmodified is the panel, because it is the common action.
+  assert.match(toggle, /if\(event\.ctrlKey\|\|event\.metaKey\)\{toggleCapture\(\);return\}\n\s*onToggleDock\(\)/)
+  // Capture is reached by the modifier and by a hold - the phone has no ctrl key, so
+  // the same 550 ms hold the rest of the app uses is the touch route to it.
+  assert.match(toggle, /const toggleCapture=\(\)=>\{/)
+  assert.match(toggle, /heldRef\.current=true\n\s*toggleCapture\(\)/)
+  assert.match(control, /const CAPTURE_HOLD_MS=550/)
+  // A hold that fired must not also open the panel when the finger lifts.
+  assert.match(toggle, /if\(heldRef\.current\)\{heldRef\.current=false;return\}/)
+  // Exactly one voice control in each top bar, and the second button is gone.
   for (const bar of ['mobile-toolbar', 'app-identity']) {
     assert.ok(app.includes(bar), `missing ${bar}`)
   }
-  assert.equal(app.split('<VoiceDockChip').length - 1, 2)
-  // The dock's own header carries the two size steps, and its only capture control is
-  // labelled as such rather than doubling as a close button.
+  assert.equal(app.split('<VoiceControl').length - 1, 2)
+  assert.doesNotMatch(app, /VoiceDockChip/)
+  assert.doesNotMatch(control, /VoiceDockChip/)
+})
+
+test('the panel owns the primary capture control, and the size steps are separate', () => {
+  // Ctrl+click does not exist on touch, so the in-modal microphone is the capture
+  // control there and the top-bar hold is the shortcut. It starts as well as stops:
+  // the header used to carry only a `stop mic`, which meant the panel could release
+  // the microphone but never take it.
+  assert.match(control, /class=\{`voice-dock-mic \$\{talkActive\?'active':'off'\}/)
+  assert.match(control, /onClick=\{captureConfigured\?\(\)=>conversation\.toggle\(\):\(\)=>requestSetting\('voice\.stt'\)\}/)
+  assert.match(control, /<MicIcon slashed=\{!talkActive\}\/>/)
+  assert.doesNotMatch(control, />stop mic</)
+  // And it is lit by capture alone, like the top-bar control it mirrors.
+  const mic = css.match(/\n\s*\.voice-dock-mic\{([^}]+)\}/)
+  assert.ok(mic, 'missing dock mic rule')
+  assert.doesNotMatch(mic[1], /green/)
+  assert.match(css, /\n\s*\.voice-dock-mic\.active\{[^}]*--talk-edge:var\(--green/)
+  // The size steps stay their own two buttons at the other end of the header, and
+  // neither of them reaches capture.
   assert.match(control, /onClick=\{\(\)=>onDock\('collapse'\)\}/)
   assert.match(control, /onClick=\{\(\)=>onDock\('expand'\)\}/)
-  assert.match(control, /onClick=\{\(\)=>conversation\.stop\(\)\}>stop mic</)
+})
+
+test('read aloud is a third body in the panel, mounted once and hidden rather than dropped', () => {
+  // Same rule as the assistant body above: the panel holds the clip list it has
+  // fetched and its subscription to clip events, so a remount on every tab switch
+  // would refetch the whole list to render the same rows.
+  assert.match(control, /<div class="voice-dock-body voice-dock-read" hidden=\{read\?undefined:true\}>\{readView\}<\/div>/)
+  assert.equal(app.split('<VoiceReadTab').length - 1, 1)
+  assert.match(control, /onClick=\{\(\)=>onMode\('read'\)\}>tts</)
+  // The master switch keeps exactly one owner. The tab may turn it on through the
+  // standard gate - a grant only ever turns something on - and links to Settings for
+  // turning it off, rather than carrying a second copy of the switch.
+  assert.match(readTab, /<GrantGate\n\s*ids=\{\['voice\.tts'\]\}/)
+  assert.match(readTab, /<SettingLink target="voice\.tts"/)
+  assert.doesNotMatch(readTab, /type="checkbox"/)
+  // And the per-session control left the pane bar, so it is answered once rather than
+  // once per drawn pane.
+  assert.doesNotMatch(app, /tts:\{voiceMode/)
+  assert.doesNotMatch(app, /tts:setup/)
+})
+
+test('the global clip list is ordered by when each reply arrived', () => {
+  // Synthesis order is exactly wrong for a held backlog: clips are made in whatever
+  // order engine slots and summary calls free up, so it puts an hour-old update above
+  // the reply that just landed. `source_ts` is captured at generation time for this.
+  assert.match(readTab, /typeof clip\.source_ts === 'number' \? clip\.source_ts : clip\.created_at/)
+  // The daemon's synthesis state and this device's playback state are separate fields
+  // and stay separate: a clip is `ready` on the daemon forever, while `played` is true
+  // on the laptop and false on the phone.
+  assert.match(readTab, /if \(clip\.status === 'synthesizing'\) return 'synthesizing'/)
+  assert.match(readTab, /return device \|\| 'ready'/)
 })
 
 test('the dock floats from a zero-height anchor instead of taking a workspace track', () => {

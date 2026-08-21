@@ -35,15 +35,27 @@ import {
   type TranscriptGroup,
   type TranscriptMessage,
 } from './transcriptView'
-import type { Session } from './types'
+import {
+  indexTranscriptAudio, transcriptAudioClip, transcriptAudioHint, transcriptAudioMark,
+  transcriptAudioState, TRANSCRIPT_AUDIO_KINDS,
+} from './transcriptAudio'
+import type { MessageAudio } from './transcriptAudio'
+import type { Session, VoiceClip, VoiceContent } from './types'
+import { newVoiceStreamId, playClip, unlockPlayback } from './voice'
 
 // The drawer's reader: what the focused session has said, in a column you can
 // scroll and copy from without touching the terminal.
 //
-// Deliberately inert. It has no composer, no insert button and no send: every
-// other session-scoped tab exists to put text *into* an agent, and mixing that
-// into the one surface meant for reviewing what already happened is how a
-// stray click becomes a message nobody meant to send. Copy is the only verb.
+// Deliberately write-nothing. It has no composer, no insert button and no send:
+// every other session-scoped tab exists to put text *into* an agent, and mixing
+// that into the one surface meant for reviewing what already happened is how a
+// stray click becomes a message nobody meant to send.
+//
+// The rule is about what a tap can reach, not about a count of buttons. Copy,
+// select, and the per-message read-aloud markers all leave the conversation, the
+// PTY, and the session exactly as they were; the one thing playback spends - a
+// summary's model call - is named on the chip before it is pressed, and its
+// verbatim twin spends nothing (`design/features/voice.md`).
 
 const COPIED_FLASH_MS = 1200
 /** Copy-all's key in the flash state, where per-message keys are ordinals. */
@@ -118,14 +130,58 @@ function SelectSheet({ title, text, copied, onCopy, onClose }: {
   </div>
 }
 
-function Message({ message, copied, expanded, query, onCopy, onExpand, onSelectText }: {
+/**
+ * Read one reply aloud, from the reader, in either kind.
+ *
+ * Two chips rather than one button because the choice between a spoken summary and the
+ * reply read out is exactly the choice this surface exists to offer, and the two cost
+ * different things - a summary is a model call against the daily read-aloud budget, and
+ * verbatim never touches a model. Each chip is its own marker: nothing yet, being made,
+ * ready to play, or a failed attempt worth retrying.
+ *
+ * A ready chip *plays*, it does not regenerate. That is the whole point of anchoring a
+ * clip to its message: automatic read-aloud and this button produce identical audio for
+ * the same reply, so the second request is a lookup (`transcriptAudio.ts`).
+ *
+ * Rendered only for assistant messages, and only while read aloud is on. This is a
+ * per-item surface repeated once per reply, so it carries no gate of its own - the one
+ * gate for the master switch lives in the voice panel's `tts` tab
+ * (`design/features/setting-links.md`).
+ */
+function MessageAudioChips({ audio, requested, onSpeak, onPlay }: {
+  audio: MessageAudio | undefined
+  requested: readonly VoiceContent[]
+  onSpeak: (kind: VoiceContent) => void
+  onPlay: (clip: VoiceClip) => void
+}) {
+  return <>{TRANSCRIPT_AUDIO_KINDS.map(kind => {
+    const state = transcriptAudioState(audio, kind, requested.includes(kind))
+    const clip = transcriptAudioClip(audio, kind)
+    return <button
+      key={kind}
+      class={`transcript-copy transcript-audio ${state}`}
+      disabled={state === 'generating'}
+      aria-label={transcriptAudioHint(state, kind)}
+      title={transcriptAudioHint(state, kind)}
+      onClick={() => (clip ? onPlay(clip) : onSpeak(kind))}
+    >{transcriptAudioMark(state)} {kind}</button>
+  })}</>
+}
+
+function Message({ message, copied, expanded, query, audio, audioRequested, onCopy, onExpand, onSelectText, onSpeak, onPlay }: {
   message: TranscriptMessage
   copied: boolean
   expanded: boolean
   query: string
+  /** Clips that already speak this message, by kind; `undefined` while read aloud is off. */
+  audio: MessageAudio | undefined
+  /** Kinds this reader has asked for and not yet seen land. */
+  audioRequested: readonly VoiceContent[] | null
   onCopy: (message: TranscriptMessage) => void
   onExpand: (messageId: string) => void
   onSelectText: (message: TranscriptMessage) => void
+  onSpeak: (message: TranscriptMessage, kind: VoiceContent) => void
+  onPlay: (clip: VoiceClip) => void
 }) {
   const clamped = transcriptClamped(message.text) && !expanded && !query
   const stamp = transcriptTimestampLabel(message.ts)
@@ -144,6 +200,14 @@ function Message({ message, copied, expanded, query, onCopy, onExpand, onSelectT
         title={`Copy this ${kind}`}
         onClick={() => onCopy(message)}
       >{copied ? 'Copied' : 'Copy'}</button>
+      {/* Replies only: read aloud speaks what the agent said, and a prompt is
+          something the operator wrote. */}
+      {audioRequested && message.role === 'assistant' && <MessageAudioChips
+        audio={audio}
+        requested={audioRequested}
+        onSpeak={kind => onSpeak(message, kind)}
+        onPlay={onPlay}
+      />}
     </div>
     <header>
       <span class="transcript-speaker">{transcriptSpeaker(message.role)}</span>
@@ -190,7 +254,11 @@ function AbandonedRun({ messages, open, onToggle, renderMessage }: {
   </section>
 }
 
-export function TranscriptTab({ session }: { session: Session | null }) {
+export function TranscriptTab({ session, readAloud = false }: {
+  session: Session | null
+  /** `tts_enabled`. Off means the per-message markers are not drawn at all. */
+  readAloud?: boolean
+}) {
   const sessionId = session?.id || ''
   const runId = session?.agent_run_id || ''
   const [data, setData] = useState<SessionTranscript | null>(null)
@@ -204,6 +272,14 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const [sheet, setSheet] = useState<{ title: string; text: string } | null>(null)
   const [showToolCalls, setShowToolCalls] = useState(false)
   const [openBranches, setOpenBranches] = useState<string[]>([])
+  // Every clip of this run, indexed by the message it speaks. Fetched once per run and
+  // refreshed on clip events rather than polled: `mux:voice-clip` is raised for every
+  // ready or failed clip, which is exactly when this index can change.
+  const [clips, setClips] = useState<VoiceClip[]>([])
+  // What this reader has asked for and not yet seen land, keyed `<messageId>:<kind>`.
+  // Local, because another device generating the same clip is not something this tab can
+  // observe until the clip arrives - a shared "generating" would spin forever here.
+  const [audioRequests, setAudioRequests] = useState<string[]>([])
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
   const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
@@ -249,8 +325,32 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     // The sheet holds a snapshot of text from the conversation being left behind, so it
     // closes with it rather than presenting one session's words over another's.
     setSheet(null)
+    // Clips are anchored per run, so a rollover invalidates the index with the
+    // transcript. In-flight requests go with it: their markers belong to messages that
+    // are no longer on screen.
+    setClips([]); setAudioRequests([])
     if (sessionId) void load(sessionId)
   }, [sessionId, runId])
+
+  // The run's audio. `limit` is the store's own ceiling: a conversation with more clips
+  // than that has older ones no longer worth a marker, and the reader's window is
+  // bounded well below it anyway.
+  useEffect(() => {
+    if (!readAloud || !sessionId) { setClips([]); return }
+    let live = true
+    const loadClips = () => api<{ items: VoiceClip[] }>(
+      'GET',
+      `/api/voice/clips?session=${encodeURIComponent(sessionId)}&limit=200`,
+    ).then(result => { if (live) setClips(result.items) }).catch(() => { /* the reader still reads */ })
+    void loadClips()
+    const onClip = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string }>).detail
+      if (detail?.sessionId && detail.sessionId !== sessionId) return
+      void loadClips()
+    }
+    window.addEventListener('mux:voice-clip', onClip)
+    return () => { live = false; window.removeEventListener('mux:voice-clip', onClip) }
+  }, [sessionId, runId, readAloud])
 
   // A manual selection held over the column freezes the follow-scroll below.
   //
@@ -444,13 +544,58 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     ? visibleMessages.map(message => ({ kind: 'message', message }) as const)
     : groupTranscriptMessages(visibleMessages)
   const stale = data?.observation_stale_since
+  const audioIndex = readAloud ? indexTranscriptAudio(clips) : null
+  const requestedFor = (messageId: string): VoiceContent[] =>
+    TRANSCRIPT_AUDIO_KINDS.filter(kind => audioRequests.includes(`${messageId}:${kind}`))
+  const playMessageClip = (clip: VoiceClip) => {
+    unlockPlayback()
+    void playClip(clip.id, clip.session_id).catch(() => setError('Playback failed.'))
+  }
+  /**
+   * Ask for one reply's audio, in one kind.
+   *
+   * The daemon answers from the store when a clip for this (run, message, kind) already
+   * exists, so a second reader pressing the same chip costs a lookup rather than another
+   * summary call. The clip is played either way - the reader pressed play, and whether
+   * the audio was found or made is not their question.
+   */
+  const speakMessage = async (message: TranscriptMessage, kind: VoiceContent) => {
+    if (!sessionId) return
+    const key = `${message.message_id}:${kind}`
+    if (audioRequests.includes(key)) return
+    setAudioRequests(current => [...current, key])
+    unlockPlayback()
+    try {
+      const clip = await api<VoiceClip>('POST', `/api/sessions/${sessionId}/voice/generate`, {
+        message_id: message.message_id,
+        content_mode: kind,
+        // A per-message request is its own stream: it must not join, or cut, whatever a
+        // pane's automatic read-aloud happens to be speaking.
+        stream_id: newVoiceStreamId(),
+      })
+      // Optimistic, and then corrected by the refetch the clip event triggers. Without
+      // it the chip would sit on `generating` until an event that has already fired.
+      if (clip?.id) {
+        setClips(current => [clip, ...current.filter(item => item.id !== clip.id)])
+        if (clip.status === 'ready') playMessageClip(clip)
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setAudioRequests(current => current.filter(item => item !== key))
+    }
+  }
   const renderMessage = (message: TranscriptMessage) => <Message
     message={message}
     copied={copied === message.ordinal}
     expanded={expanded.includes(message.message_id)}
     query={normalizedQuery}
+    audio={audioIndex?.get(message.message_id)}
+    audioRequested={audioIndex ? requestedFor(message.message_id) : null}
     onCopy={item => void copy(item.text, item.ordinal)}
     onExpand={toggleExpand}
+    onSpeak={(item, kind) => void speakMessage(item, kind)}
+    onPlay={playMessageClip}
     onSelectText={item => setSheet({
       title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
       text: item.text,

@@ -1,5 +1,5 @@
 import { render } from 'preact'
-import { ConversationToggle, VoiceDock, VoiceDockChip, type Conversation } from '../../src/ConversationControl'
+import { VoiceControl, VoiceDock, type Conversation } from '../../src/ConversationControl'
 import type { Command } from '../../src/commands'
 import type { VoiceDockState } from '../../src/voiceDock'
 import '../../src/style.css'
@@ -15,15 +15,16 @@ import '../../src/style.css'
  * clear, and at the peek there is no composer but every open confirmation card is still
  * there with its buttons.
  *
- * Query parameters: `dock` (chip|peek|full), `mode` (talk|chat), `talk=0` to render with
- * capture stopped, `card=1` to draw an open confirmation card in the assistant body, and
- * `mobile=1` for the phone toolbar, where the chip is a seventh control on a bar that has
- * to stay one row.
+ * Query parameters: `dock` (chip|peek|full), `mode` (talk|chat|read), `talk=0` to render
+ * with capture stopped, `card=1` to draw an open confirmation card in the assistant body,
+ * and `mobile=1` for the phone toolbar, where the voice control shares a row with nav,
+ * quota, the Project name, Run, and the drawer toggle.
  */
 
 const parameters = new URLSearchParams(location.search)
 const dock = (parameters.get('dock') || 'full') as VoiceDockState
-const mode = parameters.get('mode') === 'talk' ? 'dictation' : 'chat'
+const modeParameter = parameters.get('mode')
+const mode = modeParameter === 'talk' ? 'dictation' : modeParameter === 'read' ? 'read' : 'chat'
 const talkActive = parameters.get('talk') !== '0'
 const card = parameters.get('card') === '1'
 const mobile = parameters.get('mobile') === '1'
@@ -75,7 +76,6 @@ const assistantView = dock === 'peek'
 const pane = <section class="terminal-pane focused">
   <div class="pane-bar agent-pane-bar">
     <div class="pane-identity"><span class="pane-title">claude-1ee230</span></div>
-    <div class="pane-voice"><button class="voice-chip auto">tts:auto</button></div>
     <div class="pane-tools"><button>⋯</button></div>
   </div>
   <div class="terminal-surface">
@@ -91,7 +91,45 @@ const root = document.querySelector('#root')!
 root.setAttribute('style', 'width:100%;height:100dvh;margin:0')
 document.body.setAttribute('style', 'margin:0')
 document.documentElement.style.setProperty('--ui-scale', '1')
-const chip = <VoiceDockChip state={dock} talkActive={talkActive} pendingActions={card ? 1 : 0} unseen={false} onToggle={() => {}} />
+// One control, both jobs: click opens the panel, ctrl+click or a hold starts capture.
+// It also carries what is waiting behind a collapsed panel, being the only way back to it.
+const control = <VoiceControl
+  conversation={conversation}
+  configured={true}
+  dock={dock}
+  pendingActions={card ? 1 : 0}
+  unseen={false}
+  onToggleDock={() => {}}
+/>
+
+// A presentational stand-in, like the assistant body: the real panel fetches clips from a
+// daemon this harness does not have. The shapes that matter to layout are the control row
+// and a clip list long enough to scroll.
+const readView = <div class="voice-read">
+  <div class="voice-read-controls">
+    <div class="voice-read-session"><span>session</span><strong>claude-1ee230</strong>
+      <button class="voice-read-mode auto">tts:auto</button>
+      <button class="voice-read-content verbatim">verbatim</button>
+    </div>
+    <button class="voice-read-autoplay active">🔊 this device</button>
+    <button class="voice-read-held">▶ 2 held</button>
+    <a class="voice-read-master" href="#">master: on</a>
+    <button class="dictation-settings">⚙</button>
+  </div>
+  <div class="voice-read-clips" role="list">
+    {[
+      { id: 'a', kind: 'summary', state: 'held', text: 'The scrollback ring keeps bracketed paste across replay now.' },
+      { id: 'b', kind: 'verbatim', state: 'played', text: 'Landed on master and the gate is green.' },
+      { id: 'c', kind: 'summary', state: 'synthesizing', text: 'Working through the migration.' },
+    ].map(clip => <div key={clip.id} role="listitem" class={`voice-read-clip ${clip.state}`}>
+      <button class="voice-read-play">▶</button>
+      <span class="voice-read-kind">{clip.kind}</span>
+      <span class="voice-read-when">10:41</span>
+      <span class="voice-read-text">{clip.text}</span>
+      <span class={`voice-read-state ${clip.state}`}>{clip.state}</span>
+    </div>)}
+  </div>
+</div>
 
 // The phone bar in full, because the risk the chip introduces here is width: it is a
 // seventh control on a row that must not wrap, beside nav, quota, the Project name, the
@@ -99,8 +137,7 @@ const chip = <VoiceDockChip state={dock} talkActive={talkActive} pendingActions=
 const mobileToolbar = <div class="mobile-toolbar">
   <button class="nav-toggle mobile-nav-toggle">≡</button>
   <button class="mobile-project-name">swe-mux</button>
-  <ConversationToggle conversation={conversation} configured={true} />
-  {chip}
+  {control}
   <button class="mobile-run-trigger">▶ Run</button>
   <button class="mobile-drawer-toggle">▤</button>
 </div>
@@ -111,8 +148,7 @@ render(
       <div class="app-identity">
         <button class="sidebar-collapse">«</button>
         <strong class="desktop-project-name">swe-mux</strong>
-        <ConversationToggle conversation={conversation} configured={true} />
-        {chip}
+        {control}
       </div>
     </header>
     <aside class="sidebar" />
@@ -136,6 +172,8 @@ render(
         mode={mode}
         onMode={() => {}}
         assistantView={assistantView}
+        readView={readView}
+        captureConfigured={true}
         dock={dock}
         onDock={() => {}}
       />

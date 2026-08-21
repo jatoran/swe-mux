@@ -1288,6 +1288,7 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "interrupt",
         "end_session",
         "request_land",
+        "request_verify",
         "watch_session",
     }
     assert names == {tool["name"] for tool in TOOLS}
@@ -1489,6 +1490,36 @@ async def test_request_land_reads_the_worktree_from_the_callers_own_cwd() -> Non
     assert land.calls[0]["origin"] == "agent"
     assert land.calls[0]["origin_session_id"] == "s1"
     assert land.calls[0]["project_root"] == "D:/repo"
+    assert land.calls[0]["kind"] == "land"
+
+
+async def test_request_verify_is_the_same_scoping_asking_for_a_different_act() -> None:
+    """A separate tool, so the dangerous call is never the default spelling of the safe one.
+
+    It inherits `request_land`'s by-construction scoping unchanged - no target argument,
+    the worktree read off the caller's own record - and differs in exactly one field.
+    """
+    land = LandStub()
+    caller = live_session("s1")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    await _land_service(caller, land).dispatch_tool(
+        caller, "request_verify", {"reason": "ready for the gate"}
+    )
+    assert land.calls[0]["kind"] == "verify"
+    assert land.calls[0]["worktree_root"] == "D:/worktrees/alpha"
+    assert land.calls[0]["origin"] == "agent"
+    # No argument of any spelling can name another checkout.
+    schema = next(item for item in TOOLS if item["name"] == "request_verify")["inputSchema"]
+    assert "target" not in schema["properties"]
+    assert schema["additionalProperties"] is False
+
+
+async def test_request_verify_without_the_service_is_unavailable() -> None:
+    caller = live_session("s1")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    with pytest.raises(QueueError) as caught:
+        await _land_service(caller, None).dispatch_tool(caller, "request_verify", {})
+    assert caught.value.code == "unavailable"
 
 
 async def test_request_land_without_the_service_is_unavailable_not_a_partial_write() -> None:
