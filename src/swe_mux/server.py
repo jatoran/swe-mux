@@ -291,8 +291,10 @@ from .session_resume import ResumeRefused, resolve_latest_run, resume_run
 from .settings_store import SettingsStore
 from .spawn_contract import (
     SpawnRequest,
+    apply_spawn_model,
     resolve_contained_cwd,
     resolve_listed_cwd,
+    resolve_spawn_model,
     scrub_claude_session_markers,
 )
 from .spawn_probe import SpawnFailure, spawn_settled
@@ -6350,6 +6352,11 @@ async def _spawn_from_body(
                 profile_id,
                 len(agent_profile.argv),
             )
+    if spec.model:
+        # After the profile slots and before the seed prompt: the model is a flag
+        # that replaces whatever those slots set, and the seed prompt is the
+        # positional that must stay last on the command line.
+        argv = apply_spawn_model(backend, argv, resolve_spawn_model(backend, spec.model))
     if spec.seed_text:
         if not is_agent_harness(backend):
             raise ValueError({"seed_text": "seed prompts require an agent backend"})

@@ -145,6 +145,93 @@ class MemoryInventory:
     detail: str
 
 
+@dataclass(frozen=True, slots=True)
+class ModelSelection:
+    """How a launch tells one CLI which model to run.
+
+    Declared per harness because "takes a model flag" is not a property every
+    agent CLI has, and assuming it fails in the expensive direction: the flag is
+    handed to a CLI that does not know it, the CLI exits during startup, and the
+    operator gets a pane that appears and dies instead of a sentence saying the
+    model could not be chosen. ``None`` on :class:`HarnessDescriptor` is that
+    sentence - a declared absence mux refuses on, not a silent default.
+
+    Recognition is by **namespace plus alias**, never by an enumerated catalogue
+    of released models. A catalogue lags every vendor release and would refuse a
+    model that works, which is the failure `claude_models.py` already had to
+    grow a family fallback to escape. A namespace check still catches the failure
+    that matters here: a name meant for another harness - or for none - reaching
+    a CLI that will die on it.
+    """
+
+    # Tokens that introduce the value, canonical first. Every entry is recognized
+    # when an earlier argument slot's model is stripped, so a short form a user's
+    # profile happens to use is replaced rather than left to fight with the
+    # request's own flag.
+    argv: tuple[str, ...]
+    # Short names the CLI accepts *as* a model. These are the whole reason a
+    # spoken "open an opus session" works without the operator knowing an id.
+    aliases: frozenset[str]
+    # Namespaces a full model id belongs to, canonical first. The first entry is
+    # also what a family alias carrying a version suffix resolves into, so the
+    # spoken "opus 5" becomes this harness's own spelling rather than being
+    # refused for not looking like an id.
+    id_prefixes: tuple[str, ...]
+    # Value-token prefixes that set the model through the CLI's *generic* config
+    # flag (Codex's `-c model=…`). Stripped together with the flag introducing
+    # them, so "the request's model replaces the profile's" is true rather than
+    # nearly true.
+    config_prefixes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.argv:
+            raise ValueError("a model selection must declare the argv introducing it")
+        if not self.id_prefixes:
+            raise ValueError("a model selection must declare its model id namespace")
+
+    def resolve(self, name: str) -> str | None:
+        """The value the CLI is given for `name`, or ``None`` when unrecognized."""
+        model = normalize_model_name(name)
+        if not model:
+            return None
+        if model in self.aliases:
+            return model
+        if any(model.startswith(prefix) for prefix in self.id_prefixes):
+            return model
+        # "opus 5" is how an operator says `claude-opus-5`. A family alias with a
+        # version suffix resolves into this harness's own namespace instead of
+        # being refused for not being spelled as an id.
+        family, _, suffix = model.partition("-")
+        if suffix and family in self.aliases:
+            return f"{self.id_prefixes[0]}{model}"
+        return None
+
+    def describe(self) -> str:
+        """The accepted vocabulary, for a refusal the operator can act on."""
+        namespaces = ", ".join(self.id_prefixes)
+        ids = f"a full model id beginning {namespaces}"
+        if self.aliases:
+            return f"{', '.join(sorted(self.aliases))}, or {ids}"
+        return ids
+
+
+# A model name after normalization: lowercase, no whitespace, and never opening
+# with `-`, so a value that would read as another argument can never become one.
+_MODEL_NAME = re.compile(r"[a-z0-9][a-z0-9._\-\[\]]{0,79}")
+
+
+def normalize_model_name(value: str) -> str:
+    """Canonicalize a spoken or typed model name, or `""` when it is not one.
+
+    Speech arrives as words, so "Opus" and "claude opus 5" have to become `opus`
+    and `claude-opus-5` before anything can recognize them. The charset is closed
+    and anchored deliberately: this value ends up as an argv token beside a flag,
+    and the one thing it must never be able to do is turn into a second flag.
+    """
+    text = "-".join(str(value or "").strip().lower().split())
+    return text if _MODEL_NAME.fullmatch(text) else ""
+
+
 DataHomeResolver = Callable[[], Path]
 ToolCatalog = tuple[tuple[str, str], ...]
 
@@ -274,6 +361,19 @@ class HarnessDescriptor:
     # takes arbitrary `-c key=value` pairs and mux injects two of them, so `-c` itself
     # stays available and only `notify=` and `mcp_servers.mux.` are reserved.
     reserved_launch_args: tuple[str, ...]
+    # How a launch names the model this CLI should run. See :class:`ModelSelection`.
+    #
+    # Deliberately **not** reserved argv: a launch profile setting `--model` is the
+    # documented way to keep a "Claude (opus)" entry in the Run menu, and reserving
+    # the flag would take that away. What a request-level model does instead is
+    # *replace* whatever the profile set (`strip_model_args`), because two `--model`
+    # flags on one command line is a per-CLI coin toss and "the request wins" has to
+    # be a fact rather than a hope.
+    #
+    # `None` is a declared absence: mux has measured no model argument for this
+    # harness, so a spawn asking for one is refused before anything starts rather
+    # than started with a flag the CLI will reject.
+    model_selection: ModelSelection | None
     # How a live conversation is forked, or `None` when mux implements no strategy.
     branch_strategy: BranchStrategy | None
     # The root instruction file this CLI reads from a project, and the directory
@@ -752,6 +852,14 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             "-c",
             "--fork-session",
         ),
+        # Claude Code takes `--model` and accepts its own family aliases directly,
+        # which is what makes "open an opus session" answerable without the
+        # operator knowing an id. `opusplan` is the CLI's own mixed mode.
+        model_selection=ModelSelection(
+            argv=("--model",),
+            aliases=frozenset({"opus", "sonnet", "haiku", "opusplan", "default"}),
+            id_prefixes=("claude-",),
+        ),
         branch_strategy="transcript_fork",
         instruction_file_name="CLAUDE.md",
         global_instruction_parts=_CLAUDE_GLOBAL_INSTRUCTIONS,
@@ -836,6 +944,18 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # `-c` stays open: Codex takes arbitrary config overrides and mux injects two
         # of them, so only those two keys are reserved. `--config` is its long form.
         reserved_launch_args=("resume", "notify=", "mcp_servers.mux."),
+        # Codex takes `--model`/`-m`, and separately `-c model=…` through the same
+        # generic config channel `-c` already carries mux's two injected overrides.
+        # Both forms are declared so a request-level model replaces either spelling
+        # a profile used; no aliases, because Codex names models by their provider
+        # slug and has no short forms of its own - which is also what makes a
+        # Claude alias reaching a Codex pane a refusal rather than a dead session.
+        model_selection=ModelSelection(
+            argv=("--model", "-m"),
+            aliases=frozenset(),
+            id_prefixes=("gpt-", "o1", "o3", "o4", "codex-"),
+            config_prefixes=("model=",),
+        ),
         branch_strategy="resume_child_thread",
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_CODEX_GLOBAL_INSTRUCTIONS,
@@ -926,6 +1046,12 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # when its own path is not already present, and a second extension of the
         # user's own is a legitimate thing to want.
         reserved_launch_args=("--resume",),
+        # Unmeasured. oh-my-pi is configured through its own provider/model settings
+        # and mux has captured no launch-time model argument for it, so a spawn
+        # asking for one is refused with the launch profile named as the way to set
+        # it. Declaring a guessed flag here would trade that refusal for a pane that
+        # dies at startup, which is the whole reason this axis is declared.
+        model_selection=None,
         # No strategy: `--resume` reopens the same session file, so forking a live
         # OMP conversation would put two writers on one file.
         branch_strategy=None,
@@ -1016,6 +1142,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # is pi's interactive picker, so a profile carrying it opens every pane on a
         # menu waiting for a keystroke rather than on a conversation.
         reserved_launch_args=("--session", "--resume"),
+        # Unmeasured, as oh-my-pi: no launch-time model argument has been captured
+        # for pi, so a spawn asking for one is refused rather than started with a
+        # flag that may not exist.
+        model_selection=None,
         # `--session` appends to the same file wherever pi stands, so a fork would
         # put two writers on one conversation.
         branch_strategy=None,
@@ -1121,6 +1251,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         spawn_id_argv=(),
         resume_argv=("--session",),
         reserved_launch_args=("--session",),
+        # Unmeasured. opencode addresses models as `provider/model`, a spelling no
+        # namespace declared here would recognize, so the axis stays undeclared
+        # until a real launch is measured against it.
+        model_selection=None,
         # `--session` reopens the same row, so a fork would put two writers on one
         # conversation.
         branch_strategy=None,
@@ -1391,6 +1525,96 @@ def reserved_launch_arg_conflict(name: object, args: Sequence[str]) -> str | Non
             elif text == token or text.startswith(f"{token}="):
                 return token
     return None
+
+
+def model_selection(name: object) -> ModelSelection | None:
+    """How `name`'s CLI is told which model to run, or `None` when unmeasured."""
+    if not isinstance(name, str) or name not in HARNESSES:
+        return None
+    return HARNESSES[name].model_selection
+
+
+def resolve_launch_model(name: object, model: str) -> str | None:
+    """The value `name`'s CLI is given for `model`, or `None` when unrecognized.
+
+    `None` covers both refusals on purpose - a harness that declares no model
+    argument and a name that harness would not accept - because a caller has to
+    handle them the same way (refuse before spawning) and only the *message*
+    differs. `model_refusal` builds that message.
+    """
+    selection = model_selection(name)
+    return selection.resolve(model) if selection is not None else None
+
+
+def model_refusal(name: object, model: str) -> str | None:
+    """Why `name` cannot be launched on `model`, or `None` when it can.
+
+    Both refusals name the launch profile as the way through, because a profile's
+    arguments are unvalidated by design and are how a model mux has not measured
+    still reaches its CLI.
+    """
+    selection = model_selection(name)
+    label = descriptor(name).display_name if isinstance(name, str) and name in HARNESSES else name
+    if selection is None:
+        return (
+            f"mux has not measured how to choose a model for {label} at launch, so "
+            f"this session cannot be started with one; set it in a launch profile "
+            f"for that harness instead"
+        )
+    if selection.resolve(model) is None:
+        spoken = normalize_model_name(model) or str(model)
+        return (
+            f"{label} does not recognize the model {spoken!r}; it takes "
+            f"{selection.describe()}"
+        )
+    return None
+
+
+def strip_model_args(name: object, args: Sequence[str]) -> list[str]:
+    """`args` without any model this harness's CLI would read from them.
+
+    Run before a request-level model is appended, so the request replaces the
+    global harness arguments and the launch profile rather than sitting beside
+    them. Two `--model` flags on one command line is a per-CLI coin toss, and the
+    precedence the product promises is not something to leave to a coin toss.
+    """
+    selection = model_selection(name)
+    if selection is None:
+        return [str(argument) for argument in args]
+    kept: list[str] = []
+    skip = False
+    for argument in args:
+        text = str(argument)
+        if skip:
+            skip = False
+            continue
+        if text in selection.argv:
+            # Its value is the next token and goes with it.
+            skip = True
+            continue
+        if any(text.startswith(f"{flag}=") for flag in selection.argv):
+            continue
+        if any(text.startswith(prefix) for prefix in selection.config_prefixes):
+            # `-c model=…` is two tokens and the flag introducing it was kept a
+            # moment ago; dropping the value alone would leave a dangling `-c`.
+            if kept and kept[-1].startswith("-"):
+                kept.pop()
+            continue
+        kept.append(text)
+    return kept
+
+
+def model_launch_args(name: object, resolved_model: str) -> tuple[str, ...]:
+    """The argv that tells `name`'s CLI to run `resolved_model`.
+
+    Takes an already-resolved value (`resolve_launch_model`) rather than raw
+    operator input, so the canonical spelling the operator confirmed on a card is
+    the exact spelling handed to the CLI.
+    """
+    selection = model_selection(name)
+    if selection is None or not resolved_model:
+        return ()
+    return (selection.argv[0], resolved_model)
 
 
 def resume_command(name: object, native_id: str) -> str | None:

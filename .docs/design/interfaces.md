@@ -769,6 +769,7 @@ interface SpawnRequest {
   completion_mode?: 'interactive' | 'one_shot'
   seed_text?: string                // agent backends only; ≤ 500k chars; the agent RUNS it
   stage_text?: string               // agent backends only; ≤ 500k chars; parked unsent
+  model?: string                    // agent backends only; ≤ 100 chars; the CLI's own spelling
 }
 ```
 
@@ -806,6 +807,18 @@ prompt that reads the staged file — which also removes the quoting-inflation r
 Windows command line carries.
 Because the seed rides argv, the agent runs it: `seed_text` submits by construction and can
 never leave text waiting for review.
+
+`model` names the model the new session's CLI should run, in that CLI's own spelling (an
+alias like `opus`, or a full id).
+It is a name rather than argv because whether a model can be chosen at all - and which names
+are accepted - is a per-harness declaration (`features/backends.md`), so the daemon maps it
+and refuses before anything spawns: an explicit `backend: 'shell'` is refused at parse, and a
+harness that declares no model argument, or a name it would not recognize, is refused once
+the backend has resolved through the Project's defaults.
+The request's model **replaces** any the global harness arguments or the launch profile set
+rather than joining it, because two `--model` flags on one command line is a per-CLI coin
+toss (`features/launch-profiles.md`).
+The refusal is a 400, not a session that starts and dies with the flag echoed back at it.
 
 `stage_text` is the stage-without-send counterpart, mutually exclusive with `seed_text`.
 The daemon spawns the session, waits up to 15 s for it to read `idle` (a fresh Claude

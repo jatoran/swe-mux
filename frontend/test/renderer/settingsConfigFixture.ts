@@ -3,7 +3,10 @@
 // subset that quietly goes stale. Regenerate by dumping `public_dict()` again if a field
 // is added. It had gone stale exactly that way: every `assistant_*` field was missing and
 // four removed `tts_edge_*` fields were still here, so the assistant tab rendered against
-// values the daemon has not served for months.
+// values the daemon has not served for months. A *value* can go stale the same way and is
+// harder to see: `tts_engine` sat at the removed `"edge"`, which `validate_config` rejects
+// and schema 26 migrates away, and which matches neither engine branch — so the Voice tab
+// rendered with no engine controls at all and nothing said so.
 //
 // Most of it only has to be complete enough that every tab renders. The exception is the
 // model ids, which `model-picker.spec.ts` resolves against a stubbed catalog, so a default
@@ -235,7 +238,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "tts_daily_budget_usd": 1.0,
   "tts_default_mode": "off",
   "tts_enabled": false,
-  "tts_engine": "edge",
+  "tts_engine": "sapi",
   "tts_kokoro_speed": 1.0,
   "tts_kokoro_voice": "af_heart",
   "tts_lexicon": {},

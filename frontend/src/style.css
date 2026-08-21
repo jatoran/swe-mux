@@ -1659,6 +1659,23 @@ body {
 .settings-content label.check>span{grid-column:1}.settings-content label.check>input{grid-column:2;justify-self:start;margin:2px 0 0}
 .settings-content input:not([type=checkbox]),.settings-content select,.settings-content textarea{min-height:calc(31px*var(--ui-scale));border:1px solid var(--line);border-radius:0;padding:6px 8px;background:var(--bg);color:var(--text);font:inherit}
 .settings-content textarea{min-height:calc(82px*var(--ui-scale));resize:vertical}.settings-content p{max-width:82ch;margin:8px 0;color:var(--muted);line-height:1.5!important}
+/* A section whose body is reference rather than a control someone came to change:
+   the full spoken-command catalog, the wake-word tester and latency readout, the
+   one-time mobile setup. The `<h3>` stays outside the disclosure so the section
+   rail still indexes it and the search jump still lands on it; only the body
+   folds. The summary is deliberately a full-width row rather than a bare arrow —
+   it has to read as "there is more here", not as decoration.
+   `revealSetting` opens the disclosures above its target, so a marked control inside
+   one is still reachable; the convention is nonetheless to keep `data-setting` marks
+   above the fold, because a switch a deep link promised should be on screen when the
+   panel lands rather than behind one more state change. */
+.settings-content .settings-disclosure{margin:8px 0;border:1px solid var(--line);background:var(--bg)}
+.settings-content .settings-disclosure>summary{padding:8px 10px;color:var(--text);cursor:pointer;list-style-position:inside}
+.settings-content .settings-disclosure>summary:hover{background:var(--panel2)}
+.settings-content .settings-disclosure[open]>summary{border-bottom:1px solid var(--line);color:var(--green)}
+.settings-content .settings-disclosure>:not(summary){margin-left:10px;margin-right:10px}
+.settings-content .settings-disclosure>h4{margin:12px 10px 0}
+.settings-content .settings-disclosure>:last-child{margin-bottom:10px}
 /* "Which of these two values this window is actually using." Set apart from the
    surrounding help text because it is a statement about *this device*, and the
    two scale selects are otherwise indistinguishable in effect from here. */

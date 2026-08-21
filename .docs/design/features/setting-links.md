@@ -44,9 +44,13 @@ Everything here is that pattern generalised.
   automation switches) or `project` (the Projects registry, the only per-Project editor).
   The Automation dashboard owns no switch: it shows the state of the global automation
   switches and links to them in Settings → Automation, so one switch has one owner.
-- **Reveal**: `frontend/src/settingReveal.ts`. Waits for the marked control to exist and to have
-  a layout box, opens any `<details>` above it, centres it in its scroller, flashes it, and
-  focuses it.
+- **Reveal**: `frontend/src/settingReveal.ts`. Opens any `<details>` above the marked control,
+  waits for it to exist and to have a layout box, centres it in its scroller, flashes it, and
+  focuses it. The disclosures are opened *before* the layout test, not on the way to the scroll:
+  how a closed `<details>` hides its body is an engine detail (current Chromium skips it with
+  `content-visibility`, which still reports client rects; a `display:none` implementation reports
+  none), and under the second the wait would observe a control already in the DOM until its
+  deadline expired.
 - **Gate notice**: the standard shape a gated surface renders - `GrantGate`
   (`frontend/src/GrantGate.tsx`) for a surface that cannot function, or `GrantButton` for
   prose on a working surface that names a switch in passing.
@@ -101,6 +105,12 @@ Everything here is that pattern generalised.
 - **The reveal waits rather than firing once.** Settings fetches its bundle before rendering any
   tab, and a Project's opt-in list is a second fetch inside the panel, so the control is
   routinely absent at request time.
+- **A marked control stays outside a collapsed disclosure.** Settings sections may fold a
+  reference body behind a `<details class="settings-disclosure">` (`features/ui.md`), and the
+  reveal does open one on the way in - `frontend/test/renderer/setting-reveal.spec.ts` pins that,
+  so the rule is a convention rather than a load-bearing constraint. It holds anyway: a switch a
+  gate has just promised should be on screen when the panel lands, not one state change further
+  in. `frontend/test/renderer/voice-settings.spec.ts` checks it for the tab that folds most.
 - **The flash is brief and identical everywhere.** One class (`.setting-flash`), shared with the
   settings search's own arrival cue, two pulses over 1.8s, reduced to a static outline under
   `prefers-reduced-motion`.

@@ -1541,7 +1541,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
-        {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
+        {/* Voice is the largest tab in the panel, and it used to be one `<section>` with
+            eight headings inside it: read-aloud policy, engine, pronunciation, summary
+            budgets, the microphone, the phrase table, the full command catalog, the
+            latency readout, the tester, and mobile setup, in one unbroken column. That
+            is a reference manual and a control panel stacked on top of each other, and
+            the only way to find anything in it was to scroll past everything else.
+            It is one `<section>` per heading now, like Automation and Remote, so the
+            section rail (four headings or more) actually indexes it and the borders
+            between concerns are visible. Three of them are reference rather than daily
+            controls — the command catalog, the tester and latency readout, and the
+            one-time mobile setup — and those collapse behind a disclosure. Nothing
+            moved tabs and nothing gained a second owner: every install-wide switch is
+            still edited in exactly one place, and every `data-setting` mark travelled
+            with its control (`settingTargets.ts`, `test/settingTargets.test.ts`).
+            A marked control deliberately never sits inside a *collapsed* disclosure. */}
+        {activeTab==='voice'&&<Fragment>
+          <section><h3>Read aloud (TTS)</h3>
           <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
           {/* Three switches decide whether a word is ever spoken, and they used to sit in
               three unrelated places — a checkbox here, a pane chip there, a button on a
@@ -1573,8 +1589,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               </div>
             </div>
           </div>
-          <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select></label>
-          <label>Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="sapi">OS voice (offline, no download)</option><option value="kokoro">Kokoro-82M (local neural, one-time download)</option></select></label>
+          </section>
+
+          {/* How it sounds, separated from whether it speaks. The engine decides which of
+              the two voice blocks below applies, so it leads; the model download panel is
+              beside the engine that needs it rather than three headings away. */}
+          <section><h3>Voice and engine</h3>
+          <p>Which synthesizer speaks, and how it sounds. The OS voice needs no download and no network call; Kokoro is a local neural voice that downloads once and then runs offline.</p>
+          <label data-setting="tts_engine">Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="sapi">OS voice (offline, no download)</option><option value="kokoro">Kokoro-82M (local neural, one-time download)</option></select></label>
           {draft.tts_engine==='sapi'&&<>
             <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
@@ -1588,19 +1610,43 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               onSelect={voice=>change('tts_kokoro_voice',voice)}
             />
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
-            <h4>Pronunciation</h4>
-            <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Spell the sound with plain letters — if it isn't a real word (<code>swee</code>), tap ✨ and the exact phonemes are built for you; you never have to write them by hand. Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix — ✨ there with an empty box pronounces the word the way it reads.</p>
-            <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
           </>}
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
-          <h3>Spoken summary</h3>
-          <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts.</p>
+          <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /><small>Generated clips are files under the data directory; the oldest are dropped past this. The live figure is on the status line above.</small></label>
+          </section>
+
+          {/* The lexicon was a `<h4>` buried inside the Kokoro branch of the engine block,
+              which is the one place nobody scrolls to when a name comes out spelled letter
+              by letter. It is a section of its own now. It stays a Kokoro repair — the OS
+              voice has its own dictionary and never consults `tts_lexicon` — so under SAPI
+              the section says so and offers the engine control rather than going quiet. */}
+          <section><h3>Pronunciation</h3>
+          {draft.tts_engine==='kokoro'
+            ?<>
+              <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Spell the sound with plain letters — if it isn't a real word (<code>swee</code>), tap ✨ and the exact phonemes are built for you; you never have to write them by hand. Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix — ✨ there with an empty box pronounces the word the way it reads.</p>
+              <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
+            </>
+            :<>
+              <p>Respellings repair <strong>Kokoro's</strong> pronouncer, which spells a word it does not know letter by letter. The OS voice uses the system's own dictionary and never reads this list, so there is nothing to teach it here. Any entries you have already saved are kept and apply again the moment Kokoro is selected.</p>
+              <div class="theme-actions"><button onClick={()=>goToSetting('voice','tts_engine')}>Go to the engine setting</button></div>
+            </>}
+          </section>
+
+          {/* What gets spoken, and what it costs. `tts_content` chooses between the two
+              halves, so it leads them rather than sitting a heading above. */}
+          <section><h3>Spoken summary</h3>
+          <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts. Verbatim never touches a model.</p>
+          <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select><small>The default for every session. A pane's player strip overrides it for that session alone.</small></label>
           <label for="summary-model-picker" data-setting="tts_summary_model">Summary model<ModelPicker id="summary-model-picker" value={draft.tts_summary_model} options={modelOptions(draft.tts_summary_model)} emptyLabel="Use the cheap model…" onChange={value=>change('tts_summary_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <label>Daily summary budget (USD)<input type="number" step="0.01" min="0" max="100" value={draft.tts_daily_budget_usd} onInput={e=>change('tts_daily_budget_usd',Number(e.currentTarget.value))} /></label>
-          <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /></label>
-          <h3>Storage and dictation</h3>
-          <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /></label>
+          <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /><small>Applies to the verbatim mode only, where no model is involved to shorten anything.</small></label>
+          </section>
+
+          {/* The whole capture half in one place: the switch, the decoders it runs, and
+              the trigger word they are listening for. The wake words used to sit four
+              headings below the microphone switch that makes them do anything. */}
+          <section><h3>Microphone and wake words</h3>
           <label class="check" data-setting="stt_enabled"><span>Enable microphone input and hands-free Conversation mode</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
           {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">The first Talk downloads the local Whisper speech model (several hundred MB) plus the browser voice-activity runtime. It runs once, then transcription is offline.</p>}
           <label>Daemon transcription engine<select value={draft.stt_engine} onChange={e=>change('stt_engine',e.currentTarget.value as Config['stt_engine'])}><option value="whisper">Whisper Turbo (local, recommended)</option><option value="sapi">Windows Speech Recognition (legacy)</option></select></label>
@@ -1609,22 +1655,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
           <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. It acts only when an utterance ends with a wake word followed by a command phrase; everything before that is buffered as your message. Raw audio is deleted after transcription.</p>
-          <h3>Mux assistant</h3>
-          <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
-          <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
-          <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
-          <label>Daily assistant budget (USD)<input type="number" step="0.05" min="0" max="1000" value={draft.assistant_daily_budget_usd} onInput={e=>change('assistant_daily_budget_usd',Number(e.currentTarget.value))} /></label>
-          <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
-          <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
-          <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
-          <label>Chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>Extra pause allowed before plain chat-mode speech becomes an assistant turn, so thinking out loud is not answered at every breath. Wake-word commands stay fast regardless. For long brainstorms say <code>hold on</code> (or a wake-worded <code>listen</code>): speech buffers until you say <code>go ahead</code>.</small></label>
-          <h3>Spoken command latency</h3>
-          <p>End of speech to executed action, broken into the four stages it passes through. Samples are recorded by the browser after each utterance and also written to <code>daemon.log</code>. The target is under 500 ms for a short command.</p>
-          <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />
-          <h3>Wake words and commands</h3>
-          <p>Add every spelling your recognizer actually produces (comma separated) — the matcher does not invent variants. <code>Standby</code> keeps the mic on but ignores speech until you say a <code>resume</code> command; <code>stop</code> turns Conversation mode off and releases the mic. Leave a command blank to disable its voice trigger.</p>
-          <p>Fleet and reading queries are built in and deterministic: list active or pending sessions overall or in a Project, list Projects, ask for session or Project status, open numbered results, and read a named or numbered session’s last reply in the current, summary, or verbatim mode. Say <code>list voice commands</code> to hear the full groups and examples.</p>
+          <h4>Wake words</h4>
+          <p>Add every spelling your recognizer actually produces (comma separated) — the matcher does not invent variants. A good trigger is two or three syllables, distinctive, rare in ordinary speech, and not the start of a common word; <strong>Testing and latency</strong> below measures which one your recognizer really hears.</p>
           <label>Wake words<input value={(draft.voice_wake_words||[]).join(', ')} placeholder="mux, mucks, max" onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /></label>
+          </section>
+
+          {/* The phrase table, on its own. Seventeen rows is the largest single control in
+              the tab, and it used to share a heading with the wake words that trigger it
+              and with two paragraphs about built-in queries it does not configure. */}
+          <section><h3>Command phrases</h3>
+          <p>What to say after the wake word, per action. Leave a row blank to disable that voice trigger. <code>Standby</code> keeps the mic on but ignores speech until you say a <code>resume</code> command; <code>stop</code> turns Conversation mode off and releases the mic.</p>
+          <p>Fleet and reading queries are built in and deterministic — they are not configured here: list active or pending sessions overall or in a Project, list Projects, ask for session or Project status, open numbered results, and read a named or numbered session’s last reply in the current, summary, or verbatim mode. Say <code>list voice commands</code> to hear the full groups and examples.</p>
           <div class="voice-commands">
             {VOICE_ACTION_ORDER.map(action=>{
               const meta=VOICE_ACTION_META[action]
@@ -1637,7 +1678,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               }} /></label>
             })}
           </div>
-          <h3>Command reference</h3>
+          </section>
+
+          {/* Reference, not a control: the complete live catalog, read once and then rarely.
+              Collapsed by default so it stops standing between the phrase table above and
+              the assistant below. Nothing inside carries a `data-setting`: the reveal does
+              open the disclosures above its target (pinned by `setting-reveal.spec.ts`), but
+              a marked control behind a fold is one a search result and a deep link both
+              reach through an extra state change, so the marks stay above it. */}
+          <section><h3>Command reference</h3>
+          <details class="settings-disclosure">
+          <summary>Every spoken command, as currently configured</summary>
           <p>Say a configured wake word before every command. <code>Project N</code> uses the visible sidebar order. <code>Session N</code> uses the selected Project. Braced values such as <code>{'{text}'}</code> are spoken content, not literal words.</p>
           <div class="voice-command-reference">
             {completeVoiceCatalog.map((section,index)=><details open={index===0} key={section.id}>
@@ -1650,7 +1701,29 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               </article>)}</div>}
             </details>)}
           </div>
-          <h4>Test what the recognizer actually hears</h4>
+          </details>
+          </section>
+
+          <section><h3>Mux assistant</h3>
+          <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
+          <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
+          <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
+          <label>Daily assistant budget (USD)<input type="number" step="0.05" min="0" max="1000" value={draft.assistant_daily_budget_usd} onInput={e=>change('assistant_daily_budget_usd',Number(e.currentTarget.value))} /></label>
+          <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
+          <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
+          <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
+          <label>Chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>Extra pause allowed before plain chat-mode speech becomes an assistant turn, so thinking out loud is not answered at every breath. Wake-word commands stay fast regardless. For long brainstorms say <code>hold on</code> (or a wake-worded <code>listen</code>): speech buffers until you say <code>go ahead</code>.</small></label>
+          </section>
+
+          {/* The two measuring instruments, together and folded away. Neither is a setting:
+              the tester scores the wake word against the *saved* configuration, and the
+              latency report reads back samples the browser already posted. They are
+              reached when a trigger word is being chosen or when spoken commands feel
+              slow, which is not most visits to this tab. */}
+          <section><h3>Testing and latency</h3>
+          <details class="settings-disclosure">
+          <summary>Measure what the recognizer hears, and how fast it acts</summary>
+          <h4>Wake-word tester</h4>
           <p>Speak the wake word and a command a few times. Each utterance goes through the same transcription and the same matcher the command path uses, so this reports what would really have happened. Choose a trigger word from this, not from how it looks: a good one is two or three syllables, distinctive, rare in ordinary speech, and not the start of a common word. Save any pending changes above first — the test scores against the saved configuration.</p>
           <WakeWordTester
             wakeWords={voiceInfo?.wake_words||draft.voice_wake_words||[]}
@@ -1658,13 +1731,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             available={!!voiceInfo?.stt_available}
             diagnostic={voiceInfo?.stt_diagnostic||''}
           />
-          <h3>Mobile voice</h3>
+          <h4>Spoken command latency</h4>
+          <p>End of speech to executed action, broken into the four stages it passes through. Samples are recorded by the browser after each utterance and also written to <code>daemon.log</code>. The target is under 500 ms for a short command.</p>
+          <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />
+          </details>
+          </section>
+
+          {/* One-time setup, and a deliberate second copy of what Remote owns: someone
+              setting up dictation should not have to leave this tab (`features/ui.md`).
+              Folded away because it is done once and then never again. */}
+          <section><h3>Mobile voice</h3>
+          <details class="settings-disclosure">
+          <summary>Set up microphone access from a phone (HTTPS)</summary>
           <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS. swe-mux configures a private Tailscale Serve address (<code>https://&lt;device&gt;.ts.net/</code>) automatically at startup; use the button below if it needs a one-time Tailscale approval or repair.</p>
           <TailscaleConnection status={remote} />
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
           <PhoneDnsChecklist />
-        </section>}
+          </details>
+          </section>
+        </Fragment>}
 
         {activeTab==='remote'&&<Fragment>
           <section><h3>Tailnet listener</h3>

@@ -85,6 +85,29 @@ test('a control that renders after the request is still revealed', async ({ page
   expect((await placement(page, 'auto_delivery_enabled')).flashed).toBe(true)
 })
 
+// Settings sections are allowed to fold reference material away behind a `<details>`
+// (`.settings-disclosure`, Settings → Voice), so the reveal has to arrive inside a closed one
+// rather than stopping at its summary. Pinned here because the alternative is a rule nobody
+// can check — "never mark a control inside a disclosure" — enforced by remembering it.
+test('a control folded inside a closed disclosure is opened, not waited out', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/setting-reveal-harness.html?collapsed=1')
+
+  const closed = await placement(page, 'auto_delivery_enabled')
+  expect(closed.found).toBe(true)
+  expect(closed.insideViewport).toBe(false)
+  expect(await page.locator('details.settings-disclosure').evaluate(node => (node as HTMLDetailsElement).open)).toBe(false)
+
+  await reveal(page, 'auto_delivery_enabled')
+  await expect.poll(async () => (await placement(page, 'auto_delivery_enabled')).insideViewport).toBe(true)
+
+  const after = await placement(page, 'auto_delivery_enabled')
+  expect(after.belowRail).toBe(true)
+  expect(after.flashed).toBe(true)
+  expect(after.focused).toBe('INPUT:checkbox')
+  expect(await page.locator('details.settings-disclosure').evaluate(node => (node as HTMLDetailsElement).open)).toBe(true)
+})
+
 test('a text field is not focused on a touch device, where the keyboard would cover it', async ({ page }) => {
   await page.setViewportSize(MOBILE)
   await page.goto('/setting-reveal-harness.html')
