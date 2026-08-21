@@ -4342,6 +4342,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-command-editor small.warn{color:var(--amber);font-size:9px}
 .git-land-plan{margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
 .git-land-plan small{display:block;color:var(--muted);opacity:.75}
+/* The setup prompt for another repository. Collapsed by default and taller than the
+   approval `pre` when open, because this one is read rather than glanced at: it is an
+   instruction being handed to an agent that will write somebody's gate. */
+.git-land-setup-prompt{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)}
+.git-land-setup-prompt summary{cursor:pointer;color:var(--muted);font-size:9px}
+.git-land-setup-prompt>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0}
+.git-land-setup-prompt small{color:var(--muted);font-size:9px}
+.git-land-setup-prompt .git-land-source{max-height:320px;white-space:pre-wrap;overflow-wrap:anywhere}
 
 /* Landing, on the Map row of the worktree it acts on. Set apart from the row's change
    groups by a rule rather than a box: it is another reading of the same checkout, not a

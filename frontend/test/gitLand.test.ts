@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   formatDuration,
   isActiveLand,
+  landAttentionRow,
   landGateNote,
   landHistoryOrder,
   landQueueOrder,
@@ -12,10 +13,12 @@ import {
   parseLandQueue,
   parseLandVerifyCommand,
   parseVerifyProgress,
+  recentLandings,
   verifyCommandEditable,
   verifyPlanNote,
   verifyProgressLabel,
 } from '../src/gitLand.ts'
+import { verifySetupPrompt } from '../src/landSetupPrompt.ts'
 
 test('a land row parses with its detail and its two OIDs', () => {
   const queue = parseLandQueue({
@@ -377,10 +380,157 @@ test('a handback surfaces only once nothing is queued behind it', () => {
   assert.equal(busy.queue, '1 queued · next worktree-beta')
 })
 
+// -- a bounce stops speaking once the branch gets another answer ---------------
+//
+// Nothing ever closes a handed-back row: the agent's redo is a *new* request with a new
+// id, so the bounced row stays terminal forever and the summary, which picks the most
+// interesting terminal row, resurrects it for good. Observed 2026-08-21 - the collapsed
+// strip read `worktree-watch-session-settle · returned to agent` for hours after that
+// branch's redo had landed, through several unrelated landings.
+
+test('a handback is superseded the moment a later request for its branch lands', () => {
+  // The exact observed sequence: A hands back, B for the same branch lands, and the strip
+  // must read idle rather than resurrecting A.
+  const now = 1_800_000_000
+  const summary = landingSummary(queueOf({
+    requests: [
+      { id: 'a', state: 'handed_back', branch: 'worktree-watch-session-settle',
+        created_at: now - 7200, updated_at: now - 7000, finished_at: now - 7000 },
+      { id: 'b', state: 'landed', branch: 'worktree-watch-session-settle',
+        created_at: now - 3600, updated_at: now - 3400, finished_at: now - 3400 },
+    ],
+  }), gateOf({}), now)
+  assert.equal(summary.queue, 'nothing queued · 1 landed recently')
+  assert.equal(summary.tone, 'idle')
+  assert.equal(summary.blocked, false)
+})
+
+test('supersession needs a *later* request, and needs it on the same branch', () => {
+  const rows = (extra: Record<string, unknown>[]) => parseLandQueue({
+    requests: [
+      { id: 'a', state: 'handed_back', branch: 'worktree-alpha', created_at: 100, finished_at: 120 },
+      ...extra,
+    ],
+  }).requests
+
+  // Another branch landing says nothing about this one.
+  assert.equal(landAttentionRow(rows([
+    { id: 'b', state: 'landed', branch: 'worktree-beta', created_at: 200, finished_at: 220 },
+  ]))?.id, 'a')
+
+  // An *earlier* request for the same branch is what the handback already followed.
+  assert.equal(landAttentionRow(rows([
+    { id: 'b', state: 'landed', branch: 'worktree-alpha', created_at: 50, finished_at: 60 },
+  ]))?.id, 'a')
+
+  // A later one closes it, whichever terminal answer it reached.
+  for (const state of ['landed', 'already_landed', 'refused', 'handed_back']) {
+    const attention = landAttentionRow(rows([
+      { id: 'b', state, branch: 'worktree-alpha', created_at: 200, finished_at: 220 },
+    ]))
+    // Either nothing needs attention, or it is the *newer* row - never the stale one.
+    assert.notEqual(attention?.id, 'a', state)
+  }
+})
+
+test('a withdrawn re-request does not close the handback it followed', () => {
+  // `cancelled` is terminal but is not an answer about the branch: nothing ran, nothing
+  // was decided, and the earlier handback is still the standing fact.
+  const queue = parseLandQueue({
+    requests: [
+      { id: 'a', state: 'handed_back', branch: 'worktree-alpha', created_at: 100, finished_at: 120 },
+      { id: 'b', state: 'cancelled', branch: 'worktree-alpha', created_at: 200, finished_at: 220 },
+    ],
+  })
+  assert.equal(landAttentionRow(queue.requests)?.id, 'a')
+})
+
+test('the newest unanswered bounce speaks, not the stalest', () => {
+  const queue = parseLandQueue({
+    requests: [
+      { id: 'old', state: 'handed_back', branch: 'worktree-alpha', created_at: 100, finished_at: 120 },
+      { id: 'new', state: 'refused', branch: 'worktree-beta', created_at: 200, finished_at: 220 },
+    ],
+  })
+  assert.equal(landAttentionRow(queue.requests)?.id, 'new')
+})
+
+test('an idle strip counts what recently landed, as a floor and never as a total', () => {
+  const now = 1_800_000_000
+  const requests = parseLandQueue({
+    requests: [
+      { id: 'a', state: 'landed', branch: 'one', created_at: now - 600, finished_at: now - 500 },
+      { id: 'b', state: 'landed', branch: 'two', created_at: now - 1200, finished_at: now - 1100 },
+      // Outside the window.
+      { id: 'c', state: 'landed', branch: 'three', created_at: now - 200_000, finished_at: now - 190_000 },
+      // Nothing moved, so it is not a landing.
+      { id: 'd', state: 'already_landed', branch: 'four', created_at: now - 300, finished_at: now - 290 },
+      { id: 'e', state: 'cancelled', branch: 'five', created_at: now - 300, finished_at: now - 290 },
+    ],
+  }).requests
+  assert.equal(recentLandings(requests, now), 2)
+  // A queue that has landed nothing lately says only the fact it is sure of.
+  assert.equal(landingSummary(queueOf({ requests: [] }), gateOf({}), now).queue, 'nothing queued')
+})
+
 test('a summary with no queue read at all still renders', () => {
   const summary = landingSummary(null, null)
   assert.equal(summary.blocked, false)
   assert.equal(summary.queue, 'nothing queued')
+})
+
+// -- the prompt for setting a gate up somewhere else --------------------------
+//
+// The prompt is a *proposal* being handed to an agent, and the last section is the only
+// thing that keeps a copyable setup prompt from reading as "an agent sets up its own
+// gate". The daemon enforces the separation regardless of what any prompt says; what
+// these assert is that the prompt does not send an agent off to do work whose final step
+// it is not allowed to take without telling it so.
+
+test('the setup prompt states the contract a verification command has to satisfy', () => {
+  const prompt = verifySetupPrompt('.worktree-verify')
+  // What the gate is used for, in the pipeline's own order.
+  for (const term of ['reconcile', 'gate', 'fast-forward']) {
+    assert.match(prompt, new RegExp(term, 'i'), term)
+  }
+  // The exit code is the only verdict, and nothing may launder it through a pipeline.
+  assert.match(prompt, /exit code is the only verdict/i)
+  assert.match(prompt, /\btail\b/)
+  assert.match(prompt, /\bgrep\b/)
+  // The contract's four bounds.
+  assert.match(prompt, /working directory/i)
+  assert.match(prompt, /parallel-safe/i)
+  assert.match(prompt, /fixed port/i)
+  assert.match(prompt, /bounded/i)
+  // How to prove it honest: two at once, then a deliberate break.
+  assert.match(prompt, /at the same time/i)
+  assert.match(prompt, /nonzero/i)
+})
+
+test('the setup prompt names both conventions and which of them wins', () => {
+  const prompt = verifySetupPrompt('.worktree-verify')
+  assert.match(prompt, /\.worktree-verify/)
+  assert.match(prompt, /\[worktree\] verify_command/)
+  assert.match(prompt, /\.swe-mux\/config\.toml/)
+  // An override, not a fallback: stating the preference without stating the resolution
+  // order would leave an agent that wrote both expecting the script to run.
+  assert.match(prompt, /override, not a fallback/i)
+  // The script convention is named as this install resolves it, not hard-coded.
+  assert.match(verifySetupPrompt('.verify-me'), /\.verify-me/)
+  // An empty name still produces a usable prompt rather than a blank filename.
+  assert.match(verifySetupPrompt(''), /\.worktree-verify/)
+})
+
+test('the setup prompt ends by telling the agent it cannot approve its own bytes', () => {
+  // This is the assertion that fails if someone trims the prompt to "just the useful
+  // part". Without it the button is a nicer way of saying an agent set up its own gate.
+  const prompt = verifySetupPrompt('.worktree-verify')
+  assert.match(prompt, /You cannot approve this/i)
+  assert.match(prompt, /A human presses approve\./)
+  // And it says where that act happens, because naming an authority obliges pointing at it.
+  assert.match(prompt, /Approve these bytes/)
+  // The instruction is last: anything after it reads as the real ending.
+  assert.ok(prompt.trimEnd().endsWith('A human presses approve.'))
 })
 
 // -- which gate a land ran ----------------------------------------------------
