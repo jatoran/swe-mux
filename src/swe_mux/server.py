@@ -177,6 +177,7 @@ from .project_actions import (
     ActionStep,
     ProjectActionService,
     action_spawn_body,
+    preview_action_run,
     read_actions_source,
     substituted_action,
     write_actions_source,
@@ -254,6 +255,7 @@ from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
     STATE_WATCHDOG_LOOP,
+    TERMINAL_SESSION_STATES,
     PtySubscriber,
     Session,
     SessionManager,
@@ -383,10 +385,6 @@ SLOW_STARTUP_SECONDS = 20.0
 # a rewritten `tasks.json` and bounded so a generated `package.json` cannot make the
 # approval dialog unrenderable.
 MAX_ACTION_DIFF = 64 * 1024
-# The `SessionState` members that mean the process is gone. An ended session is
-# retained in the live table (its scrollback and exit code are what a task result
-# is read from), so "is it still running" is this test rather than a lookup miss.
-TERMINAL_SESSION_STATES = frozenset({"exited", "crashed"})
 # Browser reconnects use a small recovery window. Wider gaps fall back to one
 # authoritative REST refresh instead of replaying a large, stale event history.
 EVENTS_CATCHUP_LIMIT = 64
@@ -1794,6 +1792,48 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 result["git"] = "the folder is already inside a git repository"
         return result
 
+    def _assistant_action_project(project_id: str) -> ProjectRecord:
+        project = projects.projects.get(project_id)
+        if project is None:
+            raise ValueError("unknown project")
+        return project
+
+    async def _assistant_action_catalog(project_id: str) -> dict[str, Any]:
+        """One Project's declared actions and their per-file approval state."""
+        project = _assistant_action_project(project_id)
+        catalog = await asyncio.to_thread(project_actions.catalog, project.root)
+        return catalog.snapshot()
+
+    async def _assistant_action_preview(
+        project_id: str, reference: str, inputs: dict[str, str]
+    ) -> dict[str, Any]:
+        """Resolve an action named in conversation to exactly what would run.
+
+        The assistant's preflight calls this so a card never pends for something
+        the executor will refuse, and so an unapproved action is answered with
+        the file a human has to review rather than with a failure after the
+        operator confirmed it.
+        """
+        project = _assistant_action_project(project_id)
+        catalog = await asyncio.to_thread(project_actions.catalog, project.root)
+        return await asyncio.to_thread(
+            preview_action_run,
+            catalog,
+            reference,
+            dict(inputs),
+            project_label=project.name,
+        )
+
+    async def _assistant_run_action(
+        project_id: str, action_id: str, inputs: dict[str, str]
+    ) -> dict[str, Any]:
+        """Start one approved action through the Run menu's own execution path."""
+        project = _assistant_action_project(project_id)
+        payload, _status = await _start_project_action(
+            app, project, action_id, dict(inputs), origin="assistant"
+        )
+        return payload
+
     assistant = AssistantService(
         config,
         events,
@@ -1812,6 +1852,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         note_list=_assistant_note_list,
         note_edit=_assistant_note_edit,
         create_project_op=_assistant_create_project,
+        action_catalog=_assistant_action_catalog,
+        action_preview=_assistant_action_preview,
+        action_run=_assistant_run_action,
     )
     app["assistant"] = assistant
     app["assistant_store"] = assistant_store

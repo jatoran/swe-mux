@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import assistant as assistant_module
 from swe_mux.assistant import (
     ACTION_CLASS_CONSEQUENTIAL,
     ACTION_CLASS_NAVIGATION,
@@ -21,8 +22,10 @@ from swe_mux.assistant import (
     AssistantError,
     AssistantService,
     AssistantStore,
+    action_outcome_line,
     action_snapshot,
     apply_note_edit,
+    output_looks_unhealthy,
     speech_form,
     split_sentences,
 )
@@ -134,6 +137,72 @@ class QueueStub:
         return {"id": "m-1", "armed": kwargs.get("armed", False), "state": "pending"}
 
 
+class ActionStub:
+    """The three Project Action closures, over a canned catalog.
+
+    The real resolution and trust check live in `preview_action_run`
+    (`tests/test_project_actions_v2.py` exercises them against a real catalog);
+    what these tests need from this stub is only what the assistant does with
+    each answer.
+    """
+
+    def __init__(self) -> None:
+        self.catalog_payload: dict[str, Any] = {
+            "actions": [
+                {
+                    "id": "native:verify",
+                    "label": "Verify",
+                    "description": "Run the gate",
+                    "source_path": ".swe-mux/actions.toml",
+                    "trusted": True,
+                    "steps": [{"name": "verify"}, {"name": "lint"}],
+                    "inputs": [],
+                },
+                {
+                    "id": "npm:deploy",
+                    "label": "Deploy",
+                    "description": "npm run deploy",
+                    "source_path": "package.json",
+                    "trusted": False,
+                    "steps": [{"name": "deploy"}],
+                    "inputs": [],
+                },
+            ],
+            "diagnostics": [],
+        }
+        self.preview_payload: dict[str, Any] = {
+            "action_id": "native:verify",
+            "label": "Verify",
+            "source_path": ".swe-mux/actions.toml",
+            "steps": 2,
+        }
+        self.run_payload: dict[str, Any] = {
+            "sessions": [{"id": "task-1", "name": "verify"}],
+            "errors": [],
+            "inputs": {},
+        }
+        self.run_error: Exception | None = None
+        self.previews: list[tuple[str, str, dict[str, str]]] = []
+        self.runs: list[tuple[str, str, dict[str, str]]] = []
+
+    async def catalog(self, project_id: str) -> dict[str, Any]:
+        return self.catalog_payload
+
+    async def preview(
+        self, project_id: str, reference: str, inputs: dict[str, str]
+    ) -> dict[str, Any]:
+        self.previews.append((project_id, reference, dict(inputs)))
+        return self.preview_payload
+
+    async def run(
+        self, project_id: str, action_id: str, inputs: dict[str, str]
+    ) -> dict[str, Any]:
+        self.runs.append((project_id, action_id, dict(inputs)))
+        if self.run_error is not None:
+            raise self.run_error
+        return self.run_payload
+
+
 def make_service(
     tmp_path: Path,
     turns: list[OpenRouterToolTurn] | None = None,
@@ -141,6 +210,7 @@ def make_service(
     enabled: bool = True,
     trust: str = "confirm",
     ledger: LedgerStub | None = None,
+    actions: ActionStub | None = None,
 ) -> tuple[AssistantService, list[MuxEvent], QueueStub, dict[str, Any]]:
     config = load_config(tmp_path / "config.toml")
     update_config(
@@ -226,8 +296,40 @@ def make_service(
         spawn_op=spawn_op,
         interrupt_op=interrupt_op,
         end_op=end_op,
+        action_catalog=actions.catalog if actions else None,
+        action_preview=actions.preview if actions else None,
+        action_run=actions.run if actions else None,
     )
     return service, emitted, queue, side_effects
+
+
+def task_session(session_id: str, state: str, exit_code: int | None, tail: bytes = b"") -> Any:
+    """A running or finished one-shot Project Action step."""
+    record = SessionRecord(
+        id=session_id,
+        name=session_id,
+        project_id="p1",
+        backend="shell",
+        native_session_id=None,
+        cwd=".",
+        exe="cmd.exe",
+        args=[],
+        state=state,
+        completion_mode="one_shot",
+    )
+    record.exit_code = exit_code
+    return SimpleNamespace(
+        record=record,
+        transcript_path=None,
+        scrollback=SimpleNamespace(tail_bytes=lambda _limit: tail),
+    )
+
+
+async def drain_outcome_watches(service: AssistantService) -> None:
+    """Wait for every armed action-outcome watch to report."""
+    watches = list(service._outcome_watches)
+    if watches:
+        await asyncio.wait_for(asyncio.gather(*watches), timeout=10)
 
 
 def last_tool_result(provider: ToolProviderStub, call: int = 1) -> dict[str, Any]:
@@ -556,6 +658,313 @@ async def test_create_project_without_a_wired_operation_fails_closed(tmp_path: P
             dialog["id"], "t1", "create_project", {"name": "scraper"}
         )
         assert "not wired" in result["error"]
+    finally:
+        service.store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Project Actions
+# --------------------------------------------------------------------------- #
+
+
+async def test_list_project_actions_reports_each_actions_approval_state(
+    tmp_path: Path,
+) -> None:
+    actions = ActionStub()
+    service, _events, _queue, _effects = make_service(tmp_path, actions=actions)
+    try:
+        listed = await service._execute_read(
+            "list_project_actions", {"project": "pixel lab"}
+        )
+        by_title = {item["title"]: item for item in listed["actions"]}
+        # Trust is per source file, so one unapproved file leaves the rest
+        # runnable: the list has to say which is which, per action.
+        assert by_title["Verify"]["approved"] is True
+        assert by_title["Deploy"]["approved"] is False
+        assert by_title["Verify"]["terminals"] == 2
+        assert by_title["Deploy"]["file"] == "package.json"
+        assert "cannot approve" in listed["note"]
+        # A read never opens a card and never mutates.
+        assert service._classify("list_project_actions", {}) == ACTION_CLASS_READ
+    finally:
+        service.store.close()
+
+
+async def test_list_project_actions_without_wiring_is_an_honest_failure(
+    tmp_path: Path,
+) -> None:
+    service, _events, _queue, _effects = make_service(tmp_path)
+    try:
+        listed = await service._execute_read(
+            "list_project_actions", {"project": "pixel lab"}
+        )
+        assert "not available" in listed["error"]
+    finally:
+        service.store.close()
+
+
+async def test_running_an_action_is_consequential_whatever_the_trust_setting(
+    tmp_path: Path,
+) -> None:
+    """A build, a deploy, or a migration is not undone by a tombstone.
+
+    `assistant_trust_reversible: auto` exists for writes that can be taken
+    back; letting it reach repository commands would run them with no card at
+    all, so this kind sits on the floor that is not configurable.
+    """
+    actions = ActionStub()
+    service, _events, _queue, _effects = make_service(
+        tmp_path, trust="auto", actions=actions
+    )
+    try:
+        assert service._classify("run_project_action", {}) == ACTION_CLASS_CONSEQUENTIAL
+        dialog = await service.store.create_dialog()
+        result = await service._run_tool(
+            dialog["id"], "t1", "run_project_action",
+            {"project": "pixel lab", "action": "Verify"},
+        )
+        assert result["pending_confirmation"] is True
+        assert result["mode"] == "confirm"
+        assert actions.runs == []  # nothing ran on the way to the card
+    finally:
+        service.store.close()
+
+
+async def test_run_action_preflight_refuses_an_unapproved_action_by_naming_the_file(
+    tmp_path: Path,
+) -> None:
+    actions = ActionStub()
+    actions.preview_payload = {
+        "error": '"Deploy" cannot run: package.json is not approved',
+        "trust_required": True,
+        "file": "package.json",
+    }
+    service, _events, _queue, _effects = make_service(tmp_path, actions=actions)
+    try:
+        dialog = await service.store.create_dialog()
+        result = await service._run_tool(
+            dialog["id"], "t1", "run_project_action",
+            {"project": "pixel lab", "action": "Deploy"},
+        )
+        assert result["file"] == "package.json"
+        assert result["trust_required"] is True
+        assert "not approved" in result["error"]
+        # A refusal, never a card: nothing may pend for something the executor
+        # would refuse, and the assistant cannot approve it either.
+        assert await service.store.actions(dialog["id"]) == []
+    finally:
+        service.store.close()
+
+
+async def test_run_action_preflight_stamps_the_card_with_what_would_run(
+    tmp_path: Path,
+) -> None:
+    actions = ActionStub()
+    actions.preview_payload = {
+        "action_id": "native:deploy",
+        "label": "Deploy",
+        "source_path": ".swe-mux/actions.toml",
+        "steps": 2,
+    }
+    service, _events, _queue, _effects = make_service(tmp_path, actions=actions)
+    try:
+        arguments: dict[str, Any] = {
+            "project": "pixel",
+            "action": "deploy",
+            # Preflight-owned outputs a model must not be able to supply: a
+            # stray label would let the card describe one action while another
+            # id executes.
+            "action_label": "Something Else",
+            "steps": 99,
+            "inputs": {"target": "staging"},
+        }
+        assert await service._preflight_mutation("run_project_action", arguments) is None
+        assert arguments["project"] == "pixel lab"
+        assert arguments["action"] == "native:deploy"
+        assert arguments["action_label"] == "Deploy"
+        assert arguments["steps"] == 2
+        restated = service._restate("run_project_action", arguments)
+        assert '"Deploy"' in restated
+        assert "pixel lab" in restated
+        # The input value is the one part of the run no approval covers, so the
+        # operator confirms it explicitly.
+        assert "target=staging" in restated
+        assert "2 terminals" in restated
+        assert actions.previews == [("p1", "deploy", {"target": "staging"})]
+    finally:
+        service.store.close()
+
+
+async def test_run_action_reports_a_clean_outcome_without_reading_output_back(
+    tmp_path: Path,
+) -> None:
+    actions = ActionStub()
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "run_project_action",
+            "arguments": json.dumps({"project": "pixel lab", "action": "Verify"}),
+        },
+    }
+    service, events, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Asked.")], actions=actions
+    )
+    try:
+        service.sessions.sessions["task-1"] = task_session(
+            "task-1", "exited", 0, b"all tests passed\nsecret-token=abc\n"
+        )
+        dialog_id = await run_turn(service, "run the verify action")
+        pending = (await service.store.actions(dialog_id))[0]
+        assert pending["status"] == "pending"
+        assert actions.runs == []
+        outcome = await service.confirm_action(str(pending["id"]))
+        assert outcome["result"]["started"] is True
+        assert outcome["result"]["terminals"] == 1
+        assert actions.runs == [("p1", "native:verify", {})]
+        await drain_outcome_watches(service)
+        notice = next(
+            event for event in events if event.type == "assistant_notice"
+        )
+        assert "finished cleanly" in notice.payload["display"]
+        # The whole outcome contract: a flag, never the log. Nothing the step
+        # printed may appear in what the operator is told.
+        assert "all tests passed" not in notice.payload["display"]
+        assert "secret-token" not in notice.payload["display"]
+        # Durable, so a device that was closed when the build finished still
+        # finds the report in the conversation.
+        stored = await service.store.messages(dialog_id)
+        assert any(
+            item["id"] == notice.payload["message_id"] and item["role"] == "assistant"
+            for item in stored
+        )
+    finally:
+        service.store.close()
+
+
+async def test_action_outcome_flags_a_failure_and_waits_for_a_running_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(assistant_module, "ACTION_OUTCOME_POLL_SECONDS", 0.01)
+    actions = ActionStub()
+    actions.run_payload = {
+        "sessions": [{"id": "task-1", "name": "build"}, {"id": "task-2", "name": "test"}],
+        "errors": [],
+        "inputs": {},
+    }
+    service, events, _queue, _effects = make_service(tmp_path, actions=actions)
+    try:
+        service.sessions.sessions["task-1"] = task_session("task-1", "exited", 0)
+        service.sessions.sessions["task-2"] = task_session("task-2", "running", None)
+        dialog = await service.store.create_dialog()
+        row = await service._record_action(
+            dialog["id"], "t1", "run_project_action", ACTION_CLASS_CONSEQUENTIAL,
+            {"project": "pixel lab", "action": "native:verify", "action_label": "Verify"},
+            "executing",
+        )
+        await service._execute_mutation_row(row)
+        # The watch is still waiting: an unfinished step is never reported as done.
+        await asyncio.sleep(0.05)
+        assert not [event for event in events if event.type == "assistant_notice"]
+        service.sessions.sessions["task-2"] = task_session("task-2", "crashed", 1)
+        await drain_outcome_watches(service)
+        notice = next(event for event in events if event.type == "assistant_notice")
+        assert "exit code 1" in notice.payload["display"]
+    finally:
+        service.store.close()
+
+
+async def test_action_outcome_line_covers_every_verdict() -> None:
+    clean = [{"state": "exited", "exit_code": 0, "unhealthy": False}]
+    assert action_outcome_line("Verify", clean) == (
+        'The "Verify" action finished cleanly.', False
+    )
+    # A command that fails while exiting 0 is the only reason the tail is read
+    # at all, and the flag never carries the line that produced it.
+    unhealthy = [{"state": "exited", "exit_code": 0, "unhealthy": True}]
+    line, issue = action_outcome_line("Verify", unhealthy)
+    assert issue and "looks unhealthy" in line
+    failed = [
+        {"state": "exited", "exit_code": 0, "unhealthy": False},
+        {"state": "crashed", "exit_code": 2, "unhealthy": False},
+    ]
+    line, issue = action_outcome_line("Verify", failed)
+    assert issue and "exit code 2" in line
+    # A step still running when the watch expired is neither success nor
+    # failure, and saying so is what keeps an unfinished task from reading done.
+    line, issue = action_outcome_line(
+        "Verify", [{"state": "running", "exit_code": None, "unhealthy": False}]
+    )
+    assert issue and "still running" in line
+    # A step whose session is gone is unknown, never clean.
+    line, issue = action_outcome_line(
+        "Verify", [{"state": "unknown", "exit_code": None, "unhealthy": False}]
+    )
+    assert issue and "could not be read" in line
+    assert action_outcome_line("Verify", []) == (
+        'The "Verify" action started nothing.', True
+    )
+
+
+async def test_output_health_check_ignores_the_words_healthy_builds_print() -> None:
+    """A flag that fires on green runs is a flag the operator learns to ignore."""
+    assert not output_looks_unhealthy("0 errors, 0 warnings\n996 passed")
+    assert not output_looks_unhealthy("ok tests/test_error_path.py::test_failed_login")
+    assert output_looks_unhealthy("Traceback (most recent call last):\n  File ...")
+    assert output_looks_unhealthy("npm ERR! code ELIFECYCLE")
+    assert output_looks_unhealthy("'pytest' is not recognized as an internal or external command")
+
+
+async def test_run_action_relays_a_trust_refusal_raised_at_execution(
+    tmp_path: Path,
+) -> None:
+    """The executor is the authority; preflight only refuses early.
+
+    A task file edited between the card opening and the operator confirming it
+    lands here, and it must read as a refusal to relay rather than as a broken
+    tool.
+    """
+    actions = ActionStub()
+    actions.run_error = PermissionError(".swe-mux/actions.toml changed since approval.")
+    service, _events, _queue, _effects = make_service(tmp_path, actions=actions)
+    try:
+        dialog = await service.store.create_dialog()
+        row = await service._record_action(
+            dialog["id"], "t1", "run_project_action", ACTION_CLASS_CONSEQUENTIAL,
+            {"project": "pixel lab", "action": "native:verify", "action_label": "Verify"},
+            "executing",
+        )
+        result = await service._execute_mutation_row(row)
+        assert "changed since approval" in result["error"]
+        assert "Run menu" in result["error"]
+        final = await service.store.action(str(row["id"]))
+        assert final is not None and final["status"] == "failed"
+        assert not service._outcome_watches  # nothing started, nothing to watch
+    finally:
+        service.store.close()
+
+
+async def test_run_action_that_starts_no_step_fails_rather_than_reporting_success(
+    tmp_path: Path,
+) -> None:
+    actions = ActionStub()
+    actions.run_payload = {
+        "sessions": [],
+        "errors": [{"step": "verify", "error": "executable not found"}],
+        "inputs": {},
+    }
+    service, _events, _queue, _effects = make_service(tmp_path, actions=actions)
+    try:
+        dialog = await service.store.create_dialog()
+        row = await service._record_action(
+            dialog["id"], "t1", "run_project_action", ACTION_CLASS_CONSEQUENTIAL,
+            {"project": "pixel lab", "action": "native:verify", "action_label": "Verify"},
+            "executing",
+        )
+        result = await service._execute_mutation_row(row)
+        assert "no step" in result["error"]
+        assert "executable not found" in result["error"]
+        assert not service._outcome_watches
     finally:
         service.store.close()
 

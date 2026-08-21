@@ -22,7 +22,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
   - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
-  - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
+  - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send — and `run_project_action`, because a build or a deploy is not taken back): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
   A pending or scheduled action is typed state (`assistant_actions` row) rendered as a card, and a daemon restart expires anything still pending — a confirmation minted by a dead daemon can never execute.
 - **Dialog state is daemon-owned** (`assistant_dialogs`/`assistant_messages`/`assistant_actions` in SQLite, one worker thread like `voice_clips`).
   Any device resumes the same conversation; a dropped tab cannot orphan a half-confirmed action.
@@ -131,6 +131,20 @@ Execution is the ordinary registration path (`ProjectManager.register` with `cre
 An optional `git: true` chains the one-time repository initialization with its contract intact: nothing staged, no commit made, and an init failure reports without unwinding the registration.
 Reversal is the same as spawn's class implies: removal is a registration tombstone that deletes nothing on disk, and the minted folder is empty.
 
+## Running project actions
+
+The assistant reaches the Project Run menu through two tools, and the hard part was already built (`project-actions.md`): `run_action` executes only the exact bytes a human approved, so the assistant inherits that boundary whole and adds no authority of its own.
+
+- `list_project_actions` names a Project's actions with what each is for, how many terminals it opens, the inputs it declares, and **its own approval state** - trust is per source file, so one unapproved file leaves the rest runnable and a single "approved" flag for the Project would be a lie.
+- `run_project_action` starts one. It is **consequential**, not reversible: a build, a deploy, or a migration is not undone the way removing a project registration or clearing a composer is, so it sits on the always-confirm floor rather than under `assistant_trust_reversible`, where `auto` would run repository commands with no card at all.
+- An unapproved action is refused **at preflight, naming the file a human must review**, exactly as the MCP surface does. Nothing pends for something the executor would refuse, and the refusal is the only useful next step: neither the assistant nor the agent that wrote the action can approve it. A file edited between the card opening and the operator confirming it is refused again at execution, because the executor is the authority and preflight only refuses early.
+- The card restates the action's **title**, its terminal count, and any **input values**, which are the one part of a run no approval covers (`${input:…}` is substituted at run time, so the approved template never contained them).
+- Resolution is one implementation, `preview_action_run`: a spoken title, an id, or a fragment resolves to exactly one action, and a miss or an ambiguity answers with candidates rather than a guess. Input values are validated through `substituted_action` rather than a second copy of that rule.
+
+**The outcome is a terse notification, never a read-back.** A step is an ordinary one-shot terminal, so its exit code arrives long after the turn ended and after the operator confirmed the card - there is no reply for it to ride. A bounded watch (`ACTION_OUTCOME_WATCH_SECONDS`) polls the step sessions and then says one sentence through `assistant_notice`: finished cleanly, or an issue flag when a step exited nonzero, when its output tail carries a failure marker, or when a step is still running at the bound. Reading output back was rejected at scoping as spam, and the flag never quotes the line that produced it - the tail is classified and discarded. `UNHEALTHY_OUTPUT_MARKERS` is deliberately narrow and strong ("traceback", "npm err!", "command not found"), because bare "error" and "failed" appear in healthy builds and a flag that fires on green runs is a flag the operator learns to ignore. A step whose session is gone reports as unknown rather than clean.
+
+A re-run is deliberately **not** duplicate-guarded past execution: "run the tests again" is an ordinary ask, and every run already needs its own explicit confirmation. Two *open* cards for one run are still refused, like every other kind.
+
 ## Voice attachment
 
 The assistant is text-first and voice-attached, not voice-only:
@@ -200,7 +214,8 @@ correctness does not depend on it either way, only time-to-first-word).
 
 - `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution, the duplicate guard and action ledger), `AssistantStore`, `_SentenceStreamer`, `restate_action`/`action_announcement`, the tool definitions, the primer.
 - `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path.
-- `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control).
+- `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control, and the Project Action catalog/preview/run closures over `_start_project_action`).
+- `src/swe_mux/project_actions.py` — `preview_action_run`, the shared resolve-and-refuse used by the assistant preflight.
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
 - `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.
 - `frontend/src/AssistantPanel.tsx` — the conversation view and action cards.

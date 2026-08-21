@@ -47,6 +47,7 @@ from .leaf_names import suggest_folder_name, validate_leaf_name
 from .openrouter import OpenRouterClient, OpenRouterError
 from .path_identity import same_path
 from .projects import RESERVED_PROJECT_FOLDER_NAMES
+from .session import TERMINAL_SESSION_STATES
 from .session_titles import generated_titles, record_display_name, record_run_id
 from .sqlite_store import (
     connect_or_quarantine,
@@ -118,6 +119,18 @@ DUPLICATE_GUARDED_KINDS = {
     "send_to_session",
 }
 UI_ACK_TIMEOUT_SECONDS = 8.0
+# How long the daemon watches an assistant-started Project Action for its
+# outcome. A step is an ordinary one-shot terminal, so its exit code arrives
+# long after the turn that started it ended; the watch is what turns that into
+# the one terse notification the operator gets. Bounded because a task that
+# never exits is a task nobody is waiting on: the watch says so and stops,
+# rather than holding a timer for the life of the daemon.
+ACTION_OUTCOME_WATCH_SECONDS = 900.0
+ACTION_OUTCOME_POLL_SECONDS = 2.0
+# How much of a finished step's terminal tail the health check reads. Never
+# returned, spoken, or stored - only classified. Reading output back was
+# rejected at scoping as spam, and a flag that quotes the log is a read-back.
+ACTION_OUTCOME_TAIL_BYTES = 4_096
 MAX_TURN_TEXT_CHARS = 8_000
 MAX_TOOL_RESULT_CHARS = 12_000
 MAX_CONTEXT_SESSIONS = 80
@@ -152,7 +165,26 @@ MUTATION_KINDS = {
     "type_into_session",
     "submit_session_composer",
     "create_project",
+    "run_project_action",
 }
+
+# Markers that make a step's output tail worth flagging even though it exited
+# cleanly. Deliberately narrow and line-anchored to a strong signal: bare
+# "error" and "failed" appear in healthy builds ("0 errors", a test named
+# test_error_path), and a flag that fires on green runs trains the operator to
+# ignore it, which is the dangerous direction for the one bit this feature
+# reports. The exit code stays the primary signal; this only catches the
+# command that fails while exiting 0.
+UNHEALTHY_OUTPUT_MARKERS = (
+    "traceback (most recent call last)",
+    "unhandled exception",
+    "npm err!",
+    "fatal:",
+    "panic:",
+    "segmentation fault",
+    "command not found",
+    "is not recognized as an internal or external command",
+)
 
 
 @dataclass
@@ -217,6 +249,13 @@ chance to review. When the operator asks for text staged, input, or left unsent,
 stage_text and never seed_text. type_into_session also stages text, but only into a \
 session whose terminal is already open on the operator's device, so it is the wrong tool \
 immediately after a spawn.
+
+A project's actions are commands a human already approved: list_project_actions shows them \
+with their approval state, and run_project_action starts one. You cannot approve an action \
+and you cannot invent a command - an unapproved action refuses and names the file a person \
+has to review, which you relay as the answer. A run reports its outcome on its own when the \
+steps finish, so never offer to read the output back and never claim it succeeded before \
+that report arrives.
 
 Confirmation is not yours to restate. A mutating tool that returns pending_confirmation has \
 already put a card in front of the operator and their device reads that card out, so do not \
@@ -692,7 +731,76 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
         return f"type into {target}'s composer without sending:{preview}"
     if kind == "submit_session_composer":
         return f"press Enter on {target}'s composer, sending its staged text"
+    if kind == "run_project_action":
+        # The label rather than the id, and the step count rather than the
+        # commands: the operator confirms the Run-menu entry they know, and the
+        # exact bytes behind it are the thing they already approved once. Any
+        # inputs are named because those are the part no approval covers.
+        label = str(arguments.get("action_label") or arguments.get("action") or "")
+        steps = int(arguments.get("steps") or 0)
+        shape = f" ({steps} terminal{'s' if steps != 1 else ''})" if steps else ""
+        values = arguments.get("inputs")
+        filled = ""
+        if isinstance(values, dict) and values:
+            filled = " with " + ", ".join(
+                f"{key}={str(value)[:40]}" for key, value in sorted(values.items())
+            )
+        return f'run the "{label}" action in {target}{filled}{shape}'
     return kind
+
+
+def output_looks_unhealthy(tail: str) -> bool:
+    """Whether a finished step's output tail carries a failure marker.
+
+    Pure, so the classification is testable without a PTY. It answers one bit
+    and the bit never carries the text that produced it: the outcome report is
+    a flag, never a read-back of the log.
+    """
+    lowered = tail.casefold()
+    return any(marker in lowered for marker in UNHEALTHY_OUTPUT_MARKERS)
+
+
+def action_outcome_line(label: str, steps: list[dict[str, Any]]) -> tuple[str, bool]:
+    """The terse notification for a finished action, and whether it flags an issue.
+
+    One sentence, no output. `steps` carries one entry per started step with
+    `state`, `exit_code`, and `unhealthy`; a step whose session is gone before
+    the watch read it carries `state: "unknown"`.
+
+    Three outcomes, in the order that matters most: a nonzero exit code, then
+    an unhealthy tail on an otherwise clean exit, then success. A step still
+    running when the watch expired reports as such rather than as either, so
+    nothing here ever calls an unfinished task done.
+    """
+    if not steps:
+        return f'The "{label}" action started nothing.', True
+    running = [item for item in steps if item.get("state") == "running"]
+    if running:
+        minutes = int(ACTION_OUTCOME_WATCH_SECONDS // 60)
+        return (
+            f'The "{label}" action is still running after {minutes} minutes; '
+            "I have stopped watching it.",
+            True,
+        )
+    failed = [
+        item for item in steps
+        if item.get("exit_code") not in (None, 0) or item.get("state") == "crashed"
+    ]
+    if failed:
+        codes = sorted({
+            str(item.get("exit_code")) for item in failed
+            if item.get("exit_code") is not None
+        })
+        detail = f"exit code {', '.join(codes)}" if codes else "a failed step"
+        return f'The "{label}" action finished with {detail}.', True
+    if any(item.get("unhealthy") for item in steps):
+        return (
+            f'The "{label}" action exited cleanly but its output looks unhealthy.',
+            True,
+        )
+    if any(item.get("state") == "unknown" for item in steps):
+        return f'The "{label}" action finished; its outcome could not be read.', True
+    return f'The "{label}" action finished cleanly.', False
 
 
 def action_announcement(kind: str, arguments: dict[str, Any], status: str) -> str:
@@ -755,6 +863,18 @@ class AssistantService:
             [str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]
         ] | None = None,
         create_project_op: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+        # Project Actions. Three closures over the one service the Run menu and
+        # the MCP surface already use, so the assistant adds no second authority:
+        # it can list what a Project declares, resolve one name to exactly what
+        # would run, and start an action whose file a human approved. Unwired,
+        # both tools report honestly that the daemon does not offer them.
+        action_catalog: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        action_preview: Callable[
+            [str, str, dict[str, str]], Awaitable[dict[str, Any]]
+        ] | None = None,
+        action_run: Callable[
+            [str, str, dict[str, str]], Awaitable[dict[str, Any]]
+        ] | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -773,6 +893,9 @@ class AssistantService:
         self.note_edit = note_edit
         self.note_append = note_append
         self.create_project_op = create_project_op
+        self.action_catalog = action_catalog
+        self.action_preview = action_preview
+        self.action_run = action_run
         self.diagnostic: str | None = None
         # One turn at a time per dialog; concurrent turns would interleave the
         # message log and race the pending-action state.
@@ -789,6 +912,10 @@ class AssistantService:
         # because two breaths of one thought are one request.
         self._queued: dict[str, _QueuedTurn] = {}
         self._queue_starters: set[asyncio.Task[None]] = set()
+        # One task per running Project Action, waiting for its steps to finish
+        # so the operator gets the outcome. Held so a daemon shutdown cancels
+        # them instead of leaving timers referencing dead sessions.
+        self._outcome_watches: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ status
 
@@ -977,12 +1104,16 @@ class AssistantService:
         self._queued.clear()
         for task in [
             *self._turn_tasks.values(), *self._window_tasks.values(),
-            *self._queue_starters,
+            *self._queue_starters, *self._outcome_watches,
         ]:
             task.cancel()
-        pending = [*self._turn_tasks.values(), *self._window_tasks.values()]
+        pending = [
+            *self._turn_tasks.values(), *self._window_tasks.values(),
+            *self._outcome_watches,
+        ]
         self._turn_tasks.clear()
         self._window_tasks.clear()
+        self._outcome_watches.clear()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
@@ -1440,6 +1571,40 @@ class AssistantService:
                 {"session": session_property},
                 ["session"],
             ),
+            tool(
+                "list_project_actions",
+                "List a project's Run-menu actions: what each one is for, how many "
+                "terminals it opens, the inputs it asks for, and whether a human has "
+                "approved its file. Only an approved action can be run.",
+                {"project": project_property},
+                ["project"],
+            ),
+            tool(
+                "run_project_action",
+                "Run one of a project's already-approved actions. You cannot approve "
+                "an action and cannot run an unapproved one: that refuses and names "
+                "the file a human must review. Always requires confirmation. Each "
+                "step opens a terminal; the outcome is reported to the operator when "
+                "the steps finish, so do not promise to read the output back.",
+                {
+                    "project": project_property,
+                    "action": {
+                        "type": "string",
+                        "description": (
+                            "The action's title or id, from list_project_actions"
+                        ),
+                    },
+                    "inputs": {
+                        "type": "object",
+                        "description": (
+                            "Values for the action's declared inputs, as "
+                            "id-to-string. Omit when it declares none."
+                        ),
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                ["project", "action"],
+            ),
         ]
 
     @staticmethod
@@ -1451,10 +1616,21 @@ class AssistantService:
             "read_project_note",
             "list_project_notes",
             "list_queue",
+            "list_project_actions",
         }:
             return ACTION_CLASS_READ
         if kind == "run_ui_command":
             return ACTION_CLASS_NAVIGATION
+        # Running a Project Action is consequential and stated rather than left
+        # to the fall-through, because the classification is the whole trust
+        # story: the bytes were approved by a human, but a build, a deploy, or a
+        # migration is not undone by removing a registration or clearing a
+        # composer, which is what "reversible" means everywhere else here. It
+        # therefore sits on the always-confirm floor rather than under
+        # `assistant_trust_reversible`, where an `auto` setting would run
+        # repository commands with no card at all.
+        if kind == "run_project_action":
+            return ACTION_CLASS_CONSEQUENTIAL
         # Typing unsent text is reversible on its face (the operator can clear
         # the composer, and nothing is delivered); submitting the composer is a
         # send and falls through to the consequential floor below. Creating a
@@ -1834,7 +2010,10 @@ class AssistantService:
             # confirms names the session the way their screen does.
             names = await self._display_names([session])
             arguments["session"] = names.get(session.record.id, session.record.name)
-        if kind in {"spawn_session", "append_project_note", "edit_project_note"}:
+        if kind in {
+            "spawn_session", "append_project_note", "edit_project_note",
+            "run_project_action",
+        }:
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
@@ -1851,6 +2030,10 @@ class AssistantService:
             }
         if kind == "create_project":
             refusal = await self._preflight_create_project(arguments)
+            if refusal is not None:
+                return refusal
+        if kind == "run_project_action":
+            refusal = await self._preflight_run_action(arguments)
             if refusal is not None:
                 return refusal
         if kind == "edit_project_note":
@@ -1937,6 +2120,56 @@ class AssistantService:
         removed = await self.projects.history.removed_project_for_root(str(target))
         if removed is not None:
             arguments["restores"] = removed.name
+        return None
+
+    async def _preflight_run_action(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Resolve an action name and refuse anything that cannot execute.
+
+        Everything answerable before a card pends is answered here, because a
+        card that pends for an unapproved action asks the operator to confirm
+        something the executor will refuse. The refusal names the file a human
+        must review, which is the same answer the MCP surface gives, and it is
+        the only useful next step: the assistant cannot approve an action, and
+        neither can the agent that wrote it.
+
+        The resolved id, label, step count, and validated inputs are stamped
+        into the arguments so the restatement the operator confirms describes
+        exactly what runs - including any input value, which is the one part of
+        a run no approval covers.
+        """
+        # Preflight-owned outputs, never model inputs: a stray `action_label`
+        # or `steps` could otherwise make the card describe a different action
+        # from the one whose id executes.
+        arguments.pop("action_label", None)
+        arguments.pop("steps", None)
+        if self.action_preview is None:
+            return {"error": "Project Actions are not available on this daemon"}
+        project, candidates = self.resolve_project(str(arguments.get("project") or ""))
+        if project is None:
+            return {"error": "project did not resolve", "candidates": candidates}
+        reference = str(arguments.get("action") or "").strip()
+        if not reference:
+            return {"error": "name the action to run"}
+        raw_inputs = arguments.get("inputs") or {}
+        if not isinstance(raw_inputs, dict):
+            return {"error": "inputs must be a map of input id to string value"}
+        inputs = {str(key): str(value) for key, value in raw_inputs.items()}
+        preview = await self.action_preview(project.id, reference, inputs)
+        if preview.get("error"):
+            refusal: dict[str, Any] = {"error": str(preview["error"])}
+            for key in ("candidates", "trust_required", "file"):
+                if preview.get(key):
+                    refusal[key] = preview[key]
+            return refusal
+        arguments["action"] = str(preview.get("action_id") or reference)
+        arguments["action_label"] = str(preview.get("label") or arguments["action"])
+        arguments["steps"] = int(preview.get("steps") or 0)
+        if inputs:
+            arguments["inputs"] = inputs
+        else:
+            arguments.pop("inputs", None)
         return None
 
     async def _execute_mutation_row(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -2050,6 +2283,8 @@ class AssistantService:
             # arguments carry the preflight-resolved absolute root, so what
             # executes is exactly what the confirmed card restated.
             return await self.create_project_op(dict(arguments))
+        if kind == "run_project_action":
+            return await self._run_project_action(arguments, row)
         if kind == "interrupt_session":
             session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
@@ -2083,6 +2318,202 @@ class AssistantService:
                 raise AssistantError(str(note["error"]))
             return {"edited": True, "note": note.get("title"), "bytes": note.get("bytes")}
         raise AssistantError(f"unknown mutation {kind}")
+
+    # -------------------------------------------------- project action outcomes
+
+    async def _run_project_action(
+        self, arguments: dict[str, Any], row: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Start one approved action and arm the watch that reports its outcome.
+
+        The run itself is the Run menu's own path: the same trust check, the
+        same substitution, the same spawn and timeout arming. Nothing here
+        widens what may execute - the assistant's whole addition is that a
+        confirmed card started a command whose exact bytes a human approved.
+
+        The tool result deliberately says only that the steps started. Their
+        exit codes arrive long after this turn ends, and the operator hears
+        about them once, tersely, from the watch.
+        """
+        if self.action_run is None:
+            raise AssistantError("Project Actions are not available on this daemon")
+        project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
+        if project is None:
+            raise AssistantError("the target project no longer exists")
+        action_id = str(arguments.get("action") or "")
+        label = str(arguments.get("action_label") or action_id)
+        raw_inputs = arguments.get("inputs") or {}
+        inputs = (
+            {str(key): str(value) for key, value in raw_inputs.items()}
+            if isinstance(raw_inputs, dict)
+            else {}
+        )
+        try:
+            payload = await self.action_run(project.id, action_id, inputs)
+        except PermissionError as exc:
+            # The executor is the authority and preflight only refuses early:
+            # a file edited between the card opening and the operator
+            # confirming it lands here, and it has to read as a refusal to
+            # relay rather than as a broken tool.
+            raise AssistantError(
+                f"{exc} A human has to review and approve it in the Project's Run menu."
+            ) from exc
+        except (KeyError, ValueError) as exc:
+            raise AssistantError(str(exc)[:300] or "the action could not start") from exc
+        sessions = list(payload.get("sessions") or [])
+        errors = list(payload.get("errors") or [])
+        session_ids = [str(item.get("id")) for item in sessions if item.get("id")]
+        if not session_ids:
+            detail = "; ".join(str(item.get("error") or "")[:120] for item in errors)
+            raise AssistantError(
+                f'no step of "{label}" started{": " + detail if detail else ""}'
+            )
+        log.info(
+            "assistant_action_run action_id=%s label=%s project_id=%s dialog=%s "
+            "steps=%d failures=%d inputs=%d",
+            action_id, label, project.id, row.get("dialog_id"),
+            len(session_ids), len(errors), len(inputs),
+        )
+        self._watch_action_outcome(str(row.get("dialog_id") or ""), label, session_ids)
+        result: dict[str, Any] = {
+            "started": True,
+            "action": label,
+            "project": project.name,
+            "terminals": len(session_ids),
+            "note": (
+                "The steps are running. Their outcome is reported to the operator "
+                "when they finish; do not offer to read the output back."
+            ),
+        }
+        if errors:
+            result["errors"] = [
+                {
+                    "step": str(item.get("step") or ""),
+                    "error": str(item.get("error") or "")[:200],
+                }
+                for item in errors
+            ][:8]
+        return result
+
+    def _watch_action_outcome(
+        self, dialog_id: str, label: str, session_ids: list[str]
+    ) -> None:
+        """Report an action's outcome once its step sessions finish.
+
+        Deferred rather than awaited inline for two reasons that both matter: a
+        confirmation request would otherwise block for the length of a build,
+        and the confirming operator is not inside a turn, so there is no reply
+        for the outcome to ride. The report is one sentence delivered into the
+        dialog when it is true, which is what "a terse notification" means here.
+        """
+        if not dialog_id or not session_ids:
+            return
+
+        async def watch() -> None:
+            deadline = time.monotonic() + ACTION_OUTCOME_WATCH_SECONDS
+            steps: list[dict[str, Any]] = []
+            # unsupervised-loop-ok: one poll per started action, bounded by
+            # ACTION_OUTCOME_WATCH_SECONDS. A task that outlives the bound is
+            # reported as still running rather than watched forever.
+            while True:
+                steps = [self._step_outcome(item) for item in session_ids]
+                if all(item["state"] != "running" for item in steps):
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(ACTION_OUTCOME_POLL_SECONDS)
+            line, issue = action_outcome_line(label, steps)
+            log.log(
+                logging.WARNING if issue else logging.INFO,
+                "assistant_action_outcome label=%s dialog=%s issue=%s steps=%s",
+                label, dialog_id, issue,
+                [
+                    f"{item['state']}:{item['exit_code']}"
+                    f"{':unhealthy' if item['unhealthy'] else ''}"
+                    for item in steps
+                ],
+            )
+            await self._notify(dialog_id, line)
+
+        task = asyncio.create_task(watch(), name=f"assistant-action-outcome-{dialog_id}")
+        self._outcome_watches.add(task)
+        task.add_done_callback(self._outcome_watches.discard)
+
+    def _step_outcome(self, session_id: str) -> dict[str, Any]:
+        """One step's finished state: still running, its exit code, or unknown.
+
+        A session the daemon no longer holds reports `unknown` rather than
+        success. Reporting a removed step as clean is the one wrong answer
+        here: the operator would hear "finished cleanly" about a task whose
+        result nobody read.
+        """
+        session = self.sessions.sessions.get(session_id)
+        if session is None:
+            return {
+                "session_id": session_id, "state": "unknown",
+                "exit_code": None, "unhealthy": False,
+            }
+        record = session.record
+        if str(record.state) not in TERMINAL_SESSION_STATES:
+            return {
+                "session_id": session_id, "state": "running",
+                "exit_code": None, "unhealthy": False,
+            }
+        return {
+            "session_id": session_id,
+            "state": str(record.state),
+            "exit_code": record.exit_code,
+            "unhealthy": self._tail_unhealthy(session),
+        }
+
+    @staticmethod
+    def _tail_unhealthy(session: Session) -> bool:
+        """Classify a finished step's output tail without returning any of it."""
+        try:
+            raw = session.scrollback.tail_bytes(ACTION_OUTCOME_TAIL_BYTES)
+        except (AttributeError, OSError, ValueError):
+            return False
+        return output_looks_unhealthy(raw.decode("utf-8", "replace"))
+
+    async def _notify(self, dialog_id: str, text: str) -> None:
+        """Say one thing in a dialog outside any turn.
+
+        The dialog is the assistant's own surface, so an outcome that arrives
+        minutes after the turn belongs in it rather than in a second inbox. It
+        is stored like any assistant message - durable, and part of the next
+        turn's context, so the model knows what the operator was already told -
+        and published as `assistant_notice`, which the client renders and (with
+        Talk active) speaks on the announcement path that joins the current
+        speech stream rather than taking the floor from it.
+        """
+        message_id = str(uuid.uuid4())
+        speech = speech_form(text)
+        await self.store.add_message(
+            {
+                "id": message_id,
+                "dialog_id": dialog_id,
+                "turn_id": f"notice:{message_id}",
+                "created_at": time.time(),
+                "role": "assistant",
+                "display": text,
+                "speech": speech,
+                "status": "done",
+                "error": None,
+                "model": None,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": None,
+            }
+        )
+        await self.store.touch_dialog(dialog_id)
+        await self.events.emit(
+            "assistant_notice",
+            source="assistant",
+            dialog_id=dialog_id,
+            message_id=message_id,
+            display=text,
+            speech=speech,
+        )
 
     async def _execute_read(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if kind == "session_detail":
@@ -2196,6 +2627,51 @@ class AssistantService:
                 "title": note.get("title"),
                 "markdown": str(note.get("markdown") or "")[:8_000],
             }
+        if kind == "list_project_actions":
+            project, candidates = self.resolve_project(str(arguments.get("project") or ""))
+            if project is None:
+                return {"error": "project did not resolve", "candidates": candidates}
+            if self.action_catalog is None:
+                return {"error": "Project Actions are not available on this daemon"}
+            catalog = await self.action_catalog(project.id)
+            actions = [
+                {
+                    "id": item.get("id"),
+                    "title": item.get("label"),
+                    "description": str(item.get("description") or "")[:400],
+                    "file": item.get("source_path"),
+                    # The approval state per action, which is the state that
+                    # decides whether run_project_action can start it: trust is
+                    # per source file, so one unapproved file leaves the rest
+                    # runnable.
+                    "approved": bool(item.get("trusted")),
+                    "terminals": len(item.get("steps") or []),
+                    "inputs": [
+                        {
+                            "id": value.get("id"),
+                            "label": value.get("label"),
+                            "kind": value.get("kind"),
+                            "options": value.get("options") or [],
+                            "default": value.get("default"),
+                        }
+                        for value in item.get("inputs") or []
+                    ],
+                }
+                for item in catalog.get("actions") or []
+            ][:60]
+            result: dict[str, Any] = {
+                "project": project.name,
+                "actions": actions,
+                "note": (
+                    "Only an action marked approved can be run. An unapproved one "
+                    "needs a human to review its file in the Project's Run menu; "
+                    "you cannot approve it."
+                ),
+            }
+            diagnostics = [str(item)[:200] for item in catalog.get("diagnostics") or []][:6]
+            if diagnostics:
+                result["diagnostics"] = diagnostics
+            return result
         if kind == "list_queue":
             reference = str(arguments.get("session") or "").strip()
             if reference:
@@ -2541,6 +3017,7 @@ class AssistantService:
                     "append_project_note", "edit_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
                     "type_into_session", "submit_session_composer", "create_project",
+                    "list_project_actions", "run_project_action",
                 }
                 if name in known:
                     try:

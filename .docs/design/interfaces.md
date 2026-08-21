@@ -1256,6 +1256,15 @@ running), `assistant_turn_started`, `assistant_sentence`
 pending/scheduled/executed confirmation state), `assistant_turn_done`, and
 `assistant_turn_failed`, each carrying `dialog_id` and `turn_id`.
 
+`assistant_notice` is the one assistant event belonging to **no turn**:
+`{dialog_id, message_id, display, speech}`, published when the daemon has something to say
+after the turn that started it ended. Today that is a Project Action's outcome, which arrives
+when its step sessions finish - minutes later, with nobody's turn open to carry it.
+It is stored as an ordinary assistant message, so it survives a reload and rides the next
+turn's context, and a client renders it complete rather than streaming.
+Spoken, it takes the announcement path (join the live stream, never take the floor), because an
+outcome landing mid-sentence must not cut that sentence off.
+
 Text posted while a turn is running is **queued, never refused**: the response carries
 `queued: true`, `assistant_turn_queued` announces it under the id it will run as, and
 consecutive arrivals merge into that one waiting turn (`merged: true`) rather than becoming

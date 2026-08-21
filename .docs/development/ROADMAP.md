@@ -3887,11 +3887,21 @@ model.
 The hard part is already built: `run_action` executes only human-approved exact bytes, so the
 assistant inherits that boundary wholesale and cannot run anything a person did not approve.
 
-- [ ] A list tool over the Project's actions, showing each action's approval state.
-- [ ] A run tool for approved actions only, confirmation-carded per the existing trust policy;
+- [x] A list tool over the Project's actions, showing each action's approval state.
+  `list_project_actions` reports approval **per action**, because trust is per source file and
+  one unapproved file leaves the rest runnable.
+- [x] A run tool for approved actions only, confirmation-carded per the existing trust policy;
   an unapproved action names the file a human must review, exactly as the MCP surface does.
-- [ ] The outcome is a terse notification: success, or an issue flag when the exit code is
+  `run_project_action` classifies as *consequential* rather than reversible - a build or a
+  deploy is not undone by a tombstone, so it never runs under an `auto` trust setting - and the
+  refusal happens at preflight, so nothing pends that the executor would refuse. Resolution,
+  the trust check, and input validation are one shared implementation (`preview_action_run`).
+- [x] The outcome is a terse notification: success, or an issue flag when the exit code is
   nonzero or the output tail looks unhealthy - never an automatic read-back of output.
+  A bounded watch over the step sessions reports one sentence through `assistant_notice` (the
+  one assistant event belonging to no turn, since the exit code arrives after the confirmation).
+  The unhealthy-tail markers are deliberately narrow: bare "error" and "failed" appear in
+  healthy builds, and a flag that fires on green runs is one the operator learns to ignore.
 
 ### Assistant reach: spawn with a specified model
 

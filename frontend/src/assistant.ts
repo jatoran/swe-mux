@@ -294,6 +294,25 @@ export function applyAssistantEvent(
     }
     return { ...state, messages, thinking: null }
   }
+  // Something the assistant says outside any turn: today, the outcome of a
+  // Project Action it started, which lands minutes after the turn that started
+  // it ended. One durable message rather than a transient toast, because the
+  // operator may not be looking when a build finishes.
+  if (event.type === 'assistant_notice') {
+    const id = String(payload.message_id || '')
+    if (!id || state.messages.some(item => item.id === id)) return state
+    const message: AssistantMessage = {
+      id,
+      dialog_id: String(payload.dialog_id || ''),
+      turn_id: '',
+      created_at: Date.now() / 1000,
+      role: 'assistant',
+      display: String(payload.display || ''),
+      speech: String(payload.speech || ''),
+      status: 'done',
+    }
+    return { ...state, messages: [...state.messages, message] }
+  }
   if (event.type === 'assistant_tool_status') {
     const tool = String(payload.tool || '')
     const status = String(payload.status || '')

@@ -134,6 +134,17 @@ export function AssistantPanel({
           }
         }
       }
+      // A notice belongs to no turn, so it is spoken on the announcement path:
+      // it joins whatever stream is live rather than taking the floor, which is
+      // the same rule a confirmation card follows. A Project Action's outcome
+      // arriving mid-sentence must not cut the sentence off.
+      if (event.type === 'assistant_notice') {
+        const notice = String(payload.speech || '')
+        playEarcon('tick')
+        if (notice && voiceActiveRef.current && speechRef.current) {
+          void speakAnnouncement(notice).catch(() => {})
+        }
+      }
       if (event.type === 'assistant_action') {
         const status = String(payload.status || '')
         const actionId = String(payload.id || '')
