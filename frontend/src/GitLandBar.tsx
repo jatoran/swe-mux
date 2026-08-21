@@ -18,6 +18,7 @@ import {
   type LandVerifyCommand,
 } from './gitLand'
 import { landErrorText, useVerifyCommand } from './landState'
+import { verifySetupPrompt } from './landSetupPrompt'
 import { shortSha } from './gitWorktrees'
 import type { Project } from './types'
 
@@ -342,7 +343,53 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
         </div>
       </>}
     </div>
+
+    <SetupPromptDisclosure scriptName={gate?.scriptName || '.worktree-verify'} />
   </div>
+}
+
+/**
+ * The same command, for a repository that does not have one yet.
+ *
+ * It sits under the editor because that is where the question arises: an operator reading
+ * what this Project's gate is, or that this Project has none, is the one about to set one
+ * up somewhere else, and everything the receiving agent needs is already written down in
+ * `land-queue.md` rather than being anybody's to remember in a new repository.
+ *
+ * The prompt is **shown** rather than only copied. It is an instruction being handed to an
+ * agent that will write the thing deciding what reaches a trunk unattended, and a copy
+ * button whose payload nobody can read before pressing it is the wrong shape for that.
+ * The copy itself is best-effort by construction - `navigator.clipboard` is absent in an
+ * insecure context and refusable everywhere - so a failure says so and the text is already
+ * on screen to select by hand, rather than the button silently doing nothing.
+ *
+ * **The prompt's last paragraph is what keeps this from being an authority leak**, and it
+ * is the reason this is a button rather than something that could ever run: it tells the
+ * agent it cannot approve what it just wrote, and that the human presses approve in this
+ * very section. See `landSetupPrompt.ts` and `land-queue.md`.
+ */
+function SetupPromptDisclosure({ scriptName }: { scriptName: string }) {
+  const [note, setNote] = useState('')
+  const prompt = verifySetupPrompt(scriptName)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(prompt); setNote('Setup prompt copied.') }
+    catch { setNote('Clipboard access was blocked. Select the text below and copy it.') }
+  }
+  return <details class="git-land-setup-prompt" onToggle={() => setNote('')}>
+    <summary>Setting this up in another repository</summary>
+    <p class="git-state">
+      A prompt for an agent in a repository that has no verification command yet. It states
+      what the gate is used for, the contract the command has to satisfy, the two
+      conventions, and how to prove it fails when it should - and it ends by telling that
+      agent it cannot approve what it wrote. Approving stays a human act, here, against the
+      exact bytes.
+    </p>
+    <div>
+      <button onClick={() => void copy()}>Copy setup prompt</button>
+      {note && <small role="status">{note}</small>}
+    </div>
+    <pre class="git-land-source">{prompt}</pre>
+  </details>
 }
 
 function LandRow({ request, busy, onCancel, position }: {

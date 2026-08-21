@@ -111,10 +111,11 @@ separately opt-in.
   A **settle-watch notice** is the third caller of that same shape, and the one addressed to
   the session that asked for it: `watch_session` arms a read-only watch on a sibling, and when
   that sibling settles, ends, or the caller's timeout elapses, one fixed template is staged
-  against the *watcher* as a `rule` sender keyed by the watch id (`mux-mcp.md`). The
-  consequence of the sender kind is the same one the land handback has and is stated in the
-  arming result rather than discovered later: a `rule` item is never self-arming, so the notice
-  waits for a person.
+  against the *watcher* as a `rule` sender keyed by the watch id (`mux-mcp.md`). It is armed
+  the same way the handback is, and for the same reason: `solicited_by` names the watch, which
+  is the request the receiver itself made, so the arming is the receiver's own consent rather
+  than the sender's claim. The consequence is stated in the arming result rather than
+  discovered later - staged armed, and armed is not delivered.
   A scheduled **resume** stages its opening prompt the same way rather than as an argv seed:
   the resumed pane's argv is already `--resume <id>`, and whether a positional prompt may follow
   that is per-harness luck rather than a contract.

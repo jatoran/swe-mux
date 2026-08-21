@@ -14,6 +14,33 @@ is a fixed daemon-authored template into the *caller's own* prompt queue, as a
 already uses (`design/features/land-queue.md`, `prompt-queue.md`). Nothing here
 writes a PTY, addresses a third session, spends a budget, or triggers a scan.
 
+**And it is staged armed, because the watch is the consent.** A notice nobody
+delivers is a notice that did not happen, and the whole point of a watch is to
+replace polling with being told: a watcher that has to be hand-fed its own
+answer by an operator is back to waiting on a human. The Phase 5 floor - a
+non-human sender's write ends at a human - is about an *unsolicited* write
+appearing in somebody's terminal, and this is the opposite of that. So the floor
+is narrowed by exactly the width of the request and no further, the same four
+bounds the land handback carries, each of which is the watch's own shape rather
+than a new permission (`_notice_arming`):
+
+- **Only the watcher.** The target is `watcher_session_id` and no argument could
+  make it another session, the same way `watch_session` has no recipient.
+- **Only this service's templates.** No model writes any part of `_notice_body`.
+- **Only the run that armed it.** A conversation that rolled over never asked,
+  which is the run binding every auto-delivery grant carries. The sweep already
+  drops a rolled watch outright; this repeats the check at write time because
+  the `stop()` flush does not go through the sweep.
+- **Once.** `_resolve` pops the watch before staging, so one watch produces one
+  notice by construction - the cap the land queue has to claim atomically is 1
+  here for structural reasons, and there is nothing to count.
+
+Read at write time rather than trusted from arming: `session_watch_enabled`,
+which is this feature's own switch and has no per-Project half (`config.py`), so
+an operator who turns watches off mid-flight turns off the unattended half too.
+Refusing to arm is never refusing the notice - it is enqueued as the draft it
+always used to be, and a person can still send it.
+
 Three rules decide when it fires, and the third is the one the operator asked
 for by name:
 
@@ -114,17 +141,30 @@ DROP_REASONS = ("watcher_ended", "watcher_rolled")
 _SENDER_ID = "session_watch"
 _SENDER_LABEL = "Session watch"
 
-#: Stated on every result rather than derived, because it is a property of the
-#: sender kind and not of the target: `PromptQueueStore.create_message` refuses
-#: to arm a `rule` sender, and `auto_delivery` only ever presses send on an
-#: armed head. A watch notice therefore always waits for a person, exactly like
-#: a land-queue handback, and a caller told only "queued" would wait for a
-#: message that no machine was ever going to hand it.
+#: Stated on every result rather than derived, because "queued" alone is not
+#: something a caller can act on. A `rule` sender is not self-arming in general,
+#: but this notice is the bounded deterministic answer to a request this very
+#: session made, so it is staged armed by naming the watch in `solicited_by` -
+#: exactly the narrowing the land-queue handback established
+#: (`agent-messaging.md`, `land-queue.md`). Armed is still not delivered: every
+#: auto-delivery gate the receiver has can refuse it.
 NOTICE_DELIVERY_NOTE = (
-    "a deterministic rule-sender item is never self-arming, so the notice waits "
-    "in your queue for the operator to send it, exactly like a land-queue "
-    "handback"
+    "the notice is the bounded answer to the watch you armed, so it is staged "
+    "armed rather than as an inert draft, exactly like a land-queue handback. "
+    "Armed is not delivered: your own auto-delivery grant, head-of-line order, "
+    "delivery readiness, quiet hours, and the caps each still decide the send, "
+    "and if any of them refuses it the notice waits in your queue for a person"
 )
+
+#: Why a notice was staged as a draft rather than armed, recorded on the
+#: resolution alongside `armed` itself. A draft nobody delivered otherwise reads,
+#: from the log and the event stream alone, exactly like a notice that arrived -
+#: which is the failure mode that produced the land handback's audit fields.
+ARMING_REASON_OK = "answering this session's own watch request"
+ARMING_REASON_DISABLED = "session watches are not enabled on this install"
+ARMING_REASON_UNKNOWN_RUN = "the watching conversation could not be identified"
+ARMING_REASON_ROLLED = "the watching conversation was replaced"
+ARMING_REASON_NOT_ARMED = "the queue staged the notice as a draft"
 
 
 class WatchRefusal(QueueError):
@@ -170,6 +210,10 @@ class _Counters:
     resolved: dict[str, int] = field(default_factory=dict)
     dropped: dict[str, int] = field(default_factory=dict)
     notice_failures: int = 0
+    #: Notices that reached the queue armed. Reported next to `resolved` because
+    #: the two diverging is the quiet failure: watches maturing while nothing is
+    #: delivered looks, from every other counter, like a working service.
+    armed_notices: int = 0
 
 
 def running_work(record: Any) -> bool:
@@ -589,18 +633,35 @@ class SessionWatchService:
         state = describe_state(record) if record is not None else "ended (session gone)"
         body = self._notice_body(watch, case, state)
         message_id = ""
+        armed, arming_reason = self._notice_arming(watch)
         if self._queue_message is not None:
             try:
                 message = await self._queue_message(
                     target_session_id=watch.watcher_session_id,
                     body=body,
+                    armed=armed,
+                    solicited_by=watch.id if armed else None,
                     sender_kind="rule",
                     sender_id=_SENDER_ID,
                     sender_label=_SENDER_LABEL,
                     correlation_id=watch.id,
                 )
                 message_id = str((message or {}).get("id") or "")
+                # Read the arming back off the row rather than reporting what was
+                # asked for. A retry dedupes into the message it already created,
+                # and the queue applies its own floor on top of this one; either
+                # way what the audit must record is the state the row is in.
+                staged = str((message or {}).get("state") or "") == "armed"
+                if armed and not staged:
+                    arming_reason = (
+                        ARMING_REASON_NOT_ARMED
+                        if message_id
+                        else "the watcher was gone before the notice was staged"
+                    )
+                armed = staged
             except Exception:  # noqa: BLE001 - a failed notice must not kill the loop
+                armed = False
+                arming_reason = "the notice could not be enqueued"
                 self._counters.notice_failures += 1
                 log.warning(
                     "session_watch_notice_failed watch_id=%s watcher=%s case=%s",
@@ -608,17 +669,31 @@ class SessionWatchService:
                     watch.watcher_session_id,
                     case,
                 )
+        else:
+            armed = False
+            arming_reason = "this service has no queue to stage a notice in"
+        if armed:
+            self._counters.armed_notices += 1
         log.info(
             "session_watch_resolved watch_id=%s watcher=%s target=%s case=%s "
-            "state=%r message_id=%s",
+            "state=%r message_id=%s armed=%s arming_reason=%r",
             watch.id,
             watch.watcher_session_id,
             watch.target_session_id,
             case,
             state,
             message_id or "-",
+            armed,
+            arming_reason,
         )
-        await self._emit("session_watch_resolved", watch, case=case, state=state)
+        await self._emit(
+            "session_watch_resolved",
+            watch,
+            case=case,
+            state=state,
+            armed=armed,
+            arming_reason=arming_reason,
+        )
         return {
             "watch_id": watch.id,
             "case": case,
@@ -626,7 +701,35 @@ class SessionWatchService:
             "target_session_id": watch.target_session_id,
             "target_state": state,
             "message_id": message_id,
+            # Whether the answer will reach the session that asked without a human
+            # press, and why not when it will not. From the resolution alone a
+            # draft nobody delivered otherwise reads exactly like one that arrived.
+            "armed": armed,
+            "arming_reason": arming_reason,
         }
+
+    def _notice_arming(self, watch: Watch) -> tuple[bool, str]:
+        """Whether this watch's notice may reach its watcher without a human press.
+
+        The four bounds in the module docstring, of which only two are decisions
+        made here - the other two hold by construction. Refusing arming is never
+        refusing the notice; it is staged as a draft and a person can send it.
+        """
+        if not self._enabled():
+            return False, ARMING_REASON_DISABLED
+        watcher = self._sessions.sessions.get(watch.watcher_session_id)
+        if watcher is None:
+            return False, ARMING_REASON_UNKNOWN_RUN
+        live_run = str(getattr(watcher.record, "agent_run_id", "") or "")
+        if not watch.watcher_run_id or not live_run:
+            # A check that could not be made is not a check that passed. Without a
+            # run on both sides the consent cannot be shown to still belong to the
+            # conversation that gave it, and the sweep's drop guard - which needs
+            # both too - will not have caught the case either.
+            return False, ARMING_REASON_UNKNOWN_RUN
+        if live_run != watch.watcher_run_id:
+            return False, ARMING_REASON_ROLLED
+        return True, ARMING_REASON_OK
 
     def _notice_body(self, watch: Watch, case: str, state: str) -> str:
         """A fixed template. No model writes any part of this message."""
@@ -708,7 +811,11 @@ class SessionWatchService:
             "settle_hold_seconds": int(SETTLE_HOLD_SECONDS),
             "watches_open": self._count_for(watch.watcher_session_id),
             "watches_limit": self._max_per_session(),
-            "notice_delivery": {"auto_delivery": False, "waits_for": NOTICE_DELIVERY_NOTE},
+            # `auto_delivery` states eligibility, not a promise: the notice is
+            # staged armed, and every receiver-side gate still decides the send.
+            # Stated at arming time because "queued" alone is unactionable, which
+            # is the same lesson `notify`'s `target_delivery` records.
+            "notice_delivery": {"auto_delivery": True, "waits_for": NOTICE_DELIVERY_NOTE},
             "project_scope": scope.requested,
             "note": (
                 "Nothing is delivered now. Exactly one message will enter your "
@@ -717,7 +824,8 @@ class SessionWatchService:
                 f"the {watch.timeout_minutes}-minute timeout elapses, whichever "
                 f"happens first. It arrives as a queue item, and {NOTICE_DELIVERY_NOTE}. "
                 "The watch is one-shot and dies with your session or a daemon "
-                "restart."
+                "restart, and a conversation that rolls over before it matures "
+                "gets no notice at all."
             ),
         }
         if already_settled:
@@ -741,6 +849,7 @@ class SessionWatchService:
             "resolved": dict(self._counters.resolved),
             "dropped": dict(self._counters.dropped),
             "notice_failures": self._counters.notice_failures,
+            "armed_notices": self._counters.armed_notices,
             "settle_hold_seconds": int(SETTLE_HOLD_SECONDS),
             "enabled": self._enabled(),
         }

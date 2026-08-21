@@ -65,10 +65,14 @@ Every refusal is a typed `QueueError`.
 - The two suppressions that keep "settled" honest: `starting` is not working, and an `idle` target holding `RUNNING_ACTIVITY_KINDS` or `idle_reason: waiting_on_background` has not finished.
 - Lifetime: in-memory, dropped when the watcher session ends or its conversation rolls over, and flushed as notices on `stop()` so a daemon restart is never a silent un-arming.
 - The fixed notice template, and the counters `GET /api/diagnostics/background` reports.
+- `_notice_arming`: whether the notice is staged armed (`solicited_by=<watch id>`) or as a draft.
+  Two checks, made when the notice is written rather than at arming time: the run that armed the watch must still be live, and `session_watch_enabled` must still be on.
+  The other bounds that authority requires hold by construction here (`design/features/land-queue.md`), so there is nothing else to check.
+  The outcome is recorded as `armed` plus an `arming_reason`, and counted as `armed_notices` beside `resolved`.
 
 Every refusal is a typed `WatchRefusal` (a `QueueError`).
 
-**Not:** delivery or arming of the notice (`prompt_queue.py` owns both, and a `rule` sender is never self-arming), status detection itself (`session.py` and `observation.py` own the state the watch reads), MCP transport (`mcp.py`), or any storage - a watch has no table on purpose (`design/data-model.md`).
+**Not:** the arming floor itself or delivery (`prompt_queue.py` owns both; this module decides only what to *ask* for and reads the answer back off the row), status detection itself (`session.py` and `observation.py` own the state the watch reads), MCP transport (`mcp.py`), or any storage - a watch has no table on purpose (`design/data-model.md`).
 
 ## Prompt delivery
 

@@ -219,7 +219,9 @@ async def test_prompt_route_widens_to_every_project_only_when_asked(tmp_path: Pa
             serialize_project_config({"prompt_library_scope": "both"})
         )
         roots[name] = root
-    client = TestClient(TestServer(create_app(Config(data_dir=tmp_path / "data"))))
+    # See the note in `test_notification_sound_route_serves_the_packaged_audio`.
+    config = Config(data_dir=tmp_path / "data", reconcile_external_history=False)
+    client = TestClient(TestServer(create_app(config)))
     await client.start_server()
     await wait_runtime_ready(client.app)
     try:
@@ -261,9 +263,14 @@ async def test_notification_sound_route_serves_the_packaged_audio(tmp_path: Path
     payload = b"ID3\x04\x00\x00preview-audio"
     (sound_dir / "two-tone.mp3").write_bytes(payload)
     (frontend / "index.html").write_text("app shell", encoding="utf-8")
-    client = TestClient(
-        TestServer(create_app(Config(data_dir=tmp_path / "data"), frontend_dir=frontend))
-    )
+    # The startup reconcile is on by default and scans the *real* user home for
+    # every harness's past transcripts. An in-process daemon must not read the
+    # developer's `~/.claude/projects` - nothing here asserts anything about
+    # external history, and a suite that walks a real transcript tree once per
+    # app test is both machine-dependent and the thing that made these teardowns
+    # cost seconds.
+    config = Config(data_dir=tmp_path / "data", reconcile_external_history=False)
+    client = TestClient(TestServer(create_app(config, frontend_dir=frontend)))
     await client.start_server()
     await wait_runtime_ready(client.app)
     try:
