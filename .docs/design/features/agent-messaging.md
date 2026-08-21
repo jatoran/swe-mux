@@ -6,10 +6,14 @@ Bounded messaging *between sessions that already exist*, plus a way for an agent
 human to create one. Roadmap Phase 5; `CONTROL_PLANE_ROADMAP.md` §7.2. Fleet Queue is the
 one human review surface for both kinds of request:
 
-- `mux.notify(target, body, delivery=)` — an agent stages a message in a sibling session's
-  prompt queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
+- `mux.notify(target, body, delivery=, dry_run=)` — an agent stages a message in a sibling
+  session's prompt queue. A caller over `PromptQueueService.enqueue`, never a second delivery
+  path.
   `delivery="now"` asks for it to land in a turn that is already running, which three gates
   and two bounds decide whether the caller may even ask for.
+  `dry_run=true` runs every bound and returns the same verdict without staging anything.
+- `mux.revoke_message(message_id)` — the sender withdraws one message it staged that nothing
+  has delivered. The narrowest write here, and the counterpart to the dry run.
 - `mux.request_spawn(prompt, …)` - an agent writes an **inert draft** that appears in Fleet Queue.
   It starts nothing; a human approving it is what spawns the session.
 - The **fleet queue** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, and revocation.
@@ -118,13 +122,38 @@ its own is the default and nothing widens implicitly.
   that actually ends a runaway exchange has to be `max_thread_turns` and the per-origin hourly
   budget, and why `max_thread_turns` is 40 rather than the 12 that was about to refuse a
   working three-way conversation on its ninetieth minute (measured 2026-08-19).
+- **And a *delivered* message holds the sender's grant open until the reply can land.** The
+  symmetric half of the rule above: the session that has just handed work over is the one that
+  then goes quiet, so the idle lapse closes its grant precisely while it waits, and the
+  answer arrives armed with nothing to deliver it. `max_thread_turns` is what bounds that
+  window - the grant is held only while the exchange still has messages left in it - which is
+  the third job this budget does and the reason it, rather than chain depth, is the volume
+  bound. The mechanism and its limits are in `auto-delivery.md`; what belongs here is that the
+  exchange's own budget is what caps it, so two agents cannot renew each other's grants past
+  the bound that ends their conversation.
 - **A `notify` result says whether anything will deliver what it just staged.** `armed` alone
   is unactionable: it is the same word for a peer that is merely busy and for one nothing can
   reach without a human. The result and `message_status` both carry `target_delivery`
-  (`auto_delivery`, `blocked_by`, `sends_remaining`), derived from the install's brakes and
+  (`auto_delivery`, `blocked_by`, `sends_remaining`, and `lapse` when the grant is off for
+  idleness), derived from the install's brakes and
   the target's own grant, and the note tells a sender that finds it blocked to say so rather
   than waiting silently for a reply. Without it, three sessions in a live exchange went quiet
   on 2026-08-19 with no participant able to explain why.
+- **The verdict is available *before* the message exists, and the message is withdrawable
+  after.** Reporting deliverability only after arming meant an unreachable peer was something
+  a sender discovered rather than chose - and once discovered, the armed item was a duplicate
+  with no agent-reachable cleanup, so it sat in the peer's queue waiting to arrive out of
+  context (observed live 2026-08-21). Two bounded additions close that, and neither widens
+  what delivers. `dry_run` re-runs every check - target resolution, size, the per-origin
+  budget, the target backlog, ring detection, chain depth, the thread budget, and the three
+  mid-turn gates - and answers with `would_arm` and the same `target_delivery`, having staged
+  nothing, spent no budget slot, and charged no mid-turn slot; a refusal is still a refusal,
+  because a preview that said "fine" and then refused would be worse than none. `revoke`
+  cancels one message the caller is *already attributed as the author of* and only while it is
+  still `draft`/`armed`/`blocked` - a delivered message is text in somebody else's terminal,
+  and `not_revocable` says so rather than pretending. A revoked message reads back as
+  `revoked` from `message_status` rather than `refused`: nothing rejected it, and only one of
+  the two means "try again differently".
 - **Two bounds, because they stop different things.** `chain_depth` bounds **propagation** -
   how many distinct sessions one thread reaches - and grows only when a message lands on a
   session that has not spoken in the thread yet; a back-and-forth reaches nobody new and so
@@ -238,11 +267,16 @@ GET  /api/queue/mailbox?author=all|non_human|human[&project_id=...][&target_sess
      (the route keeps its original name; the surface it backs is the fleet queue)
 POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
-MCP  notify(target, body, reason?, correlation_id?, project?)
+MCP  notify(target, body, reason?, correlation_id?, project?, delivery?, dry_run?)
+MCP  revoke_message(message_id, reason?)
 MCP  request_spawn(prompt, backend?, name?, reason?, project?)
 MCP  message_status(message_id)
 MCP  spawn_requests(project?)
 ```
+
+`dry_run` stages nothing and returns `{dry_run, would_arm, state, thread_messages_remaining,
+would_deduplicate, target_delivery, note}`. `revoke_message` refuses with `unknown_message`
+(not the caller's) or `not_revocable` (already delivered, expired, or cancelled).
 
 `project` is omitted for the caller's own Project, `"fleet"` for every Project, or a Project
 name or id. `notify` also accepts `"Project name/session name"` as its `target`.
@@ -259,7 +293,9 @@ state that has to be flippable instantly and per session.
 
 ## Key files
 
-- `src/swe_mux/agent_messaging.py` — `AgentMessagingService` (relay policy, drafts, the `mailbox()` authorship projection the fleet queue reads).
+- `src/swe_mux/agent_messaging.py` — `AgentMessagingService` (relay policy, the `dry_run`
+  projection, sender-attributed `revoke`, drafts, the `mailbox()` authorship projection the
+  fleet queue reads).
 - `src/swe_mux/project_scope.py` — the `project` argument both write tools share with the read surface.
 - `src/swe_mux/mcp.py` — the two tools as thin callers.
 - `src/swe_mux/prompt_queue.py` — sender columns, correlation index, relay queries.

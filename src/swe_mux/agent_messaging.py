@@ -18,6 +18,13 @@ transport, and only through it):
   thread, while ``max_thread_turns`` bounds *volume* inside a thread and is what
   actually stops two agents talking forever. Cycle detection survives for what
   it was really for — a ring (A→B→C→A) that routes around the depth bound.
+  ``notify(dry_run=True)`` runs every one of those bounds and returns the same
+  verdict without staging anything, and ``revoke`` withdraws one message the
+  caller itself staged and nothing has delivered. The pair closes a gap that
+  cost a real hand-off on 2026-08-21: deliverability was reported strictly
+  *after* the item was armed, so an unreachable peer was something a sender
+  discovered rather than chose, and the stranded duplicate then had no
+  MCP-reachable cleanup at all.
 - ``request_spawn`` - write an inert request surfaced in Fleet Queue. It
   starts nothing. Approval is a separate human act (§7.2/§16): an agent that
   can create actors turns one prompt injection into unbounded fan-out, so the
@@ -387,8 +394,20 @@ class AgentMessagingService:
         correlation_id: str | None = None,
         project: Any = None,
         delivery: str = DELIVERY_WHEN_IDLE,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Stage a message from the calling session into ``target``'s queue."""
+        """Stage a message from the calling session into ``target``'s queue.
+
+        ``dry_run`` runs every bound and returns the same verdict without
+        staging anything, spending any budget, or charging a mid-turn slot. It
+        exists because the deliverability answer used to arrive strictly *after*
+        the item was armed: a sender learned that nothing would deliver its
+        message only once the message was already sitting in a peer's queue, so
+        the stranded item had to be cleaned up rather than never created
+        (observed live 2026-08-21). A refusal is still a refusal here — the point
+        is to make the armed-but-unreachable case a choice rather than a
+        discovery.
+        """
         if not self.config.agent_messaging_enabled:
             raise QueueError(
                 "agent_messaging_disabled",
@@ -510,19 +529,44 @@ class AgentMessagingService:
                 status=400,
             )
         correlation = _envelope_value(correlation_id, max_chars=200) or str(uuid.uuid4())
+        existing = (
+            await self.queue.store.message_by_correlation(
+                AGENT_SENDER_KIND, caller_id, correlation
+            )
+            if correlation_id
+            else None
+        )
         if mode == DELIVERY_NOW:
             await self._authorize_interject(
-                caller_id,
-                destination,
-                retry=bool(correlation_id)
-                and await self.queue.store.message_by_correlation(
-                    AGENT_SENDER_KIND, caller_id, correlation
-                )
-                is not None,
+                caller_id, destination, retry=existing is not None
             )
 
         outlook = await self.auto.outlook(target_id)
         armed = bool(await self.auto.accepts_agent_messages(target_id))
+        if dry_run:
+            # Nothing has been written: every check above is a read or a
+            # refusal, and the two that spend (the correlation row and the
+            # mid-turn slot) are charged after this point.
+            state = "armed" if armed else "draft"
+            return {
+                "dry_run": True,
+                "would_stage": True,
+                "would_arm": armed,
+                "state": state,
+                "target_session_id": target_id,
+                "target_name": getattr(destination.record, "name", None),
+                "target_project": getattr(destination.record, "project_label", None),
+                "cross_project": not own_scope(caller.record).admits(
+                    *record_scope(destination.record)
+                ),
+                "thread_id": thread_id if continues_thread else None,
+                "is_reply": is_reply,
+                "chain_depth": depth,
+                "thread_messages_remaining": max(0, max_turns - (turns + 1)),
+                "would_deduplicate": existing is not None,
+                "target_delivery": outlook,
+                "note": self._dry_run_note(state, outlook),
+            }
         ttl_seconds = DEFAULT_MESSAGE_TTL_HOURS * 3600
         expires_at = time.time() + ttl_seconds
         message_id = str(uuid.uuid4())
@@ -641,6 +685,49 @@ class AgentMessagingService:
         }
 
     @staticmethod
+    def _dry_run_note(state: str, outlook: dict[str, Any]) -> str:
+        """What sending it would do — said before anything exists to clean up."""
+        if state != "armed":
+            return (
+                "Nothing was staged. Sending this would arrive as an inert draft"
+                " that only a human can arm and send."
+            )
+        if outlook.get("auto_delivery"):
+            return (
+                "Nothing was staged. Sending this would arrive armed and be"
+                " delivered automatically once the target is at a safe point."
+            )
+        return (
+            "Nothing was staged. Sending this would arrive armed and then wait"
+            f" for a human, because {outlook.get('blocked_by')}."
+            f"{AgentMessagingService._lapse_detail(outlook)}"
+            " Send it anyway only if a person is expected to read that queue;"
+            " otherwise reach the target another way."
+        )
+
+    @staticmethod
+    def _lapse_detail(outlook: dict[str, Any]) -> str:
+        """The lapse audit as one sentence, or nothing when it was not a lapse.
+
+        A lapse is the one reason a grant is off that records no act, so
+        "lapsed while the conversation was idle" is all a sender ever got. The
+        numbers behind it are what make a stalled delivery explainable rather
+        than merely named.
+        """
+        lapse = outlook.get("lapse") or {}
+        idle = lapse.get("idle_seconds")
+        if not isinstance(idle, int | float):
+            return ""
+        window = lapse.get("window_minutes")
+        pending = lapse.get("pending")
+        parts = [f" It lapsed after {round(float(idle) / 60)} idle minute(s)"]
+        if isinstance(window, int | float):
+            parts.append(f" of a {round(float(window))}-minute window")
+        if isinstance(pending, int | float):
+            parts.append(f", with {int(pending)} message(s) already waiting")
+        return "".join(parts) + "."
+
+    @staticmethod
     def _staging_note(state: str, outlook: dict[str, Any]) -> str:
         """What actually happens next, including when the answer is "nothing".
 
@@ -665,8 +752,11 @@ class AgentMessagingService:
             )
         return (
             "Armed, but nothing will send it automatically: "
-            f"{outlook.get('blocked_by')}. It waits for a human to press send."
-            " Say so rather than waiting silently for a reply."
+            f"{outlook.get('blocked_by')}."
+            f"{AgentMessagingService._lapse_detail(outlook)}"
+            " It waits for a human to press send."
+            " Say so rather than waiting silently for a reply, and revoke it with"
+            " revoke_message if you reach the target another way."
         )
 
     # -- drafted spawn --------------------------------------------------------
@@ -906,14 +996,16 @@ class AgentMessagingService:
             "unreadable_projects": errors,
         }
 
-    async def message_status(self, caller: Any, message_id: str) -> dict[str, Any]:
-        """Current outcome of one notify, visible only to its attributed sender."""
+    async def _own_message(self, caller: Any, message_id: str) -> dict[str, Any]:
+        """One message this caller sent, or a refusal that confirms nothing.
+
+        Sender attribution is the whole check. The message carries the
+        *target's* Project, so a Project comparison here would hide the status
+        of every message the caller sent into another Project - the sender
+        would have written something it could not then follow.
+        """
         message = await self.queue.store.message(str(message_id or ""))
         caller_id = str(caller.record.id)
-        # Sender attribution is the whole check. The message carries the
-        # *target's* Project, so a Project comparison here would hide the status
-        # of every message the caller sent into another Project - the sender
-        # would have written something it could not then follow.
         if (
             message is None
             or message.get("sender_kind") != AGENT_SENDER_KIND
@@ -922,6 +1014,61 @@ class AgentMessagingService:
             raise QueueError(
                 "unknown_message", "no such message sent by your session", status=404
             )
+        return message
+
+    async def revoke(self, caller: Any, message_id: str, reason: str = "") -> dict[str, Any]:
+        """Withdraw one still-undelivered message this session staged.
+
+        The narrowest possible write: it cancels a message the caller is already
+        attributed as the author of, and can do nothing to any other message, to
+        the target's queue order, or to anything already delivered. Without it a
+        sender that found its message stranded - armed at a peer nothing could
+        reach - had no way to clean up after reaching that peer another way, and
+        the duplicate sat in the queue waiting to be delivered later out of
+        context (observed live 2026-08-21).
+
+        A delivered message is deliberately not revocable: the text is in
+        somebody else's terminal, and pretending otherwise would be a lie about
+        what was undone.
+        """
+        message = await self._own_message(caller, message_id)
+        state = str(message.get("state") or "")
+        if state not in {"draft", "armed", "blocked"}:
+            raise QueueError(
+                "not_revocable",
+                f"a {state} message cannot be revoked by its sender; it has already"
+                " left the queue. Say so to your human rather than sending a"
+                " correction nobody asked for.",
+                status=409,
+                state=state,
+            )
+        cancelled = await self.queue.cancel(str(message["id"]), kind="revoked")
+        log.info(
+            "agent notification revoked sender=%s target=%s message=%s previous_state=%s"
+            " reason=%s",
+            str(caller.record.id),
+            str(message.get("target_session_id") or ""),
+            str(message["id"]),
+            state,
+            _envelope_value(reason) or "(none)",
+        )
+        return {
+            "message_id": str(cancelled["id"]),
+            "correlation_id": cancelled.get("correlation_id"),
+            "status": "revoked",
+            "queue_state": str(cancelled["state"]),
+            "previous_state": state,
+            "target_session_id": str(cancelled.get("target_session_id") or ""),
+            "target_name": cancelled.get("target_label"),
+            "note": (
+                "Withdrawn before delivery; the target never saw it. Its correlation"
+                " id is spent, so a genuinely new message needs a new one."
+            ),
+        }
+
+    async def message_status(self, caller: Any, message_id: str) -> dict[str, Any]:
+        """Current outcome of one notify, visible only to its attributed sender."""
+        message = await self._own_message(caller, message_id)
         raw_state = str(message.get("state") or "")
         expires_at = (message.get("constraints") or {}).get("expires_at")
         expired = str(message.get("cancel_kind") or "") == "expired" or bool(
@@ -931,6 +1078,11 @@ class AgentMessagingService:
         )
         if expired:
             status = "expired"
+        elif str(message.get("cancel_kind") or "") == "revoked":
+            # Distinct from "refused": nothing rejected this message. Somebody
+            # withdrew it, and a sender re-reading its own outcome needs to know
+            # which of the two happened before deciding whether to resend.
+            status = "revoked"
         else:
             status = {
                 "draft": "drafted",

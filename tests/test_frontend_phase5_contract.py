@@ -27,6 +27,27 @@ def test_the_queue_tab_exposes_the_bounded_conversation_policy_and_its_state() -
     assert "disabled={busyId === 'auto' || !auto?.master_enabled}" in pane
 
 
+def test_a_lapse_is_explained_where_the_reader_is_already_asking_why() -> None:
+    """"Lapsed while the conversation was idle" is true and unactionable alone.
+
+    The strip is where somebody looks when a message has not moved, so it
+    carries the numbers behind the lapse — how long the conversation was idle,
+    under what window, and how many messages were left waiting — and routes to
+    the bound itself. The window is a *value* rather than a switch, so per
+    `setting-links.md` that is a link and never a grant.
+    """
+    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+
+    assert "describeLapse" in pane
+    assert "idle ${Math.round(lapse.idle_seconds / 60)} min" in pane
+    assert "${lapse.pending} waiting" in pane
+    assert 'target="queue.grantWindow"' in pane
+    # A grant held open by a live exchange says so, because otherwise it is
+    # indistinguishable from one that was simply granted a moment ago.
+    assert "'reply window open'" in pane
+    assert "is owed a reply" in pane
+
+
 def test_settings_explain_that_agent_conversations_default_on() -> None:
     settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
 
@@ -35,6 +56,23 @@ def test_settings_explain_that_agent_conversations_default_on() -> None:
         in settings
     )
     assert "Allow auto-delivery for agent conversations" in settings
+
+
+def test_the_two_grant_windows_are_editable_and_marked_for_deep_links() -> None:
+    """One owner per setting: both windows are edited here and nowhere else.
+
+    The idle window is what a lapse notice routes to, so it has to carry the
+    mark that reveal scrolls to. The reply window is the narrower bound beside
+    it, and its prose has to say what it does *not* widen — otherwise "keeps its
+    grant while awaiting a reply" reads as a second delivery path.
+    """
+    settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
+
+    assert 'data-setting="auto_delivery_session_ttl_minutes"' in settings
+    assert 'data-setting="auto_delivery_reply_window_minutes"' in settings
+    assert "Minutes a session keeps its grant while awaiting a reply" in settings
+    assert "capped by the exchange itself" in settings
+    assert "Set it to 0 to switch it off entirely." in settings
 
 
 def test_scheduling_is_a_property_of_the_queued_item() -> None:

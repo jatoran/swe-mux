@@ -464,8 +464,16 @@ async def test_a_clean_branch_reconciles_verifies_and_fast_forwards(
         results = await service.tick()
         assert results[0]["state"] == "landed"
         assert git(trunk, "rev-parse", "HEAD") == tip
-        steps = [item["step"] for item in await store.events(row["id"])]
-        assert steps == ["request", "reconcile", "verify", "land"]
+        events = await store.events(row["id"])
+        steps = [item["step"] for item in events]
+        assert steps == ["request", "reconcile", "classify", "verify", "land"]
+        # The classification is recorded on the ordinary path too, not only when it
+        # skips something: a trail that names the gate only when it was skipped cannot
+        # be read as "which gate ran", only as "did anything unusual happen".
+        classified = next(item for item in events if item["step"] == "classify")
+        assert classified["outcome"] == "full"
+        assert "alpha.txt" in classified["detail"]["disqualifying"]
+        assert (await store.get(row["id"]))["verify_gate"] == "full"
     finally:
         store.close()
 
@@ -498,6 +506,159 @@ async def test_a_second_branch_reconciles_against_the_first_result(
         log = git(trunk, "log", "--oneline")
         assert "alpha work" in log
         assert "beta work" in log
+    finally:
+        store.close()
+
+
+# -- the documentation-only fast path ----------------------------------------
+#
+# Every test here approves a gate that **fails**, which is the only way to prove a skip
+# is a skip: a passing gate lands either way, so it cannot tell "the classifier skipped
+# it" apart from "the gate ran and was quick".
+
+
+def docs_trunk(trunk_root: Path) -> None:
+    """Put the verification script on the trunk, where a branch inherits it.
+
+    `write_verify` commits into whatever checkout it is handed, so calling it on a
+    worktree puts `.worktree-verify` in that branch's *incoming* change set - which is
+    not documentation, and would classify every branch in this section as mixed.
+    """
+    write_verify(trunk_root, exit_code=1, noise="the gate must not have run")
+
+
+async def test_a_documentation_only_branch_lands_without_running_the_gate(
+    tmp_path: Path, trunk: Path
+) -> None:
+    docs_trunk(trunk)
+    worktree = add_worktree(trunk, "alpha")
+    tip = commit(worktree, "NOTES.md", "words\n", "docs work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        results = await service.tick()
+        # The approved gate exits 1. Reaching `landed` is therefore proof it never ran.
+        assert results[0]["state"] == "landed"
+        assert results[0]["verify_gate"] == "docs_only"
+        assert git(trunk, "rev-parse", "HEAD") == tip
+        assert queue.messages == []
+
+        events = await store.events(row["id"])
+        assert [item["step"] for item in events] == [
+            "request", "reconcile", "classify", "verify", "land",
+        ]
+        classified = next(item for item in events if item["step"] == "classify")
+        assert classified["outcome"] == "docs_only"
+        assert classified["detail"]["paths"] == ["NOTES.md"]
+        assert classified["detail"]["disqualifying"] == []
+        assert "are documentation" in classified["reason"]
+        # The verify step is still *in* the trail rather than absent from it. An
+        # absent step is the shape a silent skip would take, so the skip is recorded
+        # as an outcome of the step it replaced.
+        skipped = next(item for item in events if item["step"] == "verify")
+        assert skipped["outcome"] == "skipped"
+        assert skipped["reason"] == classified["reason"]
+    finally:
+        store.close()
+
+
+async def test_one_source_file_puts_the_branch_back_on_the_full_gate(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The mixed case, which is every case the allowlist does not cover completely."""
+    docs_trunk(trunk)
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "NOTES.md", "words\n", "docs work")
+    commit(worktree, "alpha.txt", "alpha\n", "code work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+        )
+        results = await service.tick()
+        assert results[0]["state"] == "handed_back"
+        assert results[0]["verify_gate"] == "full"
+        assert "exit code 1" in results[0]["reason"]
+        assert "the gate must not have run" in queue.messages[0]["body"]
+        assert git(trunk, "log", "--oneline", "-1").endswith("add verification")
+
+        classified = next(
+            item for item in await store.events(row["id"]) if item["step"] == "classify"
+        )
+        assert classified["outcome"] == "full"
+        assert classified["detail"]["disqualifying"] == ["alpha.txt"]
+    finally:
+        store.close()
+
+
+async def test_the_trunks_own_source_commits_do_not_disqualify_a_docs_branch(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The classification is of what the *trunk gains*, not of what the branch contains.
+
+    The reconcile merges the trunk into the branch, so after it the branch's history
+    holds the trunk's source commits too. Classifying the branch's whole history would
+    read those as incoming code and put every documentation branch back on the full
+    gate the moment anybody else landed anything.
+    """
+    docs_trunk(trunk)
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "NOTES.md", "words\n", "docs work")
+    commit(trunk, "engine.py", "x = 1\n", "trunk source work")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        results = await service.tick()
+        assert results[0]["state"] == "landed"
+        assert results[0]["verify_gate"] == "docs_only"
+        classified = next(
+            item for item in await store.events(row["id"]) if item["step"] == "classify"
+        )
+        assert classified["detail"]["paths"] == ["NOTES.md"]
+    finally:
+        store.close()
+
+
+async def test_a_docs_branch_still_hands_back_a_conflict(tmp_path: Path, trunk: Path) -> None:
+    """The fast path replaces the gate and nothing else.
+
+    Reconcile runs first and is unchanged, so a documentation branch that conflicts is
+    handed back exactly like any other - the classification never happens, because
+    there is nothing yet to classify.
+    """
+    docs_trunk(trunk)
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "NOTES.md", "from the branch\n", "branch docs")
+    commit(trunk, "NOTES.md", "from the trunk\n", "trunk docs")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+        )
+        results = await service.tick()
+        assert results[0]["state"] == "handed_back"
+        assert results[0]["verify_gate"] == ""
+        steps = [item["step"] for item in await store.events(row["id"])]
+        assert "classify" not in steps
     finally:
         store.close()
 

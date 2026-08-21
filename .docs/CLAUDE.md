@@ -160,6 +160,15 @@
   which is what stops an agent approving the command its own land runs - editing the
   command and approving it stay two acts against two routes, and a write can never produce
   an approved command because the approval is a digest over the bytes it just moved.
+  *Which* gate runs is decided by a `classify` step, and it stays on the executing side of
+  the same line: matching paths against a **closed** documentation allowlist is a total
+  function with no model, heuristic, or configuration in it, so it is not a decision -
+  what would cross the line is judging whether a change "looks risky". Everything it
+  cannot answer with certainty answers "the full gate", including a rename between two
+  documents; and the classification is recorded on **both** outcomes, with the skipped
+  `verify` step still present in the trail and the class persisted on the row, because a
+  documentation-only land never enters `verifying` and would otherwise read exactly like
+  one that passed three minutes of pytest.
   A second rule governs what a *running* gate may say: every signal is observed or absent,
   never estimated. A step number counts markers the gate itself printed, a step *total*
   exists only where a byte-identical run has already passed and is withdrawn the moment a

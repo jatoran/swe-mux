@@ -83,7 +83,19 @@ That is what stops an agent approving the command its own land runs - editing th
 
 It owns the *lifetime* of a gate's progress reading: created per attempt, seeded from the recorded plan for that digest, attached to a `verifying` row by `status()` and dropped the instant the process ends, and recorded as a new plan only when the run passed.
 
-**Not:** the precondition reads (`land_preconditions.py`), durability and serialization (`land_store.py`), the gate's authority (`worktree_verify.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.
+It also owns *which* gate runs: between reconcile and verify it classifies the change set, records the decision on both outcomes, and either enters `verifying` or transitions straight to `landing` with the `verify` step recorded as `skipped`.
+
+**Not:** the precondition reads (`land_preconditions.py`), the allowlist itself (`land_classify.py`), durability and serialization (`land_store.py`), the gate's authority (`worktree_verify.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.
+
+### `land_classify.py`
+
+The closed documentation allowlist, the `git diff --raw -z` parser it runs over, and the total function from a change set to `full` or `docs_only`.
+
+- A path is documentation when it ends in `.md` anywhere, or lies under `.docs/`/`docs/` at the root and ends in a documentation asset suffix.
+- The raw form is used rather than `--name-status` because it is the only one carrying file modes, which is what excludes a submodule gitlink and a symlink by mode rather than by name.
+- Everything unrecognised - an unreadable or empty diff, a rename or copy, an exotic mode, a mode change, an undecodable path, an unparseable record - returns `full`.
+
+**Not:** a judgement about whether a change is risky, any repository-specific knowledge, any configuration, or the decision to act on the answer, which is `land_queue.py`'s.
 
 ### `land_preconditions.py`
 
@@ -97,6 +109,7 @@ It fails closed, and identifies the main tree by `--absolute-git-dir` versus `--
 `land_requests`, `land_events`, and `land_verify_plans` on a dedicated worker thread.
 
 - Conditional state transitions, the per-step audit trail, and restart recovery of orphaned steps.
+- `verify_gate` on the request row, added at schema version 3 through the `PRAGMA table_info` column migration and backfilled to `''` rather than to `full`.
 - The two partial unique indexes that make one-request-per-branch and one-land-per-trunk properties of the schema rather than of the worker.
 - The upserted per-digest record of what a *passing* gate's steps were; a malformed one reads back as no plan, never as a wrong total.
 

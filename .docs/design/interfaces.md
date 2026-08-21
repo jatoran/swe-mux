@@ -538,7 +538,8 @@ POST   /queue/send-next                             {message_id, revision, idemp
 GET    /queue/export?target_session_id=[&redact_secrets=0]
 
 GET    /queue/auto                                  master switch, pause, default-on conversation
-                                                     grants/overrides,
+                                                     grants/overrides, per-row lapse audit and
+                                                     reply window,
                                                      counters, promotion criteria
 POST   /queue/auto/pause                            {paused}   emergency disable
 PUT    /queue/auto/sessions/{sid}                   {enabled?, ttl_minutes?, max_sends?,
@@ -575,6 +576,15 @@ from an authenticated remote device) and never read from the body; `initiator` (
 policy, not config: live agent runs receive bounded default-on rows, while explicit opt-outs
 and the pause survive a restart and depend on no provider
 (`features/auto-delivery.md`).
+Each per-session row carries `lapse` while its grant is off *for idleness* - when it fired,
+how long the conversation had been idle, the window it was measured against, and how many
+messages it left waiting - because a lapse is the one disable with no act behind it and so
+the one nobody can look up afterwards; fields are individually null on a row that lapsed
+before the audit existed, and the whole block is cleared when the grant returns.
+A row carries `reply_window` while an active exchange is holding that lapse off (the peer,
+the thread, its expiry, and the thread's used/limit message counts); the block authorizes
+nothing, every other gate still decides each send, and the policy block reports the bound as
+`reply_window_minutes`.
 `/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
 Its view also carries a `spawn_requests` list and, since Phase 7.6, a `control_requests` list of drafted interrupt/end approvals awaiting a human, each sorted newest-first and bounded.
 It backs the **fleet queue** surface; the route keeps its original name because renaming a daemon path for a UI rename would be a breaking change bought with nothing.
@@ -1606,6 +1616,16 @@ percentage in it by design: `step_index` counts the `=== name ===` markers the g
 rendered. The reading is in memory and dies with the process; a restart that returns a row to
 `queued` reports none rather than a stale snapshot. See `features/land-queue.md`.
 
+Every row carries `verify_gate`: `""` until the pipeline classified its change set, then `"full"`
+or `"docs_only"`. It answers **which gate that land ran**, decided from the incoming paths against
+a closed documentation allowlist, and it exists because a documentation-only land never enters
+`verifying` and would otherwise be indistinguishable from one that passed the full gate. `""` is
+not collapsed into `"full"` at either end, and a client reads any value it does not recognise as
+`""` rather than as a skip. `GET /land/{id}/events` carries the same decision as a `classify` step
+recorded on **both** outcomes, with the reason, the matched paths, and whatever disqualified them;
+on the fast path the `verify` step is still present, with outcome `skipped`. See
+`features/land-queue.md`.
+
 `GET /land/verify-command` reports the command a land would run, its digest, whether those exact
 bytes are approved, and both the approved and current text so the prompt can show a diff. It also
 carries the editable half (`config_command`, `config_revision`, `config_status`, `config_path`),
@@ -1823,7 +1843,9 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
 The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
-The write tools are `notify`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
+The write tools are `notify`, `revoke_message`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
+`notify(dry_run=true)` runs every bound and returns the same verdict - including `target_delivery` and `would_arm` - having staged nothing and spent no budget, so an unreachable peer is chosen rather than discovered after the item is armed.
+`revoke_message` cancels one still-undelivered message as `revoked`, refusing with `unknown_message` when the caller is not its attributed sender and `not_revocable` once it has left the queue.
 Each takes a `project` argument selecting the scope it answers within: omitted (or `self`) is the caller's own Project, `fleet` is every Project, and a Project name or id is that one.
 `request_spawn` accepts a name but refuses `fleet`, because one request starts one session in one Project.
 An unknown Project name is refused with the names that exist; a name matching two sessions is refused with their session ids rather than resolved.

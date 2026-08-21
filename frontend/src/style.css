@@ -4066,6 +4066,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-auto-emergency button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-auto-emergency button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
 .queue-promotion{flex:1 1 100%;color:var(--muted);font-size:9px;line-height:1.4}
+/* Why a grant is off, or why it is still on. Both are explanations rather than
+   controls, so they read at the muted weight the promotion counters do. */
+.queue-auto-lapse{margin:6px 0 0;color:var(--muted);font-size:10px;line-height:1.45}
 /* Staged work is not an alert, so it carries the count as a word rather than an amber
    dot: it names where the fleet-wide answer is instead of pretending to be one. */
 .queue-fleet-open{min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
@@ -4248,6 +4251,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-state.busy{color:var(--fg)}
 .git-land-state.idle{color:var(--muted)}
 .git-land-origin,.git-land-oid{color:var(--muted);font-size:8px}
+/* A skipped gate. Amber rather than muted: it is the one thing about a finished land
+   that a reader must not scan past, since the row's states cannot show it. */
+.git-land-gate-note{color:var(--amber);font-size:8px;white-space:nowrap}
 .git-land-reason{margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
 .git-land-paths{display:grid;gap:2px;margin:0;padding-left:14px;font-size:9px}
 .git-land-paths code{overflow-wrap:anywhere}

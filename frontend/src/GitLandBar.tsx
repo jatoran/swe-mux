@@ -3,6 +3,7 @@ import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
 import {
   formatDuration,
+  landGateNote,
   landHistoryOrder,
   landQueueOrder,
   landStateLabel,
@@ -352,12 +353,17 @@ function LandRow({ request, busy, onCancel, position }: {
   position?: number
 }) {
   const progress = verifyProgressLabel(request.verifyProgress)
+  // Drawn in the queue *and* in the history disclosure, because a land that skipped the
+  // gate has to still say so after it finishes: the row's own states cannot, having gone
+  // from merging the trunk to fast-forwarding without ever passing through `Verifying`.
+  const gateNote = landGateNote(request)
   return <article class={`git-land-row ${landStateTone(request.state)}`}>
     <div class="git-land-row-head">
       {position !== undefined && <span class="git-land-position">{position}</span>}
       <strong>{request.branch}</strong>
       <em class={`git-land-state ${landStateTone(request.state)}`}>{landStateLabel(request.state)}</em>
       {progress && <span class="git-land-progress-detail">{progress}</span>}
+      {gateNote && <small class="git-land-gate-note">{gateNote}</small>}
       {request.origin !== 'operator' && <small class="git-land-origin">requested by agent</small>}
       {request.waitingSince && <small>{ago(request.waitingSince)} waiting</small>}
       {onCancel && (request.state === 'queued' || request.state === 'waiting')

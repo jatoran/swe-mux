@@ -25,6 +25,16 @@ bound the roadmap requires around that decision:
   being pushed by something that never answers; a session that answers is not
   that. Volume in an agent-to-agent exchange is bounded where it belongs, by the
   per-thread and per-origin bounds in `agent_messaging.py`.
+- **The idle lapse is bounded, audited, and held off by exactly one thing.** A
+  grant lapses when nobody has touched the conversation for
+  ``auto_delivery_session_ttl_minutes``, and that lapse records when it fired,
+  after how much idleness, under which window, and how many messages it left
+  waiting — because a lapse is the one disable with no act behind it, so it is
+  the one nobody can look up afterwards. The single exception to the lapse is a
+  session that is *mid-exchange and owed a reply*
+  (``auto_delivery_reply_window_minutes``): it is bounded by its own clock and by
+  the exchange's message budget, it holds off the lapse and nothing else, and
+  every other gate below still decides each send.
 - **Fail closed and stay stopped.** A failed delivery — where the PTY write may
   or may not have landed — disables the session's grant and requires human
   reconciliation. It never retries blindly.
@@ -43,6 +53,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import Collection
 from typing import Any
 
 from .background_tasks import background
@@ -90,6 +101,10 @@ COUNTER_REFUSED = "auto_refused"
 COUNTER_FAILED = "auto_failed"
 COUNTER_UNSAFE = "unsafe_reported"
 COUNTER_PROVING_SINCE = "proving_since"
+# How often a grant has switched itself off for idleness. Counted rather than
+# only logged because "is this install losing grants constantly" is a rate
+# question, and the operator asking it is usually asking why a message sat.
+COUNTER_LAPSED = "auto_lapsed"
 
 DEFAULT_POLICY_BY = "conversation-default"
 FAILED_DELIVERY_REASON = (
@@ -108,6 +123,11 @@ LAPSED_REASON = "auto-delivery grant lapsed while the conversation was idle"
 # forever and the fix appears to do nothing on the machine that needed it.
 LEGACY_EXPIRED_REASON = "auto-delivery grant expired"
 LAPSE_REASONS = frozenset({LAPSED_REASON, LEGACY_EXPIRED_REASON})
+
+
+def is_lapse_reason(reason: Any) -> bool:
+    """Whether a grant is off only because its idle window ran out."""
+    return str(reason or "") in LAPSE_REASONS
 
 
 def _minutes(value: str) -> int | None:
@@ -252,6 +272,13 @@ class AutoDeliveryController:
             sends_used=0,
             disabled_reason=None,
             enabled_at=now,
+            # The lapse audit describes the grant that is being replaced, so it
+            # is cleared with it. Leaving it would make a working grant read as
+            # one that had just stranded messages.
+            disabled_at=None,
+            lapse_idle_seconds=None,
+            lapse_window_minutes=None,
+            lapse_pending=None,
             updated_by=by,
             **accept,
         )
@@ -270,8 +297,21 @@ class AutoDeliveryController:
         return policy
 
     async def disable_session(
-        self, session_id: str, *, reason: str = "disabled by user", by: str = "user"
+        self,
+        session_id: str,
+        *,
+        reason: str = "disabled by user",
+        by: str = "user",
+        audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Switch one grant off, recording when and — for a lapse — on what evidence.
+
+        ``audit`` is written only by the lapse path. Every other disable clears
+        the columns rather than leaving them: a grant the user turned off is not
+        explained by the last time it happened to lapse, and a stale record is
+        worse than no record, because a reader acts on it.
+        """
+        now = time.time()
         async with self._policy_lock:
             session = self.sessions.sessions.get(session_id)
             record = getattr(session, "record", None)
@@ -280,14 +320,82 @@ class AutoDeliveryController:
                 enabled=0,
                 agent_run_id=getattr(record, "agent_run_id", None) or None,
                 disabled_reason=reason,
+                disabled_at=now,
+                lapse_idle_seconds=(audit or {}).get("idle_seconds"),
+                lapse_window_minutes=(audit or {}).get("window_minutes"),
+                lapse_pending=(audit or {}).get("pending"),
                 updated_by=by,
             )
         self._stability.pop(session_id, None)
         self._backoff.pop(session_id, None)
         self.queue.events.emit_background(
-            "queue_auto_policy", session_id=session_id, enabled=False, reason=reason
+            "queue_auto_policy",
+            session_id=session_id,
+            enabled=False,
+            reason=reason,
+            **({"lapse": audit} if audit else {}),
         )
         return policy
+
+    async def _lapse_session(
+        self, session_id: str, record: Any, policy: dict[str, Any], *, now: float
+    ) -> dict[str, Any]:
+        """Close a grant for idleness, and record enough to explain it later.
+
+        A lapse is the only disable with no act behind it, so it is the only one
+        whose reason nobody can look up afterwards. That is exactly the state a
+        stranded sender lands in: its notification armed, nothing delivered it,
+        and the target's grant says only that it "lapsed while the conversation
+        was idle" — not when, not after how long, not under which window, and not
+        how many messages it left waiting. All four are cheap here and
+        unrecoverable later.
+        """
+        window_minutes = max(1, int(self.config.auto_delivery_session_ttl_minutes))
+        last_seen = max(
+            float(getattr(record, "last_activity_ts", 0.0) or 0.0),
+            float(policy.get("enabled_at") or 0.0),
+        )
+        idle_seconds = max(0.0, now - last_seen) if last_seen else None
+        pending = await self.queue.store.pending_message_count(session_id)
+        await self.queue.store.bump_counter(COUNTER_LAPSED)
+        audit = {
+            "at": now,
+            "idle_seconds": idle_seconds,
+            "window_minutes": float(window_minutes),
+            "pending": int(pending),
+        }
+        # WARNING rather than INFO precisely because of the pending count: a
+        # lapse with messages waiting is a stalled delivery, and the log is where
+        # an operator looks when a peer went quiet.
+        log.warning(
+            "auto-delivery grant lapsed session=%s idle=%ss window=%smin pending=%d",
+            session_id,
+            round(idle_seconds) if idle_seconds is not None else "unknown",
+            window_minutes,
+            pending,
+        )
+        return await self.disable_session(
+            session_id, reason=LAPSED_REASON, by="controller", audit=audit
+        )
+
+    @staticmethod
+    def lapse_record(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The lapse audit on one policy row, or None when it is not a lapse.
+
+        Absent fields stay absent. A row written before the audit existed lapsed
+        without the evidence being kept, and inventing a zero for it would read
+        as "lapsed the instant it was granted".
+        """
+        if row is None or row.get("enabled"):
+            return None
+        if not is_lapse_reason(row.get("disabled_reason")):
+            return None
+        return {
+            "at": row.get("disabled_at"),
+            "idle_seconds": row.get("lapse_idle_seconds"),
+            "window_minutes": row.get("lapse_window_minutes"),
+            "pending": row.get("lapse_pending"),
+        }
 
     async def set_accept_agent_messages(
         self, session_id: str, accept: bool, *, by: str = "user"
@@ -336,6 +444,61 @@ class AutoDeliveryController:
                 session_id, accept_agent_interjections=int(bool(accept)), updated_by=by
             )
 
+    # -- the bounded reply window ---------------------------------------------
+
+    async def reply_windows(
+        self, session_ids: Collection[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Which of these sessions are mid-exchange and owed an answer.
+
+        The one thing that holds off the idle lapse, and it holds off *only* the
+        lapse. A session whose own message was **delivered** to a peer inside
+        ``auto_delivery_reply_window_minutes`` is not an untouched conversation:
+        it is the half of a bounded exchange that is waiting. Losing the grant
+        there is what strands the answer, which is the failure this exists for.
+
+        Three things keep it from being a widening:
+
+        - It is evidence, not authority. Every other gate — the master switch,
+          the emergency pause, quiet hours, head-of-line order, the stability
+          window, delivery readiness, the consecutive-send cap — is unchanged and
+          still decides each send.
+        - It is capped by the exchange's own budget. A thread that has spent
+          ``agent_message_max_thread_turns`` opens no window, so the window can
+          never outlive the conversation that justifies it.
+        - It expires on the clock from the moment the message landed, not from
+          the moment anyone looks.
+
+        Staging a message opens nothing: an armed message nothing ever delivered
+        is the symptom, not the evidence.
+        """
+        ids = [str(session_id) for session_id in session_ids]
+        minutes = int(self.config.auto_delivery_reply_window_minutes or 0)
+        if minutes <= 0 or not ids:
+            return {}
+        span = minutes * 60
+        now = time.time()
+        found = await self.queue.store.open_reply_windows(ids, now - span)
+        max_turns = int(self.config.agent_message_max_thread_turns)
+        windows: dict[str, dict[str, Any]] = {}
+        for session_id, entry in found.items():
+            thread_id = str(entry.get("thread_id") or "")
+            if not thread_id:
+                # A row from before the thread model carries no budget to be
+                # capped by, so it earns no window rather than an unbounded one.
+                continue
+            turns = await self.queue.store.thread_message_count(thread_id)
+            if turns >= max_turns:
+                continue
+            windows[session_id] = {
+                **entry,
+                "expires_at": float(entry.get("sent_at") or 0.0) + span,
+                "window_minutes": minutes,
+                "thread_messages_used": turns,
+                "thread_messages_limit": max_turns,
+            }
+        return windows
+
     async def outlook(self, session_id: str) -> dict[str, Any]:
         """Whether anything will press send at this session, and what stops it.
 
@@ -370,7 +533,7 @@ class AutoDeliveryController:
             blocked_by = str(row.get("disabled_reason") or "the target's grant is off")
         elif not accepts:
             blocked_by = "the target is not accepting agent-authored messages armed"
-        return {
+        result: dict[str, Any] = {
             "auto_delivery": blocked_by is None,
             "blocked_by": blocked_by,
             "sends_remaining": (
@@ -379,6 +542,14 @@ class AutoDeliveryController:
                 else 0
             ),
         }
+        # A lapse is the one blocked_by a sender can neither act on nor explain
+        # from the sentence alone, so it carries its audit: when it happened,
+        # after how much idleness, under what window, and how many messages were
+        # already waiting when it fired.
+        lapse = self.lapse_record(row)
+        if lapse is not None:
+            result["lapse"] = lapse
+        return result
 
     async def report_unsafe(self, note: str = "") -> dict[str, float]:
         """Operator review input: one confirmed bad automatic delivery.
@@ -413,6 +584,15 @@ class AutoDeliveryController:
             live_ids = [str(session_id) for session_id in self.sessions.sessions]
             rows = await self.queue.store.auto_policies(live_ids)
             by_session = {str(row["session_id"]): row for row in rows}
+            # Only lapsed rows can be held open by an exchange, so only they are
+            # worth a query — this runs on the one-second tick, and an install
+            # with nothing lapsed pays nothing for the feature.
+            lapsed_ids = [
+                str(row["session_id"])
+                for row in rows
+                if not row.get("enabled") and is_lapse_reason(row.get("disabled_reason"))
+            ]
+            windows = await self.reply_windows(lapsed_ids) if lapsed_ids else {}
             changed = False
             for session_id, session in self.sessions.sessions.items():
                 record = getattr(session, "record", None)
@@ -436,7 +616,12 @@ class AutoDeliveryController:
                     # restored here either — `credit_auto_attention` clears it at
                     # the moment the evidence arrives.
                     assert row is not None
-                    if not self._restorable(row, record, now=time.time()):
+                    if not self._restorable(
+                        row,
+                        record,
+                        now=time.time(),
+                        reply_window=windows.get(str(session_id)),
+                    ):
                         continue
                 elif row is not None and row.get("disabled_reason") == FAILED_DELIVERY_REASON:
                     continue
@@ -462,6 +647,12 @@ class AutoDeliveryController:
         rows = await self._policies_with_conversation_defaults()
         counters = await self.queue.store.counters()
         now = time.time()
+        # Read here rather than on the tick: this is the browser's endpoint, and
+        # a grant being *held open* by an exchange is the thing an operator
+        # cannot otherwise tell from a grant that is simply fresh.
+        windows = await self.reply_windows(
+            [str(row["session_id"]) for row in rows if row.get("enabled")]
+        )
         sessions: list[dict[str, Any]] = []
         for row in rows:
             session_id = str(row["session_id"])
@@ -470,6 +661,8 @@ class AutoDeliveryController:
             sessions.append(
                 {
                     **row,
+                    "lapse": self.lapse_record(row),
+                    "reply_window": windows.get(session_id),
                     "enabled": bool(row.get("enabled")),
                     "accept_agent_messages": bool(row.get("accept_agent_messages")),
                     "accept_agent_interjections": bool(
@@ -506,6 +699,7 @@ class AutoDeliveryController:
             "stable_seconds": float(self.config.auto_delivery_stable_seconds),
             "max_consecutive": int(self.config.auto_delivery_max_consecutive),
             "session_ttl_minutes": int(self.config.auto_delivery_session_ttl_minutes),
+            "reply_window_minutes": int(self.config.auto_delivery_reply_window_minutes),
             "sessions": sessions,
             "counters": counters,
             "promotion": promotion_status(counters),
@@ -552,12 +746,27 @@ class AutoDeliveryController:
                 delivered.append(sent)
         return delivered
 
-    def _restorable(self, row: dict[str, Any], record: Any, *, now: float) -> bool:
-        """True for a lapsed grant on a conversation that is being used again."""
+    def _restorable(
+        self,
+        row: dict[str, Any],
+        record: Any,
+        *,
+        now: float,
+        reply_window: dict[str, Any] | None = None,
+    ) -> bool:
+        """True for a lapsed grant that is live again — by activity or by exchange.
+
+        Two facts restore it, and both are evidence rather than a decision: the
+        conversation was touched inside the idle window, or it is mid-exchange
+        and owed a reply. Every other disabled state records something that
+        happened and stays until a human clears it.
+        """
         if row.get("enabled"):
             return False
-        if str(row.get("disabled_reason") or "") not in LAPSE_REASONS:
+        if not is_lapse_reason(row.get("disabled_reason")):
             return False
+        if reply_window is not None:
+            return True
         return now < self._idle_deadline(record, {"enabled_at": 0.0})
 
     def _idle_deadline(self, record: Any, policy: dict[str, Any]) -> float:
@@ -601,8 +810,15 @@ class AutoDeliveryController:
         # it now measures.
         deadline = self._idle_deadline(record, policy)
         if now >= deadline:
-            await self.disable_session(session_id, reason=LAPSED_REASON, by="controller")
-            return None
+            # One exception, and only one: a session that is mid-exchange and
+            # owed a reply is not an untouched conversation. The window is
+            # bounded by its own clock and by the exchange's message budget, and
+            # it holds off *this* check alone — everything below still runs.
+            window = (await self.reply_windows([session_id])).get(session_id)
+            if window is None:
+                await self._lapse_session(session_id, record, policy, now=now)
+                return None
+            deadline = max(deadline, float(window["expires_at"]))
         expires_at = policy.get("expires_at")
         if expires_at and now >= float(expires_at):
             # Still in use, so the window moves with the conversation. Written at
