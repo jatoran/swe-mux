@@ -221,7 +221,9 @@ uncommitted work together.
 
 ## Git drawer tab
 
-- The Project-scoped Git tab has Map, Log, and Provenance readings of one repository.
+- The Project-scoped Git tab has Map, Log, Provenance, and Land readings of one repository.
+  Land is the queue of branches waiting to reconcile, verify, and fast-forward onto the trunk (`land-queue.md`);
+  it is a segment of its own rather than a strip inside Map, because Map answers what is *in* a worktree and Land answers what is *happening to* it.
 - The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
 
 ### A Project with no repository
@@ -358,6 +360,8 @@ uncommitted work together.
 - Explicit Refresh covers Git changes created outside swe-mux event paths.
 - The Git surface mutates only through the worktree create and remove operations and the one-time repository initialization offered to a Project whose folder has no repository.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
+- The **land queue** is the one path that merges, and it is not this surface: it is a daemon-owned pipeline with its own fixed vocabulary, its own preconditions, and its own approval (`land-queue.md`).
+  Its Land segment in this tab enqueues and cancels *requests* and approves the verification command's bytes; no control there moves a trunk, and the read-mostly rule for the rest of the tab is unchanged.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 - Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
   Client cancellation cannot interrupt a mutation after Git starts changing repository state.
@@ -418,6 +422,10 @@ and provider-managed worktrees may live outside that root.
   Its output is seeded into the new session's supervisor-owned scrollback before the harness starts.
   Setup failure never removes the worktree and never blocks session creation.
   The terminal scrollback and `spawn.setup` result state that the tree is not bootstrapped.
+- `[worktree].verify_command` and the executable `.worktree-verify` convention are the same shape one step later: the command the land queue runs as a branch's gate (`land-queue.md`).
+  Resolution and bounded execution are shared with bootstrap; the authority is not.
+  Bootstrap runs once, for a tree a human just asked to create, before anything starts in it, so it needs no approval of its own.
+  Verification runs repeatedly on an agent's request, so it carries an exact-content approval and any edit to it un-approves it.
 - Harness preparation is adapter-owned and best effort.
   Claude atomically clones the primary checkout's `~/.claude.json` trust entry to the canonical forward-slashed worktree key, copies the primary `.claude/settings.local.json` permission allowlist, and adds `--add-dir <primary-root>`.
   Codex atomically writes `trust_level = "trusted"` under the canonical worktree key in the runtime `CODEX_HOME` config and grants the primary root through `sandbox_workspace_write.writable_roots`.

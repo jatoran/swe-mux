@@ -24,7 +24,7 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
   `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`,
   `phase_transitions`, `timeline_handoff`, `catch_me_up`, `live_blockers`,
-  `semantic_history_search`, `scheduled_runs`).
+  `semantic_history_search`, `scheduled_runs`, `land_queue`).
   `observation_inbox` is a persisted compatibility id whose current label and surface are
   spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
 - **Memory-read opt-ins (Phase 7.5)**: each cross-session memory MCP read is gated by the
@@ -41,6 +41,13 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
   The same automation gates the Project's `spawn_grant`, which does the identical draft/granted
   split for agent-initiated `mux.requestSpawn` into that Project.
+- **`land_queue` (Phase 14)** gates a capability rather than a read, so it depends on no
+  substrate (`requires ()`) and is off by default. Its own id rather than a second meaning
+  for `session_control`: that one acts on a *session*, this one moves a *repository's
+  trunk*, and they deserve separate switches and separate budgets. Opting in is necessary
+  and not sufficient - the Project's separate `land_grant` field stays at the inert `draft`,
+  where an agent's `request_land` writes an approval row a human decides, until it is raised
+  to `granted` (`land-queue.md`).
 - **`scheduled_runs`** gates a capability rather than a read, like `session_control`, so it
   depends on no substrate (`requires ()`) and is off by default. Permission alone starts
   nothing: the schedules themselves are machine-local rows in the daemon's database, so a

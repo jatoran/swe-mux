@@ -175,6 +175,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                             -> Phase 10.5 Distribution licensing + voice-stack replacement [voice stack done+deployed; license paperwork open]
                                               -> Phase 10.6 Mux assistant: conversational fleet operation [done+deployed 2026-08-18]
                                                 -> Phase 11  Public packaging and release  [open]
+
+Phase 14  Land queue: serialized branch landing   [built, not landed; live run outstanding]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -3642,40 +3644,44 @@ exact-content approval model, and Tier 0 fact capture.
 
 ### The request, not the action
 
-- [ ] Add a land request as the only entry point: a `mux.request_land` MCP tool scoped to the
+- [x] Add a land request as the only entry point: a `mux.request_land` MCP tool scoped to the
   caller's own session by the existing per-session token, and an operator Land control on the
   worktree surface. Neither performs the land; both enqueue it.
-- [ ] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
+- [x] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
   `off`/`draft`/`granted`, default `draft` so a human approves each land - registered as its own
   `land_queue` automation in the enablement DAG and capped by an hourly budget.
   Its own automation id rather than a second meaning for `session_control`: that one acts on a
   *session*, this one acts on a *repository*, and they deserve separate switches and separate
   budgets.
-- [ ] Bind the request to what it was made about: the worktree root and the branch tip OID at
-  request time. A branch that moved before the item runs is a refusal, not a silent land of
-  something else.
+- [x] Bind the request to what it was made about: the worktree root and the branch tip OID at
+  request time, recorded as evidence of what was asked for. The tip is re-read at each step
+  rather than frozen - an agent that requests a land and keeps working is the case the hold
+  exists for, and refusing on any movement would contradict it. The refusal that protects
+  something is narrower and is in the pipeline below: a branch that moved past the OID that
+  *verified* never lands, because that is the one movement that would put unverified code on
+  the trunk.
 
 ### The pipeline
 
-- [ ] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
+- [x] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
   in arrival order. Verification is measured parallel-safe across worktrees, but `advance` re-runs
   every remaining item after each land anyway, so concurrency buys only the first item and is left
   as a config ceiling the store's shape permits rather than as v1 behaviour.
-- [ ] Check preconditions before **every** mutation rather than once at enqueue, and fail closed:
+- [x] Check preconditions before **every** mutation rather than once at enqueue, and fail closed:
   the worktree is clean on tracked paths, its branch tip still matches the bound OID, the resolved
   trunk is the main tree and not a worktree (the `--absolute-git-dir` versus `--git-common-dir`
   test, never a name comparison), and no live session rooted in that worktree is `working`.
   The last one is the hazard the pipeline exists inside: reconcile writes into a checkout an agent
   owns and may be mid-turn writing to, and `delivery_readiness` already answers that question with
   the same fail-closed predicate `interrupt` gates on.
-- [ ] Hold a busy item in a visible `waiting` state with its reason, retrying on the ordinary tick
+- [x] Hold a busy item in a visible `waiting` state with its reason, retrying on the ordinary tick
   until a bounded timeout; only the timeout hands back. A wait is a state a human can read, never
   an invisible sleep.
-- [ ] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
+- [x] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
   records the conflicting paths, and hands the request back to the originating agent session as a
   bounded deterministic template through the Phase 5 queue - a draft by default, promotable by the
   ordinary auto-delivery grant like any other item.
-- [ ] Verify: run the Project's declared verification command inside the worktree through the
+- [x] Verify: run the Project's declared verification command inside the worktree through the
   daemon's own bounded-subprocess runner, under the fingerprint approval above, and record the
   exact commit OID that passed.
   Run it verbatim and read its real exit code: never pipe it, never trim it, never wrap it in a
@@ -3683,37 +3689,37 @@ exact-content approval model, and Tier 0 fact capture.
   shipped a failing suite green in this repository once.
   Running under the daemon's `base_session_env` rather than an agent shell also removes the known
   intermittent false failure `.worktree-verify` shows in an agent shell, by construction.
-- [ ] Skip re-verification only for a reconcile that reported nothing to merge. A verified OID
+- [x] Skip re-verification only for a reconcile that reported nothing to merge. A verified OID
   still standing is the one case where re-running the gate proves nothing.
-- [ ] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
+- [x] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
   the verified OID or the checkout is dirty on touched paths. A refusal is a reported failure,
   never a retried force.
-- [ ] Advance: after each successful land, re-run every remaining queued item from reconcile
+- [x] Advance: after each successful land, re-run every remaining queued item from reconcile
   against the new trunk automatically, so one landing does not strand the other agents' now-stale
   reconciles.
-- [ ] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
+- [x] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
   end: who asked, what verified, which OID moved the trunk.
-- [ ] Keep the queue itself machine-local, like scheduled runs: a land queue committed to a
+- [x] Keep the queue itself machine-local, like scheduled runs: a land queue committed to a
   repository would arm itself in every clone and every worktree of it.
 
 ### Boundaries
 
-- [ ] The pipeline never resolves a conflict, never rebases, never forces, and executes no
+- [x] The pipeline never resolves a conflict, never rebases, never forces, and executes no
   model-chosen command; its git vocabulary is fixed, and fast-forward-only is the only trunk merge
   shape.
-- [ ] A verification failure hands back like a conflict, with the failing output attached. Retries
+- [x] A verification failure hands back like a conflict, with the failing output attached. Retries
   are bounded and explicit - at most one, and only when configured - never silent, because a flaky
   gate that loops is worse than one that stops.
   A retry that fails *differently* from the first attempt stops rather than retrying again: two
   unlike failures are evidence about the gate, not about the branch.
-- [ ] A handback body is bounded and redacted before it becomes an agent's prompt: the tail of the
+- [x] A handback body is bounded and redacted before it becomes an agent's prompt: the tail of the
   output at a few KiB through the same `looks_like_secret` gate every other excerpt uses, keyed by
   the request id as its `correlation_id` so the queue's existing uniqueness index dedupes repeats.
-- [ ] The daemon is the single writer for the trunk merge, which also closes the race two sessions
+- [x] The daemon is the single writer for the trunk merge, which also closes the race two sessions
   otherwise have over the primary checkout's one index.
-- [ ] Kill switches at the config level and per Project, per the completion policy; `off` is inert
+- [x] Kill switches at the config level and per Project, per the completion policy; `off` is inert
   and produces no queue writes at all.
-- [ ] No decision-gated entry is crossed: execution authority is the already-trusted verification
+- [x] No decision-gated entry is crossed: execution authority is the already-trusted verification
   task plus the fixed git vocabulary, and the conflict handback rides Phase 5's bounded
   deterministic templates rather than a new agent-to-agent path.
 
@@ -3722,16 +3728,19 @@ exact-content approval model, and Tier 0 fact capture.
 - [ ] Three finished branches requested together land in sequence under `granted`: the second
   reconciles against the first's result automatically, and the conflicting third is handed back
   with its conflict list while the trunk stays clean.
-- [ ] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
+  (Covered against real repositories and real worktrees in `tests/test_land_queue.py`; still
+  owed a live run on the isolated daemon with real agent sessions occupying the worktrees,
+  which is the half a test with no live session cannot prove.)
+- [x] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
   failure, a trunk that resolves to a worktree - are covered by tests, and each reports rather than
   retries.
-- [ ] A worktree whose session is mid-turn holds in a readable `waiting` state and lands once that
+- [x] A worktree whose session is mid-turn holds in a readable `waiting` state and lands once that
   session settles, and only a bounded timeout converts the wait into a handback.
-- [ ] The verify command is refused until its exact bytes are approved, and editing it un-approves
+- [x] The verify command is refused until its exact bytes are approved, and editing it un-approves
   it, so no agent can author the command its own land runs.
-- [ ] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
+- [x] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
   budget accounting.
-- [ ] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
+- [x] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
   the prompt-queue and mux-mcp documents name the handback template and the request tool.
 
 ## Decision-gated capabilities

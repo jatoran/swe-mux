@@ -120,6 +120,14 @@ Worktree bootstrap (`.worktree-setup`) is `uv sync` plus `npm ci`, sharing the u
 caches, so it is a dependency install rather than a download. It is not free: if agent
 tasks are short, prefer reusing a few long-lived worktrees over creating one per task.
 
+**The land queue automates exactly the sequence above** (`.docs/design/features/land-queue.md`):
+the Git drawer's Land segment, or `mux.request_land` from inside the worktree, enqueues a
+request and the daemon runs reconcile → `.worktree-verify` → fast-forward for one branch at a
+time. It never resolves a conflict and never runs a gate whose exact bytes a human has not
+approved; a conflict or a failed gate comes back to the requesting session as a queue message.
+It is off by default per Project, and the manual two commands remain the fallback and the
+thing to reach for when the queue is not enabled.
+
 ## Verification
 
 Backend: `uv run pytest tests -q -m "not live_agent and not live_subagent and not

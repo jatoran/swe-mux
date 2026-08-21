@@ -285,6 +285,26 @@
   `(schedule_id, fire_key)` is **unique, and that index is the idempotency mechanism**: the
   row is inserted before the spawn, so a daemon that dies mid-fire cannot start the same
   occurrence twice on restart.
+- `land_requests` / `land_events` (`features/land-queue.md`, `land-queue.sqlite3`): one row per
+  branch asked to land, and its per-step audit trail. A request carries the two checkout roots,
+  the branch and the OID it was requested at, the trunk ref, the origin (operator or agent, with
+  the requesting session and run), its state, the OID that passed verification, and the trunk's
+  before and after positions.
+  **Machine-local for the same reason schedules are**: a queue committed to a repository would
+  arm itself in every clone and worktree of it, while the `land_queue` opt-in stays portable and
+  is inert on its own.
+  Two **partial unique indexes carry the design rather than merely guarding it**.
+  `land_requests_active`, unique on `(project_root, branch)` over the live states, makes enqueue
+  itself the claim, so an agent asking twice cannot create a second pipeline over one worktree.
+  `land_requests_inflight`, unique on `project_root` over the running states, is what makes
+  "one land at a time per trunk" a property of the schema: two workers cannot both mark a step
+  running against one primary checkout even if both believe they should.
+  A row left in a step state by a daemon that died mid-flight returns to `queued` on restart
+  rather than resuming, because every step re-checks the repository from scratch and guessing
+  how far it got is the part that is not safe.
+  `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
+  the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
+  an originating session to attribute it to.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.

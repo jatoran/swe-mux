@@ -185,6 +185,15 @@ boundary entirely: they are typed by the user into machine-local settings rather
 from a checkout, so there is nothing to fingerprint and nothing repository-supplied to approve.
 Worktree setup is different: it is committed repository configuration, but it has authority only after the user explicitly selects New worktree session, and only for the newly created Git-listed root before that one session starts.
 
+The land queue's **verification command** borrows this approval model and deliberately not the
+execution one (`land-queue.md`). It cannot be an action: an action's cwd is bounded by the
+canonical Project root and is expressly denied the sibling-worktree widening spawns get, so it
+cannot reach the tree it has to verify, and an action step becomes a one-shot terminal rather
+than a captured exit code. What it takes instead is the fingerprint - a machine-local SHA-256
+over the exact bytes, retained alongside them so the prompt can show a diff, and un-approved by
+any edit. That is what keeps the same sentence true one step further out: an agent that writes a
+verification script has made a proposal, and a human is what turns it into an authority.
+
 ## Authoring
 
 The Run menu's **Author** section opens `.swe-mux/actions.toml` in a TOML editor, with

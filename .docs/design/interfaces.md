@@ -1483,6 +1483,12 @@ POST   /git/init                     {project_id}
 POST   /git/worktrees
 POST   /git/worktrees/session
 DELETE /git/worktrees
+GET    /land[?project_id=]
+POST   /land                         {project_id, worktree_root}
+DELETE /land/{request_id}
+GET    /land/{request_id}/events
+GET    /land/verify-command          ?project_id=&worktree_root=
+POST   /land/verify-command/approve  {project_id, worktree_root, digest}
 GET    /processes[?session=&include_ended=1&unique_memory=1&summary=1]
 POST   /processes/action             {session_id, pid, identity_id, action}
 GET    /previews[?session=]
@@ -1498,6 +1504,19 @@ It re-resolves the folder's repository state inside the request: `404 project_no
 `404 root_unavailable`, `409 already_initialized` for a folder Git already tracks, and
 `400 git_error` carrying Git's own message. The reading that leads a client here is the
 `404 not_git_repository` code from `GET /git/worktrees`. See `features/git.md`.
+
+The `/land` routes are the land queue (`features/land-queue.md`). **None of them lands
+anything**: `POST /land` enqueues a request and the daemon's own sweep is the only thing that
+moves a trunk, so a client that gets `201` has been told the request was accepted, not that the
+branch is on the trunk. `GET /land` returns the queue plus its bounds (`hourly_budget`,
+`hold_timeout_seconds`, `retry_verification`); `409 already_queued` names an active request for
+that branch, and `DELETE` refuses with `409 not_cancellable` once a step is in flight.
+
+`GET /land/verify-command` reports the command a land would run, its digest, whether those exact
+bytes are approved, and both the approved and current text so the prompt can show a diff.
+`POST /land/verify-command/approve` requires the digest the caller was shown: `409
+digest_mismatch` means the bytes moved between the prompt and the click and returns the new
+digest, and `409 not_configured` means the repository declares no gate.
 
 `POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
 under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning

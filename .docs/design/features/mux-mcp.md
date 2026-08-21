@@ -163,6 +163,11 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Under the default `draft` grant it writes an inert approval instead of acting |
+| `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
+
+`request_land` deliberately takes no target. The checkout comes from the caller's own live
+cwd, so "an agent lands the checkout it is working in, and no other" holds by construction
+rather than by a check that could be routed around. There is nothing in the call to forge.
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is

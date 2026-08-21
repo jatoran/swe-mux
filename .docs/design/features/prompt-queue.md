@@ -103,6 +103,11 @@ separately opt-in.
   A scheduled run stages its follow-up messages as `rule` senders against the session it just
   started, with any per-message delay written as an ordinary `not_before` constraint rather
   than a timer that feature owns (`scheduled-runs.md`).
+  A land queue handback is staged the same way: a conflict, a failed verification, or an
+  expired hold returns to the requesting session as a `rule` sender carrying a fixed
+  template, keyed by the land request id as its `correlation_id` so a repeat dedupes on
+  the existing uniqueness index (`land-queue.md`). It is a message rather than an action
+  because the pipeline has no way to resolve a conflict and no business trying.
   A scheduled **resume** stages its opening prompt the same way rather than as an argv seed:
   the resumed pane's argv is already `--resume <id>`, and whether a positional prompt may follow
   that is per-harness luck rather than a contract.

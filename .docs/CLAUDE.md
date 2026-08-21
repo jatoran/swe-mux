@@ -131,6 +131,21 @@
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
   `technical/frontend/workspace-state.md`
+- Changing the land queue (its pipeline steps, preconditions, the verification gate and its
+  approval, the grant, or the Land segment): `design/features/land-queue.md`,
+  `design/features/git.md`, `design/features/project-actions.md`,
+  `design/features/prompt-queue.md`, `design/features/automation-enablement.md`,
+  `design/features/mux-mcp.md`, `design/interfaces.md`, `design/data-model.md`,
+  `technical/backend/packages.md`, `technical/backend/sqlite.md`.
+  The rule the design turns on: the pipeline executes a *fixed* git vocabulary and never
+  decides anything - fast-forward-only is what makes the trunk step safe for a machine,
+  because Git refuses it on divergence and refuses to overwrite local changes, so the
+  pipeline cannot lose work by construction. A conflict and a failed gate both need
+  intelligence and both belong to the branch's own agent, so they leave as a bounded
+  deterministic message rather than being resolved here. And the verification command is
+  *not* a Project Action: an action's cwd is bounded by the Project root and deliberately
+  denied the sibling-worktree widening, so it borrows only the exact-content approval,
+  which is what stops an agent approving the command its own land runs.
 - Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint
   detection, the absence digest, mined demotion rules, or model narration:
   `design/features/attention-ranking.md`, `design/features/deterministic-consumers.md`,
