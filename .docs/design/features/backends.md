@@ -95,6 +95,7 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | How is a conversation forked? | `branch_strategy(name)` | Branch dispatch and its refusal; the browser's branch gate reads the published `branch` capability |
 | Can a branch be cut at a chosen message? | `branches_from_message(name)` (frontend `branchesFromMessage(name)`, published `branch_from_message`) | Whether the rail's Branch opens a point picker or forks on the click |
 | What does a user type to invoke a skill? | published `skill_invocation_prefix` | Skill inventories and the command rail's injected payload |
+| What key discards its whole composer? | published `composer_clear_keys` (frontend `composerClearKeys(name)`) | The rail's Clear-input button, and whether the daemon's unsent-input estimate treats a write as a clear |
 | Which root instruction file does the CLI read? | `instruction_harnesses()`, `instruction_file_name`, `global_instruction_parts` | Agent Context inventory and sync |
 | Which harness is this command line running? | `harness_for_command(executable, args)` | Recognizing an already-launched agent, including the history backend-mismatch repair |
 | Can this harness be driven by the live canary? | `live_canary_harnesses()`, `live_subagent_harnesses()`, `live_telemetry_harnesses()`, from `headless_probes` | The live conformance tier |
@@ -167,7 +168,9 @@ The descriptor is the source of truth for all generic surfaces.
   The same flag gates the daemon's answer to a client `repaint` frame, because a harness that floods the ring with live-region repaint traffic is both the only one whose replay can parse to nothing and the only one that restates its transcript when pulsed (`features/sessions.md`).
 - Every harness declares its terminal surface traits: `webgl_unsafe`, `owns_scroll_viewport`, `applies_width_envelope`, `min_desktop_columns`, and `suppresses_late_color_response`.
   These are published to the browser, because a per-harness fact compiled into a frontend module is a second copy of a daemon-owned fact and drifts from it.
-- Every harness declares its CLI grammar: `spawn_id_argv`, `resume_argv`, `skill_invocation_prefix`, `instruction_file_name` with `global_instruction_parts`, and `npm_entrypoint` when it ships as an npm package.
+- Every harness declares its CLI grammar: `spawn_id_argv`, `resume_argv`, `skill_invocation_prefix`, `composer_clear_keys`, `instruction_file_name` with `global_instruction_parts`, and `npm_entrypoint` when it ships as an npm package.
+  `composer_clear_keys` is the newest of these and exists for the usual reason: the browser's own guess was wrong.
+  Ctrl+U is a *line* kill in Claude Code, not a composer clear (measured against v2.1.238 on a four-line draft), so a rail button sending it cleared one line and reported a clear, and the daemon's unsent-input estimate read the same write as "now empty".
   `spawn_id_argv` is non-empty exactly when `assigns_conversation_id` is true, and the descriptor rejects a pair that disagrees.
 - Every harness declares `publishes_cli_state`, `branch_strategy` (or `None`), and `requires_direct_entrypoint`.
   `transcript_fork` is the strategy where mux writes the forked conversation itself; declaring it obliges two dialect-keyed entries, both keyed on `transcript_dialect` rather than the harness name so two harnesses sharing a record format share one implementation: a cut-point scanner (`transcript_view._OPEN_TOOL_SCANNERS`, which answers what a cut at each record boundary would leave unanswered) and a fork writer (`transcript_fork._FORK_WRITERS`).

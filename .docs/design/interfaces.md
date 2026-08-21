@@ -1731,11 +1731,18 @@ Ordinary reads default to 12 messages and 32 KiB of message text while preservin
 An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
 `get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
 Reads and writes default to the caller's own Project and reach another only through an explicit `project` argument; there is no mode, no config flag, and no implicit widening.
-Claude's generated settings allow the sixteen declared read tools without a prompt, while every write tool remains permission-gated.
+Claude's generated settings allow every declared read tool without a prompt, while every write tool remains permission-gated.
+A session spawned before a read tool is added does not carry it in its allowlist, so a newly added read tool reaches only sessions spawned afterwards.
 Tool annotations declare the same read/write split.
 Successful MCP calls record content-free per-tool call, serialized-response-byte, and truncation counters in background diagnostics.
 `notify` only stages a queue message with a visible sender/message/correlation envelope and `request_spawn` only creates an inert Fleet Queue approval row.
 The four cross-session memory reads are deterministic queries over Tier 0 facts, git-provenance edges, the experience corpus, and the scan timeline; each is per-Project opt-in through the enablement DAG and returns `unsupported` (503) when the substrate is absent or `disabled` (409) when no Project in scope opted its automation in, never a fake empty.
+The Phase 7.11 `scan_timeline` and `scan_search` reads expose the scan timeline to agents.
+`scan_timeline` is session-scoped and gates on the **target session's** Project opting into `scan_reads`; `scan_search` gates on `semantic_history_search`, the opt-in that already gates the identical query on the human surface.
+`detail:"digest"` is the bounded `catch_me_up` rollup, `detail:"records"` is the compact projection paged newest-first and cursored by an exclusive `since_t1`, and `detail:"full"` expands at most five explicitly named record ids.
+The projection omits `evidence_refs`, `tier0_fact_ids`, `prompt_hash`, `prompt_version` and `observer_model` and collapses `target` to a count plus a few paths, while keeping `repaired_fields`, `messages_seen` and `window_truncated`, which are what let a reader calibrate a label; a record that withheld `approach_status` omits the key rather than rendering `unknown`.
+Every result carries the enablement/liveness block (`scanning`, `last_scan_at`, `skip_reason`, `run_decided`), so a budget-stopped scanner is never readable as a quiet session, and an ended session is readable rather than refused.
+Neither `POST .../scan-timeline/scan` nor the backfill route is reachable through MCP: a read costs nothing, a scan spends the human's gated budget.
 The Phase 7.10 `doc_debt` read follows the same gate: it returns `{doc, changed_files}` pairs re-derived from each doc's "Key files" section over the Project's recently changed files, gated on the `doc_debt` detector's automation, and names the same blind spot the surface has — a source file no doc lists produces no debt, so empty is not proof the docs are current.
 `interrupt` and `end_session` act on a running agent only under a per-Project grant (`off`/`draft`/`granted`, default `draft`); a `draft` grant writes an inert `control_request` a human decides in Fleet Queue, and `interrupt` is refused unless delivery-readiness is `safe`.
 The full contract is `features/mux-mcp.md`.
@@ -1797,9 +1804,15 @@ retryability, token and cost usage, latency, and response content type and lengt
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
 row has `rule_id`, `calls`, `tokens`, `cost_usd`, the same three figures scoped to today, the
 requested models, and `last_at`. The daemon labels each row with `label`, `detail`, `kind`
-(`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because four
+(`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because several
 features bill the observer budget without being automation rules and a raw `rule_id` names
-neither them nor the setting that governs them. The rows are grouped from
+neither them nor the setting that governs them.
+`enabled` is read from the governing switch in every case - the live engine for a rule, the
+named `Config` flag for a feature - because the column's whole job is to separate a live bill
+from spent history.
+`kind: retired` is the fallback for an id nothing on the page can turn off, so a *live* spender
+missing from `FEATURE_SPENDERS` is reported as the opposite of what it is; the guard against
+that is `tests/test_spend_label_matrix.py` rather than review. The rows are grouped from
 `automation_budget_ledger` — the same table `spend_today` sums — so they reconcile with it
 exactly, including the rows a call that failed after the provider billed for its input writes.
 

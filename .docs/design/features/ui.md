@@ -214,6 +214,9 @@ responsive controls.
   On desktop, each Project row reveals its Run control while the pointer or keyboard focus is anywhere in that Project's row-and-session block; its reserved column preserves row alignment while hidden.
   On mobile, Project rows expose Run persistently and also expose `⋮` immediately left of it, giving Project actions direct tap targets.
   The compact Run menu contains new Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a launch surface, not persistent sidebar grouping.
+  Each harness launch row is marked with that harness's own mark (`harnessMark`, `harnessIcons.tsx`) rather than a play triangle, and a launch profile wears its harness's mark because it launches that harness.
+  Every row in the section starts a session, so a triangle on all of them distinguished nothing; which CLI a row starts is the fact that separates them.
+  The Project Action rows keep `▶`/`▷`, which there is not decoration but the file's trust state.
 - Run is the only always-present launcher, since tab strips carry no new-tab button
   (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
   and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
@@ -355,6 +358,21 @@ Its rules, and what each one is defending:
 - **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
   the menu is — so a mark that means "this opens something" appeared on nearly all of them
   and therefore distinguished none.
+- **Every row in the app menu and in the sidebar context menu carries its own mark**, opting
+  the row into `.menu-row` (icon, then label, then any trailing hint) and suppressing the
+  terminal skin's `> ` prefix.
+  Same argument as the ellipsis: a marker identical on fifteen rows says only "this is a menu
+  row", so a reader scanned fifteen prefixes and still had to read every label.
+  The marks come from `railIcons.tsx`, the drawer set, so a concept appearing in both places
+  (Notes, Queue, Actions, Alerts) is literally the same drawing.
+  `MenuGroup` takes an `icon` for the same reason and lines its header up with the rows it sits
+  among.
+  This is opt-in per row rather than applied to every `.context-menu button`: most context
+  menus in the app are a handful of verbs about one object ("Rename", "Close", "Duplicate"),
+  where a mark per verb is noise, while these two list a dozen unrelated destinations.
+  Where two rows differ only in what they reload, the marks name the *thing* rather than the
+  act — a server, a package, a refresh arrow — because three refresh arrows would say "reload"
+  three times and name nothing.
 - The app menu holds **nothing that acts on a single Project**, and no longer holds the Project
   registry either — adding and managing Projects are the two buttons in the sidebar's `PROJECTS`
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
@@ -454,6 +472,9 @@ Its rules, and what each one is defending:
   dialog from Projects must place it above the manager, never beneath it.
 - **"Back" is one concept with one implementation.**
   Every dismissable level registers with the dismiss stack (`dismissStack.ts`) while it is open, and Escape, the platform back gesture, and the mobile back swipe all resolve to a single `pop()` that closes exactly one level.
+  Back has a **second rung underneath that one**, reached only when nothing is layered: the recent-views ring (`viewHistory.ts`), which steps the mobile workspace back through the tabs and Projects most recently looked at before the press is finally handed to the platform.
+  `composeBackTarget` joins the two into the single `BackTarget` that `systemBack.ts` and the `nav.back` command hold, so the ordering - overlays, then navigation, then leave, which is Android's own - lives in one place rather than in each entry point.
+  Escape is the one channel deliberately left on `dismissStack.pop()` alone: with nothing open Escape belongs to the terminal, and stepping the workspace back a tab from inside an agent's TUI is the same class of side effect the flat Escape handlers were replaced to stop.
   Registration happens through `useModalFocus`, so declaring a focus-trapped modal is also how it declares what back means for it; anything that is not its own focus-trapped modal — a drill-down, a menu, a slide-in panel, an in-pane find bar — uses `useDismissLevel`.
   Coverage is total rather than partial: modals, the nine context menus, the mobile slide-in panels, the palette, the quick launcher, every root-owned dialog, and the in-pane widgets (terminal find, resource find, note outline, files tree menu, note row menu) are all levels.
   Four surfaces had grown private versions of this ladder before it existed — the paired `useModalFocus` gates in `AutomationDashboard.tsx`, the nested Escape ternary in `ProjectRunMenu.tsx`, the four-rung unwind in `Settings.tsx`, and two flat Escape handlers in `App.tsx` closing nine and eighteen things at once — which is the evidence that it is one behavior rather than a per-dialog decision.
@@ -1091,15 +1112,35 @@ Its rules, and what each one is defending:
   The override applies to one- and two-finger horizontal swipes alike, even to unbound slots; the drawer wins when both panels are open because it overlays the sidebar.
   Slide-in panels are dismiss-stack levels for system Back and Escape, but `gestureOverlayDepth` excludes their entries from modal-overlay gesture precedence.
   Resolution is a pure layer between recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input → touch gestures).
-- **The platform back gesture closes one overlay level.**
+- **The platform back gesture steps back one place inside the app.**
   swe-mux installs as a `display: standalone` PWA, where back is the primary navigation control, and the app keeps no route history of its own (the URL is only ever `replaceState`d to track the focused session).
   With nothing to pop, Android's back backgrounded the whole app while a modal was open.
-  `systemBack.ts` keeps **one** sentinel history entry alive for exactly as long as the dismiss stack is non-empty: pushed when the first level opens, consumed by the platform on a back gesture, and re-pushed if levels remain.
+  `systemBack.ts` keeps **one** sentinel history entry alive for exactly as long as the back target has somewhere to go: pushed when the first level opens, consumed by the platform on a back gesture, and re-pushed if anything remains.
   One sentinel rather than one per level is the invariant that matters — per-level entries desynchronize the first time a level closes by button instead of by back, with nothing able to resynchronize them.
   Closing the last level steps back over the sentinel so the next back press is not silently swallowed, and the popstate that step causes is counted and ignored rather than read as a user gesture.
   A sentinel that is no longer the current history entry is dropped rather than stepped over, because navigating the user somewhere they did not ask to go is the worse failure.
 - The one back press this deliberately does not see is the one that dismisses the Android soft keyboard: the platform consumes it and never tells the page, so an overlay behind the keyboard survives the first press.
   That matches how the keyboard shadows back everywhere else on the platform and is not special-cased.
+- **With nothing layered, back steps through the tabs and Projects most recently looked at, then leaves.**
+  Closing the last overlay used to be the end of what back could do, so a phone user reading a session - by far the most common thing to be doing - had back background the entire PWA.
+  `viewHistory.ts` holds a ring of the last ten distinct `(Project, view)` pairs, recorded from the **committed** focus pair rather than at the two dozen call sites that set focus, because only the settled value is what the user is actually looking at and per-call-site recording would rot the first time a new flow forgot it.
+  It is an in-memory ring rather than one history entry per view, and that is the load-bearing choice: Chrome's history-manipulation intervention marks entries pushed without a user gesture as skippable, focus here moves programmatically constantly (a spawn, a resume, a branch, a closing pane handing focus to its neighbour), and those entries would quietly stop being poppable so that back left the app at random.
+  Keeping the ring in memory means the feature adds no history entries at all - `systemBack.ts` maintains the same single sentinel it already did.
+- Four rules are what separate that from a gesture that traps the user, and each is a test.
+  A traversal **consumes** its entry and never re-records, because a ring that refills itself is a cycle back can never walk out of, which is worse than the bug being fixed.
+  Recording is **MRU-distinct and excludes the destination**: a revisited view moves rather than repeating, and arriving somewhere drops it out of the ring, so flipping between two tabs twenty times still leaves exactly one step back and ten presses is a bound rather than a typical walk.
+  Dead entries - a closed pane, an ended session, a removed Project - are **skipped when back is pressed rather than pruned when pushed**, since what is reachable is only knowable at that moment, and a run of them costs one press in total rather than one press each.
+  The **traversal echo** (restoring a view makes the recorder observe a move *to* it) is recognized by identity with the entry just handed out, not by a "skip the next record" flag: a flag is silently eaten by a restore that changed nothing, taking a real navigation with it.
+- A back that lands on another tab shows the same `InteractionHud` label pill a swipe does, prefixed with the Project name when the step crossed one.
+  Same reason as the swipe: a tab change the eye misses is indistinguishable from "back did nothing", and the user presses again and leaves the app.
+- The ring is **armed on the mobile layout only**, though it is recorded on every layout.
+  On the desktop the tabs are on screen and one click away, and a permanently armed sentinel would stop the browser's own Back button from ever leaving the site - the same reason the docked sidebar and drawer are not dismiss levels there.
+  Recording regardless is what lets a phone rotate across the 760 px breakpoint and back with its history intact instead of wiped.
+  Liveness and the layout mode are state the ring cannot see, so `App` tells it when they move rather than having it poll; otherwise the sentinel stays armed against entries naming nothing.
+- `gestureOverlayDepth` keeps reading `dismissStack.depth()` and never the composite.
+  It asks "is an overlay painted over the workspace", and that answer is what resolves every non-back gesture slot to nothing - counting navigation history there would make it true permanently, and one tab switch would kill every gesture on the device.
+- The hot-reloadable `mobile_back_view_history` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour, where back on a session closed swe-mux outright.
+  `nav.back` remains one command for both rungs, so a key binding, a gesture slot, and the palette entry all step back the same way.
 - The same motion is available in-app as a **rightward swipe** while any level is open, since Android owns the edge-anchored swipes and only a mid-screen one is available.
   The overlay wrappers are in the recognizer's target allowlist solely to carry it, and the list is every wrapper rather than the most common one: `.modal-layer`, `.settings-layer`, `.usage-layer` (usage, automation, fleet queue, observations, bandwidth), `.process-layer`, `.folder-picker-layer`, and `.palette-layer`.
   Listing only `.modal-layer` left the swipe silently dead on most of the app's large surfaces.
@@ -1368,10 +1409,10 @@ Its rules, and what each one is defending:
   chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
   placed there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
-  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, the clipboard-history picker (`Clip`), and the session's skill picker (`Skills`).
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
-  Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
+  Immediately after Up/Down, five editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, copy the composer, clear the composer, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout and the customize gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into configuration.
@@ -1524,6 +1565,17 @@ Its rules, and what each one is defending:
   is, how old the replayed content is, and — when there is none — why not, since an empty
   recovered agent pane otherwise reads as a bug rather than the deliberate exclusion it is
   (`features/session-recovery.md`).
+- **`Clip` and `Skills` open a drop-up over the rail**, not the drawer.
+  Both surfaces already exist as sections of the Actions tab, and both are reached from the drop-up's sticky first row, so nothing became less reachable - what changed is that the two-tap jobs (paste the thing I copied a minute ago; type a skill name) no longer cost a drawer trip.
+  The drop-up shows five rows and then scrolls; the cap is a height, never a slice, because capping by count would make the sticky link the only route to a sixth entry.
+  It opens upward from its trigger through `anchoredPopoverStyle`, the same placement math the account and resource popovers use, and repositions on scroll with capture because the rail is itself a horizontal scroller.
+  A row does the one obvious thing and closes: Clipboard inserts the entry, Skills inserts the invocation without submitting.
+  Reading, searching, pinning and deleting stay in the drawer section - a drop-up that also expanded rows would rebuild the surface it is a shortcut past.
+  Inserting from the ring never touches `navigator.clipboard`, which is what makes it the working paste path on a plain-HTTP tailnet client and on mobile Safari.
+- **Copy input and Clear input read the draft off the terminal grid.**
+  Nothing else can answer the question: no harness publishes its composer, and the daemon's write log deliberately keeps a character count rather than text (`features/terminal-input.md`).
+  Copy is disabled with its reason on a harness whose composer geometry has not been measured, rather than hidden - a missing button reads as "not built", a disabled one reads as "not here yet", and only the second is true.
+  Clear never depends on the read succeeding: the keys reach the CLI either way, and the status line says whether the discarded text was captured to clipboard history or only cleared.
 - Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
   rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
   most of a screen's worth of rail before the terminal keys begin — and their marks (offset
@@ -2525,6 +2577,7 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/App.tsx`
 - `frontend/src/dismissStack.ts`
 - `frontend/src/systemBack.ts`
+- `frontend/src/viewHistory.ts`
 - `frontend/src/modalFocus.ts`
 - `frontend/src/sidebarSearch.ts`
 - `frontend/src/fuzzyText.ts`

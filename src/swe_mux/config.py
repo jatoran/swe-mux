@@ -581,6 +581,11 @@ class Config:
     # original behaviour, where an overlay ignored every gesture rather than reassigning
     # them: a swipe over a modal must never run a workspace binding behind it.
     mobile_gesture_overlay_back: bool = True
+    # With no overlay open, back steps through the tabs and Projects most recently looked
+    # at on this device (a bounded in-memory ring, mobile layout only) before it leaves
+    # the app. Off restores the original behaviour, where back on a session backgrounded
+    # the whole PWA.
+    mobile_back_view_history: bool = True
     terminal_auto_copy_selection: bool = True
     # Clipboard history (clipboard_store.py). Capture is in-app only — nothing
     # polls the OS clipboard — and the ring is memory-only unless `persist` is

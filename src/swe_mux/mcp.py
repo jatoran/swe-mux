@@ -85,6 +85,12 @@ from .project_scope import (
     split_qualified_target,
 )
 from .prompt_queue import QueueError
+from .scan_consumers import (
+    catch_me_up,
+    project_record,
+    search_scan_records,
+)
+from .scan_timeline import APPROACH_STATUS, HEARTBEAT_TRIGGERS, WORK_PHASES
 from .transcript_view import (
     conversation_is_readable,
     transcript_message_page,
@@ -112,6 +118,20 @@ SEARCH_MAX_OUTPUT_BYTES = 64 * 1024
 PARSE_TIMEOUT_SECONDS = 2.0
 NOTE_MAX_BYTES = 512 * 1024
 RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
+# Phase 7.11 scan-timeline reads. A projected record measures ~730 bytes on the
+# live store, so the page bound is what keeps a timeline read affordable - field
+# selection alone is not enough. A whole 230-record run would be ~41k tokens.
+SCAN_RECORDS_DEFAULT_LIMIT = 30
+SCAN_RECORDS_MAX_LIMIT = 100
+#: `detail:'full'` reads whole stored records, hashes and evidence included, so
+#: it is bounded far tighter than the projection and requires explicit ids.
+SCAN_FULL_MAX_RECORDS = 5
+#: Records a digest rolls up. The digest is bounded by `catch_me_up` itself; this
+#: bounds the *read* behind it so a pathological run cannot make one tool call a
+#: 2000-row query.
+SCAN_DIGEST_SCAN_LIMIT = 2000
+SCAN_SEARCH_DEFAULT_LIMIT = 20
+SCAN_SEARCH_MAX_LIMIT = 100
 #: Projects one fleet-wide inventory read walks before it reports a truncation.
 #: An inventory is a per-Project filesystem read, so the fleet form is bounded
 #: the way every other tool is rather than being unbounded because it is a list.
@@ -161,6 +181,14 @@ MEMORY_TOOL_AUTOMATION = {
     "find_references": "code_graph",
     "code_context": "code_graph",
     "test_gap": "code_graph",
+    # Phase 7.11 scan-timeline reads. `scan_timeline` gates on its own consumer
+    # id rather than on the `scan_timeline` substrate: a distilled intent summary
+    # is in some ways more revealing than the transcript excerpt behind it, so a
+    # Project must be able to keep its timeline and still withhold it from
+    # sibling agents. `scan_search` inherits the opt-in that already gates the
+    # identical query on the human surface.
+    "scan_timeline": "scan_reads",
+    "scan_search": "semantic_history_search",
 }
 
 #: The `project` argument, identical on every tool that has one. Written once so
@@ -1100,6 +1128,146 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "scan_timeline",
+        "description": (
+            "What has a session actually been doing? Reads the distilled "
+            "behavioral timeline of one agent run - phases, intents, claims, "
+            "blockers and touched paths - instead of paging its raw conversation. "
+            "detail:'digest' (the default) is a few phase-structured bullets plus "
+            "the current blocker, and is the whole answer to 'is this session "
+            "healthy'. detail:'records' returns the compact per-window rows, "
+            "newest first; detail:'full' expands the named record_ids. "
+            "To monitor a session, poll with since_t1 set to the newest t1 you "
+            "have already seen: it returns only what is new. "
+            "Every result states whether scanning is on, when it last ran and why "
+            "it stopped, so a budget-stopped scanner is never readable as a quiet "
+            "session. "
+            "Each row carries messages_seen (how thin the window behind the "
+            "judgement was) and repaired_fields (which fields were coerced rather "
+            "than asserted by the model) - read both before trusting a label. "
+            "To zoom into a window, take its t0/t1 and agent_run_id and call "
+            "search_history with run_ids, message_after and message_before, then "
+            "read_transcript on a hit. "
+            'Omit session_id or use "self" for yourself; pass project:"fleet" or a '
+            "Project name to read a session outside your Project. Needs the Agent "
+            "scan-timeline reads automation enabled for that session's Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Session id, agent run id, or exact backend/display name; "
+                        'omit or "self" for the caller. An ended session is readable.'
+                    ),
+                },
+                "project": _PROJECT_ARG,
+                "detail": {
+                    "type": "string",
+                    "enum": ["digest", "records", "full"],
+                    "description": "digest (default), records, or full",
+                },
+                "record_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        f"Required for detail:'full'; at most {SCAN_FULL_MAX_RECORDS} ids"
+                    ),
+                },
+                "since_t1": {
+                    "type": ["number", "string"],
+                    "description": (
+                        "Exclusive cursor: only records whose t1 is newer than this"
+                    ),
+                },
+                "until_t1": {
+                    "type": ["number", "string"],
+                    "description": "Inclusive upper bound on t1",
+                },
+                "work_phase": {
+                    "type": "string",
+                    "enum": sorted(WORK_PHASES),
+                    "description": "Only records in this work phase",
+                },
+                "approach_status": {
+                    "type": "string",
+                    "enum": sorted(APPROACH_STATUS),
+                    "description": (
+                        "Only records carrying this run-level verdict. Narrow-window "
+                        "records omit the field entirely and match nothing here."
+                    ),
+                },
+                "blocked_only": {
+                    "type": "boolean",
+                    "description": "Only records whose blocked_on is not 'none'",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Only records whose touched paths contain this fragment",
+                },
+                "exclude_heartbeat": {
+                    "type": "boolean",
+                    "description": (
+                        "Drop periodic heartbeat scans, keeping only event-driven ones"
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        f"Records in this page (default {SCAN_RECORDS_DEFAULT_LIMIT}, "
+                        f"max {SCAN_RECORDS_MAX_LIMIT})"
+                    ),
+                },
+                "oldest_first": {
+                    "type": "boolean",
+                    "description": (
+                        "Return the page oldest-first; the default is newest-first"
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "scan_search",
+        "description": (
+            "Search what runs were *doing*, across conversations. Resolves a query "
+            "against distilled scan summaries, intents and touched paths rather "
+            "than raw transcript text, so it finds a run by what it was working on "
+            "even when the words never appeared verbatim. All query terms must "
+            "match. Each hit names its agent_run_id and its t0/t1 window; pass "
+            "those to scan_timeline for that run's spine, or to search_history "
+            "(run_ids + message_after/message_before) to reach the raw messages. "
+            'Defaults to your own Project; pass project:"fleet" or a Project name '
+            "to widen. Needs the Semantic history search automation enabled for the "
+            "Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms; all must match a record",
+                },
+                "project": _PROJECT_ARG,
+                "agent_run_id": {
+                    "type": "string",
+                    "description": "Restrict the search to one agent run",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        f"Maximum hits (default {SCAN_SEARCH_DEFAULT_LIMIT}, "
+                        f"max {SCAN_SEARCH_MAX_LIMIT})"
+                    ),
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "blast_radius",
         "description": (
             "What can a change to this file reach? Returns the reverse callers "
@@ -1413,6 +1581,7 @@ class McpService:
         session_control: Any = None,
         code_graph: Any = None,
         land_queue: Any = None,
+        scan_timeline_service: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -1445,6 +1614,11 @@ class McpService:
         # Phase 14 land queue. Absent it, `request_land` answers unavailable rather
         # than half-enqueueing - the same rule the other write tools follow.
         self.land_queue = land_queue
+        # Phase 7.11 scan timeline. Only its `liveness` block is read from here -
+        # the records come from the store - so absent it a scan read still
+        # answers, and says the liveness block is unavailable rather than
+        # reporting a stopped scanner as a quiet one.
+        self.scan_timeline_service = scan_timeline_service
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -3345,6 +3519,314 @@ class McpService:
             **self._scope_envelope(scope),
         }
 
+    # --------------------------------------------- scan timeline reads (7.11)
+
+    async def _scan_target(
+        self, caller: Any, args: dict[str, Any], tool_name: str
+    ) -> tuple[ProjectScope, str, str, Any]:
+        """Resolve a session-scoped scan read: scope, session id, run id, session.
+
+        Session-scoped, so the gate is the **target session's** Project rather
+        than the caller's scoped Project set: `_memory_scope` answers "which of
+        the Projects I am allowed to see opted in", which is the right question
+        for a Project-wide read and the wrong one for a read that names one
+        session in one Project.
+
+        An ended session resolves through history, because its records outlive
+        it and "what did that finished sibling do" is the read this tool exists
+        for. The returned session is `None` when it has ended.
+        """
+        automation_id = MEMORY_TOOL_AUTOMATION[tool_name]
+        if self.automation_store is None or self.automation_gate is None:
+            raise QueueError(
+                "unsupported",
+                f"{tool_name} needs the scan-timeline substrate, which this "
+                "daemon does not run.",
+                status=503,
+            )
+        scope = self._requested_scope(caller, args)
+        identity = str(args.get("session_id") or "self").strip() or "self"
+        session: Any = None
+        try:
+            session, _display = await self._resolve_live(caller, identity, scope)
+        except KeyError:
+            session = None
+        if session is not None:
+            session_id = str(session.record.id)
+            run_id = str(session.record.agent_run_id or "")
+            project_id = str(session.record.project_id or "")
+        else:
+            row, _display = await self._resolve_history(caller, identity, scope)
+            # A history row's `id` is the agent run id and its `note_id` is the
+            # session the run belonged to; scan records are keyed by the latter.
+            run_id = str(row.get("id") or "")
+            session_id = str(row.get("note_id") or "") or run_id
+            project_id = str(row.get("project_id") or "")
+        project = (
+            self.projects.projects.get(project_id)
+            if project_id and self.projects is not None
+            else None
+        )
+        if project is None:
+            raise QueueError(
+                "disabled",
+                f"that session belongs to no registered Project, so {tool_name} "
+                "has no per-Project opt-in to read it under.",
+                status=409,
+                automation=automation_id,
+            )
+        enabled = await self.automation_gate(str(project.root))
+        if automation_id not in enabled:
+            label = automation_id.replace("_", " ")
+            raise QueueError(
+                "disabled",
+                f"the '{label}' automation is not enabled for Project "
+                f"'{project.name}'. Enable it in that Project's automation "
+                "settings for this tool to read anything.",
+                status=409,
+                automation=automation_id,
+            )
+        return scope, session_id, run_id, session
+
+    async def scan_timeline(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.scanTimeline`: one session's distilled behavioral spine.
+
+        A read, never a trigger. Scanning spends the human's gated budget under
+        caps they set in Settings, so no scan or backfill is reachable here; an
+        agent that could start scans could exhaust every Project's daily budget
+        on the host.
+
+        Every result carries the enablement/liveness block, because a scanner
+        stopped by a cap and a session that is simply quiet both present as an
+        empty tail and only one of them is worth acting on.
+        """
+        scope, session_id, run_id, _session = await self._scan_target(
+            caller, args, "scan_timeline"
+        )
+        detail = str(args.get("detail") or "digest").strip() or "digest"
+        if detail not in {"digest", "records", "full"}:
+            raise ValueError("detail must be digest, records, or full")
+        # An out-of-range filter value must be refused, not answered with an
+        # empty page. The inputSchema declares these enums, but relying on the
+        # client to enforce them would make a typo indistinguishable from "no
+        # records are in that phase" - which is the same silent-empty failure
+        # the whole surface exists to avoid.
+        work_phase = self._enum_arg(args, "work_phase", WORK_PHASES)
+        approach_status = self._enum_arg(args, "approach_status", APPROACH_STATUS)
+        service = self.scan_timeline_service
+        liveness = (
+            await service.liveness(session_id, agent_run_id=run_id)
+            if service is not None
+            else {
+                # Never an all-false block: a reader must not mistake "this
+                # daemon cannot tell you" for "the scanner is off".
+                "available": False,
+                "note": (
+                    "This daemon does not run the scan-timeline service, so "
+                    "whether scanning is live cannot be reported here."
+                ),
+            }
+        )
+        result: dict[str, Any] = {
+            "session_id": session_id,
+            "agent_run_id": run_id or None,
+            "detail": detail,
+            "scan_state": liveness,
+            **self._scope_envelope(scope),
+        }
+        if detail == "full":
+            record_ids = _string_list(
+                args.get("record_ids"), "record_ids", maximum=SCAN_FULL_MAX_RECORDS
+            )
+            if not record_ids:
+                raise ValueError("detail:'full' requires record_ids")
+            records = []
+            for record_id in record_ids:
+                record = await self.automation_store.scan_record(record_id)
+                # Scoped to the session that was resolved and gated, so a record
+                # id borrowed from another Project reads as absent rather than
+                # as a way around the opt-in.
+                if record is None or str(record.get("session_id") or "") != session_id:
+                    continue
+                records.append(self._redact_scan_record(record))
+            result["records"] = records
+            result["note"] = (
+                "Whole stored records for the ids that belong to this session. "
+                "Rehydrating the source messages is deliberately not available "
+                "here: it reparses a transcript, and that cost does not belong "
+                "behind a list read."
+            )
+            self._record_memory_outcome(
+                "scan_timeline", returned=len(records), suppressed=0
+            )
+            return result
+
+        if detail == "digest":
+            if not run_id:
+                result["digest"] = None
+                result["note"] = (
+                    "This session has no agent run to summarize, so there is no "
+                    "spine to roll up."
+                )
+                self._record_memory_outcome("scan_timeline", returned=0, suppressed=0)
+                return result
+            records = await self.automation_store.scan_records(
+                agent_run_id=run_id, limit=SCAN_DIGEST_SCAN_LIMIT
+            )
+            digest = catch_me_up(records, run_id)
+            for key in ("claims", "progress"):
+                digest[key] = [_redact(str(item)) for item in digest.get(key) or []]
+            if digest.get("current_blocker"):
+                blocker = dict(digest["current_blocker"])
+                blocker["summary"] = _redact(str(blocker.get("summary") or ""))
+                digest["current_blocker"] = blocker
+            result["digest"] = digest
+            result["note"] = (
+                "The current run's phases, claims and blocker. Ask for "
+                "detail:'records' when you need per-window rows, and note that "
+                "the digest keeps the most recent phase segments - "
+                "phase_segments_omitted says how many earlier ones were dropped."
+            )
+            self._record_memory_outcome(
+                "scan_timeline", returned=len(records), suppressed=0
+            )
+            return result
+
+        limit = max(
+            1,
+            min(
+                int(args.get("limit") or SCAN_RECORDS_DEFAULT_LIMIT),
+                SCAN_RECORDS_MAX_LIMIT,
+            ),
+        )
+        newest_first = not bool(args.get("oldest_first", False))
+        rows = await self.automation_store.scan_records(
+            session_id=session_id,
+            since_t1=_parse_time_bound(args.get("since_t1"), "since_t1"),
+            until_t1=_parse_time_bound(args.get("until_t1"), "until_t1"),
+            exclude_triggers=(
+                sorted(HEARTBEAT_TRIGGERS) if args.get("exclude_heartbeat") else None
+            ),
+            work_phase=work_phase,
+            approach_status=approach_status,
+            blocked_only=bool(args.get("blocked_only", False)),
+            target_fragment=str(args.get("target") or "") or None,
+            newest_first=newest_first,
+            limit=limit,
+        )
+        records = [self._redact_projection(project_record(row)) for row in rows]
+        result["records"] = records
+        # The cursor to feed back on the next poll. Taken from the page rather
+        # than from the newest record in the store, so a filtered poll advances
+        # only past what it actually returned.
+        stamps = [float(item.get("t1") or 0.0) for item in records]
+        result["next_since_t1"] = max(stamps) if stamps else args.get("since_t1")
+        result["page_is_full"] = len(records) >= limit
+        result["note"] = (
+            "Compact per-window rows. evidence_refs, tier0_fact_ids, prompt "
+            "hashes and the observer model are omitted; messages_seen and "
+            "repaired_fields are kept because they are what lets you calibrate "
+            "how much a label is worth. An absent approach_status means the "
+            "record withheld a run-level verdict, not that it decided 'unknown'. "
+            "Poll with since_t1=next_since_t1 to see only what is new."
+        )
+        self._record_memory_outcome(
+            "scan_timeline", returned=len(records), suppressed=0
+        )
+        return result
+
+    @staticmethod
+    def _enum_arg(
+        args: dict[str, Any], name: str, allowed: frozenset[str]
+    ) -> str | None:
+        """One optional enum-valued filter, refused rather than silently empty."""
+        value = str(args.get(name) or "").strip()
+        if not value:
+            return None
+        if value not in allowed:
+            raise ValueError(f"{name} must be one of: {', '.join(sorted(allowed))}")
+        return value
+
+    @staticmethod
+    def _redact_projection(projected: dict[str, Any]) -> dict[str, Any]:
+        for key in ("intent", "summary", "dead_end"):
+            if projected.get(key):
+                projected[key] = _redact(str(projected[key]))
+        projected["targets"] = [_redact(str(item)) for item in projected["targets"]]
+        return projected
+
+    @staticmethod
+    def _redact_scan_record(record: dict[str, Any]) -> dict[str, Any]:
+        expanded = {
+            key: value for key, value in record.items() if key != "record_json"
+        }
+        for key in ("intent", "claim", "user_ask", "summary", "dead_end"):
+            if expanded.get(key):
+                expanded[key] = _redact(str(expanded[key]))
+        if isinstance(expanded.get("target"), list):
+            expanded["target"] = [_redact(str(item)) for item in expanded["target"]]
+        return expanded
+
+    async def scan_search(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.scanSearch(query)`: find runs by what they were doing.
+
+        An exposure of the query the human surface already runs, not a new
+        capability: it resolves against distilled `summary`/`intent`/`target`
+        records rather than raw transcript, so it finds a run by its work even
+        when the words never appeared verbatim.
+        """
+        query = str(args.get("query") or "").strip()
+        if not query:
+            raise ValueError("query is required")
+        if self.automation_store is None:
+            raise QueueError(
+                "unsupported",
+                "scan_search needs the scan-timeline substrate, which this daemon "
+                "does not run.",
+                status=503,
+            )
+        scope, projects, disabled, _truncated = await self._memory_scope(
+            caller, args, "scan_search"
+        )
+        limit = max(
+            1,
+            min(int(args.get("limit") or SCAN_SEARCH_DEFAULT_LIMIT), SCAN_SEARCH_MAX_LIMIT),
+        )
+        run_filter = str(args.get("agent_run_id") or "").strip()
+        current_run, owned = await self._caller_run_ids(caller)
+        hits: list[dict[str, Any]] = []
+        for project in projects:
+            rows = await self.automation_store.scan_records(
+                project_id=str(project.id),
+                agent_run_id=run_filter or None,
+                limit=SCAN_DIGEST_SCAN_LIMIT,
+            )
+            for match in search_scan_records(rows, query, limit=limit):
+                match["snippet"] = _redact(str(match.get("snippet") or ""))
+                match["targets"] = [
+                    _redact(str(item)) for item in match.get("targets") or []
+                ]
+                match["run"] = self._run_attribution(
+                    str(match.get("agent_run_id") or ""), current_run, owned
+                )
+                hits.append(match)
+        hits.sort(key=lambda item: float(item.get("t1") or 0.0), reverse=True)
+        hits = hits[:limit]
+        self._record_memory_outcome("scan_search", returned=len(hits), suppressed=0)
+        return {
+            "query": query,
+            "results": hits,
+            "note": (
+                "Matches over distilled scan records, not raw transcript; all "
+                "query terms must appear. Take a hit's agent_run_id for "
+                "scan_timeline, or its agent_run_id plus t0/t1 for "
+                "search_history(run_ids, message_after, message_before) to reach "
+                "the raw messages."
+            ),
+            **self._disabled_note(disabled, "semantic_history_search"),
+            **self._scope_envelope(scope),
+        }
+
     # ------------------------------------------------ code graph reads (7.9)
 
     #: Static reverse-caller results are always a lower bound; the blind spots are
@@ -3825,6 +4307,8 @@ class McpService:
             "prior_resolutions": self.prior_resolutions,
             "dead_ends": self.dead_ends,
             "doc_debt": self.doc_debt,
+            "scan_timeline": self.scan_timeline,
+            "scan_search": self.scan_search,
             "blast_radius": self.blast_radius,
             "find_definition": self.find_definition,
             "find_callers": self.find_callers,

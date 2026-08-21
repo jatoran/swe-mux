@@ -15,7 +15,7 @@
 
 import { harnessDisplayName } from './harnessRegistry.ts'
 import { agentTargetName } from './agentTargets.ts'
-import { providerGlyph } from './ProviderAccounts'
+import { harnessMark } from './harnessIcons'
 import type { RowSection, RowToken, SessionRowTokens } from './sessionRowFields.ts'
 import { GAUGE_CELLS, MAX_PIPS, type SessionRowConfig } from './sessionRowConfig.ts'
 import type { Session } from './types'
@@ -70,7 +70,7 @@ function TokenView({ token, session, config }: { token: RowToken; session: Sessi
     return <strong class="row-title">{agentTargetName(session)}</strong>
   }
   if (token.kind === 'glyph') {
-    return <span class={`agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>
+    return <span class={`agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{harnessMark(session.backend)}</span>
   }
   if (token.kind === 'broadcast') {
     return <span class="broadcast-flag" title={token.title}>⇶</span>
