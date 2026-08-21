@@ -73,8 +73,9 @@ export const BranchIcon = () => <svg {...stroke}>
 </svg>
 
 // Drawer tabs. Each mark is chosen to be readable at 17px and to not collide with its
-// neighbours: the two text-into-a-terminal tabs are a terminal and a speech bubble, and the
-// two navigators are the classic folder/document pair.
+// neighbours: the two navigators are the classic folder/document pair, and the two tabs that
+// are both a trace (Activity and Processes) are held apart by silhouette — an open squiggle
+// against a monitor on a stand — rather than by a detail that dissolves at this size.
 
 /** A clipboard holding a clock: the paste surface, but the *history* of it. */
 export const ClipboardHistoryIcon = () => <svg {...stroke}>
@@ -84,11 +85,14 @@ export const ClipboardHistoryIcon = () => <svg {...stroke}>
   <path d="M12 11v2.2l1.5.9" />
 </svg>
 
-/** A terminal window: every Action ultimately targets the focused terminal. */
-export const ActionsIcon = () => <svg {...stroke}>
-  <rect x="2" y="4" width="20" height="16" rx="2" />
-  <path d="m7 10 2.5 2.5L7 15" />
-  <line x1="13" y1="15" x2="17" y2="15" />
+/** The command-key glyph: the four-looped square every keyboard shortcut is drawn with.
+ *
+ * Replaces a terminal window, which said "terminal" rather than "the keys and commands you
+ * fire at one" — and said it in the same rectangle the Processes monitor is drawn in, two
+ * tabs apart on the same rail. The loop square is the one mark in the set that means
+ * *command* on its own, and its silhouette collides with nothing else here. */
+export const CommandKeyIcon = () => <svg {...stroke}>
+  <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />
 </svg>
 
 /** A message with body text: saved wording you send, not a discrete key action. */
@@ -98,15 +102,19 @@ export const PromptsIcon = () => <svg {...stroke}>
   <line x1="8" y1="12" x2="14" y2="12" />
 </svg>
 
-/** A stack of lines feeding a chevron: things waiting in order, and the way out.
+/** Three left-aligned rules with a clock face at the bottom-right: things written down in
+ *  order, and the wait before the next one goes.
  *
- * Not an envelope, which would say "mail" — the queue is ordered and the order is the whole
- * point of it. The chevron is what stops three lines reading as a hamburger menu. */
-export const QueueIcon = () => <svg {...stroke}>
-  <line x1="3" y1="6" x2="13" y2="6" />
-  <line x1="3" y1="12" x2="13" y2="12" />
-  <line x1="3" y1="18" x2="13" y2="18" />
-  <polyline points="17 8 21 12 17 16" />
+ * The rules shorten as they descend so the stack reads as a list rather than a hamburger,
+ * and the clock is what distinguishes the queue from every other list in the set — a queued
+ * message is one that has not been delivered *yet*. It is the same face `ScheduleIcon` and
+ * `HistoryIcon` draw, deliberately: three surfaces about time share one clock. */
+export const QueueClockIcon = () => <svg {...stroke}>
+  <line x1="3" y1="4.5" x2="20" y2="4.5" />
+  <line x1="3" y1="9.5" x2="20" y2="9.5" />
+  <line x1="3" y1="14.5" x2="10.5" y2="14.5" />
+  <circle cx="16.8" cy="17.2" r="4.4" />
+  <path d="M16.8 14.8v2.4l1.7 1.1" />
 </svg>
 
 /** Two bubbles, tails on opposite sides: an exchange, read back.
@@ -120,11 +128,17 @@ export const TranscriptIcon = () => <svg {...stroke}>
   <path d="M21 14.5A1.5 1.5 0 0 0 19.5 13h-9A1.5 1.5 0 0 0 9 14.5v4A1.5 1.5 0 0 0 10.5 20H17l4 3z" />
 </svg>
 
-/** A lightbulb: the Insight tab (scan timeline plus deterministic findings). */
-export const InsightIcon = () => <svg {...stroke}>
-  <path d="M9 18h6" />
-  <path d="M10 21h4" />
-  <path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3Z" />
+/** A pulse trace: the Activity tab, which is a session's turns and findings over time.
+ *
+ * A lightbulb said "idea", which is what a *finding* is and not what the tab is — the tab is
+ * the record of what this session did, and a trace is the mark for that.
+ *
+ * The trace is also what `ProcessesIcon` draws, two tabs away on the same rail, so the two
+ * are deliberately held apart by silhouette rather than by detail: this one is a bare,
+ * full-bleed squiggle and that one is a framed monitor on a stand. An open line against a
+ * closed rectangle survives 17px; two traces differing only in their frame would not. */
+export const ActivityIcon = () => <svg {...stroke}>
+  <path d="M2 12.5h4l2.5-7 3.5 12 2.5-5H22" />
 </svg>
 
 /** A node with two dependents hanging off it: one changed file and what it reaches.
@@ -139,11 +153,19 @@ export const ChangeMapIcon = () => <svg {...stroke}>
   <path d="M8.2 10.7 16 6.2M8.2 13.3 16 17.8" />
 </svg>
 
-/** A hexagonal agent core with three capability ports. */
-export const AgentIcon = () => <svg {...stroke}>
-  <path d="m12 3 6 3.5v7L12 17l-6-3.5v-7z" />
-  <circle cx="12" cy="10" r="2.5" />
-  <path d="M12 17v4M6 13.5l-3 2M18 13.5l3 2" />
+/** A robot head: the tab about the CLI agent itself — its context, environment, and skills.
+ *
+ * A hexagonal "core" with ports was an abstraction of an agent; this is the thing. Antenna,
+ * two eyes, and the two ear-nubs are what make a rounded rectangle read as a face rather
+ * than as one more panel at 17px, which is the size this has to survive. */
+export const RobotIcon = () => <svg {...stroke}>
+  <line x1="12" y1="3.2" x2="12" y2="7" />
+  <circle cx="12" cy="2.2" r="1.2" fill="currentColor" stroke="none" />
+  <rect x="4.5" y="7" width="15" height="12" rx="3" />
+  <line x1="4.5" y1="12" x2="2.2" y2="12" />
+  <line x1="19.5" y1="12" x2="21.8" y2="12" />
+  <circle cx="9.5" cy="13" r="1.25" fill="currentColor" stroke="none" />
+  <circle cx="14.5" cy="13" r="1.25" fill="currentColor" stroke="none" />
 </svg>
 
 /** A folder. A folder *tree* is the truer picture but turns to mud at this size. */
@@ -151,12 +173,16 @@ export const FilesIcon = () => <svg {...stroke}>
   <path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.7.9L11.5 8H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
 </svg>
 
-/** A written page. The Notes tab indexes documents; it no longer edits one. */
-export const NotesIcon = () => <svg {...stroke}>
-  <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-  <polyline points="14 3 14 8 19 8" />
-  <line x1="9" y1="13" x2="15" y2="13" />
-  <line x1="9" y1="17" x2="13" y2="17" />
+/** A written page with a pencil across its lower-right corner: notes are documents you
+ *  *write*, which is the half a plain page left out.
+ *
+ * The page is drawn open at the corner the pencil crosses rather than behind it, because two
+ * closed outlines overlapping at this size read as one smudge. */
+export const NotePencilIcon = () => <svg {...stroke}>
+  <path d="M17.5 11.5V7.5L13 3H6.5a1.8 1.8 0 0 0-1.8 1.8v14.4A1.8 1.8 0 0 0 6.5 21h4.2" />
+  <polyline points="13 3 13 7.5 17.5 7.5" />
+  <line x1="8" y1="11.5" x2="13" y2="11.5" />
+  <path d="M19.7 12.7a1.6 1.6 0 0 1 2.3 2.3l-5.4 5.4-3 .7.7-3z" />
 </svg>
 
 /** Brackets around linked memory nodes: context held around facts, not another document. */
@@ -183,13 +209,19 @@ export const GitIcon = () => <svg {...stroke}>
   <path d="M16 12H12a6 6 0 0 1-6-6" />
 </svg>
 
-/** A pulse on a screen: something running, and whether it is doing anything.
+/** A pulse on a monitor: something running, and whether it is doing anything.
  *
  * Not a gauge or a chip — this tab is about live activity per session, and the trace is the one
- * mark that reads as "running" rather than "capacity". */
+ * mark that reads as "running" rather than "capacity".
+ *
+ * The stand is not decoration. `ActivityIcon` is also a trace and sits on the same rail, so
+ * the frame alone was the whole difference between them; a frame *with a stand* is a monitor
+ * and reads as a different object at a glance, which is what a 17px rail needs. */
 export const ProcessesIcon = () => <svg {...stroke}>
-  <rect x="2" y="4" width="20" height="16" rx="2" />
-  <path d="M5 13h3l2-4 2.5 7 2-3h4.5" />
+  <rect x="2" y="4" width="20" height="13" rx="2" />
+  <path d="M5.5 11.5h2.5l2-3.5 2.5 6 2-2.5h3" />
+  <line x1="12" y1="17" x2="12" y2="20.5" />
+  <line x1="8.5" y1="20.5" x2="15.5" y2="20.5" />
 </svg>
 
 /** A clock with a forward hand: a session this Project will start later.
@@ -429,13 +461,13 @@ export const CloseIcon = () => <svg {...stroke}>
 
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
-  actions: ActionsIcon,
-  queue: QueueIcon,
+  actions: CommandKeyIcon,
+  queue: QueueClockIcon,
   transcript: TranscriptIcon,
-  activity: InsightIcon,
-  agent: AgentIcon,
+  activity: ActivityIcon,
+  agent: RobotIcon,
   files: FilesIcon,
-  notes: NotesIcon,
+  notes: NotePencilIcon,
   git: GitIcon,
   processes: ProcessesIcon,
   schedule: ScheduleIcon,

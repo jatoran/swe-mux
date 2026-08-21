@@ -2069,37 +2069,76 @@ body {
 .terminal-surface{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
 .terminal-surface>.terminal-host{grid-row:1;grid-column:1;min-width:0;min-height:0}
 .mobile-terminal-live-input{display:none}
+/* Rail density: one variable group, three steps, and nothing else knows the numbers.
+   Comfortable *is* the stylesheet's own `:root` block, so a device that has never opted in -
+   and a build whose daemon never answers - renders exactly what it rendered before the
+   setting existed. `railDensity.ts` writes `data-rail-density` on the root element from a
+   per-device-class config field, the same desktop/mobile split chrome scale uses, which is
+   why the mobile numbers are a second copy of the group rather than a multiplier: a phone
+   wants a different *floor*, not a scaled desktop.
+   Below Comfortable the phone's chips fall under the 44px touch-target guidance. That is the
+   deliberate content of the choice rather than an oversight - the setting exists to trade
+   reach for rail height, and it is opt-in on the device it applies to. */
+:root{--rail-gap:5px;--rail-pad-y:3px;--rail-pad-x:7px;--rail-chip-h:calc(27px*var(--ui-scale));--rail-chip-pad:6px;--rail-text-pad:8px;--rail-row-h:34px;--rail-more-width:42px}
+:root[data-rail-density="compact"]{--rail-gap:4px;--rail-pad-y:2px;--rail-pad-x:6px;--rail-chip-h:calc(24px*var(--ui-scale));--rail-chip-pad:5px;--rail-text-pad:7px;--rail-row-h:29px;--rail-more-width:38px}
+:root[data-rail-density="dense"]{--rail-gap:3px;--rail-pad-y:1px;--rail-pad-x:5px;--rail-chip-h:calc(21px*var(--ui-scale));--rail-chip-pad:4px;--rail-text-pad:6px;--rail-row-h:25px;--rail-more-width:34px}
+@media(max-width:760px){
+  :root{--rail-gap:7px;--rail-pad-y:4px;--rail-pad-x:7px;--rail-chip-h:44px;--rail-chip-pad:8px;--rail-text-pad:10px;--rail-row-h:52px;--rail-more-width:52px}
+  :root[data-rail-density="compact"]{--rail-gap:5px;--rail-pad-y:3px;--rail-pad-x:6px;--rail-chip-h:40px;--rail-chip-pad:7px;--rail-text-pad:9px;--rail-row-h:46px;--rail-more-width:48px}
+  :root[data-rail-density="dense"]{--rail-gap:4px;--rail-pad-y:2px;--rail-pad-x:5px;--rail-chip-h:36px;--rail-chip-pad:6px;--rail-text-pad:8px;--rail-row-h:40px;--rail-more-width:44px}
+}
 /* The rail owns one scrolling column plus an optional fixed mobile Send end-cap.
    Overflow belongs only to the inner strip so Send never moves with its siblings. */
-.terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:34px;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
+.terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:var(--rail-row-h);display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
-/* The rail's configured rows, stacked. Each is its own horizontal scroller, so a
-   row that overflows pages independently of the others. The rail's grid track is
-   `auto`, so adding a row grows the rail and shrinks the terminal by exactly one
-   row height - a layout change, never a measured-then-adjusted one. */
+/* The rail's configured rows, stacked. Each splits independently, so a row that does not
+   fit gets its own `+N` chip and its own popover holding only its remainder. The rail's
+   grid track is `auto`, so adding a row grows the rail and shrinks the terminal by exactly
+   one row height - a layout change, never a measured-then-adjusted one. */
 .terminal-action-rows{grid-row:1;grid-column:1;min-width:0;display:flex;flex-direction:column}
-.terminal-action-rows>.overflow-rail{display:flex;min-height:34px}
-.terminal-action-rows>.overflow-rail>.terminal-action-scroll{flex:1 1 auto}
-.terminal-action-rows>.overflow-rail+.overflow-rail{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+/* One `.rail-row` per configured row: the visible strip, its hidden measuring twin, and the
+   popover the twin's measurements decide the contents of (`RailStrip.tsx`). */
+.terminal-action-rows>.rail-row{position:relative;min-width:0;display:flex;min-height:var(--rail-row-h)}
+.terminal-action-rows>.rail-row>.overflow-rail{flex:1 1 auto;min-width:0;display:flex}
+.terminal-action-rows>.rail-row>.overflow-rail>.terminal-action-scroll{flex:1 1 auto}
+.terminal-action-rows>.rail-row+.rail-row{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+/* The measuring twin. `visibility:hidden` is doing three jobs at once - unpainted,
+   unfocusable, and still a real layout box to read widths off - and `width:max-content`
+   stops an absolutely-positioned flex container from shrink-fitting the chips it is
+   supposed to be measuring at their natural size. It is a sibling of the scroller and not
+   a child of it because an absolutely-positioned child still counts toward `scrollWidth`,
+   which would report permanent overflow to the very component drawing the edge chevrons. */
+.rail-row-measure{position:absolute;left:0;top:0;width:max-content;visibility:hidden;pointer-events:none}
 .overflow-rail{position:relative;min-width:0;overflow:hidden}
 .overflow-rail-strip{scrollbar-width:none}
 .overflow-rail-strip::-webkit-scrollbar{display:none}
 .terminal-action-scroller{--overflow-rail-bg:var(--panel);--overflow-rail-accent:var(--green)}
 .terminal-action-scroller.overflow-rail-touch-drag{touch-action:none}
-.terminal-action-scroll{width:100%;height:100%;min-width:0;display:flex;align-items:center;gap:5px;padding:3px 7px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.terminal-action-scroll{width:100%;height:100%;min-width:0;display:flex;align-items:center;gap:var(--rail-gap);padding:var(--rail-pad-y) var(--rail-pad-x);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .terminal-action-scroll::-webkit-scrollbar{display:none}
 .terminal-action-scroll>*{flex:0 0 auto}
+/* The status readout and the gear ride the last row's trailing edge. Only the gear is
+   reserved out of the fit budget (`data-rail-fixed`); the readout takes what is left and
+   ellipsises, so a chip never moves because a transient "Copied" appeared beside it. */
+.terminal-action-scroll>.rail-row-trailing{flex:1 1 auto;min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:var(--rail-gap)}
 /* An arrow rather than the word: the end-cap is the one control on the rail with a fixed
    place, so it can be recognised by shape, and the width it gives back goes to the scrolling
    keys beside it. Narrower, but still a thumb target - the height is what makes it tappable,
    and that is unchanged. */
-.terminal-action-rail .terminal-mobile-send{align-self:center;min-width:52px;margin:3px 7px 3px 0;display:inline-flex;align-items:center;justify-content:center;border-color:color-mix(in srgb,var(--green) 60%,var(--line));background:color-mix(in srgb,var(--green) 10%,var(--panel2));color:var(--green);font-weight:700}
+.terminal-action-rail .terminal-mobile-send{align-self:center;min-width:52px;margin:var(--rail-pad-y) var(--rail-pad-x) var(--rail-pad-y) 0;display:inline-flex;align-items:center;justify-content:center;border-color:color-mix(in srgb,var(--green) 60%,var(--line));background:color-mix(in srgb,var(--green) 10%,var(--panel2));color:var(--green);font-weight:700}
 .terminal-action-rail .terminal-mobile-send svg{width:17px;height:17px;display:block}
-.terminal-action-rail .term-key{min-width:30px;padding:0 6px}
+.terminal-action-rail .term-key{min-width:30px;padding:0 var(--rail-chip-pad)}
 .terminal-action-rail .rail-key-repeat{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+/* Configured text: a skill, a slash command, a prompt template, a literal. These size to
+   their own label with symmetric padding, and their `min-width` is a *floor* for a short
+   one rather than a width every one of them is stretched to. The rail's shared 74px
+   min-width is right for the built-in labelled buttons, whose wording is fixed and whose
+   even widths read as a row; it is wrong here, where the label is whatever the user named
+   the thing, and it padded a five-character skill out to the width of "Copy resume". */
+.terminal-action-rail .rail-text{min-width:30px;padding:0 var(--rail-text-pad)}
 /* Icon-only actions size like keys, not like the 74px text buttons they replaced. The svg is
    sized here rather than in `em` because the rail's font is 9px. */
-.terminal-action-rail .rail-icon{min-width:30px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;color:var(--text)}
+.terminal-action-rail .rail-icon{min-width:30px;padding:0 var(--rail-chip-pad);display:inline-flex;align-items:center;justify-content:center;color:var(--text)}
 .terminal-action-rail .rail-icon svg{width:15px;height:15px;display:block}
 .terminal-action-rail .rail-icon:disabled{color:var(--muted)}
 .terminal-action-rail .kbd-toggle{display:none;position:relative;font-size:13px}
@@ -2148,6 +2187,35 @@ body {
 .rail-dropup-empty,.rail-dropup-note{margin:0;padding:9px 8px;color:var(--muted);font:9px/1.5 'Cascadia Mono',Consolas,monospace}
 .rail-dropup-note{border-top:1px solid var(--line)}
 .terminal-action-rail .rail-dropup-open-trigger{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green)}
+/* The overflow popover: the rest of one rail row, as a wrap grid of the same real chips.
+   Glass rather than a solid panel, because it stands over live output the operator is
+   usually still reading around. `--rail-glass` is the single opacity both the panel and the
+   chips on it are mixed at, and it is a measured value rather than a taste one:
+   `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every
+   theme and requires chip labels to hold 4.5:1, and also requires it to stay under 90% so a
+   future "fix" cannot buy contrast by quietly going opaque. Borders and text are never mixed.
+   z-index sits one below `.rail-dropup`, which is the whole reason a Clip/Skills/Prompts
+   drop-up opened from inside this panel renders over it instead of behind it. */
+.rail-overflow-popover{--rail-glass:86%;position:fixed;z-index:95;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  /* With no blur behind it the glass is just a wash of whatever happens to be under it,
+     which is neither the look nor a contrast guarantee. Fall back to near-solid. */
+  .rail-overflow-popover{--rail-glass:98%}
+}
+.rail-overflow-popover>header{display:flex;align-items:center;gap:8px;min-height:26px;padding:0 4px 0 9px;border-bottom:1px solid var(--line);font:9px 'Cascadia Mono',Consolas,monospace}
+.rail-overflow-popover>header strong{color:var(--text);letter-spacing:.06em;text-transform:uppercase}
+/* Scoped through `.terminal-action-rail` only to beat that selector's own `span` rule, which
+   is later in the sheet and would otherwise repaint this hint in the status readout's muted
+   grey - on glass, which is exactly where a muted grey stops being readable. */
+.terminal-action-rail .rail-overflow-popover>header span{max-width:none;margin:0 auto 0 0;color:var(--green);letter-spacing:.04em}
+.rail-overflow-popover .rail-overflow-close{flex:none;width:24px;height:24px;min-width:0;padding:0;border:0;background:transparent;color:var(--text);font-size:15px;line-height:1;cursor:pointer}
+.rail-overflow-grid{min-height:0;display:flex;flex-wrap:wrap;align-content:flex-start;gap:var(--rail-gap);padding:var(--rail-pad-y) var(--rail-pad-x);overflow-y:auto;overscroll-behavior:contain}
+.rail-overflow-grid>*{flex:0 0 auto}
+/* Specificity has to beat `.terminal-action-rail button`, which is later in the sheet. The
+   accent-tinted states (an armed End session, an open drop-up trigger, the keyboard-mode
+   toggle) still win over this and stay opaque, which is right: those colours are a state
+   readout and are not what the glass is for. */
+.terminal-action-rail .rail-overflow-grid>button{background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent)}
 /* Dismissible first-open orientation. Persistent copy lives in tooltips and the
    scope note instead of a standing paragraph. */
 .commandrail-settings .rail-intro-callout{margin:0 0 10px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--blue) 45%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}
@@ -2324,7 +2392,12 @@ body {
 .prompt-inline-head strong{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .prompt-inline-editor .prompt-draft-fields{padding:9px}
 .prompt-inline-editor .prompt-draft-actions{padding:0 9px 9px}
-.terminal-action-rail button{min-width:calc(74px*var(--ui-scale));height:calc(27px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.terminal-action-rail button{min-width:calc(74px*var(--ui-scale));height:var(--rail-chip-h);border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+/* The overflow chip. Fixed width by construction so the one control that exists to absorb
+   overflow can never be the thing that overflows, and so the split can reserve its width
+   before it is mounted - `--rail-more-width` is read by `RailStrip.tsx` for exactly that. */
+.terminal-action-rail button.rail-more{min-width:var(--rail-more-width);width:var(--rail-more-width);padding:0;border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green);font-weight:700}
+.terminal-action-rail button.rail-more.rail-more-open{border-color:var(--green);background:color-mix(in srgb,var(--green) 12%,var(--panel2))}
 /* Hover styling is gated to real pointers: touch browsers keep :hover on the last
    tapped element until something else is tapped, which made a rail button look
    permanently selected. Touch feedback is the one-shot pulse below instead, added
@@ -2533,7 +2606,7 @@ body {
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
   .prepared-clipboard{top:5px;grid-template-columns:minmax(0,1fr) auto auto}.prepared-clipboard button{min-height:44px}.prepared-clipboard textarea{display:block;min-height:96px;padding:10px;font-size:16px;line-height:1.4;user-select:text;-webkit-user-select:text;touch-action:auto}
-  .terminal-action-rail{min-height:52px}.terminal-action-rows>.overflow-rail{min-height:52px}.terminal-action-scroll{gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail.mobile-pinned-send .terminal-action-scroll{padding-right:7px}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .terminal-mobile-send{min-width:56px;margin:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) 0}.terminal-action-rail .terminal-mobile-send svg{width:20px;height:20px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
+  .terminal-action-scroll{padding:var(--rail-pad-y) max(var(--rail-pad-x),env(safe-area-inset-right)) max(var(--rail-pad-y),env(safe-area-inset-bottom)) max(var(--rail-pad-x),env(safe-area-inset-left))}.terminal-action-rail.mobile-pinned-send .terminal-action-scroll{padding-right:var(--rail-pad-x)}.terminal-action-rail button{min-width:96px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon,.terminal-action-rail .rail-text{min-width:var(--rail-chip-h)}.terminal-action-rail .terminal-mobile-send{min-width:56px;margin:var(--rail-pad-y) max(var(--rail-pad-x),env(safe-area-inset-right)) max(var(--rail-pad-y),env(safe-area-inset-bottom)) 0}.terminal-action-rail .terminal-mobile-send svg{width:20px;height:20px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
   .context-menu{z-index:49}
   /* Status rows are taps here, not hover targets, so they take the 44px floor the rest of
      the mobile chrome uses. The drawer is 285px at most and these rows already ellipsize,

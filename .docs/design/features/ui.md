@@ -940,6 +940,30 @@ Its rules, and what each one is defending:
     (`features/terminal-input.md`) — but leaving the largest surface in the window at a fixed
     size while everything around it grew is not what the setting is asked for, and the
     arbitration consequence turned out to be the correct behaviour rather than the objection.
+- Appearance also exposes **rail density** (`Comfortable | Compact | Dense`), stored per device
+  class beside chrome scale and defaulting to Comfortable on both.
+  It is a separate setting rather than another thing chrome scale multiplies, because scale is
+  about *type you cannot read* and this is about *height you would rather give the terminal*.
+  The Action rail is the one strip drawn under every pane at once, so on a desktop showing four
+  terminals a step of density is four rows of output back.
+  - Comfortable is the spacing that has always shipped, and it is expressed as the stylesheet's
+    own `:root` values rather than as a third selectable block, so `railDensity.ts` writes no
+    attribute at all for it.
+    A device that has never opted in, and a browser whose daemon never answered, therefore
+    render a file indistinguishable from the build before the setting existed — the same
+    "the default must stay inert" check chrome scale is held to.
+  - The steps are one variable group — gap, chip height, chip side padding, container padding,
+    row height, and the overflow chip's fixed width — declared once per step in `style.css`.
+    The numbers live there and not in TypeScript because they are six lengths that must move
+    together; what crosses the boundary is one `data-rail-density` attribute on the root element.
+  - The mobile group is a **second set of numbers, not the desktop set scaled**: a phone's
+    Comfortable chip is a 44px touch target, which is a floor rather than a multiple of the
+    desktop's 27.
+    Below Comfortable a phone's chips fall under that guidance, and that is the content of the
+    choice rather than an oversight — the setting exists to trade reach for rail height, it is
+    opt-in on the device it applies to, and the panel says so.
+  - Previewed live as it is picked, and restored with theme and scale when the draft is
+    discarded, because the only way to judge a density is to see the rail at it.
 - Terminals exposes `auto | webgl | dom` renderer selection.
   `auto` preserves accelerated WebGL for desktop shells with automatic DOM fallback, and keeps scrollback-repainting harnesses on DOM.
   Claude and OMP are also DOM-only, including under an explicit `webgl` preference: their repainting surfaces can return from a retained hidden interval or deep replay with a live but intermittently mangled WebGL context, no context-loss event, and no reliable recovery short of a real resize.
@@ -1482,6 +1506,23 @@ Its rules, and what each one is defending:
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout and the customize gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into configuration.
+  Only the gear is reserved out of a row's fit budget; the readout takes whatever is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
+- **A row that does not fit fills with what does and collapses the rest into a trailing `+N` chip.**
+  The rail is a toolbar, and a toolbar's answer to overflow is an overflow menu rather than a scroller: a horizontal scroller hides an unknown number of controls behind a gesture, says nothing about how many, and puts the one you want at an offset you have to hunt for.
+  Each row is split independently and gets its own popover, in row order, holding only that row's remainder.
+  An empty remainder draws no `+N` chip at all, so a rail that fits looks exactly as it did before the split existed — including not reserving the chip's width "just in case".
+  The `+N` chip is fixed-width by construction, because the one control that exists to absorb overflow must never be the thing that overflows, and the count follows the row's width live.
+- **The popover is the rest of the row, not a picker, so a selection does not close it.**
+  It is a wrap grid of the same real chips with their real handlers, which is what makes the two-click End session confirm complete in place and a repeat-tap arrow key repeat where it is.
+  Dismissal is always deliberate: an outside press, Escape, or the panel's own close control, and the header says `stays open` because every other popover on the rail behaves the opposite way.
+  It is capped in width and in height (half the viewport), right-aligned to its chip, and grows upward — so on a phone it hugs the rail's edge and adds rows rather than blanketing the composer.
+  Panel and chips are translucent over a backdrop blur, with borders and text at full opacity.
+  That opacity is a measured value, not a taste one: it is the lowest that costs no theme its chip-label contrast when the terminal behind it is pure white or pure black, and it is held under 90% so a later "fix" cannot buy contrast by quietly going opaque (`test/railGlassContrast.test.ts`, and the real composited pixels in `test/renderer/rail-overflow.spec.ts`).
+- **The drop-up pickers work from inside the popover.**
+  A Clip, Skills, Prompts, or Actions chip opened there renders its drop-up *over* the panel and leaves it standing, which needs two exemptions rather than one: the tap that opens a drop-up is an outside press for the panel, and Escape reaches both listeners on `window` where `stopPropagation` stops neither — so the panel stands aside for as long as a drop-up is open.
+  The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
+- Configured chips — a skill, a slash command, a prompt template, a literal — **size to their own label** with symmetric padding, and their `min-width` is a floor for a short one rather than a width every one of them is stretched to.
+  The rail's shared 74px minimum stays right for the built-in labelled buttons, whose wording is fixed and whose even widths are the row's rhythm; it was wrong for a label the user chose, and it padded a five-character skill out to the width of `Copy resume`.
   The gear flips the rail area into the in-place editor rather than opening the modal; the modal stays one click behind its "All options…" control.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
@@ -1626,11 +1667,11 @@ Its rules, and what each one is defending:
   With no terminal focused, Quick actions and Skills explain what target is missing while Prompt templates remain browsable.
   Keys inject raw bytes on the normal input path.
   The built-in newline uses `ESC+CR`, the legacy sequence both Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
-  The Action rail overflows on narrow panes and scrolls horizontally; it never wraps.
-  The scrollbar stays hidden: endpoint-aware gradient chevrons overlay the strip without taking layout space, appear only when content remains in their direction, page to a command boundary on click, and keep focused commands clear of the overlays.
-  Touch drag, native horizontal trackpad input, and translated vertical mouse-wheel input remain direct scrolling paths.
+  The Action rail never wraps: a row that does not fit collapses its remainder into a trailing `+N` chip and a popover, above.
+  It keeps the shared overflow scroller underneath that split rather than dropping it, because that component owns the touch-drag pan's click suppression, the soft-keyboard hold, wheel translation, and focus reveal — behaviours the `+N` chip needs as much as any other chip, and a pixel of measurement error still wants somewhere to go.
+  With the split in place the strip does not actually scroll, so the endpoint chevrons never appear; they remain correct on the drawer, workspace, and Notes rails, which do scroll.
   Voice controls are not here.
-  They are in the pane header (`voice.md`) because the rail is a scroller the user pages through and they kept scrolling out of reach.
+  They are in the pane header (`voice.md`) because the rail is chrome the user reads across and they kept being the thing pushed out of it.
 - The Skills section lists **the skills that the focused agent session's CLI can actually see** (`GET /sessions/{id}/skills`, `interfaces.md`).
   These come from the vendors' own `SKILL.md` directories, not swe-mux prompt templates or Action items.
   They are *discovered*, never configured here.
@@ -2269,6 +2310,9 @@ Its rules, and what each one is defending:
   Mobile long-press opens the drawer-tab menu after 550 ms with 8 px movement tolerance; the following synthetic click is consumed.
   The root-rendered menu stays above the mobile drawer overlay so every action remains tappable.
   Icon mode uses `DRAWER_TAB_ICONS`, while title mode uses the short `DrawerTab.label`; neither mode renders both marks.
+  A tab's mark names the *thing the tab is about* rather than the surface it renders in, which is what the five redrawn in 2026-08 corrected: Actions is the command-key glyph (not a terminal window — every tab targets a terminal), Agent is a robot head (not an abstract "core"), Notes is a page with a pencil (a note is written, which a plain page left out), Queue is a list of rules with a clock (a queued message is one not delivered *yet*), and Activity is a pulse trace (not a lightbulb — a finding is an idea, the tab is the record).
+  The one collision that survives that rule is Activity and Processes, which are both traces and sit on the same rail, so they are held apart by **silhouette** rather than by detail: a bare full-bleed squiggle against a monitor on a stand.
+  A detail that distinguishes two marks at 34px and not at 17px distinguishes nothing, because 17px is the size these are read at.
   Title rails remain one-line scrollers with the same endpoint-aware overflow controls, and only right-rail title mode widens the outer launcher through `--utility-rail-width`.
   Queue and Alerts badges, scope dots, accessible names, tooltips, selection, focus, and drag state remain intact in both modes.
 - Mobile renders one flattened depth-first rail and one body from the same desktop tree without rewriting tree membership, stack IDs, directions, ratios, or ordering.

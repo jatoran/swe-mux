@@ -35,7 +35,7 @@ That is why several pure models are split out of the component that renders them
 
 - [`packages/composition.md`](packages/composition.md) - workspace composition, UI state boundaries, connection liveness, server clock, redeploy progress, shared interaction primitives.
 - [`packages/terminal.md`](packages/terminal.md) - the terminal viewport, multi-device input arbitration, mobile keyboard and IME, preview links, ended and recovered panes.
-- [`packages/layout-and-chrome.md`](packages/layout-and-chrome.md) - layout algebra, the mobile projection, the utility drawer and its segments, overflow rails, theme and scale, icon sets.
+- [`packages/layout-and-chrome.md`](packages/layout-and-chrome.md) - layout algebra, the mobile projection, the utility drawer and its segments, overflow rails, the pinned rail and its overflow popover, theme, scale and rail density, icon sets.
 - [`packages/sidebar-and-projects.md`](packages/sidebar-and-projects.md) - session rows, the sidebar filter, the Projects registry, Project actions, session display names.
 - [`packages/notes-and-files.md`](packages/notes-and-files.md) - Project resources, the note editor host, and sending a selection to an agent.
 - [`packages/actions-and-clipboard.md`](packages/actions-and-clipboard.md) - the Action rail and its editors, prompt templates, agent skills, clipboard capture and its surfaces.

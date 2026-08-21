@@ -88,7 +88,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { ActionsIcon, AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotesIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, TrashIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
+import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, TrashIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -159,6 +159,7 @@ import {
   DEFAULT_UI_SCALE, applyUiScale, createUiScaleWheelIntent, uiScaleConfigKey,
   uiScaleForIntent, uiScaleKeyboardIntent, watchUiScaleProfile, type UiScale,
 } from './uiScale'
+import { applyRailDensity, watchRailDensityProfile } from './railDensity'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { setKeybindingsStore } from './keybindingsStore.ts'
@@ -1689,6 +1690,7 @@ export function App() {
     setHarnessSetupNeeded(config.harness_setup_complete===false)
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
+    applyRailDensity(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
     setClaudeMaxColumns(claudeMaxColumnsFrom(config))
@@ -1845,6 +1847,10 @@ export function App() {
   // value, and every surface that draws an indicator must agree on it.
   useEffect(()=>{applySessionDotSize(rowConfig)},[rowConfig])
   useEffect(()=>watchSessionDotProfile(),[])
+
+  // Rail density is stored per device class for the same reason chrome scale is, and so
+  // crossing the breakpoint has to re-resolve which stored step applies.
+  useEffect(()=>watchRailDensityProfile(),[])
 
   // Browser-style UI scaling is captured before xterm, editors, command bindings, or
   // Chromium's page zoom see it. Plain wheel/key input and every non-exact modifier
@@ -7118,7 +7124,7 @@ export function App() {
       <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('project.create')}}><span class="menu-row-icon" aria-hidden="true"><FilesIcon/></span><span class="menu-row-label">Manage projects…</span></button>
       <button class="menu-row" onClick={()=>{setSidebarMenu(null);setGroupEdit({name:''})}}><span class="menu-row-icon" aria-hidden="true"><GroupIcon/></span><span class="menu-row-label">Create group</span></button>
       <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('history.open')}}><span class="menu-row-icon" aria-hidden="true"><HistoryIcon/></span><span class="menu-row-label">Session history</span></button>
-      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}><span class="menu-row-icon" aria-hidden="true"><NotesIcon/></span><span class="menu-row-label">Notes…</span></button>
+      <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}><span class="menu-row-icon" aria-hidden="true"><NotePencilIcon/></span><span class="menu-row-label">Notes…</span></button>
       <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}><span class="menu-row-icon" aria-hidden="true"><ProcessesIcon/></span><span class="menu-row-label">Resources…</span></button>
       <div class="context-rule" />
       <button class="menu-row" onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">All Settings…</span></button>
@@ -7268,8 +7274,8 @@ export function App() {
           Right-clicking a Project row still opens the Project-scoped versions prefiltered
           to it; anything that acts on one Project lives there, not here. */}
       <button class="menu-row" onClick={() => runNamedCommand('history.open')}><span class="menu-row-icon" aria-hidden="true"><HistoryIcon/></span><span class="menu-row-label">Session history</span></button>
-      <button class="menu-row" onClick={() => runNamedCommand('notes.browse')}><span class="menu-row-icon" aria-hidden="true"><NotesIcon/></span><span class="menu-row-label">Notes</span></button>
-      <button class="menu-row" onClick={() => runNamedCommand('queue.fleet')}><span class="menu-row-icon" aria-hidden="true"><QueueIcon/></span><span class="menu-row-label">Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('notes.browse')}><span class="menu-row-icon" aria-hidden="true"><NotePencilIcon/></span><span class="menu-row-label">Notes</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('queue.fleet')}><span class="menu-row-icon" aria-hidden="true"><QueueClockIcon/></span><span class="menu-row-label">Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</span></button>
       <button class="menu-row" onClick={()=>runNamedCommand('prompts.open')}><span class="menu-row-icon" aria-hidden="true"><PromptsIcon/></span><span class="menu-row-label">Prompt library</span></button>
       <button class="menu-row" onClick={()=>runNamedCommand('clipboard.open')}><span class="menu-row-icon" aria-hidden="true"><ClipboardHistoryIcon/></span><span class="menu-row-label">Clipboard history</span></button>
       {/* One row for what used to be four — processes, bandwidth, storage, and token
@@ -7285,7 +7291,7 @@ export function App() {
           menu is where every other app-wide surface is looked for. Two doors to one
           registry is the lesser cost. */}
       <button class="menu-row" onClick={() => runNamedCommand('project.create')}><span class="menu-row-icon" aria-hidden="true"><FilesIcon/></span><span class="menu-row-label">Projects</span></button>
-      <button class="menu-row" onClick={() => runNamedCommand('actions.configure')}><span class="menu-row-icon" aria-hidden="true"><ActionsIcon/></span><span class="menu-row-label">Configure Actions</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('actions.configure')}><span class="menu-row-icon" aria-hidden="true"><CommandKeyIcon/></span><span class="menu-row-label">Configure Actions</span></button>
       <button class="menu-row" onClick={() => runNamedCommand('hooks.open')}><span class="menu-row-icon" aria-hidden="true"><DashboardIcon/></span><span class="menu-row-label">Automation Dashboard</span></button>
       <MenuGroup id="maintenance" label="Maintenance" icon={<WrenchIcon/>} openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
         {/* Three rows that all mean "reload", so the marks name the thing reloaded rather

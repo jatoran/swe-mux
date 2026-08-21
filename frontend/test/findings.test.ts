@@ -124,5 +124,5 @@ test('every retired tab id migrates forward to a tab and, where it exists, a seg
   assert.ok(app.includes('const legacy=migratedTabTarget(legacyDrawerTab.current)'))
   assert.ok(!app.includes("legacyRaw==='timeline'"), 'the inline copy of the table must stay gone')
   // The icon map is keyed by DrawerTabId, so the surviving id must carry an icon.
-  assert.ok(icons.includes('activity: InsightIcon'))
+  assert.ok(icons.includes('activity: ActivityIcon'))
 })

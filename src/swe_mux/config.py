@@ -117,6 +117,7 @@ CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "acce
 # broken. 1.4 is the ceiling because past it the fixed paddings and grid tracks
 # that deliberately do *not* scale start to crowd.
 UI_SCALES = {0.9, 1.0, 1.1, 1.25, 1.4}
+RAIL_DENSITIES = ("comfortable", "compact", "dense")
 # Accepted values for `claude_max_columns`, in terminal columns, where 0 means "no
 # cap". Discrete for the same reason the scale steps are: there is no useful
 # difference between a 121- and a 123-column envelope, only a way to land on a value
@@ -688,6 +689,13 @@ class Config:
     # Both default to 1.0: installing this build changes nothing on screen.
     ui_scale_desktop: float = 1.0
     ui_scale_mobile: float = 1.0
+    # How tightly the terminal's Action rail packs, split per device class for the
+    # same reason chrome scale is: the desktop is where the height a rail costs is
+    # worth trading away, and the phone has a touch floor the desktop does not.
+    # Both default to "comfortable", which is exactly the spacing that shipped
+    # before the setting existed - installing this build changes nothing on screen.
+    rail_density_desktop: str = "comfortable"
+    rail_density_mobile: str = "comfortable"
     middle_click_paste: bool = True
     broadcast_default: bool = False
     mobile_vertical_drag: str = "smart"
@@ -1699,6 +1707,9 @@ def _validate(config: Config) -> None:
         elif not any(abs(float(value) - step) < 1e-9 for step in UI_SCALES):
             allowed = ", ".join(f"{step:g}" for step in sorted(UI_SCALES))
             errors[scale_field] = f"must be one of {allowed}"
+    for density_field in ("rail_density_desktop", "rail_density_mobile"):
+        if getattr(config, density_field) not in RAIL_DENSITIES:
+            errors[density_field] = f"must be one of {', '.join(RAIL_DENSITIES)}"
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(
         not isinstance(value, str)
         or len(value) != 7

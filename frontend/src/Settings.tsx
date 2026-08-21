@@ -18,6 +18,7 @@ import { ThemePicker } from './ThemePicker'
 import { BudgetControl } from './BudgetControl'
 import type { Budget } from './types'
 import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
+import { applyRailDensity, railDensityLabel, RAIL_DENSITIES, type RailDensity } from './railDensity'
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
 import { currentProfile } from './deviceSettings'
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
@@ -89,6 +90,7 @@ type Config = {
   note_command_rail:'auto'|'on'|'off';note_rail_button_size_px:number
   note_indent_guides:boolean
   ui_scale_desktop:UiScale;ui_scale_mobile:UiScale
+  rail_density_desktop:RailDensity;rail_density_mobile:RailDensity
   claude_max_columns:ClaudeMaxColumns
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
@@ -882,6 +884,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     change(key,scale)
     onUiScalePreview({...draft!,[key]:scale})
   }
+  // Previewed live for the same reason as scale, and directly rather than through a prop:
+  // density is one attribute on the root element and nothing outside CSS reads it, so
+  // there is no second authority to keep in step the way xterm's font size is.
+  const changeRailDensity = (key:'rail_density_desktop'|'rail_density_mobile', raw:string) => {
+    const density = raw as RailDensity
+    change(key,density)
+    applyRailDensity({...draft!,[key]:density})
+  }
   // Only the overlay is stored, never the whole table: a chord left on the
   // editor's default keeps following the editor, so a Continuity upgrade that
   // rebinds something is not frozen out by a copy saved here.
@@ -922,7 +932,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])));setErrors({})
       setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
-      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next)
+      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); applyRailDensity(next)
       return true
     } catch (error) {
       const typed = error as Error & {fields?:Record<string,string>}
@@ -932,7 +942,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const reset = async () => {
     const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); setStatus('defaults restored')
+    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); applyRailDensity(next); setStatus('defaults restored')
   }
   const exportConfig = () => {
     if (!draft) return
@@ -1097,10 +1107,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const discardAndLeave=()=>{
     if(!closeIntent)return
-    // Theme and chrome scale are previewed live as you pick them, so discarding
-    // has to put both back — not just the draft that was never saved. Pointing the
-    // authoritative theme at the saved one keeps the unmount revert agreeing.
-    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);authoritativeTheme.current=config.theme;onUiScalePreview(config)}
+    // Theme, chrome scale, and rail density are previewed live as you pick them, so
+    // discarding has to put all three back — not just the draft that was never saved.
+    // Pointing the authoritative theme at the saved one keeps the unmount revert agreeing.
+    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);authoritativeTheme.current=config.theme;onUiScalePreview(config);applyRailDensity(config)}
     leaveSettings(closeIntent)
   }
   const saveAndLeave=async()=>{
@@ -1998,7 +2008,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
           <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
-          <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Text editor</strong>.</p></section>}
+          <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Text editor</strong>.</p>
+          <h3>Rail density</h3>
+          <label data-setting="rail_density_desktop">Desktop rail density<select value={draft.rail_density_desktop} onChange={e=>changeRailDensity('rail_density_desktop',e.currentTarget.value)}>{RAIL_DENSITIES.map(step=><option value={step}>{railDensityLabel(step)}</option>)}</select></label>
+          <label data-setting="rail_density_mobile">Mobile rail density<select value={draft.rail_density_mobile} onChange={e=>changeRailDensity('rail_density_mobile',e.currentTarget.value)}>{RAIL_DENSITIES.map(step=><option value={step}>{railDensityLabel(step)}</option>)}</select></label>
+          <p>How tightly the Action rail under each terminal packs its buttons: the gap between them, their height, and the padding inside and around them. It is the one strip that is on screen under every pane at once, so on a desktop showing four terminals a tighter rail is four rows of output back. Comfortable is the spacing that has always shipped, and both devices start there — this only ever takes space away, never adds it.</p>
+          <p>Split desktop/mobile like the scale above, and for a sharper reason: below Comfortable a phone's buttons fall under the 44-pixel touch target that makes them reliable to hit with a thumb. That is the trade the setting is offering rather than an oversight, and it is why the desktop is where it pays off.</p></section>}
   </Fragment>
 
   // Rebuilt on the first keystroke of a search and then reused until the search
