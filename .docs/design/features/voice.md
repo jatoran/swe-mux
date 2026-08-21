@@ -39,7 +39,7 @@ the overwhelm this ordering exists to end.
 3. **This device** (the browser's autoplay toggle, plus the focus rule below). Answers *does
    this browser speak, and for which session*.
 
-The three are presented as one numbered block in Settings -> Voice, each layer naming where its
+The three are presented as one numbered block in Settings -> Voice -> Read aloud (TTS), each layer naming where its
 per-item control lives. The block is the source of truth for the wording; the chip and the strip
 say the same thing in one line each.
 
@@ -94,7 +94,7 @@ say the same thing in one line each.
 - **Kokoro's model is downloaded, never bundled** (`voice_models.py`): a pinned immutable
   Hugging Face revision, per-file SHA-256 verified while streaming, with explicit
   `not_downloaded → downloading → ready → error` state — a partial download can never be
-  loaded. Settings → Voice owns the download with visible progress
+  loaded. Settings → Voice → Voice and engine owns the download with visible progress
   (`voice_model_progress` events); `kokoro` is selectable but reports itself unavailable
   until the model is `ready`. English voices only, because the phonemizer is English-only.
 - **Phonemization is lexicon-only misaki with `fallback=None`, and no espeak-ng package may
@@ -116,7 +116,7 @@ say the same thing in one line each.
   word — the token an operator would actually respell — into `SpelledWordLog`, a bounded
   (200), deduplicated, counted JSON store at `<data_dir>/voice/spelled_words.json` that
   survives restarts, plus a `daemon.log` line. `GET /api/voice` surfaces the entries as
-  `spelled_words`; Settings → Voice lists them under the lexicon editor with a one-tap
+  `spelled_words`; Settings → Voice → Pronunciation lists them under the lexicon editor with a one-tap
   respell input that writes the lexicon entry. Telemetry is fail-safe: a reporter error is
   logged and speech proceeds.
 - **A respelling must itself be pronounceable, and the editor tells the user before Save.**
@@ -499,7 +499,7 @@ executed action — so that number is measured rather than estimated.
   always sum to the total and a cost cannot quietly fall out of the breakdown.
 - Every posted field is clamped on arrival. A readout that can be poisoned into showing
   impossible stages is worse than none, because it is still believed.
-- The Settings → Voice readout reports per-stage p50/p95/max plus a **separate command-only
+- The Settings → Voice → Testing and latency readout reports per-stage p50/p95/max plus a **separate command-only
   total**, since the exit criterion is stated for a short command and dictation decodes several
   times longer audio. Percentiles rather than a mean: one cold model load is a seven-second
   outlier. Samples are also written to `daemon.log`, which is what outlives a restart, and each
@@ -525,7 +525,8 @@ executed action — so that number is measured rather than estimated.
   matched longest-first, so `read the reply again` wins over `read`, and a bare wake word or an
   unmatched tail leaves the text as draft. `parseMuxVoice` is the default matcher (built from
   the `DEFAULT_WAKE_WORDS` / `DEFAULT_COMMANDS` fallbacks that mirror `config.py`).
-- **The wake word is chosen from measurement, not from how it looks.** Settings → Voice carries a
+- **The wake word is chosen from measurement, not from how it looks.** Settings → Voice → Testing
+  and latency carries a
   tester: speak N utterances, and each one goes through the same capture pipeline, the same
   transcribe endpoint on the same routing decoder the command path uses, and the matcher compiled
   from the live configuration. It reports the raw transcript per trial, which wake-word spelling
@@ -709,6 +710,33 @@ into mobile-voice setup instead.
   None of them touches capture.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
 
+## Settings surface (Settings → Voice)
+
+Voice is the largest tab in the panel, and it configures two independent halves plus the assistant that sits behind one of them.
+It is therefore **one `<section>` per concern**, in reading order, rather than one long scroll of headings - which is what it was, and what made every control in it equally hard to find.
+The tab's `<h3>`s are what the panel's section rail is derived from (`features/ui.md`), so the section list *is* the index:
+
+| Section | What it owns |
+|---|---|
+| Read aloud (TTS) | Engine/clip/spend status, and the three-layer policy block above |
+| Voice and engine | `tts_engine` and whichever of the SAPI or Kokoro voice controls it selects, the Kokoro model download, the clip cache limit |
+| Pronunciation | `tts_lexicon` and the spelled-word telemetry with its one-tap respell |
+| Spoken summary | `tts_content`, the summary model and budgets, the verbatim cap |
+| Microphone and wake words | `stt_enabled`, the decoders and language, the STT status readout, `voice_wake_words` |
+| Command phrases | `voice_commands` - one row per fixed action |
+| Command reference | The complete live catalog (folded) |
+| Mux assistant | `assistant_*` and `voice_chat_patience_ms` (`assistant.md`) |
+| Testing and latency | The wake-word tester and the stage readout (folded) |
+| Mobile voice | Tailscale Serve setup and the phone DNS checklist (folded) |
+
+Three rules hold this shape, and each answers a way the previous single section went wrong:
+
+- **The read-aloud policy is one unit.** The three layers are only useful read together, so they stay one numbered block under the first heading and are never split across sections. This is the same rule as the ordering in *One policy, three layers* above, stated for the surface.
+- **The pronunciation lexicon owns a section.** It used to be an `<h4>` inside the Kokoro branch of the engine block, which is the one place nobody looks when a project name comes out spelled letter by letter. It stays a Kokoro repair - the OS voice has its own dictionary and never reads `tts_lexicon` - so under SAPI the section says so and offers the engine control rather than rendering empty.
+- **Reference folds; controls do not.** The command catalog, the two measuring instruments, and the one-time mobile setup are read rarely and are long, so each keeps its heading (and therefore its rail entry) and collapses its body behind a `<details class="settings-disclosure">`. A `data-setting` mark deliberately stays outside a collapsed one: `revealSetting` does open the disclosures above its target, but a switch a gate just promised should be on screen when the panel lands.
+
+`frontend/test/renderer/voice-settings.spec.ts` pins all four: the section list and its rail, the policy block, the lexicon's own section under both engines, and that nothing deep-linkable folds away.
+
 ## Session sounds (unrelated audio path)
 
 `frontend/src/sessionSounds.ts` plays short local notification tones for root-agent lifecycle
@@ -727,7 +755,7 @@ and never touches the daemon or an LLM.
   requested voice regardless of the configured engine and cached per voice on the daemon.
   A GET a media element points at directly, because the document CSP has no `media-src`:
   `default-src 'self'` governs media, so a `blob:` source is refused while this URL plays.
-  Settings → Voice renders the voices as a tap-to-audition picker (theme-picker style: a tap
+  Settings → Voice → Voice and engine renders the voices as a tap-to-audition picker (theme-picker style: a tap
   plays the sample and sets the draft selection; nothing commits until Save).
 - `POST /api/voice/lexicon/check` — advisory per-entry pronunciation verdicts for the
   lexicon editor (`{entries: {word: respelling}}` → per-word `ok`/`phonemes`/`spoken_as`/
@@ -814,3 +842,6 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
   production: the ONNX runtime not loading, and the capture worklet not being rendered by the
   audio graph.
 - `frontend/src/mobileVoice.ts`, `frontend/src/Settings.tsx` — mobile setup + configuration UI.
+- `frontend/test/renderer/voice-settings.spec.ts` — the Settings → Voice section structure above:
+  the section list and its rail, the read-aloud policy block, the lexicon's own section under both
+  engines, and that no `data-setting` mark folds away behind a closed disclosure.

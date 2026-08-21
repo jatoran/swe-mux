@@ -8,11 +8,17 @@
 //
 // `?defer=1` withholds the target for 400ms, which is the cold-open case: the panel is asked
 // to reveal a control before its data has arrived and the control has not rendered yet.
+//
+// `?collapsed=1` puts the target inside a closed `<details>`, which is what a settings section
+// that folds its reference body away looks like (`.settings-disclosure`, Settings → Voice). A
+// closed disclosure `display:none`s its body, so the control is in the DOM with no layout box:
+// the reveal has to open the way in rather than wait for a box that will never appear.
 import { revealSetting } from '../../src/settingReveal.ts'
 import '../../src/style.css'
 
 const params = new URLSearchParams(location.search)
 const defer = params.get('defer') === '1'
+const collapsed = params.get('collapsed') === '1'
 
 const section = (index: number, extra = '') => `
   <section>
@@ -29,6 +35,12 @@ const target = `
   </label>`
 const textTarget = `
   <label data-setting="scan_timeline_model">Scan timeline model<input type="text" value="deepseek" /></label>`
+const fold = (body: string) => `
+  <details class="settings-disclosure">
+    <summary>Reference material</summary>
+    ${body}
+  </details>`
+const targets = collapsed ? fold(target + textTarget) : target + textTarget
 
 const root = document.querySelector<HTMLElement>('#root')!
 root.innerHTML = `
@@ -44,7 +56,7 @@ root.innerHTML = `
             ${[...Array(6)].map((_, index) => `<button>Section ${index + 1}</button>`).join('')}
           </div>
           ${section(1)}${section(2)}${section(3)}
-          ${section(4, defer ? '' : target + textTarget)}
+          ${section(4, defer ? '' : targets)}
           ${section(5)}${section(6)}
         </div>
       </div>
@@ -60,7 +72,7 @@ const panel = document.querySelector<HTMLElement>('.settings-panel')!
 if (defer) {
   setTimeout(() => {
     const late = document.querySelectorAll('.settings-content > section')[3]
-    late.insertAdjacentHTML('beforeend', target + textTarget)
+    late.insertAdjacentHTML('beforeend', targets)
   }, 400)
 }
 
