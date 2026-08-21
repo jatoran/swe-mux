@@ -290,6 +290,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "tts_verbatim_max_chars": 6000,
   "ui_scale_desktop": 1.0,
   "ui_scale_mobile": 1.0,
+  "rail_density_desktop": "comfortable",
+  "rail_density_mobile": "comfortable",
   "usage_command": [
     "ccusage",
     "daily",
