@@ -11,13 +11,14 @@ export type LandState =
   | 'verifying'
   | 'landing'
   | 'landed'
+  | 'already_landed'
   | 'handed_back'
   | 'refused'
   | 'cancelled'
 
 const LAND_STATES: readonly LandState[] = [
   'queued', 'waiting', 'reconciling', 'verifying', 'landing',
-  'landed', 'handed_back', 'refused', 'cancelled',
+  'landed', 'already_landed', 'handed_back', 'refused', 'cancelled',
 ]
 
 export type LandRequest = {
@@ -135,7 +136,7 @@ export function parseLandVerifyCommand(raw: unknown): LandVerifyCommand {
 
 /** Terminal states are history; the rest are the queue as it stands. */
 export function isActiveLand(request: LandRequest): boolean {
-  return !['landed', 'handed_back', 'refused', 'cancelled'].includes(request.state)
+  return !['landed', 'already_landed', 'handed_back', 'refused', 'cancelled'].includes(request.state)
 }
 
 /**
@@ -153,6 +154,7 @@ export function landStateLabel(state: LandState): string {
     case 'verifying': return 'Verifying'
     case 'landing': return 'Fast-forwarding'
     case 'landed': return 'Landed'
+    case 'already_landed': return 'Already on trunk'
     case 'handed_back': return 'Returned to agent'
     case 'refused': return 'Refused'
     case 'cancelled': return 'Cancelled'
@@ -161,6 +163,9 @@ export function landStateLabel(state: LandState): string {
 
 export function landStateTone(state: LandState): 'ok' | 'warn' | 'busy' | 'idle' {
   if (state === 'landed') return 'ok'
+  // Not 'ok': nothing moved. Not 'warn' either - nothing went wrong, the answer is
+  // simply that the request was already true.
+  if (state === 'already_landed') return 'idle'
   if (state === 'handed_back' || state === 'refused') return 'warn'
   if (state === 'reconciling' || state === 'verifying' || state === 'landing') return 'busy'
   return 'idle'

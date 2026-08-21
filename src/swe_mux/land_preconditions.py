@@ -32,7 +32,7 @@ from .path_identity import same_path
 
 log = logging.getLogger(__name__)
 
-Disposition = Literal["ready", "hold", "refuse"]
+Disposition = Literal["ready", "hold", "refuse", "already_landed"]
 
 #: Long enough that an ordinary agent turn finishes inside it, short enough that a
 #: request against an abandoned worktree does not sit in the queue forever.
@@ -64,6 +64,13 @@ class RepositoryFacts:
     trunk_head: str = ""
     trunk_is_main_tree: bool = False
     trunk_dirty: tuple[str, ...] = ()
+    #: Paths the trunk would gain by fast-forwarding to this branch. The dirty check
+    #: is scoped to these rather than to the whole checkout, because those are the
+    #: only files a fast-forward can overwrite.
+    incoming_paths: tuple[str, ...] = ()
+    #: Whether the branch tip is already reachable from the trunk, so there is
+    #: nothing left to land.
+    already_landed: bool = False
     readable: bool = True
     error: str = ""
 
@@ -124,6 +131,34 @@ async def _registered_worktree(trunk_root: str, worktree_root: str) -> bool:
     return False
 
 
+async def _incoming_paths(trunk_root: str, trunk_head: str, branch_head: str) -> tuple[str, ...]:
+    """The files a fast-forward to `branch_head` would change in the trunk.
+
+    This is the exact set a fast-forward can overwrite, and therefore the only set a
+    dirty trunk can conflict with. Reading it is what keeps the pre-check honest: a
+    checkout with unrelated local edits is not a reason to refuse a land, and this
+    repository's own daemon writes `.swe-mux/config.toml` as ordinary operation, so a
+    whole-checkout dirty test deadlocks every land on the machine running it.
+    """
+    if not trunk_head or not branch_head or trunk_head == branch_head:
+        return ()
+    code, output = await read_git(
+        trunk_root, "diff", "--name-only", f"{trunk_head}..{branch_head}"
+    )
+    if code != 0:
+        # Unknown means unknown. An empty set here would read as "nothing can
+        # conflict" and skip the check entirely, so the caller is told to hold.
+        return ("\0unreadable",)
+    return tuple(line.strip() for line in output.splitlines() if line.strip())
+
+
+async def _is_ancestor(cwd: str, ancestor: str, descendant: str) -> bool:
+    if not ancestor or not descendant:
+        return False
+    code, _ = await read_git(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
+    return code == 0
+
+
 async def read_repository_facts(worktree_root: str, trunk_root: str) -> RepositoryFacts:
     """Read both checkouts in one pass, and report unreadability as unreadability."""
     try:
@@ -155,6 +190,10 @@ async def read_repository_facts(worktree_root: str, trunk_root: str) -> Reposito
         _is_main_tree(trunk_root),
         _registered_worktree(trunk_root, worktree_root),
     )
+    incoming, already_landed = await asyncio.gather(
+        _incoming_paths(trunk_root, trunk_head, worktree_head),
+        _is_ancestor(trunk_root, worktree_head, trunk_head),
+    )
     return RepositoryFacts(
         worktree_root=wt_top,
         worktree_branch=wt_branch if wt_branch_code == 0 else "",
@@ -166,6 +205,8 @@ async def read_repository_facts(worktree_root: str, trunk_root: str) -> Reposito
         trunk_head=trunk_head,
         trunk_is_main_tree=main_tree,
         trunk_dirty=_tracked_changes(tr_status) if tr_status_code == 0 else (),
+        incoming_paths=incoming,
+        already_landed=already_landed,
         readable=wt_status_code == 0 and tr_status_code == 0,
         error="" if wt_status_code == 0 and tr_status_code == 0 else "git status failed",
     )
@@ -206,6 +247,16 @@ def evaluate_preconditions(
             f"the worktree is on {facts.worktree_branch or 'a detached HEAD'}, not {branch}",
             {"branch": facts.worktree_branch},
         )
+    # Checked before the busy and dirty holds, because none of them are reasons to
+    # wait for something that has already happened. The branch tip is reachable from
+    # the trunk, so a fast-forward would move nothing and the whole pipeline - three
+    # minutes of it, almost all verification - would prove nothing.
+    if facts.already_landed:
+        return PreconditionResult(
+            "already_landed",
+            "this branch is already on the trunk; there is nothing to land",
+            {"trunk_head": facts.trunk_head, "branch_head": facts.worktree_head},
+        )
     if busy_sessions:
         return PreconditionResult(
             "hold",
@@ -218,13 +269,25 @@ def evaluate_preconditions(
             f"the worktree has {len(facts.worktree_dirty)} uncommitted change(s)",
             {"paths": list(facts.worktree_dirty[:20])},
         )
-    if facts.trunk_dirty:
-        # A dirty trunk is a hold rather than a refusal because the fix is usually the
-        # operator committing their own edits, and the request should still land after
-        # they do rather than needing to be made again.
+    # **Only the paths a fast-forward would actually touch.** A dirty file the merge
+    # will not write cannot make the merge unsafe, and `--ff-only` refuses precisely
+    # on the ones that would be - so a whole-checkout test is not a stricter safety
+    # net, it is a different and wrong question. It also deadlocks by construction on
+    # any machine whose daemon writes into its own primary checkout: enabling this
+    # feature writes `.swe-mux/config.toml`, which would then hold every land forever.
+    if "\0unreadable" in facts.incoming_paths:
+        return PreconditionResult(
+            "hold", "the incoming change set could not be read from the trunk"
+        )
+    blocked = sorted(set(facts.trunk_dirty) & set(facts.incoming_paths))
+    if blocked:
+        # A hold rather than a refusal because the fix is usually the operator
+        # committing their own edits, and the request should still land after they do
+        # rather than needing to be made again.
         return PreconditionResult(
             "hold",
-            f"the primary checkout has {len(facts.trunk_dirty)} uncommitted change(s)",
-            {"paths": list(facts.trunk_dirty[:20])},
+            f"the primary checkout has local changes to {len(blocked)} file(s) this land "
+            "would overwrite",
+            {"paths": blocked[:20]},
         )
     return PreconditionResult("ready")

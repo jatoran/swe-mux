@@ -87,7 +87,7 @@ test('the gate reads as unapproved unless the daemon says otherwise', () => {
 
 test('active and finished rows are partitioned by their state', () => {
   const active = ['queued', 'waiting', 'reconciling', 'verifying', 'landing']
-  const finished = ['landed', 'handed_back', 'refused', 'cancelled']
+  const finished = ['landed', 'already_landed', 'handed_back', 'refused', 'cancelled']
   for (const state of active) {
     const queue = parseLandQueue({ requests: [{ id: 'x', state }] })
     assert.equal(isActiveLand(queue.requests[0]), true, state)
@@ -101,7 +101,7 @@ test('active and finished rows are partitioned by their state', () => {
 test('every state has a label, and a hold does not read as a failure', () => {
   const states = [
     'queued', 'waiting', 'reconciling', 'verifying', 'landing',
-    'landed', 'handed_back', 'refused', 'cancelled',
+    'landed', 'already_landed', 'handed_back', 'refused', 'cancelled',
   ] as const
   for (const state of states) assert.ok(landStateLabel(state).length > 0, state)
   // A waiting row is a hold with a cause, not a failure: an agent that asked to land
@@ -112,4 +112,8 @@ test('every state has a label, and a hold does not read as a failure', () => {
   assert.equal(landStateTone('handed_back'), 'warn')
   assert.equal(landStateTone('refused'), 'warn')
   assert.equal(landStateTone('verifying'), 'busy')
+  // Already on the trunk is neither a success nor a failure: nothing moved, and
+  // nothing went wrong. Rendering it 'ok' would claim a land that did not happen.
+  assert.equal(landStateTone('already_landed'), 'idle')
+  assert.equal(landStateLabel('already_landed'), 'Already on trunk')
 })

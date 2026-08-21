@@ -159,6 +159,7 @@ async def test_a_linked_worktree_is_never_a_land_target(trunk: Path) -> None:
 
 async def test_a_working_session_holds_rather_than_refusing(trunk: Path) -> None:
     worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
     facts = await read_repository_facts(str(worktree), str(trunk))
     result = evaluate_preconditions(
         facts, branch="worktree-alpha", busy_sessions=("sess_1",)
@@ -169,6 +170,7 @@ async def test_a_working_session_holds_rather_than_refusing(trunk: Path) -> None
 
 async def test_a_dirty_worktree_holds_but_untracked_files_do_not(trunk: Path) -> None:
     worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
     (worktree / "scratch.log").write_text("ignore me\n", encoding="utf-8")
     facts = await read_repository_facts(str(worktree), str(trunk))
     assert evaluate_preconditions(facts, branch="worktree-alpha").disposition == "ready"
@@ -178,6 +180,96 @@ async def test_a_dirty_worktree_holds_but_untracked_files_do_not(trunk: Path) ->
     result = evaluate_preconditions(facts, branch="worktree-alpha")
     assert result.disposition == "hold"
     assert "uncommitted" in result.reason
+
+
+async def test_a_dirty_trunk_blocks_only_the_files_the_land_would_overwrite(
+    trunk: Path,
+) -> None:
+    """The pre-check asks the same question `--ff-only` does, not a broader one.
+
+    A whole-checkout dirty test is not a stricter safety net; it is a different and
+    wrong question, and it deadlocks any machine whose daemon writes into its own
+    primary checkout - which is exactly how enabling this feature blocked every land
+    on the repository that ships it.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+
+    # An unrelated local edit in the trunk. The land does not touch this file.
+    (trunk / "shared.txt").write_text("operator edit\n", encoding="utf-8")
+    facts = await read_repository_facts(str(worktree), str(trunk))
+    assert facts.incoming_paths == ("alpha.txt",)
+    assert evaluate_preconditions(facts, branch="worktree-alpha").disposition == "ready"
+
+    # An edit to a file the land *would* overwrite. Now it holds, and names it.
+    (trunk / "alpha.txt").write_text("conflicting operator edit\n", encoding="utf-8")
+    git(trunk, "add", "alpha.txt")
+    facts = await read_repository_facts(str(worktree), str(trunk))
+    result = evaluate_preconditions(facts, branch="worktree-alpha")
+    assert result.disposition == "hold"
+    assert (result.detail or {})["paths"] == ["alpha.txt"]
+
+
+async def test_a_branch_already_on_the_trunk_is_not_landed_again(trunk: Path) -> None:
+    worktree = add_worktree(trunk, "alpha")
+    tip = commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    git(trunk, "merge", "--ff-only", "worktree-alpha")
+
+    facts = await read_repository_facts(str(worktree), str(trunk))
+    assert facts.already_landed is True
+    result = evaluate_preconditions(facts, branch="worktree-alpha")
+    assert result.disposition == "already_landed"
+    assert not result.ready
+    assert git(trunk, "rev-parse", "HEAD") == tip
+
+
+async def test_requesting_an_already_landed_branch_is_refused_at_once(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Answered on the press rather than a sweep later, so the panel is not confusing."""
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    git(trunk, "merge", "--ff-only", "worktree-alpha")
+    service, store, _ = build_service(tmp_path, trunk)
+    try:
+        with pytest.raises(LandRefusal) as caught:
+            await service.request(
+                project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+            )
+        assert caught.value.code == "already_landed"
+        assert await store.list_requests() == []
+    finally:
+        store.close()
+
+
+async def test_a_branch_that_lands_underneath_the_queue_settles_without_verifying(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The trunk can gain these commits between the request and its turn.
+
+    It settles as `already_landed` rather than `landed`: nothing was refused, and
+    claiming a trunk movement that did not happen would corrupt the one thing the
+    ledger exists to record.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        # The operator lands it by hand while it sits in the queue.
+        git(trunk, "merge", "--ff-only", "worktree-alpha")
+
+        results = await service.tick()
+        assert results[0]["state"] == "already_landed"
+        assert results[0]["verified_oid"] == ""
+        outcomes = [item["outcome"] for item in await store.events(row["id"])]
+        assert outcomes == ["queued", "already_landed"]
+    finally:
+        store.close()
 
 
 async def test_an_unreadable_repository_holds_and_never_reads_as_ready(

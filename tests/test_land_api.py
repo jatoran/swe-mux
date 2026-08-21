@@ -108,8 +108,19 @@ async def client_for(app: web.Application) -> TestClient:
 
 
 def add_worktree(trunk_root: Path, name: str) -> Path:
+    """A worktree with a commit of its own.
+
+    The commit is not incidental: a branch whose tip the trunk already contains has
+    nothing to land and is refused, so a worktree with no work in it is not a valid
+    fixture for any of these routes.
+    """
     path = trunk_root.parent / name
     git(trunk_root, "worktree", "add", "-b", f"worktree-{name}", str(path))
+    git(path, "config", "user.name", "Test User")
+    git(path, "config", "user.email", "test@example.invalid")
+    (path / f"{name}.txt").write_text(f"{name}\n", encoding="utf-8")
+    git(path, "add", f"{name}.txt")
+    git(path, "commit", "-m", f"{name} work")
     return path
 
 

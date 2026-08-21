@@ -52,6 +52,7 @@ LAND_STATES = (
     "verifying",
     "landing",
     "landed",
+    "already_landed",
     "handed_back",
     "refused",
     "cancelled",
@@ -64,7 +65,7 @@ ACTIVE_STATES = ("queued", "waiting", "reconciling", "verifying", "landing")
 #: A request with a mutation in flight. One per trunk, enforced by the schema.
 INFLIGHT_STATES = ("reconciling", "verifying", "landing")
 
-TERMINAL_STATES = ("landed", "handed_back", "refused", "cancelled")
+TERMINAL_STATES = ("landed", "already_landed", "handed_back", "refused", "cancelled")
 
 LAND_SCHEMA = """
 CREATE TABLE IF NOT EXISTS land_requests(

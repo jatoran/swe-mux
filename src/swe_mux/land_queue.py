@@ -276,6 +276,16 @@ class LandQueueService:
                 "detached_head",
                 "the worktree is on a detached HEAD; create a named branch before landing",
             )
+        if facts.already_landed:
+            # Answered here rather than one sweep later, so pressing Land on a branch
+            # that is already on the trunk says so at once instead of producing a row
+            # that resolves a tick afterwards. The pipeline keeps its own check for
+            # the case this cannot see: the trunk gaining these commits between the
+            # request and its turn in the queue.
+            raise LandRefusal(
+                "already_landed",
+                f"{facts.worktree_branch} is already on the trunk; there is nothing to land",
+            )
         trunk_ref = ""
         if self._comparison_ref is not None:
             trunk_ref = (await self._comparison_ref(project_root)) or ""
@@ -425,6 +435,8 @@ class LandQueueService:
         result = evaluate_preconditions(facts, branch=row["branch"], busy_sessions=busy)
         if result.ready:
             return None
+        if result.disposition == "already_landed":
+            return await self._settle_already_landed(row, result.reason, result.detail)
         if result.disposition == "refuse":
             return await self._refuse(row, result.reason, detail=result.detail)
         waited = self._clock() - float(row.get("waiting_since") or self._clock())
@@ -674,6 +686,41 @@ class LandQueueService:
         return landed
 
     # -- outcomes -------------------------------------------------------------
+
+    async def _settle_already_landed(
+        self,
+        row: dict[str, Any],
+        reason: str,
+        detail: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Close a request whose branch the trunk already contains.
+
+        Its own terminal state rather than `landed` or `refused`, because it is
+        neither. Nothing was refused - the request was reasonable and the answer is
+        that it is already true - and reporting `landed` would claim a trunk movement
+        that did not happen, in a ledger whose whole purpose is recording which OID
+        moved what.
+        """
+        updated = await self._store.transition(
+            row["id"],
+            expect=("queued", "waiting"),
+            state="already_landed",
+            reason=reason,
+            detail=dict(detail or {}),
+            clear_waiting=True,
+            now=self._clock(),
+        )
+        await self._store.record_event(
+            request_id=row["id"],
+            project_id=row["project_id"],
+            step="request",
+            outcome="already_landed",
+            reason=reason,
+            detail=dict(detail or {}),
+            now=self._clock(),
+        )
+        await self._emit("land_changed", updated)
+        return updated
 
     async def _refuse(
         self,

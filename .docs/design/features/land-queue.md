@@ -26,6 +26,8 @@ A refusal is a reported failure and never a retried force.
 | `verify` | Runs the repository's declared verification command in the worktree and records the commit OID that passed. | A nonzero exit hands the request back with the output tail. An unapproved or absent gate refuses instead: neither is a branch problem. |
 | `land` | Fast-forwards the trunk in the primary checkout. | Divergence, a dirty checkout, or a branch that moved past the verified OID refuses. |
 
+A branch already reachable from the trunk skips all three: there is nothing to land, and running the gate would spend three minutes proving it.
+
 After each successful land the next queued item runs from `reconcile` against the new trunk, so one landing never strands another agent's now-stale reconcile.
 That is the `advance` rule, and it is the queue's ordinary behaviour rather than a separate step.
 
@@ -39,7 +41,7 @@ Preconditions are therefore evaluated before **each** mutation rather than once 
 
 They divide into two dispositions, and the difference is the queue's whole operator experience:
 
-- **`hold`** - a busy tree, a working session, an unreadable repository, a dirty primary checkout.
+- **`hold`** - a busy tree, a working session, an unreadable repository, or local changes in the primary checkout **to a file this land would overwrite**.
   The request waits in a `waiting` state carrying its cause, retries on the next sweep, and only a bounded timeout (`land_hold_timeout_seconds`) converts the wait into a handback.
   An agent that asks to land and keeps working is the common case, not an error.
 - **`refuse`** - a trunk that resolves to a linked worktree, a branch the worktree is not on, a checkout Git does not list as a worktree of this repository, a detached HEAD.
@@ -47,6 +49,15 @@ They divide into two dispositions, and the difference is the queue's whole opera
 
 A session counts as busy when its live `git_cwd` is the worktree and its state is `starting`, `working`, or `awaiting`.
 Starting counts: a harness that has not settled is exactly the one whose first act may be writing files.
+
+**The dirty-trunk check is scoped to the incoming change set**, read as `git diff --name-only <trunk>..<branch>`, and holds only on the intersection with the trunk's own uncommitted paths.
+That is the same question `--ff-only` asks, and a broader one is not a stricter safety net: it is wrong.
+It also deadlocks by construction on any machine whose daemon writes into its own primary checkout - enabling this feature writes `.swe-mux/config.toml` there, which under a whole-checkout test held every land forever, so the act of turning the feature on was what stopped it working.
+An incoming set that cannot be read holds rather than being treated as empty, because an empty set would skip the check entirely.
+
+A branch the trunk already contains settles as **`already_landed`** without reconciling or verifying.
+It is its own terminal state rather than `landed` or `refused`, because it is neither: nothing was refused, and reporting a land would claim a trunk movement that did not happen in a ledger whose whole purpose is recording which OID moved what.
+Pressing Land on such a branch is refused at request time so the panel answers at once; the pipeline keeps the same check for the case the request cannot see, where the trunk gains those commits while the request waits its turn.
 
 The trunk is identified by comparing `--absolute-git-dir` with `--git-common-dir`, never by name, for the reasons `git.md` states.
 

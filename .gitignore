@@ -80,7 +80,17 @@ _agents-orchestrator/
 .trash/
 
 # === Project-local swe-mux state ===
+# Runtime state the daemon writes as ordinary operation, as opposed to the
+# repository-authored files beside it (`actions.toml`, `project-context.md`,
+# `prompts/`), which stay tracked because a human wrote them for this repository.
 .swe-mux/notes/
+.swe-mux/attachments/
+# The observation inbox: spawn, control, and land approval rows. Pure per-machine
+# runtime state with no meaning in a clone, appended to whenever an agent asks for
+# something, so tracking it makes every such request a working-tree change.
+.swe-mux/observations.json
+# Preview screenshots, generated on demand.
+.swe-mux/preview-shots/
 
 # === Test / verification scratch ===
 # Throwaway working directories written by live-agent and identity tests and by
