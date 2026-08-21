@@ -348,6 +348,72 @@ export function landHistoryOrder(requests: LandRequest[]): LandRequest[] {
     .sort((left, right) => (right.finishedAt || right.updatedAt) - (left.finishedAt || left.updatedAt))
 }
 
+/**
+ * The states that count as *the branch got an answer*, for supersession.
+ *
+ * `cancelled` is deliberately absent even though it is terminal. Withdrawing a re-request
+ * is not an answer about the branch, so an earlier handback it followed is still the
+ * standing fact about that branch and must keep speaking for it.
+ */
+const ANSWERING_STATES: readonly LandState[] = ['landed', 'already_landed', 'handed_back', 'refused']
+
+/** The durable uniqueness key a request is claimed under (`land_requests_active`). */
+function branchKey(request: LandRequest): string {
+  return `${request.projectRoot} ${request.branch}`
+}
+
+/**
+ * The bounce that still stands, or `null`.
+ *
+ * A handed-back or refused request is a *terminal* row, and nothing ever closes it: the
+ * agent's redo is a **new** request with a new id, so the old bounced row sits in the
+ * history forever and the summary, which picks the most interesting terminal row, keeps
+ * resurrecting it. Observed 2026-08-21: the collapsed strip read
+ * `worktree-watch-session-settle · returned to agent` for hours after that very branch's
+ * redo had landed, through several unrelated landings.
+ *
+ * The supersession rule: a bounced request for a branch stops speaking for the queue the
+ * moment a **later** request for the same branch reaches a state that answered the branch.
+ * Ties do not supersede - two rows created in the same second are not ordered by anything
+ * this can read, and the safe direction for a row whose whole job is asking for attention
+ * is to keep asking.
+ *
+ * It is derived here rather than written back onto the row on purpose. The handback really
+ * did happen, and `land_events` and the history disclosure are an audit that must go on
+ * saying so; what was wrong was never the record, only which row speaks for the queue.
+ * That also keeps the fix out of the daemon, where a "closed" column would be a second
+ * writer's opinion about a terminal row.
+ */
+export function landAttentionRow(requests: LandRequest[]): LandRequest | null {
+  const answeredAt = new Map<string, number>()
+  for (const request of requests) {
+    if (!ANSWERING_STATES.includes(request.state)) continue
+    const key = branchKey(request)
+    const seen = answeredAt.get(key)
+    if (seen === undefined || request.createdAt > seen) answeredAt.set(key, request.createdAt)
+  }
+  return landHistoryOrder(requests).find(request =>
+    (request.state === 'handed_back' || request.state === 'refused')
+    && (answeredAt.get(branchKey(request)) ?? request.createdAt) <= request.createdAt) || null
+}
+
+/** How far back the idle summary's "recently" reaches, in seconds. */
+const RECENT_LANDING_SECONDS = 24 * 60 * 60
+
+/**
+ * Lands that actually moved the trunk inside the recent window - a floor, not a total.
+ *
+ * Two bounds make it one, and both are the honest direction: `GET /api/land` returns the
+ * newest 100 rows for the Project, and `already_landed` is not counted because nothing
+ * moved. It is drawn only where the alternative is a bare "nothing queued", so a count
+ * that under-reports says less rather than something untrue.
+ */
+export function recentLandings(requests: LandRequest[], now: number): number {
+  const since = now - RECENT_LANDING_SECONDS
+  return requests.filter(request => request.state === 'landed'
+    && (request.finishedAt || request.updatedAt) >= since).length
+}
+
 /** A duration a human reads at a glance: `9s`, `1m 12s`, `1h 04m`. */
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -461,6 +527,8 @@ export type LandingSummary = {
 export function landingSummary(
   queue: LandQueue | null,
   gate: LandVerifyCommand | null,
+  /** Epoch **seconds**, matching every timestamp on a request row. Injected by tests. */
+  now: number = Date.now() / 1000,
 ): LandingSummary {
   const installStopped = queue !== null && !queue.installedEnabled
   const gateBlocked = gate !== null && (!gate.configured || !gate.approved)
@@ -474,8 +542,9 @@ export function landingSummary(
 
   const active = landQueueOrder(queue?.requests || [])
   const running = active.find(request => landStateTone(request.state) === 'busy') || null
-  const attention = landHistoryOrder(queue?.requests || [])
-    .find(request => request.state === 'handed_back' || request.state === 'refused') || null
+  // Only a bounce nothing has answered since. Without the supersession rule this is the
+  // stalest handback in the whole history, forever.
+  const attention = landAttentionRow(queue?.requests || [])
 
   let queueText: string
   let tone: LandingSummary['tone']
@@ -502,7 +571,11 @@ export function landingSummary(
     queueText = `${attention.branch} · ${landStateLabel(attention.state).toLowerCase()}`
     tone = 'warn'
   } else {
-    queueText = 'nothing queued'
+    // Idle, and idle is what it says. The count is here because the alternative reading -
+    // "surely something is stuck, it said nothing" - is exactly what the resurrected
+    // handback used to answer, wrongly.
+    const landed = recentLandings(queue?.requests || [], now)
+    queueText = landed > 0 ? `nothing queued · ${landed} landed recently` : 'nothing queued'
     tone = gateTone === 'warn' ? 'warn' : 'idle'
   }
   return { gate: gateText, gateTone, queue: queueText, tone, blocked }

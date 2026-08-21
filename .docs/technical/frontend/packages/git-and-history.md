@@ -45,7 +45,7 @@ Also: read-specific timeout guidance, failed-removal refresh with the mutation e
 
 ## Landing
 
-`GitLandRow.tsx`, `GitLandBar.tsx`, `landState.ts`, `gitLand.ts`
+`GitLandRow.tsx`, `GitLandBar.tsx`, `landState.ts`, `gitLand.ts`, `landSetupPrompt.ts`
 
 Landing has no view of its own and is split by what each part is a *property of*.
 
@@ -70,6 +70,14 @@ It opens itself only while landing is blocked - the install stop is off, or the 
 - `landGateNote` draws **only** a skipped gate, on the row, in the strip's queue and history, and on the summary line while it runs.
   A full gate gets no note, because the states already narrate it and a chip on every row would bury the one that matters; a documentation-only land has no such state, going from merging the trunk straight to fast-forwarding.
 - An unrecognised `verify_gate` parses to `''` rather than to a gate that ran, so no value this build does not know can render as "nothing verified this".
+- `landAttentionRow` is the supersession rule: a handed-back or refused row stops speaking for the summary once a **later** request for the same branch reaches a state that answered the branch, because nothing ever closes the old row and the redo is a new id.
+  `cancelled` does not supersede - withdrawing a re-request is not an answer - and ties do not either, so a bounce keeps asking for attention unless something demonstrably followed it.
+  It is derived at the reading rather than written back, because `land_events` and the history disclosure are an audit that must keep saying the handback happened.
+- `recentLandings` is what an idle summary says instead of the stalest historical row, and it is a floor rather than a total: `landed` only, a 24-hour window, over the newest 100 rows the daemon returns.
+
+`landSetupPrompt.ts` is the copyable prompt the strip offers for setting verification up in *another* repository, shown in a collapsed disclosure beside the editor rather than only copied.
+It is a frontend template because every fact in it is a property of the land queue's design rather than of an install, and the one variable is the script convention's name the gate payload already carries.
+Its final paragraph - the agent cannot approve what it wrote, a human presses approve here, an edit un-approves by construction - is asserted by both test layers, because without it a copyable setup prompt reads as an agent setting up its own gate.
 
 ## History
 
