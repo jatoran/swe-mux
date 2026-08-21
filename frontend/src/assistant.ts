@@ -102,10 +102,10 @@ export type AssistantClientContext = {
 }
 
 export const sendTurn = (dialogId: string, text: string, clientContext: AssistantClientContext) =>
-  api<{ turn_id: string }>('POST', `/api/assistant/dialogs/${dialogId}/turns`, {
-    text,
-    client_context: clientContext,
-  })
+  api<{ turn_id: string; queued?: boolean }>(
+    'POST', `/api/assistant/dialogs/${dialogId}/turns`,
+    { text, client_context: clientContext },
+  )
 
 export const interruptTurn = (dialogId: string) =>
   api<{ interrupted: boolean }>('POST', `/api/assistant/dialogs/${dialogId}/interrupt`)
@@ -245,7 +245,12 @@ export function applyAssistantEvent(
   event: { type: string; payload: Record<string, unknown> },
 ): { messages: AssistantMessage[]; actions: AssistantAction[]; thinking: string | null } {
   const payload = event.payload || {}
-  if (event.type === 'assistant_turn_started') {
+  // Queued and started share one message id per turn, deliberately. What the
+  // operator said is rendered the moment it is accepted — even though it will
+  // not run until the turn ahead of it finishes — and the later start event
+  // updates that same bubble rather than adding a second copy of their words.
+  if (event.type === 'assistant_turn_started' || event.type === 'assistant_turn_queued') {
+    const queued = event.type === 'assistant_turn_queued'
     const message: AssistantMessage = {
       id: `user:${String(payload.turn_id)}`,
       dialog_id: String(payload.dialog_id || ''),
@@ -256,8 +261,16 @@ export function applyAssistantEvent(
       speech: '',
       status: 'done',
     }
-    if (state.messages.some(item => item.id === message.id)) return state
-    return { ...state, messages: [...state.messages, message], thinking: 'thinking' }
+    const messages = [...state.messages]
+    const index = messages.findIndex(item => item.id === message.id)
+    if (index < 0) messages.push(message)
+    else if (queued) messages[index] = { ...messages[index], display: message.display }
+    else if (!messages[index].display) messages[index] = message
+    return {
+      ...state,
+      messages,
+      thinking: queued ? 'queued — waiting for the current turn' : 'thinking',
+    }
   }
   if (event.type === 'assistant_sentence') {
     const id = String(payload.message_id || '')

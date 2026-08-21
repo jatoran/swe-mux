@@ -37,7 +37,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
 
 `POST /api/assistant/dialogs/{id}/turns` records the user message and returns `202 {turn_id}`; everything else arrives over the ordinary event stream so every connected device renders the same turn:
 
-`assistant_turn_started` → `assistant_sentence` (per sentence, **dual-form**: `display` and separately paced `speech`) → `assistant_tool_status` / `assistant_action` as tools run → `assistant_turn_done` (full display plus usage) or `assistant_turn_failed`.
+`assistant_turn_queued` (only when a turn is already running) → `assistant_turn_started` → `assistant_sentence` (per sentence, **dual-form**: `display` and separately paced `speech`) → `assistant_tool_status` / `assistant_action` as tools run → `assistant_turn_done` (full display, `exhausted`, and usage) or `assistant_turn_failed`.
 
 The loop behind it makes at most `MAX_MODEL_CALLS_PER_TURN` model calls per user turn, appending tool results between them; the prompt is the fixed short-response primer, the fleet snapshot plus the client's context (focused session, available UI command labels, bounded), the dialog's action ledger, and the last `assistant_context_messages` dialog messages.
 Interrupt cancels the running task; nothing already executed is undone.
@@ -54,6 +54,23 @@ Interrupt cancels the running task; nothing already executed is undone.
 - **The dialog's action ledger rides every turn's context.**
   A confirmation is a button or a spoken word, never a turn, so the message log alone cannot record that the operator said yes; the model reads its own unanswered "say confirm" and proposes the write again.
   The ledger states each recent action's kind, restatement, status, and age, and `executed` means done.
+- **A turn has a round budget, the model is told it, and running out is reported.**
+  `MAX_MODEL_CALLS_PER_TURN` is a runaway guard, not a work budget, and at six it was smaller than an ordinary multi-target request: "open three sessions and stage a note in each" needs a read, three spawns and a reply, and the turn stopped mid-way having said only "Ready when you are" (measured 2026-08-20).
+  Three things changed together, because raising the ceiling alone would only move where it stops silently.
+  A trailing system line states the rounds remaining and asks the model to batch independent calls into one response rather than one per round, and not to re-read what a tool already returned; it is replaced each round rather than appended, so exactly one budget is ever in the prompt.
+  Below `MODEL_CALL_WARNING_ROUNDS` that line changes to "start no new work and say what is done", so a turn lands on a sentence instead of on the ceiling.
+  And exhausting the rounds appends a plain notice to the reply, marks `exhausted` on `assistant_turn_done`, and logs a warning — the notice is spoken even when speech is otherwise suppressed, because a half-finished turn is the one thing the operator must hear.
+- **Speech suppression is for a card that *is* the whole turn, not for any turn with a card.**
+  Suppressing whenever a card opened also swallowed "I opened two of the three and one needs your confirmation" — information the card cannot carry.
+  The rule counts: exactly one card opened and no mutation executed.
+- **An utterance that arrives while a turn is running is queued, never refused.**
+  Refusing it (`"a turn is already running in this dialog"`) left the client holding text with nowhere to put it, so speaking over the assistant lost what you said and you repeated yourself; it is also how one sentence came to be split across two dialogs, the first fragment refused and the rest opening a new conversation.
+  At most one turn waits per dialog and consecutive arrivals **merge into it**, because a thought finished in two breaths is one request.
+  The queued turn keeps the id its `assistant_turn_queued` event announced, so the words render once and the later `assistant_turn_started` updates that same bubble.
+  The queue drains even when the turn ahead was cancelled or failed — an interrupted turn is usually interrupted *by* the thing now waiting.
+- **`seed_text` is how a session opens with a prompt already written.**
+  It stages text in the new session's composer without sending it, and it is described as such to the model: undescribed, a model asked to do exactly that passed `""` twice, and the capability was invisible.
+  `type_into_session` also stages text but needs the session's terminal already mounted on the device, so it is the wrong tool immediately after a spawn.
 - **An identical proposal is answered with the existing action, never a second card** (`_duplicate_action`).
   A pending or scheduled duplicate is refused for every kind: two cards for one intent means answering either leaves the other armed.
   An already-executed duplicate is refused only for `DUPLICATE_GUARDED_KINDS` - note writes, project creation, queued messages - where repeating is itself the damage; spawning two identical sessions is something operators genuinely ask for.
@@ -157,7 +174,7 @@ The assistant is text-first and voice-attached, not voice-only:
 - `GET  /api/assistant` — enabled, model, budget, spend, trust level, diagnostic.
 - `GET|POST /api/assistant/dialogs` — list, create.
 - `GET  /api/assistant/dialogs/{id}` — messages, actions, whether a turn is running.
-- `POST /api/assistant/dialogs/{id}/turns` — `{text, client_context}` → `202 {turn_id}`.
+- `POST /api/assistant/dialogs/{id}/turns` — `{text, client_context}` → `202 {turn_id, queued}`. `queued` means accepted and waiting behind a running turn, which is never a refusal.
 - `POST /api/assistant/dialogs/{id}/interrupt`
 - `POST /api/assistant/actions/{id}/confirm | /cancel | /ui-result | /announced`
 

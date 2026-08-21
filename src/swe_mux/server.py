@@ -10280,7 +10280,11 @@ async def assistant_turn(request: web.Request) -> web.Response:
         str(body.get("text") or ""),
         client_context if isinstance(client_context, dict) else None,
     )
-    return json_response({"turn_id": turn_id}, 202)
+    # `queued` distinguishes accepted-and-waiting from accepted-and-running. It
+    # replaces a refusal that used to lose whatever the operator said mid-turn.
+    return json_response(
+        {"turn_id": turn_id, "queued": assistant.turn_queued(turn_id)}, 202
+    )
 
 
 async def assistant_interrupt(request: web.Request) -> web.Response:

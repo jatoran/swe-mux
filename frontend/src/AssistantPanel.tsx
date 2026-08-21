@@ -93,6 +93,10 @@ export function AssistantPanel({
       setActions(current => applyAssistantEvent({ messages: [], actions: current, thinking: null }, event).actions)
       setThinking(current => applyAssistantEvent({ messages: [], actions: [], thinking: current }, event).thinking)
       const turnId = String(payload.turn_id || '')
+      // A queued turn is not running yet, so it must not claim the composer's
+      // running state or start a speech stream; the start event does both when
+      // it actually begins.
+      if (event.type === 'assistant_turn_queued') playEarcon('tick')
       if (event.type === 'assistant_turn_started') {
         setTurnRunning(true)
         // Whether this turn speaks is decided once, here. Deciding per sentence

@@ -2342,8 +2342,13 @@ export function App() {
     }
     const dialogId=await ensureDialog()
     setAssistantOpen(true);setVoicePanelMode('chat')
-    await sendAssistantTurnApi(dialogId,text,assistantClientContext())
-    return `Asked the assistant: “${text.slice(0,80)}${text.length>80?'…':''}”`
+    // Speaking over a running turn used to be refused, and the refusal had
+    // nowhere to put the words — so they were simply lost. It is queued now,
+    // and saying which of the two happened is the difference between "it
+    // ignored me" and "it heard me".
+    const accepted=await sendAssistantTurnApi(dialogId,text,assistantClientContext())
+    const quoted=`“${text.slice(0,80)}${text.length>80?'…':''}”`
+    return accepted.queued?`Queued for the assistant: ${quoted}`:`Asked the assistant: ${quoted}`
   }
   // The daemon dispatches client-executed actions (UI commands, composer
   // typing, pane-placed spawns) to the device the dialog turn came from; these

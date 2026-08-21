@@ -281,6 +281,10 @@
   everything the model says afterwards is display-only, and an identical proposal is answered
   with the existing action rather than a second card - because a confirmation is never a turn,
   so nothing in the message log records that the operator already said yes.
+  A third rule governs what a turn can *get done*: it has a round budget it is told about and
+  asked to batch against, running out of rounds is announced rather than silent, and anything
+  the operator says while a turn runs is queued (and merged with the next fragment) rather than
+  refused - a refusal had nowhere to go and simply lost what they said.
   A card is announced **once per card**, never per event, and its cancel window moves **once**:
   extending re-emits the card and a device announces a card when it sees one, so a second
   extension closes that into a loop that talks over the operator with no way to stop it

@@ -32,6 +32,7 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'tool_result',
   'tool_use',
   'transcript_message',
+  'assistant_turn_queued',
   'voice_clip_failed',
   'voice_clip_ready',
   'voice_stream_closed',

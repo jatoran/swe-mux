@@ -17,6 +17,7 @@ from swe_mux.assistant import (
     ACTION_CLASS_REVERSIBLE,
     ASSISTANT_RULE_ID,
     CANCEL_WINDOW_MAX_SECONDS,
+    MAX_MODEL_CALLS_PER_TURN,
     AssistantError,
     AssistantService,
     AssistantStore,
@@ -101,14 +102,24 @@ def tool_turn(
 
 
 class ToolProviderStub:
-    """Scripted turns: each call pops the next one; runs past the script fail."""
+    """Scripted turns: each call pops the next one; runs past the script fail.
+
+    `messages` is snapshotted per call. The turn loop mutates one list across
+    rounds - appending tool results, and replacing the round-budget line - so
+    recording the reference made every call look like the last one, and any
+    assertion about what the model saw *at a given round* silently read the
+    final state instead.
+    """
 
     def __init__(self, turns: list[OpenRouterToolTurn]) -> None:
         self.turns = list(turns)
         self.calls: list[dict[str, Any]] = []
 
     async def complete_tools(self, **kwargs: Any) -> OpenRouterToolTurn:
-        self.calls.append(kwargs)
+        recorded = dict(kwargs)
+        if isinstance(recorded.get("messages"), list):
+            recorded["messages"] = list(recorded["messages"])
+        self.calls.append(recorded)
         if not self.turns:
             raise AssertionError("provider called past its script")
         return self.turns.pop(0)
@@ -217,6 +228,19 @@ def make_service(
         end_op=end_op,
     )
     return service, emitted, queue, side_effects
+
+
+def last_tool_result(provider: ToolProviderStub, call: int = 1) -> dict[str, Any]:
+    """The newest tool result the model was shown on a given call.
+
+    Located by role rather than by position: the prompt also carries a trailing
+    system line stating how many tool rounds remain, so "the last message" is
+    not the tool result and asserting on it was incidental.
+    """
+    messages = provider.calls[call]["messages"]
+    tool_messages = [item for item in messages if item.get("role") == "tool"]
+    assert tool_messages, "the model was shown no tool result"
+    return cast(dict[str, Any], json.loads(str(tool_messages[-1]["content"])))
 
 
 async def run_turn(service: AssistantService, text: str) -> str:
@@ -609,7 +633,7 @@ async def test_reversible_mutation_pends_under_confirm_trust(tmp_path: Path) -> 
         assert len(actions) == 1 and actions[0]["status"] == "pending"
         # The model was told, in the tool result, that the action is pending.
         provider = cast(ToolProviderStub, service.provider)
-        tool_result = json.loads(provider.calls[1]["messages"][-1]["content"])
+        tool_result = last_tool_result(provider)
         assert tool_result["pending_confirmation"] is True
         outcome = await service.confirm_action(str(actions[0]["id"]))
         assert outcome["action"]["status"] == "executed"
@@ -686,7 +710,7 @@ async def test_unresolved_target_answers_with_candidates_not_a_pending_card(
     try:
         dialog_id = await run_turn(service, "message backend")
         provider = cast(ToolProviderStub, service.provider)
-        tool_result = json.loads(provider.calls[1]["messages"][-1]["content"])
+        tool_result = last_tool_result(provider)
         assert tool_result["error"] == "session did not resolve"
         assert len(tool_result["candidates"]) == 2
         assert queue.enqueued == []
@@ -1363,5 +1387,298 @@ async def test_an_unstreamed_reply_still_publishes_its_sentences(
             for event in emitted
             if event.type == "assistant_sentence"
         ] == ["One done.", "Two next."]
+    finally:
+        service.store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Multi-step turns: rounds, batching, and not losing what the operator said
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_turn_that_runs_out_of_rounds_says_so(tmp_path: Path) -> None:
+    """The measured failure (2026-08-20): asked to open three sessions with a
+    note staged in each, the turn spent its rounds, stopped in the middle, and
+    reported "Ready when you are." Running out is now part of what it says."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps({"project": "pixel lab", "backend": "claude"}),
+        },
+    }
+    # Every round asks for another tool, so the ceiling is always reached.
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("", [dict(call, id=f"call-{index}")]) for index in range(20)],
+        trust="auto",
+    )
+    try:
+        await run_turn(service, "spawn a claude in pixel lab, over and over")
+        done = [event for event in emitted if event.type == "assistant_turn_done"][0]
+        assert done.payload["exhausted"] is True
+        assert "ran out of tool rounds" in str(done.payload["display"])
+        # And it is *spoken*, not merely displayed: the operator asking by voice
+        # is exactly the one who cannot see a half-finished turn.
+        assert "ran out of tool rounds" in str(done.payload["speech"])
+        notice = [
+            event for event in emitted
+            if event.type == "assistant_sentence"
+            and "ran out of tool rounds" in str(event.payload["display"])
+        ]
+        assert notice and notice[0].payload["speech_suppressed"] is False
+        assert done.payload["usage"]["calls"] == MAX_MODEL_CALLS_PER_TURN
+    finally:
+        service.store.close()
+
+
+async def test_a_turn_that_finishes_is_not_marked_exhausted(tmp_path: Path) -> None:
+    service, emitted, _queue, _effects = make_service(tmp_path, [tool_turn("All done.")])
+    try:
+        await run_turn(service, "status")
+        done = [event for event in emitted if event.type == "assistant_turn_done"][0]
+        assert done.payload["exhausted"] is False
+        assert "ran out" not in str(done.payload["display"])
+    finally:
+        service.store.close()
+
+
+async def test_the_model_is_told_how_many_rounds_remain(tmp_path: Path) -> None:
+    """Rounds were spent blindly before, which is how a turn came to re-read a
+    note it already had and then stop mid-task."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Looked.")]
+    )
+    try:
+        await run_turn(service, "how is backend agent")
+        provider = cast(ToolProviderStub, service.provider)
+        # First call carries no budget line; the second does, and it is last so
+        # it sits closest to what the model is about to decide.
+        first = provider.calls[0]["messages"]
+        assert not any("Tool rounds remaining" in str(item.get("content")) for item in first)
+        second = provider.calls[1]["messages"]
+        assert "Tool rounds remaining" in str(second[-1]["content"])
+        assert str(second[-1]["role"]) == "system"
+        assert "Batch independent calls" in str(second[-1]["content"])
+    finally:
+        service.store.close()
+
+
+async def test_the_budget_line_is_replaced_not_stacked(tmp_path: Path) -> None:
+    # One budget, always. A stack of stale ones would both grow the prompt and
+    # leave the model reading a number that is no longer true.
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path,
+        [
+            tool_turn("", [dict(call, id="call-1")]),
+            tool_turn("", [dict(call, id="call-2")]),
+            tool_turn("", [dict(call, id="call-3")]),
+            tool_turn("Done."),
+        ],
+    )
+    try:
+        await run_turn(service, "how is backend agent")
+        provider = cast(ToolProviderStub, service.provider)
+        for messages in provider.calls:
+            budgets = [
+                item for item in messages["messages"]
+                if "Tool rounds remaining" in str(item.get("content"))
+            ]
+            assert len(budgets) <= 1
+    finally:
+        service.store.close()
+
+
+async def test_the_last_rounds_tell_the_model_to_wind_up(tmp_path: Path) -> None:
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("", [dict(call, id=f"call-{index}")]) for index in range(20)],
+    )
+    try:
+        await run_turn(service, "keep looking")
+        provider = cast(ToolProviderStub, service.provider)
+        # The very last call carries no budget line — the loop breaks on the
+        # ceiling before writing one — so the wind-up warning is on the rounds
+        # just before it, which is the point: it arrives while there is still
+        # room to act on it.
+        budgets = [
+            str(item.get("content"))
+            for call in provider.calls
+            for item in call["messages"]
+            if "Tool rounds remaining" in str(item.get("content"))
+        ]
+        assert any("Start no new work" in line for line in budgets)
+        assert any("Batch independent calls" in line for line in budgets)
+    finally:
+        service.store.close()
+
+
+async def test_a_card_plus_other_work_still_speaks_the_summary(tmp_path: Path) -> None:
+    """Suppression is for the case where the card *is* the whole outcome.
+
+    Suppressing whenever any card opened also swallowed "I opened two of the
+    three and one needs your confirmation" - information the card cannot carry
+    and the operator has no other way to hear.
+    """
+    spawn = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps({"project": "pixel lab", "backend": "claude"}),
+        },
+    }
+    send = {
+        "id": "call-2",
+        "type": "function",
+        "function": {
+            "name": "send_to_session",
+            "arguments": json.dumps(
+                {"session": "backend agent", "text": "go", "deliver": True}
+            ),
+        },
+    }
+    # spawn executes (reversible under auto trust); the armed send is on the
+    # consequential floor and pends. One card, but the turn also did something.
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("", [spawn, send]), tool_turn("I started the session; the send needs you.")],
+        trust="auto",
+    )
+    try:
+        await run_turn(service, "spawn one and message the other")
+        done = [event for event in emitted if event.type == "assistant_turn_done"][0]
+        assert done.payload["speech_suppressed"] is False
+        assert "I started the session" in str(done.payload["speech"])
+    finally:
+        service.store.close()
+
+
+async def test_a_lone_card_still_suppresses_the_paraphrase(tmp_path: Path) -> None:
+    # The original double-speak case must stay fixed.
+    service, emitted, _appended = note_service(
+        tmp_path,
+        [tool_turn("", [note_call()]), tool_turn("I've proposed appending that note.")],
+    )
+    try:
+        await run_turn(service, "note that")
+        done = [event for event in emitted if event.type == "assistant_turn_done"][0]
+        assert done.payload["speech_suppressed"] is True
+        assert done.payload["speech"] == ""
+    finally:
+        service.store.close()
+
+
+async def test_speaking_over_a_running_turn_queues_instead_of_losing_it(
+    tmp_path: Path,
+) -> None:
+    """The reported failure: interrupting mid-reply and having to repeat
+    yourself, because the turn was refused and the client had nowhere to put
+    the refusal. Nothing the operator said may be dropped."""
+    gate = asyncio.Event()
+
+    class SlowProvider(ToolProviderStub):
+        async def complete_tools(self, **kwargs: Any) -> OpenRouterToolTurn:
+            await gate.wait()
+            return await super().complete_tools(**kwargs)
+
+    service, emitted, _queue, _effects = make_service(tmp_path)
+    service.provider = cast(Any, SlowProvider([tool_turn("First."), tool_turn("Second.")]))
+    try:
+        dialog = await service.store.create_dialog()
+        first = await service.start_turn(dialog["id"], "the first thing", {})
+        second = await service.start_turn(dialog["id"], "the second thing", {})
+        assert second != first
+        assert service.turn_queued(second) is True
+        queued = [event for event in emitted if event.type == "assistant_turn_queued"]
+        assert queued and queued[0].payload["text"] == "the second thing"
+
+        gate.set()
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if service.turn_running(dialog["id"]) or not service._queue_starters:
+                break
+        running = service._turn_tasks.get(dialog["id"])
+        if running is not None:
+            await asyncio.wait_for(running, timeout=10)
+        # Both turns ran, in order, and both are in the conversation.
+        said = [
+            str(row["display"])
+            for row in await service.store.messages(dialog["id"])
+            if row["role"] == "user"
+        ]
+        assert said == ["the first thing", "the second thing"]
+    finally:
+        service.store.close()
+
+
+async def test_two_breaths_of_one_thought_become_one_turn(tmp_path: Path) -> None:
+    """A sentence finished in two breaths is one request. Answering the first
+    fragment produced the observed split, where "I have three" was answered and
+    the rest of the sentence opened a different conversation."""
+    gate = asyncio.Event()
+
+    class SlowProvider(ToolProviderStub):
+        async def complete_tools(self, **kwargs: Any) -> OpenRouterToolTurn:
+            await gate.wait()
+            return await super().complete_tools(**kwargs)
+
+    service, emitted, _queue, _effects = make_service(tmp_path)
+    service.provider = cast(Any, SlowProvider([tool_turn("First."), tool_turn("Second.")]))
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "busy", {})
+        one = await service.start_turn(dialog["id"], "I have three", {})
+        two = await service.start_turn(dialog["id"], "groups of notes to split", {})
+        assert one == two, "the fragments must share one turn, not become two"
+        merged = [
+            event for event in emitted
+            if event.type == "assistant_turn_queued" and event.payload.get("merged")
+        ]
+        assert merged
+        assert merged[-1].payload["text"] == "I have three groups of notes to split"
+        gate.set()
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+    finally:
+        service.store.close()
+
+
+async def test_seed_text_tells_the_model_what_it_is_for(tmp_path: Path) -> None:
+    # It was an undescribed string, and a model asked to open sessions with text
+    # waiting in them passed "" twice. The capability was invisible.
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        spawn = [
+            item for item in service._tool_definitions()
+            if item["function"]["name"] == "spawn_session"
+        ][0]
+        seed = spawn["function"]["parameters"]["properties"]["seed_text"]
+        assert "without" in seed["description"] and "sending" in seed["description"]
     finally:
         service.store.close()

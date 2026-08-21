@@ -37,6 +37,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -68,7 +69,19 @@ T = TypeVar("T")
 ASSISTANT_RULE_ID = "builtin:assistant"
 # One user turn may drive at most this many model calls (the first, plus one per
 # round of tool results). A loop that has not settled by then is a runaway.
-MAX_MODEL_CALLS_PER_TURN = 6
+#
+# Six was too few for any request naming more than one target: "open three
+# sessions and stage a note in each" needs a read, three spawns and a closing
+# reply, and the turn ran out mid-way having said nothing about it (measured
+# 2026-08-20). The ceiling is a runaway guard, not a work budget, so it is set
+# where a plausible multi-target task fits and spend is bounded by the daily
+# budget check that runs before every call. Rounds are also no longer spent
+# blindly: the model is told how many remain and asked to batch independent
+# calls into one round, and exhausting them is reported rather than silent.
+MAX_MODEL_CALLS_PER_TURN = 14
+# Below this many remaining rounds the model is told to stop starting new work
+# and summarize, so a turn lands on a sentence rather than on the ceiling.
+MODEL_CALL_WARNING_ROUNDS = 3
 # Pending confirmations decay on their own; nothing should stay armed because a
 # tab closed. Cancel-window actions execute much sooner (see CANCEL_WINDOW).
 CONFIRM_TTL_SECONDS = 120.0
@@ -126,6 +139,49 @@ CLIENT_EXECUTED_KINDS = {
     "spawn_session",
 }
 
+# Tools that change something. Counted per turn so the speech-suppression rule
+# can tell "one card and nothing else" — where the card says it all — from a
+# turn that also did work the operator has no other way to hear about.
+MUTATION_KINDS = {
+    "append_project_note",
+    "edit_project_note",
+    "send_to_session",
+    "spawn_session",
+    "interrupt_session",
+    "end_session",
+    "type_into_session",
+    "submit_session_composer",
+    "create_project",
+}
+
+
+@dataclass
+class _QueuedTurn:
+    """What the operator said while a turn was still running."""
+
+    turn_id: str
+    text: str
+    client_context: dict[str, Any]
+
+
+def _round_budget(remaining: int) -> str:
+    """The per-round budget line the model plans against.
+
+    Without it a turn spends rounds blindly and simply stops mid-task. Naming
+    the number is what lets the model batch, skip a re-read, or wind up early
+    with a sentence instead of hitting the ceiling silently.
+    """
+    if remaining <= MODEL_CALL_WARNING_ROUNDS:
+        return (
+            f"Tool rounds remaining this turn: {remaining}. Start no new work. "
+            "Finish or abandon what is in progress and reply now, stating plainly "
+            "what is done and what is not."
+        )
+    return (
+        f"Tool rounds remaining this turn: {remaining}. Batch independent calls "
+        "into one response, and do not re-read anything a tool already returned."
+    )
+
 SYSTEM_PRIMER = """You are Mux, the operator's assistant inside swe-mux, a fleet manager for \
 coding-agent terminal sessions (Claude Code, Codex, and others) organized into Projects.
 You operate the workspace; you never write code and never run shell commands. When the \
@@ -146,14 +202,28 @@ append, prepend, insert at a specific line, or replace a unique text span \
 ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on the device the \
 operator is speaking through; if none is connected the tool will say so.
 
-Confirmation is not yours to narrate. A mutating tool that returns \
-pending_confirmation has already put a card in front of the operator, and their device \
-reads that card out; restating it is the same sentence twice. Answer with at most a short \
-phrase ("Proposed." / "Ready when you are.") and stop. Never claim a pending action \
-happened. mode "confirm" means it runs only if the operator agrees; mode "cancel_window" \
-means it runs on its own shortly unless they stop it, so do not ask them to confirm it. \
-A result carrying duplicate or already_done means the operator has seen or accepted this \
-exact action already: say so in one short sentence and do not propose it again.
+A turn has a limited number of tool rounds and you are told how many remain. Spend them on \
+work, not on repetition: everything a tool already returned this turn is still in front of \
+you, and the action ledger lists what earlier turns did, so do not read the same thing \
+twice. When a request names several targets — three sessions, two notes — emit all the \
+independent tool calls in one response rather than one per round. If the rounds run low, \
+stop starting new work and say plainly what is done and what is not.
+
+To open a session with a prompt already written but unsent, pass seed_text to \
+spawn_session. That is the one call that both creates the session and stages the text, and \
+it is what "put this in the chat without sending it" means. type_into_session also stages \
+text, but only into a session whose terminal is already open on the operator's device, so \
+it is the wrong tool immediately after a spawn.
+
+Confirmation is not yours to restate. A mutating tool that returns pending_confirmation has \
+already put a card in front of the operator and their device reads that card out, so do not \
+repeat what the card says. Everything else is still yours to report: what you did, what you \
+could not do, what is left. Never claim a pending action happened, and never let brevity \
+swallow a partial result or a failure — "I opened two of the three and ran out of rounds" is \
+required, not optional. mode "confirm" means it runs only if the operator agrees; mode \
+"cancel_window" means it runs on its own shortly unless they stop it, so do not ask them to \
+confirm it. A result carrying duplicate or already_done means the operator has seen or \
+accepted this exact action already: say so in one short sentence and do not propose it again.
 To stage text in a session's input without sending it, use type_into_session — repeated \
 calls append, nothing reaches the agent, and the session's terminal must be open on the \
 operator's device (focus it first with run_ui_command if needed). submit_session_composer \
@@ -701,6 +771,11 @@ class AssistantService:
         self._window_tasks: dict[str, asyncio.Task[None]] = {}
         # Cards whose spoken announcement has already moved their cancel window.
         self._announced: set[str] = set()
+        # At most one waiting turn per dialog, holding what the operator said
+        # while a turn was running. Never a list: consecutive arrivals merge,
+        # because two breaths of one thought are one request.
+        self._queued: dict[str, _QueuedTurn] = {}
+        self._queue_starters: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ status
 
@@ -721,6 +796,15 @@ class AssistantService:
         task = self._turn_tasks.get(dialog_id)
         return task is not None and not task.done()
 
+    def turn_queued(self, turn_id: str) -> bool:
+        """Whether this turn is waiting behind a running one rather than running.
+
+        Read once, right after intake, so the caller can tell the operator their
+        words were accepted-but-waiting instead of answered. A turn that starts
+        between the two calls simply reports False, which is equally true.
+        """
+        return any(item.turn_id == turn_id for item in self._queued.values())
+
     async def start_turn(
         self, dialog_id: str, text: str, client_context: dict[str, Any] | None
     ) -> str:
@@ -738,8 +822,20 @@ class AssistantService:
         if dialog is None:
             raise AssistantError("unknown dialog")
         if self.turn_running(dialog_id):
-            raise AssistantError("a turn is already running in this dialog")
-        turn_id = str(uuid.uuid4())
+            return await self._queue_turn(dialog_id, body, client_context or {})
+        return await self.start_turn_now(
+            dialog_id, str(uuid.uuid4()), body, client_context or {}
+        )
+
+    async def start_turn_now(
+        self, dialog_id: str, turn_id: str, body: str, client_context: dict[str, Any]
+    ) -> str:
+        """Record the user message and run the turn, under an id chosen already.
+
+        Split out so a queued turn keeps the id its `assistant_turn_queued`
+        event already announced: the client rendered the operator's words under
+        that id and must not see them appear a second time under another.
+        """
         await self.store.add_message(
             {
                 "id": str(uuid.uuid4()),
@@ -760,7 +856,7 @@ class AssistantService:
         await self.store.touch_dialog(dialog_id, title=body[:80])
         self._interrupts.discard(dialog_id)
         task = asyncio.create_task(
-            self._run_turn(dialog_id, turn_id, body, client_context or {}),
+            self._run_turn(dialog_id, turn_id, body, client_context),
             name=f"assistant-turn-{turn_id}",
         )
         self._turn_tasks[dialog_id] = task
@@ -774,14 +870,84 @@ class AssistantService:
         )
         return turn_id
 
+    async def _queue_turn(
+        self, dialog_id: str, body: str, client_context: dict[str, Any]
+    ) -> str:
+        """Hold an utterance that arrived while a turn was running.
+
+        Refusing it was the old behaviour and the client had nowhere to put the
+        refusal, so speaking over the assistant simply lost what you said. It is
+        also why one sentence could end up split across two dialogs: the first
+        fragment was refused here and the rest opened a new conversation.
+
+        Consecutive arrivals coalesce into one waiting turn rather than becoming
+        several, because someone completing a thought in two breaths means one
+        request, and answering the first half before the second exists is the
+        failure the brainstorm hold already exists to avoid.
+        """
+        waiting = self._queued.get(dialog_id)
+        if waiting is not None:
+            merged = f"{waiting.text} {body}".strip()[:MAX_TURN_TEXT_CHARS]
+            waiting.text = merged
+            waiting.client_context = client_context or waiting.client_context
+            await self.events.emit(
+                "assistant_turn_queued", source="assistant", dialog_id=dialog_id,
+                turn_id=waiting.turn_id, text=merged, merged=True,
+            )
+            log.info(
+                "assistant turn merged into the waiting one dialog=%s turn=%s chars=%d",
+                dialog_id, waiting.turn_id, len(merged),
+            )
+            return waiting.turn_id
+        turn_id = str(uuid.uuid4())
+        self._queued[dialog_id] = _QueuedTurn(turn_id, body, client_context)
+        await self.events.emit(
+            "assistant_turn_queued", source="assistant", dialog_id=dialog_id,
+            turn_id=turn_id, text=body, merged=False,
+        )
+        log.info(
+            "assistant turn queued behind a running one dialog=%s turn=%s",
+            dialog_id, turn_id,
+        )
+        return turn_id
+
     def _turn_finished(self, dialog_id: str, task: asyncio.Task[None]) -> None:
         if self._turn_tasks.get(dialog_id) is task:
             self._turn_tasks.pop(dialog_id, None)
+        # Drained even when the turn was cancelled or failed: an interrupted
+        # turn is usually interrupted *by* the operator saying the thing that is
+        # now waiting, so that is exactly when it must run.
+        if self._queued.get(dialog_id) is not None:
+            self._start_queued(dialog_id)
         if task.cancelled():
             return
         error = task.exception()
         if error is not None:
             log.error("assistant turn task failed dialog=%s", dialog_id, exc_info=error)
+
+    def _start_queued(self, dialog_id: str) -> None:
+        waiting = self._queued.pop(dialog_id, None)
+        if waiting is None:
+            return
+
+        async def run() -> None:
+            try:
+                await self.start_turn_now(
+                    dialog_id, waiting.turn_id, waiting.text, waiting.client_context
+                )
+            except (AssistantError, OpenRouterError) as exc:
+                log.warning(
+                    "assistant queued turn could not start dialog=%s turn=%s error=%s",
+                    dialog_id, waiting.turn_id, str(exc)[:200],
+                )
+                await self.events.emit(
+                    "assistant_turn_failed", source="assistant", dialog_id=dialog_id,
+                    turn_id=waiting.turn_id, error=str(exc)[:500],
+                )
+
+        task = asyncio.create_task(run(), name=f"assistant-queued-{waiting.turn_id}")
+        self._queue_starters.add(task)
+        task.add_done_callback(self._queue_starters.discard)
 
     def interrupt(self, dialog_id: str) -> bool:
         """Stop the running turn after its current step; nothing external is undone."""
@@ -793,7 +959,13 @@ class AssistantService:
         return False
 
     async def stop(self) -> None:
-        for task in [*self._turn_tasks.values(), *self._window_tasks.values()]:
+        # Waiting turns are dropped rather than started into a shutting-down
+        # service; a restart expires every pending action anyway.
+        self._queued.clear()
+        for task in [
+            *self._turn_tasks.values(), *self._window_tasks.values(),
+            *self._queue_starters,
+        ]:
             task.cancel()
         pending = [*self._turn_tasks.values(), *self._window_tasks.values()]
         self._turn_tasks.clear()
@@ -1173,7 +1345,8 @@ class AssistantService:
             ),
             tool(
                 "spawn_session",
-                "Start a new agent session in a project, optionally with a seed prompt.",
+                "Start a new agent session in a project, optionally with a prompt "
+                "already staged in its composer but not sent.",
                 {
                     "project": project_property,
                     "backend": {
@@ -1182,7 +1355,18 @@ class AssistantService:
                             "Harness name, e.g. claude or codex; omit for the project default"
                         ),
                     },
-                    "seed_text": {"type": "string"},
+                    "seed_text": {
+                        "type": "string",
+                        # Undescribed, this was passed as "" by a model asked to do
+                        # exactly what it does (2026-08-20): open sessions with text
+                        # waiting in them. The capability existed and was invisible.
+                        "description": (
+                            "Text to place in the new session's composer without "
+                            "sending it, so the operator presses Enter themselves. "
+                            "This is how to open a session with a prompt already "
+                            "written. Omit for an empty session."
+                        ),
+                    },
                 },
                 ["project"],
             ),
@@ -2224,12 +2408,14 @@ class AssistantService:
         spoken_parts: list[str] = []
         sentence_index = 0
         message_id = str(uuid.uuid4())
-        # Set the moment a tool opens a confirmation card. Everything the model
-        # says afterwards is a paraphrase of that card, and the card is already
-        # spoken by the device: saying both is the reply read twice, the second
-        # copy cutting off the first. Structural rather than prompted, because a
-        # model that ignores the instruction still must not double-speak.
-        card_open = False
+        # Counted rather than flagged, because the rule they feed is narrow: the
+        # model's prose is suppressed only when a single card *is* the whole
+        # outcome of the turn. Suppressing it whenever any card opened also
+        # swallowed "I opened two of the three" — new information the operator
+        # has no other way to hear.
+        cards_opened = 0
+        mutations_executed = 0
+        suppress_speech = False
 
         async def emit_sentence(sentence: str) -> None:
             nonlocal sentence_index
@@ -2241,11 +2427,16 @@ class AssistantService:
                 message_id=message_id,
                 index=sentence_index,
                 display=sentence,
-                speech="" if card_open else speech_form(sentence),
-                speech_suppressed=card_open,
+                speech="" if suppress_speech else speech_form(sentence),
+                speech_suppressed=suppress_speech,
             )
             sentence_index += 1
 
+        # One system line, kept at the end of the prompt and replaced each round
+        # rather than appended, so the model always sees exactly one budget and
+        # the prompt does not grow a stack of stale ones.
+        budget_note: dict[str, Any] | None = None
+        exhausted = False
         for step in range(MAX_MODEL_CALLS_PER_TURN):
             if dialog_id in self._interrupts:
                 raise asyncio.CancelledError
@@ -2264,7 +2455,7 @@ class AssistantService:
             totals["calls"] += 1
             if turn.content.strip():
                 display_parts.append(turn.content.strip())
-                if not card_open:
+                if not suppress_speech:
                     spoken_parts.append(turn.content.strip())
                 if streamer.emitted:
                     # Streaming already published every complete sentence; only
@@ -2310,7 +2501,13 @@ class AssistantService:
                 else:
                     result = {"error": f"unknown tool {name}"}
                 if result.get("pending_confirmation"):
-                    card_open = True
+                    if not result.get("duplicate"):
+                        cards_opened += 1
+                elif name in MUTATION_KINDS and not result.get("error"):
+                    mutations_executed += 1
+                # A single card, and nothing else done, is the only case where
+                # the card says everything the turn has to say.
+                suppress_speech = cards_opened == 1 and mutations_executed == 0
                 await self.events.emit(
                     "assistant_tool_status", source="assistant",
                     dialog_id=dialog_id, turn_id=turn_id, tool=name,
@@ -2322,10 +2519,48 @@ class AssistantService:
                 messages.append(
                     {"role": "tool", "tool_call_id": call_ref, "content": payload}
                 )
+            remaining = MAX_MODEL_CALLS_PER_TURN - step - 1
+            if remaining <= 0:
+                # The model asked for more work and there is no round left to do
+                # it in. Saying nothing here is what made a half-finished turn
+                # indistinguishable from a finished one.
+                exhausted = True
+                break
+            if budget_note is not None:
+                messages.remove(budget_note)
+            budget_note = {"role": "system", "content": _round_budget(remaining)}
+            messages.append(budget_note)
+        if exhausted:
+            notice = (
+                "I ran out of tool rounds for this turn, so some of what you asked "
+                "for is not done. Say continue and I will pick up where I stopped."
+            )
+            display_parts.append(notice)
+            spoken_parts.append(notice)
+            log.warning(
+                "assistant turn exhausted its rounds dialog=%s turn=%s calls=%d "
+                "cards=%d mutations=%d",
+                dialog_id, turn_id, totals["calls"], cards_opened, mutations_executed,
+            )
+            # Deliberately not gated on `suppress_speech`: a turn that stopped
+            # early is the one thing the operator must hear about, whatever else
+            # the turn did.
+            await self.events.emit(
+                "assistant_sentence",
+                source="assistant",
+                dialog_id=dialog_id,
+                turn_id=turn_id,
+                message_id=message_id,
+                index=sentence_index,
+                display=notice,
+                speech=speech_form(notice),
+                speech_suppressed=False,
+            )
+            sentence_index += 1
         display = "\n\n".join(display_parts).strip()
         if not display:
             display = "Done." if totals["calls"] else ""
-            if not card_open and display:
+            if not suppress_speech and display:
                 spoken_parts.append(display)
         spoken = "\n\n".join(spoken_parts).strip()
         # The turn's speech is what should still be *heard*, not everything that
@@ -2354,10 +2589,12 @@ class AssistantService:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
             "assistant turn complete dialog=%s turn=%s calls=%d in=%d out=%d "
-            "cost=%.5f elapsed=%.0fms sentences=%d card_open=%s",
+            "cost=%.5f elapsed=%.0fms sentences=%d cards=%d mutations=%d "
+            "suppressed=%s exhausted=%s",
             dialog_id, turn_id, totals["calls"], totals["input_tokens"],
             totals["output_tokens"], totals["cost_usd"], elapsed_ms,
-            sentence_index, card_open,
+            sentence_index, cards_opened, mutations_executed,
+            suppress_speech, exhausted,
         )
         self.diagnostic = None
         await self.events.emit(
@@ -2368,8 +2605,12 @@ class AssistantService:
             message_id=message_id,
             display=display,
             speech=speech,
-            speech_suppressed=card_open,
+            speech_suppressed=suppress_speech,
             sentence_count=sentence_index,
+            # True when the turn stopped on the round ceiling with work still
+            # asked for. The client shows it; nothing may report such a turn as
+            # complete.
+            exhausted=exhausted,
             usage={**totals, "elapsed_ms": elapsed_ms},
         )
 

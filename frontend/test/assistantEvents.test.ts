@@ -23,6 +23,32 @@ test('a turn start records the user message once and marks thinking', () => {
   assert.equal(duplicate.messages.length, 1)
 })
 
+test('a queued turn shows the words immediately and does not double them', () => {
+  // Spoken over a running turn, what the operator said is accepted and held.
+  // It must appear at once — the old refusal simply lost it — and the later
+  // start event must update that same bubble rather than add a second copy.
+  const queued = applyAssistantEvent(empty(), {
+    type: 'assistant_turn_queued', payload: payload({ text: 'I have three groups' }),
+  })
+  assert.equal(queued.messages.length, 1)
+  assert.equal(queued.messages[0].display, 'I have three groups')
+  assert.equal(queued.thinking, 'queued — waiting for the current turn')
+
+  const merged = applyAssistantEvent(queued, {
+    type: 'assistant_turn_queued',
+    payload: payload({ text: 'I have three groups of notes', merged: true }),
+  })
+  assert.equal(merged.messages.length, 1, 'a merge updates the bubble in place')
+  assert.equal(merged.messages[0].display, 'I have three groups of notes')
+
+  const started = applyAssistantEvent(merged, {
+    type: 'assistant_turn_started',
+    payload: payload({ text: 'I have three groups of notes' }),
+  })
+  assert.equal(started.messages.length, 1, 'starting must not repeat the words')
+  assert.equal(started.thinking, 'thinking')
+})
+
 test('sentences stream into one assistant message and done finalizes it', () => {
   let state = empty()
   state = applyAssistantEvent(state, {

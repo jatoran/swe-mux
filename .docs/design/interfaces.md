@@ -1227,7 +1227,7 @@ GET    /assistant                          enabled, model, budget, spend, trust,
 GET    /assistant/dialogs[?limit=]
 POST   /assistant/dialogs                  {title?}
 GET    /assistant/dialogs/{id}             messages, actions, turn_running
-POST   /assistant/dialogs/{id}/turns       {text, client_context?} -> 202 {turn_id}
+POST   /assistant/dialogs/{id}/turns       {text, client_context?} -> 202 {turn_id, queued}
 POST   /assistant/dialogs/{id}/interrupt
 POST   /assistant/actions/{id}/confirm
 POST   /assistant/actions/{id}/cancel
@@ -1235,14 +1235,30 @@ POST   /assistant/actions/{id}/ui-result   {ok, detail?, candidates?} from the e
 POST   /assistant/actions/{id}/announced   a device began speaking this card aloud
 ```
 
-Turn progress arrives over `/events` as `assistant_turn_started`, `assistant_sentence`
+Turn progress arrives over `/events` as `assistant_turn_queued` (only when a turn is already
+running), `assistant_turn_started`, `assistant_sentence`
 (dual-form `display`/`speech`), `assistant_tool_status`, `assistant_action` (the typed
 pending/scheduled/executed confirmation state), `assistant_turn_done`, and
 `assistant_turn_failed`, each carrying `dialog_id` and `turn_id`.
 
+Text posted while a turn is running is **queued, never refused**: the response carries
+`queued: true`, `assistant_turn_queued` announces it under the id it will run as, and
+consecutive arrivals merge into that one waiting turn (`merged: true`) rather than becoming
+several - a sentence finished in two breaths is one request.
+The queued and started events share one message id per turn, so a client renders the operator's
+words once and updates them in place.
+Refusing instead left the client holding text with nowhere to put it, which is how speaking over
+the assistant lost what was said and how one sentence ended up split across two dialogs.
+
+`assistant_turn_done` carries `exhausted`, true when the turn stopped on
+`MAX_MODEL_CALLS_PER_TURN` with work still outstanding. The reply then ends with a plain notice
+saying so, and that notice is spoken even when `speech_suppressed` would otherwise silence the
+turn: a half-finished turn is the one thing the operator must hear about.
+
 Sentences are the speech contract, not a preview of it.
 Each `assistant_sentence` is released as the model writes it, so a device speaks the reply while the model is still generating; `assistant_turn_done` carries the same text for the record but is not a second thing to say.
-Both carry `speech_suppressed`, set for everything the model emits after a turn opened a confirmation card: the card's own `announcement` is the spoken statement, and the model's paraphrase of it would be the same sentence twice.
+Both carry `speech_suppressed`, set for what the model emits after a turn opened a confirmation card *and did nothing else*: the card's own `announcement` is then the spoken statement, and the model's paraphrase of it would be the same sentence twice.
+A turn that also executed something, or opened more than one card, keeps its voice - "I opened two of the three and one needs your confirmation" is information no card carries.
 `assistant_turn_done` also carries `sentence_count`, and its `speech` is only what still needs saying - empty when the card covers it.
 
 `assistant_action` carries `announcement`, the daemon-built spoken line for a `pending` or `scheduled` card.
