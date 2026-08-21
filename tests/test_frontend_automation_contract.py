@@ -28,7 +28,9 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     assert "learned fixes" in dashboard
     assert "previously labelled “Experience index.”" in dashboard
     assert "Built-in observers are controlled in Settings." not in dashboard
-    assert "<h4>Run notes</h4>" in history
+    # A collapsible band rather than a bare heading: the detail view is transcript-first
+    # and everything above the conversation collapses (`design/features/history.md`).
+    assert "section('notes','Run notes'" in history
     assert "Derived annotations" not in history
     assert "Derived annotations" not in app
 

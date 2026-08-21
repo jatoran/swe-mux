@@ -43,15 +43,29 @@ def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches(
     assert "preview_token:String(batchPreview?.preview_token" in dashboard
 
 
-def test_cross_vendor_review_binds_explicit_confirmation_to_visible_prompt() -> None:
-    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+def test_cross_vendor_review_has_no_frontend_surface() -> None:
+    """The review dialog and its only entry point are gone, together.
 
-    assert "Reviewed prompt" in app
-    assert "readOnly value={reviewState.preview.prompt}" in app
-    assert "preview_token:reviewState.preview.preview_token" in app
-    assert "prompt reviewed" in app
-    assert "Spawn {reviewState.preview.backend} review" in app
-    assert "no rule or observer can start this session" in app
+    The button lived in the History detail view and the preview dialog lived in
+    `App.tsx`; the button was the dialog's sole opener, so removing one and keeping the
+    other would leave a review flow nothing can reach and nothing can audit. What is
+    pinned here is that neither half came back on its own.
+
+    `POST /history/{id}/second-opinion` is unaffected and keeps its own confirmation
+    contract - a preview that spawns nothing, a stale confirm refused, and a confirm
+    bound to the preview's token. That contract lives with the route, in
+    `test_control_plane_api.py`'s
+    `test_review_requires_preview_then_explicit_confirm_and_records_lineage`, so any
+    future surface has to satisfy the route rather than a copy of its rules held here.
+    """
+    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+    history = (ROOT / "HistoryBrowser.tsx").read_text(encoding="utf-8")
+
+    for surface in (app, history):
+        assert "second-opinion" not in surface
+        assert "SecondOpinion" not in surface
+        assert "reviewState" not in surface
+    assert "Review with" not in history
 
 
 def test_automation_settings_keep_key_write_only_and_show_privacy_boundary() -> None:

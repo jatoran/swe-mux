@@ -897,10 +897,13 @@ def test_history_filters_fit_narrow_split_panes() -> None:
 
     assert ".history-workspace { container-type:inline-size" in css
     assert ".history-search>* { min-width:0;max-width:100% }" in css
-    assert (
-        ".history-search { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px }"
-        in css
-    )
+    # A wrapping row of controls sized to their own widest option, not equal columns:
+    # `Dropdown` already reserves that width, so a four-item list was taking half the
+    # sidebar. The floor keeps a short list from collapsing and is capped at the
+    # container, so a narrow sidebar wraps instead of overflowing.
+    assert ".history-search { display:flex;flex-wrap:wrap;align-items:center;gap:4px }" in css
+    assert "flex:0 1 auto;min-width:min(7rem,100%);max-width:100%" in css
+    assert ".history-search { display:grid" not in css
     assert "@container (max-width:620px)" in css
     # The time filter chooses which of the two stamps a row is ranked by, so the row
     # has to show both for the choice to mean anything.
@@ -926,7 +929,10 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
     # the point picker and branching on the click, and it is `runBranch` that actually
     # spawns and therefore owes the focus request - reached both directly and from the
     # picker's confirm.
-    for flow in ("resumeHistoryEntry", "runBranch", "resumeSession", "confirmSecondOpinion"):
+    # `confirmSecondOpinion` was a fourth flow until the cross-vendor review lost its
+    # frontend (`test_frontend_control_plane_contract.py`); a handler that does not exist
+    # cannot owe a focus request.
+    for flow in ("resumeHistoryEntry", "runBranch", "resumeSession"):
         body = re.search(rf"const {flow} = ?async[^\n]*\n(.*?)\n  \}}\n", app, re.DOTALL)
         assert body, f"{flow} is no longer a recognisable handler"
         assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"
