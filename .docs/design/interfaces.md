@@ -1612,7 +1612,7 @@ POST   /history/duplicates/repair     {dry_run?}
 POST   /history/{id}/resume           {project_id, ...}
 GET    /history/{id}/branch-points    cut points of an ended conversation, for a scheduled fork
 DELETE /history/{id}
-POST   /history/{id}/second-opinion   preview/confirm with project_id
+POST   /history/{id}/second-opinion   preview/confirm with project_id (no in-app caller)
 GET    /history/{id}/handoff
 ```
 

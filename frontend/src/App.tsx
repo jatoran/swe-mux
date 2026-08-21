@@ -348,8 +348,6 @@ type HistoryEntry = {
   compaction_count?:number;last_compaction_at?:number;compaction_capability?:string;compaction_confidence?:string
   auto_named?:number;generated_title?:string
 }
-type ReviewPreview={source_run_id:string;source_backend:string;backend:string;cwd:string;worktree_context:string;prompt:string;relation:'review';preview_token:string}
-type ReviewState={entry:HistoryEntry;instructions:string;project:string;preview:ReviewPreview;dirty:boolean;loading:boolean;error:string}
 type HandoffState={entry:HistoryEntry;markdown:string;message:string}
 type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|'tab'|'pane'|'mobile' } | null
 type ProjectContext = { project: Project; x: number; y: number } | null
@@ -464,7 +462,6 @@ export function App() {
   // active Project: opening "unscoped" would remove templates, not filters.
   const [promptScope,setPromptScope]=useState<Project|null>(null)
   const [promptTargetId,setPromptTargetId]=useState<string|null>(null)
-  const [reviewState,setReviewState]=useState<ReviewState|null>(null)
   const [handoffState,setHandoffState]=useState<HandoffState|null>(null)
   // A note/markdown selection waiting for a target. The message is captured when the dialog
   // opens, so editing the document underneath cannot change what is about to be sent.
@@ -4330,32 +4327,6 @@ export function App() {
     } catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
-  const previewSecondOpinion = async (entry:HistoryEntry,instructions='',targetProject=entry.project_id||projectId) => {
-    try {
-      const result=await api<{preview:ReviewPreview}>('POST',`/api/history/${entry.id}/second-opinion`,{confirm:false,instructions})
-      setReviewState({entry,instructions,project:targetProject,preview:result.preview,dirty:false,loading:false,error:''})
-    } catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
-  }
-
-  const refreshSecondOpinion = async () => {
-    if(!reviewState)return
-    setReviewState(current=>current?{...current,loading:true,error:''}:current)
-    try{
-      const result=await api<{preview:ReviewPreview}>('POST',`/api/history/${reviewState.entry.id}/second-opinion`,{confirm:false,instructions:reviewState.instructions})
-      setReviewState(current=>current?{...current,preview:result.preview,dirty:false,loading:false,error:''}:current)
-    }catch(cause){setReviewState(current=>current?{...current,loading:false,error:cause instanceof Error?cause.message:String(cause)}:current)}
-  }
-
-  const confirmSecondOpinion = async () => {
-    if(!reviewState||reviewState.dirty||reviewState.loading)return
-    setReviewState(current=>current?{...current,loading:true,error:''}:current)
-    try{
-      const result=await api<{session:Session}>('POST',`/api/history/${reviewState.entry.id}/second-opinion`,{confirm:true,preview_token:reviewState.preview.preview_token,instructions:reviewState.instructions,backend:reviewState.preview.backend,project_id:reviewState.project,target_session_id:activeId})
-      markProjectRecent(result.session.project_id)
-      setReviewState(null);await refresh();setProjectId(result.session.project_id);setActiveId(result.session.id);requestFocusView(result.session.id)
-    }catch(cause){setReviewState(current=>current?{...current,loading:false,error:cause instanceof Error?cause.message:String(cause)}:current)}
-  }
-
   const resumeHistoryEntry = async (entry: HistoryEntry) => {
     try {
       const targetProject = entry.project_id || projectId
@@ -5589,7 +5560,6 @@ export function App() {
   useDismissLevel(() => setFolderPickerOpen(false), folderPickerOpen, 'folder-picker')
   useDismissLevel(() => setGroupEdit(null), !!groupEdit, 'group-edit')
   useDismissLevel(() => setRedeployConfirmOpen(false), redeployConfirmOpen, 'redeploy-confirm')
-  useDismissLevel(() => setReviewState(null), !!reviewState, 'second-opinion')
   useDismissLevel(() => setHandoffState(null), !!handoffState, 'handoff-export')
   // The sidebar filter is a level too, so Escape and the platform back gesture put the
   // tree back. It is not gated on `mobileWorkspace` the way the sidebar itself is: the
@@ -7333,7 +7303,7 @@ export function App() {
     {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onHandoff={openHandoff}/>}
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialSetting={projectsManagerFocus?.setting} revealToken={revealToken} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 
@@ -7382,7 +7352,6 @@ export function App() {
 
     {groupEdit&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setGroupEdit(null)}><form class="modal rename-modal" onSubmit={event=>{event.preventDefault();void submitGroup()}}><div class="modal-heading"><div><span>GROUP::{groupEdit.id?'RENAME':'CREATE'}</span><h2>Sidebar group</h2></div><button type="button" onClick={()=>setGroupEdit(null)}>×</button></div><label>Name<input value={groupEdit.name} onInput={event=>setGroupEdit(current=>current?{...current,name:event.currentTarget.value}:current)} autofocus /></label><p class="modal-note">Groups only organize the sidebar. They never affect sessions, panes, or project data.</p><div class="modal-footer"><button type="button" onClick={()=>setGroupEdit(null)}>Cancel</button><button class="primary" type="submit" disabled={!groupEdit.name.trim()}>Save group</button></div></form></div>}
 
-    {reviewState&&<div class="modal-layer control-plane-modal-layer" role="dialog" aria-modal="true" aria-label="Cross-vendor second opinion" onMouseDown={event=>event.target===event.currentTarget&&setReviewState(null)}><section class="modal control-plane-modal"><div class="modal-heading"><div><span>CROSS-VENDOR REVIEW</span><h2>{reviewState.preview.source_backend} → {reviewState.preview.backend}</h2></div><button aria-label="Close review" onClick={()=>setReviewState(null)}>×</button></div><div class="control-plane-modal-body"><p>This is user-initiated. The generated prompt is shown in full and no rule or observer can start this session.</p><label>Target project<Dropdown value={reviewState.project} onChange={value=>setReviewState(current=>current?{...current,project:value}:current)} options={projects.map(project=>({value:project.id,label:project.name}))}/></label><label>Additional review instructions<textarea value={reviewState.instructions} onInput={event=>setReviewState(current=>current?{...current,instructions:event.currentTarget.value,dirty:true}:current)} placeholder="Optional constraints or review focus" /></label><label>Reviewed prompt<textarea class="review-prompt" readOnly value={reviewState.preview.prompt}/></label>{reviewState.dirty&&<p class="modal-warning">Instructions changed. Refresh the prompt before spawning.</p>}{reviewState.error&&<p class="modal-warning" role="alert">{reviewState.error}</p>}</div><div class="modal-footer"><span>{reviewState.loading?'working…':reviewState.dirty?'preview stale':'prompt reviewed'}</span><button onClick={()=>setReviewState(null)}>Cancel</button><button onClick={()=>void refreshSecondOpinion()} disabled={reviewState.loading}>Refresh preview</button><button class="primary" disabled={reviewState.loading||reviewState.dirty} onClick={()=>void confirmSecondOpinion()}>Spawn {reviewState.preview.backend} review</button></div></section></div>}
 
     {handoffState&&<div class="modal-layer control-plane-modal-layer" role="dialog" aria-modal="true" aria-label="Handoff export" onMouseDown={event=>event.target===event.currentTarget&&setHandoffState(null)}><section class="modal control-plane-modal"><div class="modal-heading"><div><span>HANDOFF::EXPORT</span><h2>{historyName(handoffState.entry)}</h2></div><button aria-label="Close handoff" onClick={()=>setHandoffState(null)}>×</button></div><div class="control-plane-modal-body"><p>{handoffState.message}</p><textarea class="handoff-export" readOnly value={handoffState.markdown}/></div><div class="modal-footer"><span>read-only annotation export</span><button onClick={()=>{const blob=new Blob([handoffState.markdown],{type:'text/markdown'});const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`handoff-${handoffState.entry.id}.md`;anchor.click();URL.revokeObjectURL(url)}}>Download</button><button class="primary" onClick={()=>void navigator.clipboard.writeText(handoffState.markdown).then(()=>setHandoffState(current=>current?{...current,message:'Copied to clipboard.'}:current)).catch(()=>setHandoffState(current=>current?{...current,message:'Clipboard blocked. Select the text and copy it manually.'}:current))}>Copy</button></div></section></div>}
 

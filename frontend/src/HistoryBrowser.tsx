@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
@@ -15,7 +16,12 @@ import {
 } from './transcriptView'
 import type { Project } from './types'
 import { runDisplayName } from './sessionNames'
-import { harnessDisplayName, promptDeliveryHarnesses, transcriptHarnesses } from './harnessRegistry'
+import { transcriptHarnesses } from './harnessRegistry'
+import { currentProfile } from './deviceSettings'
+import {
+  commitsSummary, countLabel, defaultHistorySections, historyKeyStats, speakerLabel, splitRecentScans,
+  type HistorySectionKey, type HistorySectionState,
+} from './historyDetail'
 import { ModelName } from './ModelName'
 import { parseGitProvenance, provenanceRoleLabel, shortSha, type GitProvenance } from './gitWorktrees'
 import { lineageCounterpart, lineageCutLabel, lineageDirection, lineageEndpointLabel, lineageVerb, orderedLineage, type LineageEdge } from './lineageView'
@@ -65,7 +71,6 @@ type Props={
   /** Author a schedule that reopens this conversation later. Separate from `onResume`
    *  because it starts nothing now: it hands the conversation to the Schedule tab. */
   onScheduleResume:(entry:HistoryEntry)=>void
-  onSecondOpinion:(entry:HistoryEntry)=>void|Promise<void>
   onHandoff:(entry:HistoryEntry)=>void|Promise<void>
 }
 
@@ -97,7 +102,7 @@ const formatBytes=(bytes?:number|null)=>{
 }
 const historyMessageText=(message:TranscriptMessage)=>message.content.filter(block=>block.type==='text').map(block=>block.text||'').filter(Boolean).join('\n\n')
 
-export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose,onResume,onScheduleResume,onSecondOpinion,onHandoff}:Props){
+export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose,onResume,onScheduleResume,onHandoff}:Props){
   const [items,setItems]=useState<HistoryEntry[]>([])
   const [historyProjects,setHistoryProjects]=useState<HistoryProject[]>([])
   const [nextCursor,setNextCursor]=useState<string|null>(null)
@@ -120,6 +125,10 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
   const [showToolCalls,setShowToolCalls]=useState(false)
   const [lineage,setLineage]=useState<LineageEdge[]>([])
   const [gitProvenance,setGitProvenance]=useState<GitProvenance[]>([])
+  // What is expanded above the transcript, re-defaulted every time a conversation is
+  // opened rather than watched on a media query - see `historyDetail.ts` for why.
+  const [sections,setSections]=useState<HistorySectionState>(()=>defaultHistorySections(currentProfile()==='mobile'))
+  const [timelineExpanded,setTimelineExpanded]=useState(false)
   const [job,setJob]=useState<BackfillJob|null>(null)
   const requestSequence=useRef(0)
   const transcriptBody=useRef<HTMLDivElement>(null)
@@ -200,8 +209,12 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
     return [...groups.entries()]
   },[items,historyProjects,projects])
 
+  const resetSections=()=>{setSections(defaultHistorySections(currentProfile()==='mobile'));setTimelineExpanded(false)}
+  const toggleSection=(key:HistorySectionKey,open:boolean)=>setSections(current=>current[key]===open?current:{...current,[key]:open})
+
   const view=async(entry:HistoryEntry)=>{
     setError('');setActiveMatch(0);setLineage([]);setGitProvenance([]);setExpandedMessages(new Set());setCopiedMessage(null)
+    resetSections()
     try{
       const search=new URLSearchParams({scope});if(query)search.set('q',query)
       const provenance=entry.project_id
@@ -225,6 +238,7 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
    *  caller's intent - find this session - is still servable by hand. */
   const viewById=async(historyId:string)=>{
     setError('');setActiveMatch(0);setLineage([]);setGitProvenance([]);setExpandedMessages(new Set());setCopiedMessage(null)
+    resetSections()
     try{
       const nextTranscript=await api<Transcript>('GET',`/api/history/${historyId}/transcript`)
       setTranscript(nextTranscript)
@@ -286,7 +300,18 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
 
   const scopeProject=projects.find(item=>item.id===project)
   const historyHarnesses=transcriptHarnesses()
-  const reviewTarget=(source:string)=>promptDeliveryHarnesses().find(harness=>harness.name!==source)
+  const scanRecords=splitRecentScans(transcript?.scan_records||[])
+  const keyStats=transcript?historyKeyStats(transcript.entry,{timestamp:timestampLabel,money:value=>money.format(value)}):[]
+  /** One collapsible band above the transcript: a title, what it says while closed, and its body. */
+  const section=(key:HistorySectionKey,title:string,keys:ComponentChildren,body:ComponentChildren)=>
+    <details class={`transcript-section transcript-section-${key}`} open={sections[key]} onToggle={event=>toggleSection(key,event.currentTarget.open)}>
+      <summary><span class="transcript-section-title">{title}</span><span class="transcript-section-keys">{keys}</span></summary>
+      <div class="transcript-section-body">{body}</div>
+    </details>
+  const scanRow=(item:ScanRecord)=><details class="transcript-row" key={item.id}>
+    <summary><code>{item.work_phase||'unknown'}</code><span>{item.summary||item.intent||'—'}</span></summary>
+    <div><small>{new Date(item.t0*1000).toLocaleString()}{item.blocked_on&&item.blocked_on!=='none'?` · blocked on ${item.blocked_on}`:''}{item.claim?` · claims: ${item.claim}`:''}{(item.target?.length??0)>0?` · ${item.target!.slice(0,4).join(', ')}`:''}</small></div>
+  </details>
   return <div class="modal-layer history-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section ref={panel} class="modal history-modal" role="dialog" aria-modal="true" aria-label="Agent session history">
     <div class="modal-heading"><div><span>SESSION HISTORY</span><h2>{scopeProject?scopeProject.name:'All projects'}</h2></div><button type="button" aria-label="Close session history" onClick={onClose}>×</button></div>
@@ -310,26 +335,64 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
         {loading&&<div class="history-inline-state">Searching agent history…</div>}
         {nextCursor&&!loading&&<button class="history-load-more" onClick={()=>void load(true)}>Load more</button>}
       </aside>
-      <main>{transcript?<><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Results</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label||'Unassigned'} · {transcript.entry.cwd}</span></div></div>
-        <div class="transcript-actions">{transcript.entry.held_by?<span class="transcript-held" role="note" title={transcript.entry.held_by.detail}>Cannot resume — {heldLabel(transcript.entry)}</span>:<button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume as new</button>}<button title="Schedule a session that reopens this conversation later" onClick={()=>onScheduleResume(transcript.entry)}>Resume later&hellip;</button><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button>{reviewTarget(transcript.entry.backend)&&<button onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {harnessDisplayName(reviewTarget(transcript.entry.backend)!.name)}</button>}<label class="transcript-tool-toggle"><input type="checkbox" checked={showToolCalls} disabled={!availableToolCalls} onChange={event=>setShowToolCalls(event.currentTarget.checked)}/>Tool calls</label>{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
-        <div class="transcript-metadata"><small>Started {timestampLabel(historyStart(transcript.entry))} · last {transcript.entry.last_message_role==='assistant'?'agent':transcript.entry.last_message_role==='user'?'you':'message'} {timestampLabel(transcript.entry.last_message_at)}</small><small>{transcript.entry.exit_reason||transcript.entry.final_state||'indexed'} · <ModelName model={transcript.entry.model}/> · {transcript.entry.external?'external':'mux session'}</small>{providerIdentity(transcript.entry)&&<small>{providerIdentity(transcript.entry)}</small>}<small>{transcript.entry.context_window?`context final ${Math.round((transcript.entry.final_context_pct||0)*100)}% · peak ${Math.round((transcript.entry.peak_context_pct||0)*100)}% · ${transcript.entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {transcript.entry.tokens_in||0} / out {transcript.entry.tokens_out||0} · cache read {transcript.entry.tokens_cache_read||0} / write {transcript.entry.tokens_cache_write||0} · cost {money.format(transcript.entry.cost_usd||0)}{formatBytes(transcriptBytes(transcript.entry))?` · transcript ${formatBytes(transcriptBytes(transcript.entry))}`:''}</small><small>{transcript.entry.compaction_count?`explicit compactions ${transcript.entry.compaction_count} · ${transcript.entry.compaction_capability||'native evidence'} · confidence ${transcript.entry.compaction_confidence||'unknown'}`:'compaction count unavailable - token drops are not treated as compaction evidence'}</small>{(transcript.abandoned_messages||0)>0&&<small title="Retries and rewinds append a new branch and leave the previous attempt in the transcript. Those turns were never sent to the model, so they are not shown here.">{transcript.abandoned_messages} message{transcript.abandoned_messages===1?'':'s'} from abandoned branches are not shown</small>}</div>
-        {gitProvenance.length>0&&<section class="transcript-lineage"><h4>Commits from this run</h4>{gitProvenance.map(item=><article key={item.id}><strong>{shortSha(item.commitOid)} · {item.subject||'subject unavailable'}</strong><span>{provenanceRoleLabel(item)} · {item.confidence}</span><small>{new Date(item.observedAt*1000).toLocaleString()}</small></article>)}</section>}{lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{orderedLineage(lineage).map(edge=>{
-          const direction=lineageDirection(edge,transcript.entry.id)
-          const {endpoint,runId}=lineageCounterpart(edge,transcript.entry.id)
-          const cut=edge.relation==='branch'?lineageCutLabel(edge.metadata):''
-          const label=lineageEndpointLabel(endpoint,runId)
-          /* Clickable only when the other end still has a row to open. A dead link on
-             a conversation that has been deleted is worse than plain text: it looks
-             like the lineage is broken rather than like the row is gone. */
-          return <article key={edge.id} class={endpoint.known?'':'lineage-missing'}>
-            <strong>{lineageVerb(edge.relation,direction)}</strong>
-            {endpoint.known
-              ?<button type="button" class="lineage-open" title={`Open ${label}`} onClick={()=>void viewById(runId)}>{label}{endpoint.live?<span class="lineage-live" title="a session is still open on this conversation"> · open</span>:null}</button>
-              :<span>{label}</span>}
-            {cut?<span class="lineage-cut" title={cut}>{cut}</span>:null}
-            <small>{new Date(edge.created_at*1000).toLocaleString()}</small>
-          </article>
-        })}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}{(transcript.scan_records?.length??0)>0&&<section class="transcript-annotations"><h4>Behavioral timeline</h4>{transcript.scan_records!.map(item=><details key={item.id}><summary>{item.work_phase||'unknown'} · {item.summary||item.intent||'—'}</summary><small>{new Date(item.t0*1000).toLocaleString()}{item.blocked_on&&item.blocked_on!=='none'?` · blocked on ${item.blocked_on}`:''}{item.claim?` · claims: ${item.claim}`:''}{(item.target?.length??0)>0?` · ${item.target!.slice(0,4).join(', ')}`:''}</small></details>)}</section>}
+      <main>{transcript?<><div class="transcript-heading">
+          {/* Back belongs in this view's own top bar rather than above it: on a phone the
+              detail view replaces the results list, and a full-width row of its own was a
+              band of chrome subtracted from the transcript on every conversation opened. */}
+          <button class="history-back" aria-label="Back to results" onClick={()=>setTranscript(null)}>← Results</button>
+          <div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label||'Unassigned'} · {transcript.entry.cwd}</span></div>
+        </div>
+        <div class="transcript-actions">{transcript.entry.held_by?<span class="transcript-held" role="note" title={transcript.entry.held_by.detail}>Cannot resume — {heldLabel(transcript.entry)}</span>:<button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume</button>}<button title="Schedule a session that reopens this conversation later" onClick={()=>onScheduleResume(transcript.entry)}>Schedule Resume</button><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button><label class="transcript-tool-toggle"><input type="checkbox" checked={showToolCalls} disabled={!availableToolCalls} onChange={event=>setShowToolCalls(event.currentTarget.checked)}/>Tool calls</label>{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
+        {section('stats','Session',
+          keyStats.map(stat=><span class="transcript-stat" key={stat.label}><b>{stat.label}</b>{stat.model?<ModelName model={stat.value}/>:stat.value}</span>),
+          <>
+            <small>Started {timestampLabel(historyStart(transcript.entry))} · last {speakerLabel(transcript.entry.last_message_role)} {timestampLabel(transcript.entry.last_message_at)} · {transcript.entry.external?'external':'mux session'}</small>
+            {providerIdentity(transcript.entry)&&<small>{providerIdentity(transcript.entry)}</small>}
+            <small>{transcript.entry.context_window?`context final ${Math.round((transcript.entry.final_context_pct||0)*100)}% · peak ${Math.round((transcript.entry.peak_context_pct||0)*100)}% · ${transcript.entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {transcript.entry.tokens_in||0} / out {transcript.entry.tokens_out||0} · cache read {transcript.entry.tokens_cache_read||0} / write {transcript.entry.tokens_cache_write||0}{formatBytes(transcriptBytes(transcript.entry))?` · transcript ${formatBytes(transcriptBytes(transcript.entry))}`:''}</small>
+            <small>{transcript.entry.compaction_count?`explicit compactions ${transcript.entry.compaction_count} · ${transcript.entry.compaction_capability||'native evidence'} · confidence ${transcript.entry.compaction_confidence||'unknown'}`:'compaction count unavailable - token drops are not treated as compaction evidence'}</small>
+            {(transcript.abandoned_messages||0)>0&&<small title="Retries and rewinds append a new branch and leave the previous attempt in the transcript. Those turns were never sent to the model, so they are not shown here.">{transcript.abandoned_messages} message{transcript.abandoned_messages===1?'':'s'} from abandoned branches are not shown</small>}
+          </>)}
+        {/* Commits and lineage are lists, so they read as rows that open. They used to be a
+            horizontal strip of fixed-width cards, which put the subject - the only part
+            anyone scans for - behind a sideways scroll on every viewport. */}
+        {gitProvenance.length>0&&section('commits','Commits',commitsSummary(gitProvenance,shortSha),
+          gitProvenance.map(item=><details class="transcript-row" key={item.id}>
+            <summary><code>{shortSha(item.commitOid)}</code><span>{item.subject||'subject unavailable'}</span></summary>
+            <div><small>{provenanceRoleLabel(item)} · {item.confidence}</small><small>{new Date(item.observedAt*1000).toLocaleString()}</small></div>
+          </details>))}
+        {lineage.length>0&&section('lineage','Work lineage',countLabel(lineage.length,'link'),
+          orderedLineage(lineage).map(edge=>{
+            const direction=lineageDirection(edge,transcript.entry.id)
+            const {endpoint,runId}=lineageCounterpart(edge,transcript.entry.id)
+            const cut=edge.relation==='branch'?lineageCutLabel(edge.metadata):''
+            const label=lineageEndpointLabel(endpoint,runId)
+            /* Clickable only when the other end still has a row to open. A dead link on
+               a conversation that has been deleted is worse than plain text: it looks
+               like the lineage is broken rather than like the row is gone. */
+            return <details class={`transcript-row ${endpoint.known?'':'lineage-missing'}`} key={edge.id}>
+              <summary><code>{lineageVerb(edge.relation,direction)}</code><span>{label}{endpoint.live?<span class="lineage-live" title="a session is still open on this conversation"> · open</span>:null}</span></summary>
+              <div>
+                {endpoint.known&&<button type="button" class="lineage-open" title={`Open ${label}`} onClick={()=>void viewById(runId)}>Open {label}</button>}
+                {cut?<small class="lineage-cut" title={cut}>{cut}</small>:null}
+                <small>{new Date(edge.created_at*1000).toLocaleString()}</small>
+              </div>
+            </details>
+          }))}
+        {transcript.annotations.length>0&&section('notes','Run notes',countLabel(transcript.annotations.length,'note'),
+          transcript.annotations.map(item=><details class="transcript-row" key={item.id}>
+            <summary><code>{item.tag}</code><span>{item.content}</span></summary>
+            <div><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></div>
+          </details>))}
+        {/* Two entries, newest first, and the rest behind a second disclosure. A run that
+            scanned forty times is a wall of rows nobody reads past the top of. */}
+        {(transcript.scan_records?.length??0)>0&&section('timeline','Behavioral timeline',countLabel(transcript.scan_records!.length,'entry','entries'),
+          <>
+            {scanRecords.recent.map(item=>scanRow(item))}
+            {scanRecords.earlier.length>0&&<details class="transcript-more" open={timelineExpanded} onToggle={event=>setTimelineExpanded(event.currentTarget.open)}>
+              <summary>{countLabel(scanRecords.earlier.length,'earlier entry','earlier entries')}</summary>
+              {scanRecords.earlier.map(item=>scanRow(item))}
+            </details>}
+          </>)}
         <div class="messages" ref={transcriptBody}>{visibleHistoryRows.length?visibleHistoryRows.map(({message,ordinal,text,toolCalls})=>{
           const matched=transcript.matches.some(match=>match.ordinal===ordinal)
           const foldable=transcriptClamped(text)

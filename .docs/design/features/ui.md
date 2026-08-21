@@ -1152,7 +1152,7 @@ Its rules, and what each one is defending:
 - Focus naming a view this Project's layout does not hold is treated as stale and replaced with
   the first pane's active tab. That is right for a view that was closed elsewhere and wrong for
   one that has not arrived yet, and both look identical at that instant. So a flow whose pane
-  the *daemon* creates — history resume, Branch, second opinion — **requests** focus rather than
+  the *daemon* creates — history resume, Branch — **requests** focus rather than
   setting it: the response names the new leaf, but the layout carrying it is a refresh behind,
   and a plain focus in that gap is reconciled away before the pane appears. The symptom is
   specific and was live for resume: the new session starts, and you are left looking at the tab

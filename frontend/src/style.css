@@ -134,7 +134,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .menu-row-label { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .terminal-menu { position:fixed;z-index:40;width:calc(145px*var(--ui-scale));padding:5px;border:1px solid #3b434d;border-radius:7px;background:#15191e;box-shadow:0 15px 50px #000 }.terminal-menu button { width:100%;height:calc(28px*var(--ui-scale));border:0;border-radius:4px;background:transparent;color:#bac2cc;text-align:left;padding:0 8px;font-size:10px;cursor:pointer }.terminal-menu button:hover:not(:disabled) { background:#252c25;color:#e6ece2 }.terminal-menu button:disabled { color:#4f5863 }
 .mobile-paste { display:none }
-.history-workspace { container-type:inline-size;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;background:#070a08 }.history-body { height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(260px,38%) minmax(0,1fr);grid-template-rows:minmax(0,1fr) }.history-body>aside { min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;border-right:1px solid var(--line);padding:7px;background:#0e1115 }.history-search { padding:2px 2px 8px }.history-search>* { min-width:0;max-width:100% }.history-search input { width:100%;height:calc(34px*var(--ui-scale));border:1px solid #303741;border-radius:6px;background:#090c0f;color:var(--text);padding:0 9px;font-size:10px }.history-query-row { display:grid;grid-template-columns:minmax(0,1fr) 105px;gap:4px;grid-column:1/-1 }.history-search label { display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:5px;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-transform:uppercase }.history-backfill-control { grid-column:1/-1;display:grid;gap:4px;padding-top:3px }.history-backfill-control button,.history-backfill-status button { min-height:30px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);cursor:pointer }.history-backfill-control small,.history-backfill-status small { white-space:normal!important;line-height:1.4 }.history-backfill-status { grid-column:1/-1;display:grid;gap:5px;padding:7px;border:1px solid var(--line);background:#080d09 }.history-backfill-status>div { display:flex;justify-content:space-between;text-transform:uppercase }.history-backfill-status progress { width:100%;accent-color:var(--green) }.history-backfill-status.completed { border-color:#36563c }.history-backfill-status.failed,.history-backfill-status .error { color:var(--red) }.history-body>aside>button { width:100%;height:calc(63px*var(--ui-scale));display:flex;flex-direction:column;justify-content:center;gap:3px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:left;padding:0 9px;cursor:pointer }.history-body>aside>button:hover { background:#171c22 }.history-body>aside>button.active { background:#192019;border-color:#35452f }.history-body>aside strong { font-size:11px }.history-body>aside span { color:#7d8793;font-size:9px }.history-body>aside small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#5e6874;font:8px 'JetBrains Mono' }.history-body>main { min-width:0;min-height:0;display:flex;flex-direction:column;background:#0b0e11 }.history-match { width:100%;display:block!important;padding:4px 6px;border-left:2px solid #4d6352;background:#0b110d;white-space:normal!important;line-height:1.35 }.history-match b { margin-right:6px;color:#789681;text-transform:uppercase;font-size:7px }.history-match.assistant { border-left-color:#59647a }.transcript-heading { min-height:58px;height:auto;flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 16px;border-bottom:1px solid var(--line) }.transcript-heading h3 { margin:0 0 4px;font-size:13px }.transcript-heading span { color:#68727e;font:8px 'JetBrains Mono' }.transcript-heading button { height:calc(31px*var(--ui-scale));border-radius:6px }.transcript-match-nav { display:flex;align-items:center;gap:4px;margin-left:auto }.transcript-match-nav button { min-width:30px }.messages { flex:1;overflow:auto;padding:22px max(22px,calc((100% - 800px)/2)) }.messages article { margin-bottom:17px;padding:12px 14px;border:1px solid #242b33;border-radius:8px;background:#11151a }.messages article.user { border-color:#34442d;background:#121912 }.messages article.search-match-message { border-left-color:#6b926f }.messages article.active-search-match { outline:2px solid #769d75;outline-offset:2px }.messages article header { margin-bottom:8px;color:#76816f;font:600 8px 'JetBrains Mono';letter-spacing:.1em;text-transform:uppercase }.messages article p { white-space:pre-wrap;margin:0;color:#cbd1d9;font-size:12px;line-height:1.55 }.messages article pre { white-space:pre-wrap;color:#9da8b5;font:9px/1.5 'JetBrains Mono' }.history-placeholder,.no-transcript { height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#68737f;text-align:center }.history-placeholder>span { font-size:27px;color:#50604a }.history-placeholder strong { margin-top:9px;color:#aab2bc;font-size:12px }.history-placeholder p { font-size:10px }.no-transcript { min-height:260px;font-size:11px }
+.history-workspace { container-type:inline-size;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;background:#070a08 }.history-body { height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(260px,38%) minmax(0,1fr);grid-template-rows:minmax(0,1fr) }.history-body>aside { min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;border-right:1px solid var(--line);padding:7px;background:#0e1115 }.history-search { padding:2px 2px 8px }.history-search>* { min-width:0;max-width:100% }.history-search input { width:100%;height:calc(34px*var(--ui-scale));border:1px solid #303741;border-radius:6px;background:#090c0f;color:var(--text);padding:0 9px;font-size:10px }.history-query-row { flex:1 1 100%;display:grid;grid-template-columns:minmax(0,1fr) 105px;gap:4px;grid-column:1/-1 }.history-search label { flex:0 1 auto;display:grid;grid-template-columns:auto auto;align-items:center;gap:5px;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-transform:uppercase }.history-backfill-control { flex:1 1 100%;grid-column:1/-1;display:grid;gap:4px;padding-top:3px }.history-backfill-control button,.history-backfill-status button { min-height:30px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);cursor:pointer }.history-backfill-control small,.history-backfill-status small { white-space:normal!important;line-height:1.4 }.history-backfill-status { flex:1 1 100%;grid-column:1/-1;display:grid;gap:5px;padding:7px;border:1px solid var(--line);background:#080d09 }.history-backfill-status>div { display:flex;justify-content:space-between;text-transform:uppercase }.history-backfill-status progress { width:100%;accent-color:var(--green) }.history-backfill-status.completed { border-color:#36563c }.history-backfill-status.failed,.history-backfill-status .error { color:var(--red) }.history-body>aside>button { width:100%;height:calc(63px*var(--ui-scale));display:flex;flex-direction:column;justify-content:center;gap:3px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:left;padding:0 9px;cursor:pointer }.history-body>aside>button:hover { background:#171c22 }.history-body>aside>button.active { background:#192019;border-color:#35452f }.history-body>aside strong { font-size:11px }.history-body>aside span { color:#7d8793;font-size:9px }.history-body>aside small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#5e6874;font:8px 'JetBrains Mono' }.history-body>main { min-width:0;min-height:0;display:flex;flex-direction:column;background:#0b0e11 }.history-match { width:100%;display:block!important;padding:4px 6px;border-left:2px solid #4d6352;background:#0b110d;white-space:normal!important;line-height:1.35 }.history-match b { margin-right:6px;color:#789681;text-transform:uppercase;font-size:7px }.history-match.assistant { border-left-color:#59647a }.transcript-heading { min-height:58px;height:auto;flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 16px;border-bottom:1px solid var(--line) }.transcript-heading h3 { margin:0 0 4px;font-size:13px }.transcript-heading span { color:#68727e;font:8px 'JetBrains Mono' }.transcript-heading button { height:calc(31px*var(--ui-scale));border-radius:6px }.transcript-match-nav { display:flex;align-items:center;gap:4px;margin-left:auto }.transcript-match-nav button { min-width:30px }.messages { flex:1;overflow:auto;padding:22px max(22px,calc((100% - 800px)/2)) }.messages article { margin-bottom:17px;padding:12px 14px;border:1px solid #242b33;border-radius:8px;background:#11151a }.messages article.user { border-color:#34442d;background:#121912 }.messages article.search-match-message { border-left-color:#6b926f }.messages article.active-search-match { outline:2px solid #769d75;outline-offset:2px }.messages article header { margin-bottom:8px;color:#76816f;font:600 8px 'JetBrains Mono';letter-spacing:.1em;text-transform:uppercase }.messages article p { white-space:pre-wrap;margin:0;color:#cbd1d9;font-size:12px;line-height:1.55 }.messages article pre { white-space:pre-wrap;color:#9da8b5;font:9px/1.5 'JetBrains Mono' }.history-placeholder,.no-transcript { height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#68737f;text-align:center }.history-placeholder>span { font-size:27px;color:#50604a }.history-placeholder strong { margin-top:9px;color:#aab2bc;font-size:12px }.history-placeholder p { font-size:10px }.no-transcript { min-height:260px;font-size:11px }
 .messages article pre{margin:0}
 .messages .history-transcript-content{display:grid;gap:8px;overflow-wrap:anywhere}
 .messages .history-transcript-content.clamped{max-height:280px;overflow:hidden;mask-image:linear-gradient(180deg,#000 70%,transparent)}
@@ -1019,8 +1019,14 @@ body {
 .context-menu,.terminal-menu { width:min(300px,calc(100dvw - 8px)) }
 .context-menu button,.terminal-menu button { white-space:nowrap }
 .mobile-paste-image { right:76px }
-.history-search { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px }
-.history-search select,.history-search input ,.history-search .dropdown-trigger{ min-width:0;min-height:30px;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:0 7px }
+/* Each filter is as wide as the widest option it can show and no wider - `Dropdown`'s
+   sizer already reserves exactly that - and the row wraps. Stretching them to equal
+   columns made a four-word list occupy half the sidebar and pushed the results down
+   the page for nothing. `min-width` keeps a short list from collapsing to a stub and
+   is capped at the container so a narrow sidebar wraps rather than overflows. */
+.history-search { display:flex;flex-wrap:wrap;align-items:center;gap:4px }
+.history-search label input { width:auto;min-width:0 }
+.history-search select,.history-search input ,.history-search .dropdown-trigger{ flex:0 1 auto;min-width:min(7rem,100%);max-width:100%;min-height:30px;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:0 7px }
 .history-project { border-bottom:1px solid var(--line) }
 .history-project-heading { width:100%;display:flex;justify-content:space-between;align-items:center;min-height:31px;border:0;background:var(--panel2);color:var(--text);padding:0 9px;text-align:left;cursor:pointer }
 .history-row { display:grid;grid-template-columns:minmax(0,1fr) 30px;align-items:stretch }
@@ -1042,24 +1048,58 @@ body {
 .transcript-tool-toggle:has(input:checked) { border-color:var(--accent);color:var(--text) }
 .transcript-tool-toggle:has(input:disabled) { opacity:.45;cursor:not-allowed }
 .transcript-tool-toggle input { margin:0 }
-.transcript-metadata { flex:none;max-height:min(160px,28dvh);overflow-x:hidden;overflow-y:auto;padding:7px 16px;border-bottom:1px solid var(--line);scrollbar-gutter:stable }
-.transcript-metadata small { display:block;color:var(--muted);margin:0 0 4px;overflow-wrap:anywhere;line-height:1.35 }
-.transcript-metadata small:last-child { margin-bottom:0 }
+/* Every band above the transcript collapses, and each one says while closed what a
+   reader would otherwise open it to find. `flex:none` on both states is what keeps the
+   transcript the only thing that grows; the body is bounded and scrolls, so a run with
+   forty commits cannot push the conversation off the view by being expanded. */
+.transcript-section { flex:none;border-bottom:1px solid var(--line);background:var(--panel2) }
+.transcript-section>summary { display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 10px;min-height:30px;padding:6px 16px;color:var(--muted);cursor:pointer;list-style:none }
+.transcript-section>summary::-webkit-details-marker { display:none }
+.transcript-section>summary::before { content:'\25B8';flex:none;color:var(--accent) }
+.transcript-section[open]>summary::before { content:'\25BE' }
+.transcript-section-title { flex:none;color:var(--text);text-transform:uppercase;font-size:8px;letter-spacing:.09em }
+.transcript-section-keys { min-width:0;display:flex;flex-wrap:wrap;gap:2px 10px;overflow-wrap:anywhere }
+.transcript-stat { display:flex;align-items:baseline;gap:5px;color:var(--text) }
+.transcript-stat>b { color:var(--muted);font-weight:400;text-transform:uppercase;font-size:8px }
+.transcript-section-body { max-height:min(230px,32dvh);overflow-x:hidden;overflow-y:auto;padding:2px 16px 9px;background:var(--bg);scrollbar-gutter:stable }
+.transcript-section-body small { display:block;color:var(--muted);margin:0 0 4px;overflow-wrap:anywhere;line-height:1.35 }
+.transcript-section-body small:last-child { margin-bottom:0 }
+/* A commit, a lineage link, a run note, and a timeline entry are all one row that
+   opens. They were a sideways strip of fixed-width cards, which put the subject - the
+   part anyone actually scans - behind a horizontal scroll. */
+.transcript-row { border-top:1px solid var(--line) }
+.transcript-row:first-child { border-top:0 }
+.transcript-row>summary { display:grid;grid-template-columns:auto minmax(0,1fr);align-items:baseline;gap:9px;min-height:26px;padding:5px 0;cursor:pointer;list-style:none }
+.transcript-row>summary::-webkit-details-marker { display:none }
+.transcript-row>summary>code { flex:none;color:var(--accent);font:inherit }
+.transcript-row>summary>span { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text) }
+.transcript-row>div { display:grid;justify-items:start;gap:3px;padding:0 0 7px 0 }
+.transcript-row.lineage-missing>summary>code { color:var(--muted) }
+.transcript-row.lineage-missing { opacity:.75 }
+.transcript-more { border-top:1px solid var(--line) }
+.transcript-more>summary { min-height:26px;padding:5px 0;color:var(--accent);cursor:pointer }
+.lineage-open { max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px }
+.lineage-open:hover { color:var(--accent) }
+.lineage-live { color:var(--accent);text-decoration:none }
+.lineage-cut { font-style:italic }
 .messages article header { display:flex;align-items:center;justify-content:space-between;gap:12px }
 .messages article header time { color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none }
-.history-back{display:none;min-height:32px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}
+/* In the top bar rather than above it. On a phone this used to be a full-width row of
+   its own, which cost the transcript a band of chrome on every conversation opened. */
+.history-back{flex:none;min-height:32px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;white-space:nowrap;cursor:pointer}
 @container (max-width:620px) {
   .history-body { grid-template-columns:minmax(0,1fr) }
   .history-body>aside { display:block;border-right:0 }
   .history-body>main { display:none }
   .history-body:has(.transcript-heading)>aside { display:none }
   .history-body:has(.transcript-heading)>main { display:flex }
-  .history-search { grid-template-columns:minmax(0,1fr);position:sticky;top:0;z-index:2;background:var(--panel);padding:5px }
-  .history-back { display:block;width:100%;margin-bottom:8px;min-height:44px }
-  .transcript-heading { display:block }
+  .history-search { position:sticky;top:0;z-index:2;background:var(--panel);padding:5px }
+  .history-back { min-height:44px }
+  .transcript-heading { padding:7px 10px }
   .transcript-actions { padding:7px 10px }
   .transcript-actions>button { flex:1 1 auto;min-height:44px }
-  .transcript-metadata { max-height:min(180px,30dvh);padding:7px 10px }
+  .transcript-section>summary { padding:6px 10px;min-height:40px }
+  .transcript-section-body { max-height:min(180px,26dvh);padding:2px 10px 9px }
 }
 @media(pointer:coarse) {
   .context-menu button,.terminal-menu button { min-height:44px }
@@ -1071,9 +1111,13 @@ body {
   .history-body>main { display:none }
   .history-body:has(.transcript-heading)>aside { display:none }
   .history-body:has(.transcript-heading)>main { display:flex }
-  .history-search { grid-template-columns:1fr;position:sticky;top:0;z-index:2;background:var(--panel);padding:5px }
+  .history-search { position:sticky;top:0;z-index:2;background:var(--panel);padding:5px }
+  .history-search select,.history-search input,.history-search .dropdown-trigger { min-height:40px }
   .history-row>button,.history-project-heading,.history-load-more { min-height:44px }
-  .history-back{display:block;width:100%;margin-bottom:8px;min-height:44px}.transcript-heading{display:block}.transcript-actions{padding:7px 10px}.transcript-actions>button{flex:1 1 auto;min-height:44px}.transcript-metadata{max-height:min(180px,30dvh);padding:7px 10px}
+  .history-back{min-height:44px}.transcript-heading{min-height:48px;padding:7px 10px}.transcript-actions{padding:7px 10px}.transcript-actions>button{flex:1 1 auto;min-height:44px}
+  .transcript-section>summary{padding:6px 10px;min-height:44px}
+  .transcript-section-body{max-height:min(180px,26dvh);padding:2px 10px 9px}
+  .transcript-row>summary,.transcript-more>summary{min-height:40px}
 }
 .workspace-leaf-placeholder {
   flex:1;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;
@@ -1918,7 +1962,6 @@ body {
 .budget-warning{margin:0;color:var(--amber)}
 .budget-warning.settings-warning{color:inherit;border-left-color:var(--amber)}
 @media(max-width:760px){.budget-axes{grid-template-columns:1fr}}
-.transcript-annotations{flex:none;max-height:180px;overflow:auto;border-bottom:1px solid var(--line);padding:7px 16px}.transcript-annotations h4{margin:0 0 5px;color:var(--muted);font:inherit}.transcript-annotations details{padding:4px 0;border-top:1px solid var(--line)}.transcript-annotations summary{cursor:pointer}.transcript-annotations small{display:block;margin-top:4px;color:var(--muted)}
 @media(max-width:760px){.automation-panel label{grid-template-columns:1fr}.automation-panel label>input,.automation-panel label>select,.automation-panel label>textarea,.automation-panel label>.dropdown-trigger{grid-column:1}.automation-row{flex-wrap:wrap}.automation-row>button{min-height:34px}.automation-flow,.automation-term-grid,.automation-health-grid{grid-template-columns:1fr}.automation-row>.automation-row-actions{width:100%;padding-left:18px}.automation-row-actions button{min-height:34px}
 /* Each row becomes its own card, with every cell labelled from `data-label`. The header row
    goes away because it has nowhere to align to, and the horizontal scroller goes with it. */
@@ -2009,19 +2052,14 @@ body {
 .mobile-unified-workspace{width:100%;height:100%;grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}.mobile-unified-workspace.no-tabs{grid-template-rows:minmax(0,1fr)}.mobile-unified-tabs{flex-wrap:nowrap}.mobile-unified-active{width:100%;height:100%;min-width:0;min-height:0}.mobile-unified-active>.terminal-pane,.mobile-unified-active>.project-resource,.mobile-unified-active>.preview-pane,.mobile-unified-active>.workspace-leaf-placeholder{width:100%;height:100%;min-width:0;min-height:0}.mobile-unified-tab>.tab-main{cursor:pointer}
 /* Keep a preview inside its mobile tab instead of floating fixed over the rails. */
 .mobile-unified-active>.preview-pane{position:static;inset:auto;z-index:auto}
-.transcript-lineage{flex:none;max-height:150px;overflow:auto;border-bottom:1px solid var(--line);padding:7px 16px;display:flex;align-items:center;gap:8px}.transcript-lineage h4{flex:none;margin:0;color:var(--muted);font:inherit}.transcript-lineage article{min-width:220px;display:grid;gap:2px;padding:7px 9px;border-left:2px solid var(--accent);background:var(--panel2)}.transcript-lineage article span,.transcript-lineage article small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 /* A lineage row names the other conversation and, for a branch, where it was cut.
    The name is a button because the browser can open it (`viewById`); a row whose
    other end has been deleted keeps the edge but loses the affordance, since a dead
-   link reads as broken lineage rather than as a removed row. */
-.transcript-lineage article.lineage-missing{border-left-color:var(--muted);opacity:.75}
-.transcript-lineage .lineage-open{justify-self:start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}
-.transcript-lineage .lineage-open:hover{color:var(--accent)}
-.transcript-lineage .lineage-live{color:var(--accent);text-decoration:none}
-.transcript-lineage .lineage-cut{font-style:italic}
-.control-plane-modal-layer{z-index:90}.control-plane-modal{width:min(820px,calc(100vw - 24px));max-height:calc(100dvh - 24px);display:grid;grid-template-rows:auto minmax(0,1fr) auto}.control-plane-modal-body{min-height:0;overflow:auto;padding:14px 18px;display:grid;gap:12px}.control-plane-modal-body p{margin:0;color:var(--muted)}.control-plane-modal-body label{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);align-items:start;gap:12px;color:var(--muted)}.control-plane-modal-body select,.control-plane-modal-body textarea,.control-plane-modal-body .dropdown-trigger{width:100%;border:1px solid var(--line);border-radius:0;background:var(--bg);color:var(--text);font:inherit;padding:7px;resize:vertical}.control-plane-modal-body textarea{min-height:72px}.control-plane-modal-body .review-prompt,.control-plane-modal-body .handoff-export{min-height:260px;white-space:pre-wrap}.control-plane-modal-body .handoff-export{min-height:440px}.modal-warning{color:var(--red)!important}
+   link reads as broken lineage rather than as a removed row. It renders as a
+   `.transcript-row` like every other list in this view. */
+.control-plane-modal-layer{z-index:90}.control-plane-modal{width:min(820px,calc(100vw - 24px));max-height:calc(100dvh - 24px);display:grid;grid-template-rows:auto minmax(0,1fr) auto}.control-plane-modal-body{min-height:0;overflow:auto;padding:14px 18px;display:grid;gap:12px}.control-plane-modal-body p{margin:0;color:var(--muted)}.control-plane-modal-body label{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);align-items:start;gap:12px;color:var(--muted)}.control-plane-modal-body select,.control-plane-modal-body textarea,.control-plane-modal-body .dropdown-trigger{width:100%;border:1px solid var(--line);border-radius:0;background:var(--bg);color:var(--text);font:inherit;padding:7px;resize:vertical}.control-plane-modal-body textarea{min-height:72px}.control-plane-modal-body .handoff-export{min-height:260px;white-space:pre-wrap}.control-plane-modal-body .handoff-export{min-height:440px}.modal-warning{color:var(--red)!important}
 .batch-run-picker{max-height:300px;overflow:auto;margin:8px;border:1px solid var(--line);background:var(--bg)}.automation-panel .batch-run-picker label{grid-template-columns:22px minmax(0,1fr);align-items:center;border-bottom:1px solid var(--line);cursor:pointer}.batch-run-picker label:last-child{border-bottom:0}.batch-run-picker label:hover{background:var(--panel2)}.batch-run-picker label>span{display:grid;gap:2px;color:var(--text)}.batch-run-picker label small{color:var(--muted)}
-@media(max-width:700px){.control-plane-modal-body label{grid-template-columns:1fr}.control-plane-modal-body .review-prompt,.control-plane-modal-body .handoff-export{min-height:220px}}
+@media(max-width:700px){.control-plane-modal-body label{grid-template-columns:1fr}.control-plane-modal-body .handoff-export{min-height:220px}}
 /* Send a note/markdown selection to an agent. The target list is a radio group styled as rows
    (same shape as the batch run picker) so a phone tap lands on the whole row, not the dot. */
 .send-agent-modal{width:min(680px,calc(100vw - 24px))}

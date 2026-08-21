@@ -177,6 +177,39 @@
   history reports only how many there were.
   Both transcript views can additionally disclose native tool names and input arguments behind a default-off toggle.
   Tool results, operational telemetry, and extra transcript persistence are excluded from that disclosure.
+- **The single-conversation view is transcript-first, and everything above it collapses.**
+  The detail view is an action bar over five bands - the run's figures, its commits, its work
+  lineage, its run notes, and its behavioural timeline - and each band is a disclosure whose
+  closed line already says what a reader would open it to find: the state, model, final message
+  time and cost for the run; the commit count and the newest commit; the number of links, notes,
+  or timeline entries.
+  Only the transcript grows; every band is bounded and scrolls when open, so a run with forty
+  commits cannot push the conversation off the view by being expanded.
+  Defaults are applied when a conversation is opened rather than tracked on a media query, so a
+  reader who expands a band keeps it expanded while they read and a window dragged across the
+  mobile breakpoint does not fold up what they were reading.
+  A phone opens every band closed, because the transcript is the view there and each open band
+  is subtracted from the only viewport there is; a desktop opens the run's figures and its
+  behavioural timeline and leaves the three list-shaped bands closed.
+- **The behavioural timeline previews its two newest entries.** The rest are behind a second
+  disclosure inside the band, and the preview is sorted here rather than trusted from the
+  transcript route, which returns a run's records oldest-first: a mis-ordered preview is
+  indistinguishable from a run that did those things in that order.
+- **A commit, a lineage link, a run note, and a timeline entry are all one row that opens.**
+  Commits and lineage were a sideways strip of fixed-width cards, which put the subject - the
+  only part anyone scans for - behind a horizontal scroll on every viewport.
+- **Back to results lives in the detail view's own top bar.** It used to be a full-width row
+  above the title on a phone, which cost the transcript a band of chrome on every conversation
+  opened, and did not exist at all on desktop.
+- **The filter block is a wrapping row of controls sized to their own widest option.**
+  `Dropdown` already reserves exactly that width, so stretching each filter to an equal column
+  made a four-item list occupy half the sidebar for nothing.
+  A floor keeps a short list from collapsing to a stub and is capped at the container, so a
+  narrow sidebar wraps rather than overflowing.
+- **The cross-vendor review button is gone from the detail view**, and with it the review
+  preview dialog it was the sole entry point to.
+  `POST /history/{id}/second-opinion` remains a supported daemon route with its own tests; it
+  simply has no in-app caller.
 - **Phase 7.7 scan-timeline surfaces.** The history transcript payload carries the run's
   `scan_records` alongside its annotations, so the Run-notes view renders the behavioral spine; the
   handoff export (`GET /history/{id}/handoff`) is regenerated phase-structured from that spine when
@@ -268,4 +301,4 @@
 - `src/swe_mux/transcript_fork.py`
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`
-- `frontend/src/HistoryBrowser.tsx`
+- `frontend/src/HistoryBrowser.tsx`, `frontend/src/historyDetail.ts`
