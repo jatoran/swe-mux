@@ -1843,6 +1843,7 @@ Its rules, and what each one is defending:
   It shows retained launch identity and passively discovered built-in tools, skills and commands, MCP configuration, plugins, hooks, custom agents, policies, feature overrides, sources, and diagnostics.
   Scope, origin, state, and completeness remain separate labels.
   Opening it never starts a configured server or executes extension code, and it has no mutation or terminal-insertion action.
+  A per-server **Fetch tools** button on an MCP row is the single exception, and it is a read rather than a mutation: it may start a short-lived probe and label what that probe proves, while tab-open stays passive.
   Source drift is measured against the current CLI process generation, not the latest conversation rollover.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are not
   rendered by default.

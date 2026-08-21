@@ -17,6 +17,10 @@ It never accepts paths, edits bodies, writes global instructions or provider mem
 Session-scoped passive CLI inspection from `/api/sessions/{id}/agent-environment`: runtime identity, tools, skills, MCP, plugins, hooks, custom agents, policies, features, source drift, and diagnostics.
 The surface has no execute, connect, edit, install, or insert action.
 
+`McpServerTools` is the one exception and stays deliberately narrow: a per-row Fetch tools button posting to `/agent-environment/mcp-tools`, rendering the returned catalog under that row with its evidence chip.
+It is local state per row rather than part of the shared fetch, because the whole point is that opening the tab probes nothing - folding it into the inventory would start MCP servers for anyone who opened the drawer.
+`mcpEvidenceLabel` and `mcpStatusLabel` are pure and tested for distinctness: collapsing two tiers, or rendering "auth required" the same as "no tools", is the failure the labels exist to prevent.
+
 The split is by question rather than by size.
 **Config** answers "how is it set up" - runtime block, policies, feature flags, configuration sources, diagnostics.
 **Tools** answers "what can it do" - built-in tools, skills, MCP, plugins, hooks, custom agents, with the filter.

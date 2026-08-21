@@ -27,7 +27,19 @@
 - Changing the session Agent Environment inventory, safety boundaries, or drawer surface:
   `design/features/agent-environment.md`, `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`; runtime inventory research
-  and planned collection strategy: `development/AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md`
+  and planned collection strategy: `development/AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md`.
+  The rule the split exists to enforce: **opening the tab probes nothing**, and the one
+  control that does reach a server (per-server Fetch tools, `src/swe_mux/mcp_tools.py`) is
+  reached only by an explicit press. Everything it returns carries the evidence tier that
+  produced it and those tiers are never collapsed into "connected" - a `parallel_probe` is a
+  *separate* runtime with its own connection and authentication state, so its health is not
+  the health of the CLI in the terminal, and for Claude it is strictly weaker than that CLI's
+  own `/mcp` because dialling configuration reaches neither account connectors nor plugin
+  gating. Two consequences follow. An empty catalog must say which kind of empty it is
+  ("not probed", "not reported by this session", "connected and published nothing" are
+  different facts that render identically otherwise), and an HTTP server carrying credentials
+  is reported rather than dialled, because a probe would spend a credential the user handed to
+  their CLI and not to this drawer.
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`

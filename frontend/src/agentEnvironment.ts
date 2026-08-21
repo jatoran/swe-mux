@@ -62,6 +62,56 @@ export interface AgentEnvironmentInventory {
   diagnostics: Array<{ kind: string; source_id: string | null; message: string }>
 }
 
+/**
+ * How a tool catalog was obtained. Never collapsed into "connected"/"available":
+ * the whole point of the tiers is that a sidecar's health is not the running
+ * CLI's, and a reader must be able to tell which one they are looking at.
+ */
+export type McpToolEvidence = 'swe_mux_owned' | 'live_process' | 'parallel_probe' | 'not_supported'
+
+export type McpToolStatus = 'ok' | 'auth_required' | 'unsupported' | 'unavailable' | 'error'
+
+export interface McpToolCatalog {
+  server: string
+  backend: string
+  evidence: McpToolEvidence
+  status: McpToolStatus
+  tools: Array<{ name: string; description: string; read_only?: boolean }>
+  total: number
+  truncated: boolean
+  note: string
+  diagnostic: string
+  observed_at: number
+  ttl_ms: number
+  cache_scope: 'public' | 'private'
+  server_version: string
+  fingerprint: string
+  cached: boolean
+}
+
+const EVIDENCE_LABELS: Record<McpToolEvidence, string> = {
+  swe_mux_owned: 'swe-mux owned',
+  live_process: 'Live session',
+  parallel_probe: 'Runtime probe',
+  not_supported: 'Not reportable',
+}
+
+export function mcpEvidenceLabel(evidence: McpToolEvidence): string {
+  return EVIDENCE_LABELS[evidence] || evidence
+}
+
+const STATUS_LABELS: Record<McpToolStatus, string> = {
+  ok: '',
+  auth_required: 'auth required · not probed',
+  unsupported: 'not probed',
+  unavailable: 'not reported',
+  error: 'probe failed',
+}
+
+export function mcpStatusLabel(status: McpToolStatus): string {
+  return STATUS_LABELS[status] ?? status
+}
+
 const SCOPE_LABELS: Record<AgentEnvironmentScope, string> = {
   built_in: 'Built in',
   managed: 'Managed',

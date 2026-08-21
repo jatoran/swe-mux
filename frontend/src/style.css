@@ -3769,6 +3769,25 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    has no tooltip to fall back on. */
 .agent-environment-items dd{margin:0;min-width:0;overflow-wrap:anywhere;text-align:right}
 .agent-environment-note{margin:0;padding:5px 2px 1px;color:var(--muted);font-size:7px;line-height:1.4}
+/* The one control in this tab that reaches a server, and its result. Separated
+   from the row above it by a rule so a probe's answer never reads as part of the
+   passive configuration it sits under. */
+.agent-mcp-tools{margin-top:5px;padding-top:5px;border-top:1px dashed var(--line)}
+.agent-mcp-tools-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.agent-mcp-tools-actions button{padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:7px;cursor:pointer}
+.agent-mcp-tools-actions button:disabled{opacity:.55;cursor:default}
+.agent-mcp-tools-actions .agent-state{margin-left:0}
+.agent-mcp-cached{color:var(--muted);font-size:7px}
+/* Evidence tier, always shown beside a catalog: `live_process` and
+   `parallel_probe` mean materially different things and must not read alike. */
+.agent-evidence{padding:0 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;white-space:nowrap}
+.agent-evidence.evidence-live_process{border-color:color-mix(in srgb,var(--green) 52%,var(--line));color:var(--green)}
+.agent-evidence.evidence-swe_mux_owned{border-color:color-mix(in srgb,var(--green) 52%,var(--line));color:var(--green)}
+.agent-evidence.evidence-parallel_probe{border-color:color-mix(in srgb,var(--amber) 48%,var(--line));color:var(--amber)}
+.agent-mcp-tool-list{margin:5px 0 0;padding:0;list-style:none;display:grid;gap:3px}
+.agent-mcp-tool-list li{min-width:0;display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;font-size:7px}
+.agent-mcp-tool-list li strong{font-size:8px;overflow-wrap:anywhere}
+.agent-mcp-tool-list li span{min-width:0;color:var(--muted);overflow-wrap:anywhere}
 .agent-environment-sources>div{padding:0 6px 5px;border-top:1px solid var(--line)}
 .agent-environment-sources p{margin:5px 0 0;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 6px;font-size:8px}
 .agent-environment-sources p strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
