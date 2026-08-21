@@ -98,7 +98,24 @@ export type LandRequest = {
   verifyProgress: LandVerifyProgress | null
   /** Which gate this land ran, once the daemon has classified its change set. */
   verifyGate: LandGate
+  /**
+   * Why a refusal refused, in one machine-readable word, or `''`.
+   *
+   * The reason string beside it is for a reader. This is for the strip, which has to
+   * decide whether it can *do* something about the refusal — and "the verification
+   * command is not approved" cannot be told from any other sentence by matching on it.
+   */
+  refusalCode: LandRefusalCode
 }
+
+/**
+ * The refusals the landing strip can act on, and `''` for every other cause.
+ *
+ * Only the two the operator clears from this very surface are named. Anything else — a
+ * branch that moved, a fast-forward Git would not do — is a fact about the branch, and
+ * naming it here would invite the strip to grow a control for something it cannot fix.
+ */
+export type LandRefusalCode = '' | 'unapproved' | 'not_configured'
 
 /** The Project's authority for *agent*-initiated landing. An operator never needs it. */
 export type LandGrant = 'draft' | 'granted'
@@ -251,6 +268,11 @@ function parseRequest(raw: unknown): LandRequest | null {
     verifyGate: row.verify_gate === 'docs_only' ? 'docs_only'
       : row.verify_gate === 'reused' ? 'reused'
         : row.verify_gate === 'full' ? 'full' : '',
+    // Read off the refusal's own detail, and only for a row that actually refused: a
+    // stale code carried on a landed row would offer an approval for a gate that ran.
+    refusalCode: state === 'refused' && (detail.code === 'unapproved' || detail.code === 'not_configured')
+      ? detail.code
+      : '',
   }
 }
 
@@ -443,6 +465,82 @@ export function landAttentionRow(requests: LandRequest[]): LandRequest | null {
     && (answeredAt.get(branchKey(request)) ?? request.createdAt) <= request.createdAt) || null
 }
 
+/**
+ * When each branch last actually landed, from this queue's own record.
+ *
+ * Only `landed` counts. `already_landed` is the queue saying the trunk already contained
+ * the branch, which is not a landing and carries no moment one happened; guessing one
+ * from that row would put a date on a checkout nothing here ever merged.
+ *
+ * It is a floor and is meant to be read as one: `GET /api/land` returns the newest
+ * hundred rows for the Project, so a branch that landed long enough ago has no entry
+ * here and the Map row simply says nothing. A row with no date means "this queue has no
+ * record of it landing", never "it has not landed".
+ */
+export function landedAtByBranch(requests: LandRequest[]): Map<string, number> {
+  const landed = new Map<string, number>()
+  for (const request of requests) {
+    if (request.state !== 'landed' || !request.branch) continue
+    const at = request.finishedAt || request.updatedAt
+    if (!at) continue
+    const seen = landed.get(request.branch)
+    if (seen === undefined || at > seen) landed.set(request.branch, at)
+  }
+  return landed
+}
+
+/** How many blocked checkouts the strip will draw a gate block for at once. */
+export const MAX_BLOCKED_GATES = 3
+
+/**
+ * The checkouts whose *own* copy of the gate refused a land, newest first.
+ *
+ * The gate resolves per worktree - the script convention is fingerprinted from the
+ * worktree's own `.worktree-verify` - so a branch that edited it presents different
+ * bytes from the primary's. The strip draws the Project-resolved copy, which is the
+ * primary's, so when such a land refused for `unapproved` the surface offered nothing
+ * to approve and the operator had to be walked through the HTTP API (observed
+ * 2026-08-21). These are the roots whose copy has to be offered instead.
+ *
+ * Three rules keep it from becoming a second per-row gate:
+ *
+ *  - Only `unapproved`. `not_configured` has no bytes to show and no approval to give.
+ *  - Only a refusal that still stands, by the same supersession rule the attention row
+ *    uses: a branch that has since landed or verified is not blocked on anything.
+ *  - Only a root other than the Project's own. The primary's copy is the block the
+ *    strip already draws, and drawing it twice is the repetition the strip exists to
+ *    remove.
+ */
+export function blockedVerifyWorktrees(
+  requests: LandRequest[],
+  projectRoot: string,
+): { worktreeRoot: string; branch: string }[] {
+  const answeredAt = new Map<string, number>()
+  for (const request of requests) {
+    if (!ANSWERING_STATES.includes(request.state)) continue
+    const key = branchKey(request)
+    const seen = answeredAt.get(key)
+    if (seen === undefined || request.createdAt > seen) answeredAt.set(key, request.createdAt)
+  }
+  const target = normalizeRoot(projectRoot)
+  const found: { worktreeRoot: string; branch: string }[] = []
+  const seenRoots = new Set<string>()
+  for (const request of landHistoryOrder(requests)) {
+    if (request.refusalCode !== 'unapproved') continue
+    if ((answeredAt.get(branchKey(request)) ?? request.createdAt) > request.createdAt) continue
+    const root = normalizeRoot(request.worktreeRoot)
+    if (!root || root === target || seenRoots.has(root)) continue
+    seenRoots.add(root)
+    found.push({ worktreeRoot: request.worktreeRoot, branch: request.branch })
+  }
+  return found
+}
+
+/** Path identity as the daemon compares it: separators and case folded, no trailing slash. */
+function normalizeRoot(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
 /** How far back the idle summary's "recently" reaches, in seconds. */
 const RECENT_LANDING_SECONDS = 24 * 60 * 60
 
@@ -556,12 +654,15 @@ export type LandingSummary = {
   /**
    * Nothing on this tab can land until a human acts here.
    *
-   * Exactly two causes, and both have their remedy inside the landing strip: the
-   * install-wide sweep is off, or the bytes a land would run are not approved. It is
-   * what opens the strip by default, because a surface that cannot work must not render
-   * as merely quiet (`setting-links.md`).
+   * Three causes now, and all three have their remedy inside the landing strip: the
+   * install-wide sweep is off, the bytes a land would run are not approved, or a
+   * *worktree's own* copy of the gate refused a land and is waiting to be approved. It
+   * is what opens the strip by default, because a surface that cannot work must not
+   * render as merely quiet (`setting-links.md`).
    */
   blocked: boolean
+  /** Checkouts whose own gate copy refused a land and can be approved from the strip. */
+  blockedWorktrees: { worktreeRoot: string; branch: string }[]
 }
 
 /**
@@ -580,16 +681,30 @@ export function landingSummary(
   gate: LandVerifyCommand | null,
   /** Epoch **seconds**, matching every timestamp on a request row. Injected by tests. */
   now: number = Date.now() / 1000,
+  /** The Project's own root, so a worktree that resolves the same gate is not a block. */
+  projectRoot: string = '',
 ): LandingSummary {
   const installStopped = queue !== null && !queue.installedEnabled
   const gateBlocked = gate !== null && (!gate.configured || !gate.approved)
-  const blocked = installStopped || gateBlocked
-  const gateText = gate === null ? 'verification unread'
+  const blockedWorktrees = blockedVerifyWorktrees(queue?.requests || [], projectRoot)
+    .slice(0, MAX_BLOCKED_GATES)
+  const blocked = installStopped || gateBlocked || blockedWorktrees.length > 0
+  // A blocked *worktree* copy is stated on the closed strip too, and it has to be:
+  // this is exactly the case where the Project-resolved gate reads "approved" and a
+  // land is nevertheless refused for an unapproved command, which is unreadable
+  // without it.
+  const blockedNote = blockedWorktrees.length
+    ? `${blockedWorktrees.length} worktree${blockedWorktrees.length === 1 ? '' : 's'}`
+      + ' awaiting approval'
+    : ''
+  const baseGateText = gate === null ? 'verification unread'
     : !gate.configured ? 'no verification command'
       : gate.approved ? `verification approved · ${gate.display}`
         : 'verification not approved'
+  const gateText = blockedNote ? `${baseGateText} · ${blockedNote}` : baseGateText
   const gateTone: 'ok' | 'warn' | 'idle' = gate === null ? 'idle'
-    : gate.configured && gate.approved ? 'ok' : 'warn'
+    : blockedWorktrees.length ? 'warn'
+      : gate.configured && gate.approved ? 'ok' : 'warn'
 
   const active = landQueueOrder(queue?.requests || [])
   const running = active.find(request => landStateTone(request.state) === 'busy') || null
@@ -638,5 +753,5 @@ export function landingSummary(
     queueText = landed > 0 ? `nothing queued · ${landed} landed recently` : 'nothing queued'
     tone = gateTone === 'warn' ? 'warn' : 'idle'
   }
-  return { gate: gateText, gateTone, queue: queueText, tone, blocked }
+  return { gate: gateText, gateTone, queue: queueText, tone, blocked, blockedWorktrees }
 }

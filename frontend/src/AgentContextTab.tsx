@@ -78,6 +78,33 @@ function errorMessage(cause: unknown): string {
 
 type SourceMenu = { item: AgentContextSource; x: number; y: number }
 
+/**
+ * The last inventory read per Project, so a remount is not a cold read.
+ *
+ * The Agent tab is not `keepMounted`: switching to another drawer tab and back unmounts
+ * and remounts this one, and every remount was a fresh scan of every instruction file
+ * with an empty pane while it ran. The daemon caches this response too
+ * (`agent_context.py`); this is the client half of the same idea, and the same one
+ * `AgentEnvironmentTab`'s `ENVIRONMENT_CACHE` already applies to the sibling segment.
+ *
+ * Module-scoped rather than lifted into a provider because there is exactly one drawer,
+ * and bounded because a fleet of Projects would otherwise retain one payload each for
+ * the life of the page. Every write to the underlying files reaches this through
+ * `agent_context_changed` and the filtered `project_files_changed`, which refresh and
+ * overwrite the entry; the rescan button bypasses both ends.
+ */
+const INVENTORY_CACHE = new Map<string, AgentContextInventory>()
+const INVENTORY_CACHE_LIMIT = 8
+
+function rememberInventory(projectId: string, value: AgentContextInventory) {
+  if (!projectId) return
+  INVENTORY_CACHE.set(projectId, value)
+  if (INVENTORY_CACHE.size > INVENTORY_CACHE_LIMIT) {
+    const oldest = INVENTORY_CACHE.keys().next().value
+    if (oldest !== undefined && oldest !== projectId) INVENTORY_CACHE.delete(oldest)
+  }
+}
+
 function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen, onRevealMenu }: {
   item: AgentContextSource
   selected: boolean
@@ -163,18 +190,19 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     }
   }, [sourceMenu])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (rescan = false) => {
     if (!projectId) { setInventory(null); return }
     const mine = ++generation.current
     setLoading(true)
     try {
       const next = await api<AgentContextInventory>(
         'GET',
-        `/api/projects/${projectId}/agent-context`,
+        `/api/projects/${projectId}/agent-context${rescan ? '?refresh=1' : ''}`,
         undefined,
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )
       if (mine !== generation.current) return
+      rememberInventory(projectId, next)
       setInventory(next)
       const readable = [
         ...next.instructions.items,
@@ -199,7 +227,10 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
 
   useEffect(() => {
     generation.current += 1
-    setInventory(null)
+    // Seeded from the last reading of *this* Project, so a remount draws immediately and
+    // the fetch below replaces it. `null` for a Project never read here, which is the
+    // "scanning…" state and the only time this pane is legitimately empty.
+    setInventory(INVENTORY_CACHE.get(projectId) || null)
     // Seeded from storage rather than cleared: `refresh` below validates it against what
     // is actually readable, so an id for a file that has since gone still resolves to the
     // empty state without a flash of the wrong body.
@@ -373,7 +404,10 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
             : `${project.name} · Project inventory`}
         </small>
       </div>
-      <button disabled={loading || !!busy} onClick={() => void refresh()}>{loading ? 'scanning…' : 'rescan'}</button>
+      {/* The one read that skips both caches, on both ends. "Rescan" has to mean it: a
+          stat signature cannot see a same-size rewrite landing in the same nanosecond,
+          and this is what a reader presses when they believe they are looking at one. */}
+      <button disabled={loading || !!busy} onClick={() => void refresh(true)}>{loading ? 'scanning…' : 'rescan'}</button>
     </header>
 
     {(error || message) && <p class={`agent-context-notice ${error ? 'error' : ''}`} aria-live="polite">

@@ -341,6 +341,16 @@ async def record_network_response(
         meter.record_http(request, response)
 
 
+def compact_json_bytes(data: Any) -> bytes:
+    """The exact octets `compact_json_response` would send.
+
+    Named so a handler that has to *fingerprint* what it is about to serve - a
+    conditional request's `ETag` - derives the tag from the same bytes rather than from
+    a second serialization that might disagree with them.
+    """
+    return json.dumps(data, separators=(",", ":")).encode("utf-8")
+
+
 def compact_json_response(data: Any, status: int = 200) -> web.Response:
     """JSON response without insignificant spaces; compression is negotiated later."""
 

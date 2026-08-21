@@ -16,7 +16,7 @@ import {
 import type { GitOverviewWorktree, ReviewChangeSummary } from '../src/gitWorktrees.ts'
 
 const summary = (total: number): ReviewChangeSummary =>
-  ({ total, additions: total, deletions: 0, binaryFiles: 0, files: [], truncated: false })
+  ({ total, additions: total, deletions: 0, binaryFiles: 0, files: [], truncated: false, filesOmitted: false })
 
 function tree(overrides: Partial<GitOverviewWorktree> = {}): GitOverviewWorktree {
   return {

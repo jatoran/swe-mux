@@ -72,7 +72,15 @@ export type GitGraphCommit = {
 
 export type GitGraphConnector = { kind: 'connector'; graph: string }
 export type GitGraphLine = GitGraphCommit | GitGraphConnector
-export type GitGraph = { lines: GitGraphLine[]; limit: number; hasMore: boolean }
+export type GitGraph = {
+  lines: GitGraphLine[]
+  limit: number
+  hasMore: boolean
+  /** A search ran, so these commits are a filtered subset and carry no lane drawing —
+   *  Git only draws lanes for a contiguous walk, and lanes over a subset would connect
+   *  commits that are not connected. */
+  filtered: boolean
+}
 
 export type GitProvenance = {
   id: string
@@ -255,7 +263,7 @@ export function parseWorktrees(raw: unknown): Worktree[] {
 }
 
 export function parseGitGraph(raw: unknown): GitGraph {
-  if (!raw || typeof raw !== 'object') return { lines: [], limit: 0, hasMore: false }
+  if (!raw || typeof raw !== 'object') return { lines: [], limit: 0, hasMore: false, filtered: false }
   const record = raw as Record<string, unknown>
   const lines: GitGraphLine[] = []
   if (Array.isArray(record.lines)) {
@@ -294,6 +302,7 @@ export function parseGitGraph(raw: unknown): GitGraph {
     lines,
     limit: typeof record.limit === 'number' && Number.isFinite(record.limit) ? record.limit : 0,
     hasMore: record.has_more === true,
+    filtered: record.filtered === true,
   }
 }
 
@@ -703,6 +712,14 @@ export type ReviewChangeSummary = {
   binaryFiles: number
   files: ReviewFileChange[]
   truncated: boolean
+  /**
+   * The counts are real; the file list was withheld (`detail=summary`).
+   *
+   * Distinct from `files: []` with `total: 0`, and it has to be: a Map row that shows
+   * "12 local" over an empty list is not an empty change set, it is a change set nobody
+   * asked for yet. The row fetches its own full reading when it expands.
+   */
+  filesOmitted: boolean
 }
 
 export type GitComparison = {
@@ -920,7 +937,7 @@ export function parseReviewSummary(value:unknown):ReviewChangeSummary|null {
       currentExists:typeof item.current_exists==='boolean'?item.current_exists:null,
     })
   }
-  return {total,additions,deletions,binaryFiles,files,truncated:raw.truncated===true}
+  return {total,additions,deletions,binaryFiles,files,truncated:raw.truncated===true,filesOmitted:raw.files_omitted===true}
 }
 
 export function parseGitOverview(value:unknown):GitWorktreeOverview|null {

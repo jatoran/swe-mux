@@ -930,6 +930,12 @@ class GitMonitor:
                         "git_changed",
                         session_id=session.record.id,
                         source="daemon",
+                        # Which Project's repository moved. Every session's five-second
+                        # dirty tick raises this, and the Git tab refetched a whole
+                        # worktree overview on each one regardless of whose repository
+                        # it was about - at fifty checkouts, several hundred `git`
+                        # subprocesses for a Project nobody was looking at.
+                        project_id=session.record.project_id,
                         git=asdict(state),
                         # Tier 0 provenance reads these: which commit, which
                         # working-tree change set. The UI ignores them.

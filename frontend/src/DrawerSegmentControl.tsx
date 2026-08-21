@@ -20,14 +20,24 @@ type Props = {
   active: string | null
   context: DrawerSegmentContext
   onSelect: (segment: string) => void
+  /**
+   * Draw compactly, for a tab that puts its segments in the heading row.
+   *
+   * Same control, same registry, same keyboard behaviour — only narrower. A tab whose
+   * heading is the segment's own name (Git: "Map", "Log", "Provenance") was printing
+   * that name twice, once as a heading and once as the selected chip directly beneath
+   * it, and spending a row of a small panel to do it.
+   */
+  inline?: boolean
 }
 
-export function DrawerSegmentControl({ tab, active, context, onSelect }: Props) {
+export function DrawerSegmentControl({ tab, active, context, onSelect, inline }: Props) {
   const segments = availableDrawerSegments(tab, context)
   // One available segment is not a choice, so it is not drawn as one. This is the Agent tab
   // on a shell session (Instructions alone) rather than a hypothetical.
   if (segments.length < 2) return null
-  return <div class="segmented-tabs drawer-segmented" role="tablist" aria-label={`${tab} view`}>
+  return <div class={`segmented-tabs drawer-segmented${inline ? ' drawer-segmented-inline' : ''}`}
+    role="tablist" aria-label={`${tab} view`}>
     {segments.map((segment, index) => <button
       key={segment.id}
       role="tab"

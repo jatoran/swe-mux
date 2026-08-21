@@ -121,6 +121,11 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   aiohttp serves according to `Accept-Encoding`.
 - The root document uses `Cache-Control: no-cache, must-revalidate` because it names content-addressed assets and carries the production UI identity.
   Hashed `/assets/` responses use a one-year immutable cache because a changed payload receives a changed filename.
+- `GET /api/git/worktrees` is the one **conditional** API response: a weak `ETag` over the exact bytes served, with `Cache-Control: no-cache`.
+  It earns it because every open client refetches it on any session's five-second dirty tick and the great majority of those answers are byte-identical to the one the client already holds - so the common case becomes a request with no body at all, over a link that may be a phone on a tailnet.
+  `no-cache` is "revalidate before every use", not "do not store"; without it a browser never sends `If-None-Match` and the conditional never happens.
+  The client code is unchanged, because `fetch` turns the 304 back into a 200 from its own cache.
+  Compression makes bytes smaller; this is the only mechanism here that makes them absent, which is why the same endpoint also serves a `detail=summary` reading that withholds per-file lists nothing on screen is drawing (`git.md`).
 - A cold `/events` socket receives only the current durable sequence watermark, because the
   initial REST snapshot already supplies authoritative state.
   Reconnect replay is capped at 64 records; a wider gap sends one watermark and triggers one

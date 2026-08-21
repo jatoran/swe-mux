@@ -1867,6 +1867,9 @@ Its rules, and what each one is defending:
   Agent Context is **Agent's Instructions segment**, because tools, policies, and instruction files are the halves of "what is this agent running with".
 - The two kinds are deliberately distinct rather than collapsed into one (`frontend/src/drawerSegments.ts`).
   A **segment** is a mutually exclusive view of a tab, drawn by the drawer's single shared segmented control under the pane heading; the heading names the segment, not the tab, because "Change Map" is what that pane *is* while "Activity" is only where it lives.
+  **Git is the exception, and the exception proves the rule**: its three headings *are* its three segment labels, so the heading row was printing the selected chip's own text directly above that chip and spending a row of a narrow panel to do it.
+  There the control is drawn compactly **in** the heading row, in place of the heading, sized to its labels so the Project scope still fits beside it - the same control, the same registry, the same keyboard behaviour, and no second toggle (`git.md`).
+  Every tab whose heading names something the segments do not keeps the strip under the heading, unchanged.
   A **section** is a co-visible region of one scroller, reached by scrolling to it and flashing it through the same `settingReveal.ts` arrival the Settings deep links use (`setting-links.md`).
 - Segments are **registered, not local state**, and that is the point rather than tidiness.
   Every registered tab generates two palette commands and three voice phrases; a segment reached only by clicking would have none, so folding Clipboard into Actions and Change Map into Activity would have *deleted* "open Clipboard" and "open Change Map" as commands and as spoken navigation.

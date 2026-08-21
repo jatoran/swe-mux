@@ -610,6 +610,8 @@ export function UtilityDrawer(props: Props) {
     // that pane is; "Activity" is only where it lives, and a heading that never changed
     // while the body did would be the tab strip repeated rather than a label.
     const heading = (segment && drawerSegment(selected, segment)?.heading) || active.heading
+    // The one tab whose heading is always exactly its selected segment's label.
+    const inlineSegments = selected === 'git'
     const notesHere = stack.tabs.includes('notes')
     return <section
       key={stack.id}
@@ -625,8 +627,23 @@ export function UtilityDrawer(props: Props) {
         class={`drawer-body drawer-body-${selected}`}
         style={{ '--drawer-panel-title-width': `${Math.min(22, heading.length + 2.5)}ch` } as JSX.CSSProperties}
       >
-        <div class="drawer-pane-heading">
-          <h2 class="drawer-panel-title" title={active.title}>{heading}</h2>
+        {/* Git puts its segments in the heading row instead of a heading.
+            Everywhere else the heading names something the segment strip does not
+            ("Change Map" under Activity), but Git's three headings are the three
+            segment labels - so the row above the control was the control's own
+            selected chip, spelled out, costing a line of a panel people keep narrow.
+            The scope context stays: which Project this repository belongs to is the
+            one fact the segments do not carry. */}
+        <div class={`drawer-pane-heading${inlineSegments ? ' with-segments' : ''}`}>
+          {inlineSegments
+            ? <DrawerSegmentControl
+                tab={selected}
+                active={segment}
+                context={segmentContext}
+                onSelect={id => props.onSegment(selected, id)}
+                inline
+              />
+            : <h2 class="drawer-panel-title" title={active.title}>{heading}</h2>}
           <span class="drawer-scope-context">{scopeContext(selected)}</span>
           {stack.id === collapseHostId && <button
             class="drawer-collapse"
@@ -635,12 +652,12 @@ export function UtilityDrawer(props: Props) {
             onClick={onClose}
           >×</button>}
         </div>
-        <DrawerSegmentControl
+        {!inlineSegments && <DrawerSegmentControl
           tab={selected}
           active={segment}
           context={segmentContext}
           onSelect={id => props.onSegment(selected, id)}
-        />
+        />}
         {notesHere && renderNoteHost(selected === 'notes')}
         {selected !== 'notes' && renderSegmentedBody(stack.id, selected, segment)}
       </div>

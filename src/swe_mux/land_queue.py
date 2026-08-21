@@ -987,7 +987,20 @@ class LandQueueService:
             )
         if not final.passed:
             if final.status in {"not_configured", "unapproved"}:
-                await self._refuse(current, final.failure_summary())
+                # The code, the digest, and which copy resolved it - not just a
+                # sentence. A land refused on *this worktree's* edited gate has to be
+                # answerable in the landing strip, and the strip cannot read a reason
+                # string to learn which checkout's bytes to offer for approval.
+                await self._refuse(
+                    current,
+                    final.failure_summary(),
+                    detail={
+                        "code": final.status,
+                        "verify_digest": final.digest or "",
+                        "verify_source": final.source or "",
+                        "worktree_root": row["worktree_root"],
+                    },
+                )
                 return None
             await self._hand_back(
                 current,
@@ -1116,13 +1129,28 @@ class LandQueueService:
         *,
         detail: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """End the request without running anything, and tell its author.
+
+        The reply is the half this was missing. A handback has always answered the
+        session that asked; a refusal answered nobody, so an agent that called
+        `request_land` and went quiet - which is what waiting for a land *is* - sat
+        idle while its request died of an unapproved gate or a moved branch. Observed
+        2026-08-21, twice in one evening. It rides the same `_solicited_reply` bounds
+        as a handback and for the same reason: it is the bounded, deterministic,
+        daemon-authored answer to a request this very session made.
+        """
+        payload = dict(detail or {})
+        message_id, armed, arming_reason = await self._solicited_reply(
+            row, self._refused_body(row, reason=reason, detail=payload)
+        )
         updated = await self._store.transition(
             row["id"],
             expect=("queued", "waiting", "reconciling", "verifying", "landing"),
             state="refused",
             reason=reason,
-            detail=dict(detail or {}),
+            detail=payload,
             clear_waiting=True,
+            handback_message_id=message_id,
             now=self._clock(),
         )
         await self._store.record_event(
@@ -1131,7 +1159,8 @@ class LandQueueService:
             step="request",
             outcome="refused",
             reason=reason,
-            detail=dict(detail or {}),
+            detail={**payload, "message_id": message_id, "armed": armed,
+                    "arming_reason": arming_reason},
             now=self._clock(),
         )
         await self._fact(updated, "land_refused", {"reason": reason})
@@ -1372,6 +1401,54 @@ class LandQueueService:
                 "The worktree was left as it was found; nothing was committed for you.",
             ]
         )
+        return "\n".join(lines)
+
+    def _refused_body(
+        self, row: dict[str, Any], *, reason: str, detail: dict[str, Any]
+    ) -> str:
+        """A fixed template for a request the pipeline ended without running it.
+
+        Its whole job is to keep the reader from re-reading their own branch. A
+        refusal is a statement about the *setup* - an unapproved gate, no gate at all,
+        a branch that moved out from under a verdict, a fast-forward Git would not
+        do - and an agent told only "your land was refused" will go looking for the
+        defect in its own diff, which is the one place it is not. So the message says
+        what is wrong, whose act clears it, and, for the two cases that are nobody's
+        code, that the branch is not the problem. No model writes any part of it.
+        """
+        what = "land" if self._lands(row) else "verification"
+        code = str(detail.get("code") or "")
+        lines = [
+            f"The {what} of `{row['branch']}` was refused: {reason}.",
+            "",
+            f"Worktree: `{row['worktree_root']}`",
+            f"Target: `{row['project_root']}` ({row['trunk_ref'] or 'HEAD'})",
+            "",
+        ]
+        if code in {"unapproved", "not_configured"}:
+            lines.extend(
+                [
+                    "**This is not a problem with your branch.** Nothing was run against it "
+                    "and nothing about it was found wanting.",
+                    "",
+                    (
+                        "The verification command this checkout resolves to is not "
+                        "approved on this machine."
+                        if code == "unapproved"
+                        else "This Project has no verification command, so there is "
+                        "nothing the queue is allowed to run."
+                    ),
+                    "",
+                    "Approving is a human act against the exact bytes, in the Git tab's "
+                    "Landing strip. You cannot approve it yourself, and neither can the "
+                    f"daemon. Once it is approved, request the {what} again.",
+                ]
+            )
+        else:
+            lines.append(
+                f"Nothing was committed, merged, or left behind. Address the cause above "
+                f"and request the {what} again."
+            )
         return "\n".join(lines)
 
     def _verified_body(

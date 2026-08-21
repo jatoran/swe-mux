@@ -35,6 +35,7 @@ import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
 import { GitLandBar } from './GitLandBar'
 import { GitLandRow } from './GitLandRow'
+import { landedAtByBranch } from './gitLand'
 import { landErrorText, useLandQueue } from './landState'
 import {
   assessRemoval,
@@ -55,7 +56,7 @@ import { GitReviewModal } from './GitReviewModal'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import {
   comparisonSourceLabel, parseCommitChanges, parseGitOverview, sortWorktreesByActivity,
-  type GitCommitChanges, type GitWorktreeOverview,
+  type GitCommitChanges, type GitOverviewWorktree, type GitWorktreeOverview,
   type ReviewChangeSummary, type ReviewFileChange,
 } from './gitWorktrees'
 import type { ReviewLocator } from './gitReview'
@@ -94,6 +95,17 @@ import type { ReviewLocator } from './gitReview'
 export type GitView = 'map' | 'log' | 'provenance'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
+/** `HistoryBrowser`'s own search cadence, so every search box in the app types alike. */
+const SEARCH_DEBOUNCE_MS = 220
+/**
+ * How long a burst of `mux:git-changed` is allowed to coalesce.
+ *
+ * The event is raised by every session's five-second dirty tick, so ten sessions in one
+ * repository is ten refetches of the same answer within a few hundred milliseconds. The
+ * window is trailing and short: it must not make the tab feel stale after a real act
+ * (a commit, a worktree removal), only stop the herd.
+ */
+const GIT_REFRESH_DEBOUNCE_MS = 350
 
 function describeGitError(cause: unknown, action: string, mayHaveMutated=false): string {
   const error = cause as ApiError
@@ -107,6 +119,14 @@ function committedLabel(timestamp: number): string {
   if (!timestamp) return ''
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
     .format(new Date(timestamp * 1000))
+}
+
+/** A landing's moment, to the minute: "when did this branch land" is a same-day question. */
+function landedLabel(timestamp: number): string {
+  if (!timestamp) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(new Date(timestamp * 1000))
 }
 
 function GraphGlyph({ value, commit=false }: { value: string; commit?: boolean }) {
@@ -164,6 +184,20 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
   const [expandedTree,setExpandedTree]=useState('')
+  // Full-detail rows, one per checkout the reader has expanded. The Map itself is read
+  // with `detail=summary`, which withholds every per-file list: four lists of up to two
+  // hundred records per worktree, served so a badge can say "12 local".
+  const [treeDetail,setTreeDetail]=useState<Record<string,GitOverviewWorktree>>({})
+  const [detailBusy,setDetailBusy]=useState('')
+  const [detailError,setDetailError]=useState('')
+  // Client-side only, and deliberately: every branch and path this filters on is already
+  // in the payload, so asking the daemon would be a round trip to re-send what is on
+  // screen.
+  const [treeFilter,setTreeFilter]=useState('')
+  const [logQuery,setLogQuery]=useState('')
+  const [logField,setLogField]=useState<'message'|'author'>('message')
+  const [logRegex,setLogRegex]=useState(false)
+  const [provenanceQuery,setProvenanceQuery]=useState('')
   const [preview,setPreview]=useState<Record<string,string>>({})
   const [expandedCommit,setExpandedCommit]=useState('')
   const [commitCache,setCommitCache]=useState<Map<string,GitCommitChanges>>(()=>new Map())
@@ -212,11 +246,18 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     const mine=++generation.current
     setBusy(true)
     try{
-      const raw=await api<unknown>('GET',`/api/git/worktrees?project_id=${encodeURIComponent(project.id)}`,undefined,{timeoutMs:20000})
+      // `detail=summary`: counts for every row, file lists for none. The daemon serves
+      // this with an `ETag` and `Cache-Control: no-cache`, so a poll that finds nothing
+      // changed costs a conditional request and no body at all.
+      const raw=await api<unknown>('GET',`/api/git/worktrees?project_id=${encodeURIComponent(project.id)}&detail=summary`,undefined,{timeoutMs:20000})
       if(mine!==generation.current)return
       const parsed=parseGitOverview(raw)
       if(!parsed)throw new Error('The daemon returned an invalid Git overview.')
       setOverview(parsed);setError('');setPreview({});setNotRepository(false)
+      // Every expanded row's file lists are now a statement about a tree that has moved
+      // (that is what brought us here), so they are dropped rather than redrawn. The
+      // effect below re-reads whichever one is still open.
+      setTreeDetail({})
       // The inventory is the only thing that ends a removing indication, and the only
       // thing that can: the daemon answers a fast removal before Git has finished
       // deleting anything, and a slow one while it still is.
@@ -234,33 +275,94 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     finally{if(mine===generation.current)setBusy(false)}
   },[project?.id])
 
-  const refreshGraph=useCallback(async(limit:number)=>{
+  const refreshGraph=useCallback(async(limit:number,search:{query:string;field:'message'|'author';regex:boolean})=>{
     if(!project)return
     const mine=++graphGeneration.current
     try{
-      const raw=await api<unknown>('GET',`/api/git/graph?project_id=${encodeURIComponent(project.id)}&limit=${limit}`,undefined,{timeoutMs:20000})
+      const query=new URLSearchParams({project_id:project.id,limit:String(limit)})
+      // Only sent when there is something to search for. An empty `grep` would ask Git
+      // to match every commit against nothing, and - because filtering drops
+      // `--graph` - would silently retire the lane drawing for no reason.
+      if(search.query.trim()){
+        query.set(search.field==='author'?'author':'grep',search.query.trim())
+        if(search.regex)query.set('regex','1')
+      }
+      const raw=await api<unknown>('GET',`/api/git/graph?${query}`,undefined,{timeoutMs:20000})
       if(mine!==graphGeneration.current)return
       setGraph(parseGitGraph(raw));setError('')
     }catch(cause){if(mine===graphGeneration.current)setError(describeGitError(cause,'Reading the commit graph'))}
   },[project?.id])
 
-  const refreshProvenance=useCallback(async()=>{
+  const refreshProvenance=useCallback(async(search='')=>{
     if(!project){setProvenance([]);setProvenanceGroups([]);setRefMoves([]);return}
     const mine=++provenanceGeneration.current
     try{
-      const raw=await api<unknown>('GET',`/api/git/provenance?project_id=${encodeURIComponent(project.id)}&limit=500`)
+      const query=new URLSearchParams({project_id:project.id,limit:'500'})
+      if(search.trim())query.set('subject',search.trim())
+      const raw=await api<unknown>('GET',`/api/git/provenance?${query}`)
       if(mine!==provenanceGeneration.current)return
       setProvenance(parseGitProvenance(raw));setProvenanceGroups(groupProvenance(raw));setRefMoves(parseGitRefMoves(raw));setProvenanceError('')
     }catch(cause){if(mine===provenanceGeneration.current)setProvenanceError(cause instanceof Error?cause.message:String(cause))}
   },[project?.id])
 
+  /**
+   * One checkout's full reading, for the row that just opened.
+   *
+   * The Map is read with `detail=summary`, so an expanded row has counts and no files.
+   * This asks the daemon for that one worktree - which is one worktree's worth of Git,
+   * not the Project's - and the row draws its answer.
+   */
+  const loadTreeDetail=useCallback(async(path:string)=>{
+    if(!project)return
+    setDetailBusy(path);setDetailError('')
+    try{
+      const query=new URLSearchParams({project_id:project.id,detail:'full',worktree:path})
+      const raw=await api<unknown>('GET',`/api/git/worktrees?${query}`,undefined,{timeoutMs:20000})
+      const parsed=parseGitOverview(raw)
+      const row=parsed?.worktrees.find(item=>normalizePath(item.path)===normalizePath(path))
+      if(!row)throw new Error('The daemon returned no reading for this worktree.')
+      setTreeDetail(current=>({...current,[path]:row}))
+    }catch(cause){setDetailError(describeGitError(cause,'Reading the worktree'))}
+    finally{setDetailBusy(current=>current===path?'':current)}
+  },[project?.id])
+
   useEffect(()=>{
-    setOverview(null);setGraph(null);setProvenance([]);setProvenanceGroups([]);setRefMoves([]);setProvenanceError('');setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
-    void refresh();void refreshProvenance()
-    const changed=()=>{void refresh();void refreshProvenance()}
+    setOverview(null);setGraph(null);setProvenance([]);setProvenanceGroups([]);setRefMoves([]);setProvenanceError('');setExpandedTree('');setTreeDetail({});setDetailError('');setTreeFilter('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
+    void refresh()
+    // Two filters on one listener, and both are the same defect: work done for a
+    // repository nobody is looking at. `git_changed` is raised by *every* session's
+    // five-second dirty tick, so an unfiltered handler re-read this Project's whole
+    // worktree map on another Project's poll - and ten sessions in this one repository
+    // raised it ten times inside a few hundred milliseconds for one answer.
+    let timer:number|undefined
+    const changed=(event:Event)=>{
+      const detail=(event as CustomEvent<{projectId?:string}>).detail
+      // An event with no Project named is not filtered out: `mux:events-connected` and
+      // the worktree acts carry none, and treating "unknown" as "not mine" would stop
+      // the tab refreshing after a reconnect.
+      if(detail?.projectId&&detail.projectId!==project?.id)return
+      window.clearTimeout(timer)
+      timer=window.setTimeout(()=>{void refresh()},GIT_REFRESH_DEBOUNCE_MS)
+    }
     window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
-    return()=>{window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed);window.removeEventListener('mux:worktree-created',changed);window.removeEventListener('mux:worktree-removed',changed)}
-  },[refresh,refreshProvenance])
+    return()=>{window.clearTimeout(timer);window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed);window.removeEventListener('mux:worktree-created',changed);window.removeEventListener('mux:worktree-removed',changed)}
+  },[refresh,project?.id])
+
+  // The provenance ledger is read by Log (its per-commit session links) and by
+  // Provenance. Map draws none of it, and used to fetch five hundred rows of it on
+  // every one of the refreshes above.
+  useEffect(()=>{
+    if(view==='map')return
+    const timer=window.setTimeout(()=>{void refreshProvenance(provenanceQuery)},provenanceQuery?SEARCH_DEBOUNCE_MS:0)
+    return()=>window.clearTimeout(timer)
+  },[view,provenanceQuery,refreshProvenance])
+
+  // The expanded row's own file lists. Re-runs after a refresh drops them, which is what
+  // keeps an open row current without the Map paying for every row's lists.
+  useEffect(()=>{
+    if(view!=='map'||!expandedTree||treeDetail[expandedTree])return
+    void loadTreeDetail(expandedTree)
+  },[view,expandedTree,treeDetail,loadTreeDetail])
   useEffect(()=>setCompareOverride(project?.git_compare_ref||''),[project?.git_compare_ref])
   useEffect(()=>{
     const id=project?.id
@@ -275,12 +377,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   },[project?.id])
   useEffect(()=>{
     if(view!=='log')return
-    if(!graph)void refreshGraph(graphLimit)
-    const changed=()=>void refreshGraph(graphLimit)
+    const search={query:logQuery,field:logField,regex:logRegex}
+    // Debounced only while typing. A refetch caused by the repository moving, or by
+    // loading more commits, is not a keystroke and waits for nothing.
+    const timer=window.setTimeout(()=>{void refreshGraph(graphLimit,search)},logQuery?SEARCH_DEBOUNCE_MS:0)
+    const changed=()=>void refreshGraph(graphLimit,search)
     window.addEventListener('mux:git-changed',changed)
     window.addEventListener('mux:events-connected',changed)
-    return()=>{window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed)}
-  },[view,graphLimit,refreshGraph])
+    return()=>{window.clearTimeout(timer);window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed)}
+  },[view,graphLimit,logQuery,logField,logRegex,refreshGraph])
 
   const provenanceByCommit=new Map<string,GitProvenance[]>()
   for(const item of provenance){const entries=provenanceByCommit.get(item.commitOid)||[];entries.push(item);provenanceByCommit.set(item.commitOid,entries)}
@@ -298,6 +403,17 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const mainTree=orderedWorktrees.find(tree=>tree.main)
   const linkedWorktrees=orderedWorktrees.filter(tree=>!tree.main)
   const comparisonLabel=overview?.comparison.available?(overview.comparison.display||overview.comparison.ref):null
+  // Substring, case-insensitive, over the two things a reader has to go on at fifty
+  // checkouts: the branch and the directory. Not a fuzzy match - a filter that matches
+  // things the reader cannot see the reason for is worse than one that matches less.
+  const filterText=treeFilter.trim().toLowerCase()
+  const shownWorktrees=filterText
+    ? orderedWorktrees.filter(tree=>`${tree.branch||''} ${tree.path}`.toLowerCase().includes(filterText))
+    : orderedWorktrees
+  // When this queue last landed each branch. A floor, and drawn only where it exists:
+  // `GET /api/land` returns the newest hundred rows, so a branch that landed long enough
+  // ago says nothing rather than something invented (`landedAtByBranch`).
+  const landedAt=landedAtByBranch(landQueue?.requests||[])
 
   const saveComparison=async(value:string)=>{
     setBusy(true)
@@ -397,7 +513,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         :`Repository created on ${result.branch}. The folder already had a .gitignore, which was left alone.`)
       // Everything else in the tab reads through the same refresh path, and other clients
       // learn about it from the daemon's `git_changed` event rather than from this one.
-      await refresh();void refreshProvenance()
+      await refresh()
     }catch(cause){setError(describeGitError(cause,'Creating the repository',true))}
     finally{setBusy(false)}
   }
@@ -500,11 +616,42 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
 
   return <div class="git-tab git-review-tab">
     <div class="git-toolbar">
+      {/* Each reading searches the thing it is a reading *of*, and each searches it where
+          that search is cheapest. Map filters the payload it already has - every branch
+          and path is on screen. Log asks Git, because a message body is not in any
+          payload here and `git log --grep` is the only thing that has read them all.
+          Provenance asks SQLite, over an indexed column, which is instant and covers
+          exactly the commits this daemon observed - a strictly smaller set than Git's,
+          and complementary rather than a substitute for it. */}
+      {view==='map'&&<label class="git-search">
+        <span class="sr-only">Filter worktrees</span>
+        <input type="search" value={treeFilter} placeholder="filter branch or path"
+          onInput={event=>setTreeFilter(event.currentTarget.value)}/>
+      </label>}
+      {view==='log'&&<label class="git-search">
+        <span class="sr-only">Search commits</span>
+        <input type="search" value={logQuery} placeholder={logField==='author'?'search author':'search commit messages'}
+          onInput={event=>setLogQuery(event.currentTarget.value)}/>
+      </label>}
+      {view==='log'&&<select aria-label="Search field" value={logField}
+        onChange={event=>setLogField(event.currentTarget.value==='author'?'author':'message')}>
+        <option value="message">message</option>
+        <option value="author">author</option>
+      </select>}
+      {view==='log'&&<label class="git-search-regex" title="Treat the search as a regular expression rather than literal text">
+        <input type="checkbox" checked={logRegex} onChange={event=>setLogRegex(event.currentTarget.checked)}/>
+        {' '}regex
+      </label>}
+      {view==='provenance'&&<label class="git-search">
+        <span class="sr-only">Search recorded commit subjects</span>
+        <input type="search" value={provenanceQuery} placeholder="search recorded subjects"
+          onInput={event=>setProvenanceQuery(event.currentTarget.value)}/>
+      </label>}
       {/* Right-aligned as a group, under the host's segmented control rather than beside
           a toggle of this tab's own. The refresh control is its glyph alone, so it keeps
           an explicit accessible name. */}
       <div class="git-toolbar-actions">
-        <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map')void refresh();else if(view==='log')void refreshGraph(graphLimit);void refreshProvenance()}}>↻</button>
+        <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh();if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}>↻</button>
         {/* Bulk is a mode, not a permanent column. Fifty accumulated worktrees is what
             makes it necessary; a checkbox under every branch name on a surface people
             open to read a diff is what makes it a mode. */}
@@ -560,8 +707,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         {bulkNote&&<p class="git-state" role="status">{bulkNote}</p>}
       </div>}
       {!overview&&!error&&<p class="git-state">Reading repository…</p>}
-      {overview&&orderedWorktrees.map(tree=>{
+      {overview&&filterText&&<p class="git-state" role="status">
+        {shownWorktrees.length} of {orderedWorktrees.length} worktrees match “{treeFilter.trim()}”.
+      </p>}
+      {overview&&shownWorktrees.map(row=>{
+        // The row as the Map read it, or - once expanded - the full reading fetched for
+        // this one checkout. The two carry the same fields; only the file lists differ.
+        const tree=treeDetail[row.path]||row
         const expanded=expandedTree===tree.path,{measured:localMeasured,total}=localMeasurement(tree)
+        const landed=tree.branch?landedAt.get(tree.branch):undefined
         const branchRef=overview.comparison.available?overview.comparison.display||overview.comparison.ref:null
         const attached=sessionsFor(tree.path),upstream=attached.find(session=>session.git?.ahead||session.git?.behind)?.git
         const removalBlocked=tree.locked!==null||attached.length>0
@@ -588,7 +742,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
             <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
               <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
               <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
-              <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}{removing&&<em class="removing"><i class="git-map-spinner" aria-hidden="true"/>removing…</em>}</span>
+              <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}{landed!==undefined&&<em class="landed" title={`This queue landed ${tree.branch} at ${new Date(landed*1000).toLocaleString()}`}>landed {landedLabel(landed)}</em>}{removing&&<em class="removing"><i class="git-map-spinner" aria-hidden="true"/>removing…</em>}</span>
               <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
             </button>
             {attached.length>0&&<button
@@ -600,6 +754,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           </div>
           {expanded&&<div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
             {tree.prunable!==null&&<p class="git-change-empty">Git cannot use this checkout: {tree.prunable||'the worktree registration is prunable'}.</p>}
+            {/* The Map's own reading has counts and no files, so a row that says "12
+                local" over nothing is waiting for its own read rather than reporting an
+                empty change set. Stated, because the two look identical. */}
+            {detailBusy===tree.path&&!treeDetail[tree.path]&&<p class="git-state">Reading this worktree…</p>}
+            {detailError&&expandedTree===tree.path&&!treeDetail[tree.path]&&<p class="git-state error" role="alert">{detailError}</p>}
             {tree.conflicted&&tree.conflicted.total>0&&<ReviewGroup id={`${tree.path}:conflicted`} title="CONFLICTS" summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
@@ -622,8 +781,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       <span><b>MAIN TREE</b><strong>{mainTree?.branch||mainTree&&`detached @ ${shortSha(mainTree.head)}`||'unavailable'}</strong>{mainTree?.head&&<code>@ {shortSha(mainTree.head)}</code>}</span>
       <span><b>COMPARE</b><strong>{comparisonLabel||'unavailable'}</strong></span>
       <span><b>WORKTREES</b><strong>{linkedWorktrees.length} linked</strong></span>
-      <span><b>SCOPE</b><strong>all refs</strong></span>
-    </div><section class="git-graph" aria-label="Commit graph">{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
+      <span><b>SCOPE</b><strong>{graph.filtered?`matching ${logField==='author'?'author':'message'}`:'all refs'}</strong></span>
+    </div>{graph.filtered&&<p class="git-state">
+      Searching all refs, so the lane drawing is off: Git draws lanes for a continuous
+      walk, and over a filtered set they would connect commits that are not connected.
+    </p>}{graph.filtered&&graph.lines.length===0&&<p class="git-change-empty">
+      No commit {logField==='author'?'author':'message'} matches “{logQuery.trim()}”.
+    </p>}<section class="git-graph" aria-label="Commit graph">{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
          const parent=parentByCommit[line.oid]??line.parents[0]??'',key=`${line.oid}:${parent}`,changes=commitCache.get(key),expanded=expandedCommit===line.oid
          const commitProvenance=provenanceByCommit.get(line.oid)||[]
          const lane=graphNodeLane(line.graph),decorations=graphDecorations(line,overview)
@@ -643,7 +807,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
               are part of what was written, and only the over-long line needs the browser. */}
           {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
-    })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section></>}</>}
+    })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next,{query:logQuery,field:logField,regex:logRegex})}}>Load more commits</button>}</section></>}</>}
     {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">
       {provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}
       {/* This read is written by the `provenance_graph` consumer, which is a per-Project
@@ -653,12 +817,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           thing the setting-link rule forbids. */}
       {provenanceOff&&<GrantGate ids={['project.provenanceGraph']} projectId={project.id}
         heading="This Project has not permitted the provenance graph."
-        onGranted={()=>{forgetProjectAutomations(project.id);void refreshProvenance()}}>
+        onGranted={()=>{forgetProjectAutomations(project.id);void refreshProvenance(provenanceQuery)}}>
         <p>It records which session and which run produced each commit, from evidence
         swe-mux already captures. Commits made before it is on are not attributed
         retroactively.</p>
       </GrantGate>}
-      {!provenanceError&&!provenanceOff&&provenance.length===0&&<p class="git-state">No session-to-commit associations recorded yet.</p>}
+      {!provenanceError&&!provenanceOff&&provenance.length===0&&(provenanceQuery.trim()
+        ? <p class="git-change-empty">No recorded commit subject matches “{provenanceQuery.trim()}”.
+          This ledger holds only commits swe-mux observed, so Log's own search reaches further.</p>
+        : <p class="git-state">No session-to-commit associations recorded yet.</p>)}
       {/* One card per commit, not one per row. The ledger stores a row per
           session because that is what each piece of evidence is about; read back
           flatly, ten occupancy rows bury the one naming who made the commit. */}

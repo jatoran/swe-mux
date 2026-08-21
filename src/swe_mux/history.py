@@ -40,6 +40,15 @@ _AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
 _NAMING_ROW_CHUNK = 400
 
 
+def _escape_like(value: str) -> str:
+    """Make a user's text literal inside a SQL `LIKE` pattern.
+
+    `%` and `_` are wildcards there, so a commit subject search for `100%` would
+    otherwise match everything after `100`. Paired with `ESCAPE '\\'` at the call site.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _public_history_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     raw = item.pop("provider_account_hashes_json", "{}")
@@ -2639,11 +2648,20 @@ class HistoryIndex:
         commit_oids: list[str] | None = None,
         limit: int = 200,
         include_retracted: bool = False,
+        subject_query: str = "",
     ) -> list[dict[str, Any]]:
         clauses = ["project_id=?"]
         args: list[Any] = [project_id]
         if not include_retracted:
             clauses.append("retracted_at IS NULL")
+        if subject_query.strip():
+            # A leading-wildcard LIKE no index can serve, over rows already narrowed to
+            # one Project by `idx_git_provenance_project`. That is the whole ledger for a
+            # repository - thousands of rows, not millions - so it answers instantly, and
+            # it answers about *observed* commits only. It complements `git log --grep`
+            # rather than replacing it: this knows which session made each one.
+            clauses.append("subject LIKE ? ESCAPE '\\'")
+            args.append(f"%{_escape_like(subject_query.strip())}%")
         if session_id:
             clauses.append("session_id=?")
             args.append(session_id)

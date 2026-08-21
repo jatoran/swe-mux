@@ -91,6 +91,11 @@ The purge clears the read-only bit before retrying a file (Git writes loose obje
 
 The land gate's authority: `[worktree].verify_command` and `.worktree-verify` resolution, the machine-local exact-content approval store (a digest over source-kind plus bytes, with a retained snapshot for the diff, un-approved by any edit), and the typed run result whose exit code is never re-derived and which also carries the steps the run announced and its line count.
 
+The store holds a bounded **set** of approved digests per Project root (`MAX_APPROVED_DIGESTS`), not one slot, and `is_approved` is the question the pipeline asks.
+One slot was wrong for the thing being approved: the gate is fingerprinted from the worktree's own copy, so approving a branch's edited script silently un-approved the primary's and the two took turns blocking each other (observed 2026-08-21).
+Only the newest approval retains its bytes, because the snapshot answers "what changed since you approved" and the file is read on every gate resolution.
+A single-slot trust file written by an older daemon reads as a one-element set and is **never rewritten on read**; the next approval carries that grant forward.
+
 **Not:** execution mechanics (`worktree_exec.py`), when a gate runs (`land_queue.py`), how progress is read (`verify_progress.py`), or HTTP.
 
 ### `verify_progress.py`

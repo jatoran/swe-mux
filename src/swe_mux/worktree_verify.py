@@ -43,6 +43,15 @@ MAX_HANDBACK_OUTPUT_BYTES = 4 * 1024
 #: changed. "The verify script changed" cannot separate a new test target from a new
 #: `curl | sh`.
 MAX_APPROVED_SNAPSHOT_BYTES = 128 * 1024
+#: How many distinct approved digests one Project root retains, newest last.
+#:
+#: The store is digest-scoped rather than one slot per root, so approving one copy of
+#: the gate never un-approves another (`land-queue.md`). That has to be bounded anyway:
+#: an approval is authority, and authority that only ever accumulates is authority
+#: nobody can account for. Sixteen is far more copies of one gate than a repository has
+#: worktrees editing it at once, and the oldest is what falls off - which is a genuine
+#: un-approval and is why the cap is not smaller.
+MAX_APPROVED_DIGESTS = 16
 
 CONFIG_KEY = "verify_command"
 SCRIPT_NAME = ".worktree-verify"
@@ -174,11 +183,21 @@ def _command_payload(command: WorktreeCommand, worktree: Path) -> tuple[bytes, s
 
 
 class VerifyApprovalStore:
-    """Machine-local approval of one verification command per Project root.
+    """Machine-local approval of verification-command **bytes**, per Project root.
 
     Machine-local rather than repository state for the same reason Project Action
     trust is: an approval committed to a repository would grant itself in every clone
     of it, which is the opposite of what approving means.
+
+    **Digest-scoped, not one slot per root.** It was one slot, and one slot is wrong
+    for the thing being approved. A Project's worktrees each carry their own copy of
+    `.worktree-verify`, so a branch that edits the gate resolves to different bytes
+    from the primary's - and with a single slot, approving the branch's copy silently
+    un-approved the primary's and vice versa. Observed 2026-08-21: two landings took
+    turns un-approving each other and neither could be cleared. Approving bytes now
+    says only what it says - *these* bytes may run - and says nothing about any other
+    copy. Retained approvals are capped (`MAX_APPROVED_DIGESTS`); the oldest falling
+    off is a real un-approval, which is why the cap is generous.
     """
 
     def __init__(self, data_dir: Path) -> None:
@@ -191,43 +210,110 @@ class VerifyApprovalStore:
         except (OSError, ValueError, TypeError):
             return {}
 
-    def _entry(self, project_root: str) -> dict[str, Any]:
+    def _approvals(self, project_root: str) -> list[dict[str, Any]]:
+        """This root's approvals, oldest first, in the one shape the reader uses.
+
+        The single-slot shape is read as a one-element list rather than migrated on
+        read: a store written by an older daemon must keep granting exactly what it
+        granted, and rewriting a trust file as a side effect of *reading* it is not
+        something an approval store should ever do. The next `approve` writes the new
+        shape, carrying the old grant forward.
+        """
         stored = self._store().get(str(Path(project_root).resolve()))
-        return stored if isinstance(stored, dict) else {}
+        if not isinstance(stored, dict):
+            return []
+        entries = stored.get("approvals")
+        if isinstance(entries, list):
+            return [
+                item
+                for item in entries
+                if isinstance(item, dict) and isinstance(item.get("digest"), str)
+            ]
+        legacy = stored.get("digest")
+        if isinstance(legacy, str):
+            carried: dict[str, Any] = {"digest": legacy}
+            if isinstance(stored.get("snapshot"), str):
+                carried["snapshot"] = stored["snapshot"]
+            return [carried]
+        return []
 
     def approved_digest(self, project_root: str) -> str | None:
-        value = self._entry(project_root).get("digest")
-        return value if isinstance(value, str) else None
+        """The most recently approved digest, or `None`.
+
+        Kept for the callers that ask "what stands approved here" as a single fact -
+        a diagnostic reading. Deciding whether a particular command may run is
+        `is_approved`, which is the question the pipeline actually asks.
+        """
+        approvals = self._approvals(project_root)
+        return str(approvals[-1]["digest"]) if approvals else None
+
+    def is_approved(self, project_root: str, digest: str) -> bool:
+        return bool(digest) and any(
+            item["digest"] == digest for item in self._approvals(project_root)
+        )
 
     def approved_snapshot(self, project_root: str) -> str | None:
-        value = self._entry(project_root).get("snapshot")
-        return value if isinstance(value, str) else None
+        """The bytes standing approved, for the prompt's diff.
+
+        The most recent approval's, because that is the copy a reader last said yes
+        to and therefore the one an unapproved copy is meaningfully different *from*.
+        """
+        for item in reversed(self._approvals(project_root)):
+            value = item.get("snapshot")
+            if isinstance(value, str):
+                return value
+        return None
 
     def ever_approved(self, project_root: str) -> bool:
-        return bool(self._entry(project_root))
+        return bool(self._approvals(project_root))
 
-    def approve(self, project_root: str, digest: str, *, snapshot: str | None) -> None:
-        root = str(Path(project_root).resolve())
-        store = self._store()
-        entry: dict[str, Any] = {"digest": digest}
-        if snapshot is not None and len(snapshot.encode("utf-8")) <= MAX_APPROVED_SNAPSHOT_BYTES:
-            entry["snapshot"] = snapshot
-        store[root] = entry
+    def _write(self, store: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(store, indent=2, sort_keys=True), encoding="utf-8")
         temporary.replace(self.path)
 
-    def revoke(self, project_root: str) -> None:
+    def approve(self, project_root: str, digest: str, *, snapshot: str | None) -> None:
+        root = str(Path(project_root).resolve())
+        approvals = [item for item in self._approvals(project_root) if item["digest"] != digest]
+        entry: dict[str, Any] = {"digest": digest}
+        if snapshot is not None and len(snapshot.encode("utf-8")) <= MAX_APPROVED_SNAPSHOT_BYTES:
+            entry["snapshot"] = snapshot
+        approvals.append(entry)
+        # Only the newest approval keeps its bytes. The snapshot exists to answer "what
+        # changed since you approved", which is asked against the last thing approved;
+        # retaining sixteen 128 KiB scripts per root would make the trust file - read on
+        # every gate resolution - the expensive thing about resolving a gate.
+        for older in approvals[:-1]:
+            older.pop("snapshot", None)
+        store = self._store()
+        store[root] = {"approvals": approvals[-MAX_APPROVED_DIGESTS:]}
+        self._write(store)
+
+    def revoke(self, project_root: str, digest: str | None = None) -> None:
+        """Withdraw one approval, or every approval for this root.
+
+        A digest withdraws exactly those bytes, mirroring `approve`. No digest
+        withdraws the root entirely, which is the only shape that can answer "revoke
+        everything approved here" without the caller enumerating what that is.
+        """
         root = str(Path(project_root).resolve())
         store = self._store()
         if root not in store:
             return
-        del store[root]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(store, indent=2, sort_keys=True), encoding="utf-8")
-        temporary.replace(self.path)
+        if digest is None:
+            del store[root]
+        else:
+            remaining = [
+                item for item in self._approvals(project_root) if item["digest"] != digest
+            ]
+            if len(remaining) == len(self._approvals(project_root)):
+                return
+            if remaining:
+                store[root] = {"approvals": remaining}
+            else:
+                del store[root]
+        self._write(store)
 
 
 def describe_verify_command(
@@ -259,7 +345,7 @@ def describe_verify_command(
         command.source,
         command.display,
         digest,
-        store.approved_digest(project_root) == digest,
+        store.is_approved(project_root, digest),
         store.approved_snapshot(project_root),
         previously,
         text,

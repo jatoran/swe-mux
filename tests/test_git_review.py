@@ -286,12 +286,13 @@ async def test_overview_requests_share_work_after_caller_cancellation(
     calls = 0
 
     async def overview(
-        project_id: str, project_root: str, compare_override: str | None
+        project_id: str, project_root: str, compare_override: str | None, only: str | None = None
     ) -> dict[str, object]:
         nonlocal calls
-        assert (project_id, project_root, compare_override) == (
+        assert (project_id, project_root, compare_override, only) == (
             "project",
             "C:/repo",
+            None,
             None,
         )
         calls += 1
@@ -659,3 +660,205 @@ async def test_branch_changed_paths_stops_at_its_limit(
     # Silently returning one path would read as a one-file branch.
     assert len(result["paths"]) == 1
     assert result["truncated"] is True
+
+
+# -- the overview's memo, its two readings, and the log search ------------------
+
+
+@pytest.fixture(autouse=True)
+def _drop_overview_memo() -> None:
+    """No test inherits another's memoized branch readings."""
+    git_review.reset_overview_cache()
+
+
+def _spawned(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """Every `git` argv the overview runs, so process count is a measurable claim."""
+    calls: list[tuple[str, ...]] = []
+    original = git_review._run_git_bytes
+
+    async def counted(cwd: object, *args: str, **kwargs: object) -> object:
+        calls.append(tuple(args))
+        return await original(cwd, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(git_review, "_run_git_bytes", counted)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_a_second_overview_reuses_the_branch_readings_it_already_took(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Map's expensive half is memoized on two object IDs, so it is exact.
+
+    Neither reading can be affected by anything in a working tree - both are
+    commit-to-commit - so a checkout whose HEAD and base are unchanged has, by
+    definition, the same answer. What this measures is that the five subprocesses behind
+    it stop being spawned to re-derive it.
+    """
+    git(repository, "checkout", "-b", "feature")
+    (repository / "feature.txt").write_text("feature\n", encoding="utf-8")
+    git(repository, "add", "feature.txt")
+    git(repository, "commit", "-m", "feature work")
+
+    first = await git_review.worktree_overview("p", str(repository), "main")
+    calls = _spawned(monkeypatch)
+    second = await git_review.worktree_overview("p", str(repository), "main")
+
+    assert (
+        second["worktrees"][0]["comparison_counts"]
+        == first["worktrees"][0]["comparison_counts"]
+    )
+    assert second["worktrees"][0]["branch_delta"] == first["worktrees"][0]["branch_delta"]
+    assert not any(args[0] == "rev-list" and "--left-right" in args for args in calls)
+    assert not any(args[0] == "diff" and "main...HEAD" in args for args in calls)
+    # Still read live every time: `status --porcelain=v2` carries no worktree blob hash,
+    # so a fingerprint taken from it would go quietly wrong about the line counts.
+    assert any(args[0] == "status" for args in calls)
+
+
+@pytest.mark.asyncio
+async def test_a_commit_invalidates_the_memoized_branch_reading(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git(repository, "checkout", "-b", "feature")
+    (repository / "feature.txt").write_text("feature\n", encoding="utf-8")
+    git(repository, "add", "feature.txt")
+    git(repository, "commit", "-m", "feature work")
+    await git_review.worktree_overview("p", str(repository), "main")
+
+    (repository / "second.txt").write_text("second\n", encoding="utf-8")
+    git(repository, "add", "second.txt")
+    git(repository, "commit", "-m", "more work")
+    calls = _spawned(monkeypatch)
+    after = await git_review.worktree_overview("p", str(repository), "main")
+
+    assert after["worktrees"][0]["comparison_counts"] == {"ahead": 2, "behind": 0}
+    assert any(args[0] == "rev-list" and "--left-right" in args for args in calls)
+
+
+@pytest.mark.asyncio
+async def test_a_clean_checkout_spawns_no_diff_for_line_counts(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two `git diff --numstat` per worktree ran unconditionally on a mostly-clean Map."""
+    calls = _spawned(monkeypatch)
+    overview = await git_review.worktree_overview("p", str(repository), None)
+    assert overview["worktrees"][0]["unstaged"] == {
+        "total": 0,
+        "additions": 0,
+        "deletions": 0,
+        "binary_files": 0,
+        "files": [],
+        "truncated": False,
+    }
+    # The *local* numstats: no revision range, so the argv ends at `-z`. The branch
+    # delta's own diffs take a range and are a different question.
+    assert not any(
+        args[0] == "diff" and "--numstat" in args and args[-1] == "-z" for args in calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dirty_checkout_still_gets_its_line_counts(repository: Path) -> None:
+    (repository / "tracked.txt").write_text("first\nsecond\n", encoding="utf-8")
+    overview = await git_review.worktree_overview("p", str(repository), None)
+    unstaged = overview["worktrees"][0]["unstaged"]
+    assert unstaged["total"] == 1
+    assert unstaged["additions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_detail_withholds_files_and_says_so(repository: Path) -> None:
+    (repository / "tracked.txt").write_text("first\nsecond\n", encoding="utf-8")
+    full = await git_review.worktree_overview("p", str(repository), None)
+    summary = git_review.summarize_overview(full)
+    assert full["detail"] == "full"
+    assert summary["detail"] == "summary"
+    withheld = summary["worktrees"][0]["unstaged"]
+    # The counts survive; only the list goes. Without the marker a Map row saying
+    # "1 local" over an empty list is indistinguishable from an empty change set.
+    assert withheld["total"] == 1
+    assert withheld["files"] == []
+    assert withheld["files_omitted"] is True
+    assert len(full["worktrees"][0]["unstaged"]["files"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_one_worktree_can_be_read_on_its_own(repository: Path, tmp_path: Path) -> None:
+    linked = tmp_path / "linked"
+    git(repository, "worktree", "add", "-b", "linked", str(linked))
+    one = await git_review.worktree_overview("p", str(repository), None, str(linked))
+    assert [row["branch"] for row in one["worktrees"]] == ["refs/heads/linked"]
+    # `main` is "the first tree Git lists", read off the full listing: a single-row read
+    # that renumbered from its own filtered list would call every checkout the main one.
+    assert one["worktrees"][0]["main"] is False
+
+
+@pytest.mark.asyncio
+async def test_an_unlisted_path_is_refused_rather_than_measured(
+    repository: Path, tmp_path: Path
+) -> None:
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    with pytest.raises(git_review.GitReviewError) as caught:
+        await git_review.worktree_overview("p", str(repository), None, str(stranger))
+    assert caught.value.code == "worktree_not_found"
+
+
+@pytest.mark.asyncio
+async def test_the_log_can_be_searched_by_message_and_by_author(repository: Path) -> None:
+    (repository / "b.txt").write_text("b\n", encoding="utf-8")
+    git(repository, "add", "b.txt")
+    git(repository, "commit", "-m", "teach the rail to overflow")
+    (repository / "c.txt").write_text("c\n", encoding="utf-8")
+    git(repository, "add", "c.txt")
+    git(
+        repository,
+        "-c",
+        "user.name=Other Person",
+        "-c",
+        "user.email=other@example.invalid",
+        "commit",
+        "-m",
+        "unrelated change",
+    )
+
+    # Case-insensitive, and asked of Git rather than of the page already fetched.
+    by_message = await git_review.git_graph("p", str(repository), 50, grep="RAIL")
+    assert [line["subject"] for line in by_message["lines"]] == [
+        "teach the rail to overflow"
+    ]
+    assert by_message["filtered"] is True
+    # Lanes are not drawn over a filtered set - Git only draws them for a contiguous
+    # walk - so every row carries a bare node instead of a picture of a DAG that is not
+    # there.
+    assert {line["graph"] for line in by_message["lines"]} == {"* "}
+
+    by_author = await git_review.git_graph("p", str(repository), 50, author="Other Person")
+    assert [line["subject"] for line in by_author["lines"]] == ["unrelated change"]
+
+
+@pytest.mark.asyncio
+async def test_a_log_search_is_literal_unless_regex_is_asked_for(repository: Path) -> None:
+    """`.` and `*` are ordinary characters in a commit subject, and a reader means them."""
+    (repository / "b.txt").write_text("b\n", encoding="utf-8")
+    git(repository, "add", "b.txt")
+    git(repository, "commit", "-m", "fix a.b crash")
+
+    literal = await git_review.git_graph("p", str(repository), 50, grep="a.b")
+    assert [line["subject"] for line in literal["lines"]] == ["fix a.b crash"]
+    assert await git_review.git_graph("p", str(repository), 50, grep="axb") == {
+        "lines": [],
+        "limit": 50,
+        "has_more": False,
+        "filtered": True,
+    }
+    as_regex = await git_review.git_graph("p", str(repository), 50, grep="a.b", regex=True)
+    assert [line["subject"] for line in as_regex["lines"]] == ["fix a.b crash"]
+
+
+@pytest.mark.asyncio
+async def test_an_unfiltered_log_keeps_gits_own_lanes(repository: Path) -> None:
+    result = await git_review.git_graph("p", str(repository), 50)
+    assert result["filtered"] is False
+    assert all(line["graph"].startswith("*") for line in result["lines"])

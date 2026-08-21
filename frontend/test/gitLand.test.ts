@@ -7,6 +7,7 @@ import {
   landGateNote,
   landHistoryOrder,
   landKindNote,
+  landedAtByBranch,
   landQueueOrder,
   landStateLabel,
   landStateTone,
@@ -669,4 +670,121 @@ test('a reused verdict is drawn as the skip it is, and never as a documentation 
   // The two skips are not interchangeable to a reader deciding whether to trust the
   // row: one means nobody ever ran this content, the other means this queue ran it.
   assert.notEqual(landGateNote(rowOf('reused')), landGateNote(rowOf('docs_only')))
+})
+
+// -- a worktree's own gate copy, and the block it causes ----------------------
+//
+// The gate resolves per worktree, so a branch that edited `.worktree-verify` presents
+// bytes the primary's approval says nothing about. When such a land refused, the strip
+// drew the Project-resolved copy - "verification approved" - over a refusal for an
+// unapproved command, and offered nothing to approve at all (observed 2026-08-21).
+
+const refusal = (body: Record<string, unknown>) => ({
+  id: 'r1', state: 'refused', branch: 'worktree-alpha', project_root: 'D:/repo',
+  worktree_root: 'D:/wt/alpha', created_at: 10, updated_at: 20, finished_at: 20,
+  reason: 'the verification command is not approved',
+  detail: { code: 'unapproved' }, ...body,
+})
+
+test('a land refused on a worktree copy names that checkout, and opens the strip', () => {
+  const summary = landingSummary(
+    queueOf({ requests: [refusal({})] }), gateOf({}), 1_800_000_000, 'D:/repo',
+  )
+  assert.deepEqual(summary.blockedWorktrees, [
+    { worktreeRoot: 'D:/wt/alpha', branch: 'worktree-alpha' },
+  ])
+  // The gate itself reads approved - that is the whole trap - so the closed strip has
+  // to say the other thing beside it, and open itself.
+  assert.equal(summary.gate, 'verification approved · .worktree-verify · 1 worktree awaiting approval')
+  assert.equal(summary.gateTone, 'warn')
+  assert.equal(summary.blocked, true)
+})
+
+test('the Project root is never offered as a blocked worktree', () => {
+  // The primary's copy is the block the strip already draws; drawing it twice is the
+  // repetition the strip exists to remove. Path spelling is folded, as the daemon folds it.
+  const summary = landingSummary(
+    queueOf({ requests: [refusal({ worktree_root: 'd:\\repo' })] }),
+    gateOf({ approved: false }), 1_800_000_000, 'D:/repo',
+  )
+  assert.deepEqual(summary.blockedWorktrees, [])
+  assert.equal(summary.blocked, true)
+})
+
+test('a refusal that has been answered stops blocking anything', () => {
+  // The same supersession rule the attention row uses: a branch that has since verified
+  // or landed is not blocked on approving anything.
+  const summary = landingSummary(queueOf({
+    requests: [
+      refusal({}),
+      { id: 'r2', state: 'landed', branch: 'worktree-alpha', project_root: 'D:/repo',
+        worktree_root: 'D:/wt/alpha', created_at: 40, updated_at: 50, finished_at: 50 },
+    ],
+  }), gateOf({}), 1_800_000_000, 'D:/repo')
+  assert.deepEqual(summary.blockedWorktrees, [])
+  assert.equal(summary.blocked, false)
+})
+
+test('only an approvable refusal is offered, and only once per checkout', () => {
+  const summary = landingSummary(queueOf({
+    requests: [
+      // No bytes to show and no approval to give.
+      refusal({ id: 'r0', branch: 'worktree-none', detail: { code: 'not_configured' } }),
+      // A fact about the branch, not something the strip can clear.
+      refusal({ id: 'r3', branch: 'worktree-moved', detail: {},
+        reason: 'the branch moved after it verified' }),
+      refusal({ id: 'r1', branch: 'worktree-alpha', created_at: 10, finished_at: 20 }),
+      refusal({ id: 'r2', branch: 'worktree-beta', worktree_root: 'D:/wt/beta',
+        created_at: 12, finished_at: 30 }),
+      // A second refusal of the same checkout is the same block, not another one.
+      refusal({ id: 'r4', branch: 'worktree-alpha', created_at: 14, finished_at: 40 }),
+    ],
+  }), gateOf({}), 1_800_000_000, 'D:/repo')
+  assert.deepEqual(
+    summary.blockedWorktrees,
+    [
+      { worktreeRoot: 'D:/wt/alpha', branch: 'worktree-alpha' },
+      { worktreeRoot: 'D:/wt/beta', branch: 'worktree-beta' },
+    ],
+  )
+})
+
+test('a refusal code is read only off a row that refused', () => {
+  const landed = parseLandQueue({
+    requests: [{ id: 'a', state: 'landed', branch: 'b', created_at: 10,
+      detail: { code: 'unapproved' } }],
+  }).requests[0]
+  // A stale code carried on a landed row would offer an approval for a gate that ran.
+  assert.equal(landed.refusalCode, '')
+  const refused = parseLandQueue({ requests: [refusal({})] }).requests[0]
+  assert.equal(refused.refusalCode, 'unapproved')
+  for (const code of [undefined, null, '', 'nope', 7]) {
+    const row = parseLandQueue({
+      requests: [refusal({ detail: { code } })],
+    }).requests[0]
+    assert.equal(row.refusalCode, '')
+  }
+})
+
+// -- when each branch last landed --------------------------------------------
+
+test('the map reads a landing date only from a land that actually moved the trunk', () => {
+  const requests = parseLandQueue({
+    requests: [
+      { id: 'a', state: 'landed', branch: 'worktree-alpha', created_at: 10,
+        updated_at: 20, finished_at: 20 },
+      { id: 'b', state: 'landed', branch: 'worktree-alpha', created_at: 30,
+        updated_at: 44, finished_at: 44 },
+      // Nothing moved, so there is no moment to report and none is invented.
+      { id: 'c', state: 'already_landed', branch: 'worktree-beta', created_at: 50,
+        updated_at: 60, finished_at: 60 },
+      { id: 'd', state: 'handed_back', branch: 'worktree-gamma', created_at: 70,
+        updated_at: 80, finished_at: 80 },
+    ],
+  }).requests
+  const landed = landedAtByBranch(requests)
+  // The newest landing of that branch, not the first one found.
+  assert.equal(landed.get('worktree-alpha'), 44)
+  assert.equal(landed.has('worktree-beta'), false)
+  assert.equal(landed.has('worktree-gamma'), false)
 })

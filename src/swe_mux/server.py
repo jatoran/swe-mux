@@ -167,6 +167,7 @@ from .models import (
 from .network_usage import (
     MeteredWebSocketResponse,
     NetworkUsage,
+    compact_json_bytes,
     compact_json_response,
     compressible_response_middleware,
     metered_websocket,
@@ -10529,11 +10530,19 @@ def _request_project(request: web.Request):  # type: ignore[no-untyped-def]
 
 
 async def get_agent_context(request: web.Request) -> web.Response:
-    """Inventory the bounded context sources the selected Project's agents can use."""
+    """Inventory the bounded context sources the selected Project's agents can use.
+
+    Memoized in the service on a stat signature over the files it reads; `refresh=1` is
+    the tab's rescan control and bypasses that outright, which is what keeps the cache
+    honest about the one thing a stat cannot see.
+    """
 
     project = _request_project(request)
     service: AgentContextService = request.app["agent_context"]
-    payload = await asyncio.to_thread(service.inventory, project.id, project.name, project.root)
+    refresh = request.query.get("refresh", "") in {"1", "true"}
+    payload = await asyncio.to_thread(
+        lambda: service.inventory(project.id, project.name, project.root, refresh=refresh)
+    )
     return json_response(payload)
 
 
@@ -14000,25 +14009,76 @@ GIT_GRAPH_MAX_LIMIT = 200
 
 
 async def list_worktrees(request: web.Request) -> web.Response:
-    extras = set(request.query) - {"project_id"}
+    """The Map's inventory, in one of two readings, conditionally.
+
+    `detail=summary` withholds every per-file list, which is what a Map row actually
+    draws: four lists of up to two hundred file records per worktree, served so a badge
+    can say "12 local". The full reading is what a row expansion asks for.
+
+    The `ETag` is over the reading that is being served, so the two cannot be confused
+    for one another, and it is the first conditional request anywhere in this daemon:
+    the overview is refetched by every client on any session's five-second dirty tick,
+    and the great majority of those answers are byte-identical to the one that client
+    already has.
+    """
+    extras = set(request.query) - {"project_id", "detail", "worktree"}
     if extras:
         raise git_review.GitReviewError(
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
+        )
+    detail = request.query.get("detail", "full")
+    if detail not in {"full", "summary"}:
+        raise git_review.GitReviewError(
+            "invalid_parameters", "detail must be 'full' or 'summary'"
         )
     project_id = request.query.get("project_id", "")
     project = request.app["projects"].projects.get(project_id)
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
-    return json_response(
-        await git_review.shared_worktree_overview(
-            project.id, project.root, project.git_compare_ref
-        )
+    payload = await git_review.shared_worktree_overview(
+        project.id, project.root, project.git_compare_ref, request.query.get("worktree") or None
     )
+    if detail == "summary":
+        payload = git_review.summarize_overview(payload)
+    body = compact_json_bytes(payload)
+    etag = f'W/"{hashlib.sha256(body).hexdigest()[:32]}"'
+    # Weak, and honestly so: this is a semantic identity over the reading, not a promise
+    # about the octets - `compact_json_bytes` is deterministic here, but nothing in the
+    # contract says a future serializer must be.
+    # `no-cache` is "you may store this, but revalidate before every use" - not "do not
+    # store". It is what makes the conditional request happen at all from a browser,
+    # which never sends `If-None-Match` for a response it was given no freshness rule
+    # for. The client code is unchanged: `fetch` turns the 304 back into a 200 from its
+    # own cache, so only the bytes on the wire go away.
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if _etag_matches(request.headers.get("If-None-Match"), etag):
+        return web.Response(status=304, headers=headers)
+    return web.Response(body=body, content_type="application/json", headers=headers)
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """RFC 9110 `If-None-Match`: `*`, or any listed tag by weak comparison.
+
+    Weak comparison because the tag is weak: `W/"x"` and `"x"` name the same reading,
+    and a client library that strips the prefix must not silently stop matching.
+    """
+    if not header:
+        return False
+    candidates = [item.strip() for item in header.split(",")]
+    if "*" in candidates:
+        return True
+    target = etag.removeprefix("W/")
+    return any(item.removeprefix("W/") == target for item in candidates if item)
 
 
 async def git_graph(request: web.Request) -> web.Response:
-    """Return a bounded, read-only commit graph with Git's own lane layout."""
-    extras = set(request.query) - {"project_id", "limit"}
+    """Return a bounded, read-only commit graph with Git's own lane layout.
+
+    With `grep` or `author` it is a search instead, run by Git over every commit rather
+    than by this handler over the page it happened to fetch. `regex` opts the pattern
+    out of `--fixed-strings`; the search is case-insensitive either way.
+    """
+    extras = set(request.query) - {"project_id", "limit", "grep", "author", "regex"}
     if extras:
         raise git_review.GitReviewError(
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
@@ -14034,12 +14094,28 @@ async def git_graph(request: web.Request) -> web.Response:
         return json_response({"error": "limit must be an integer"}, 400)
     if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
         return json_response({"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400)
-    return json_response(await git_review.git_graph(project.id, project.root, limit))
+    return json_response(
+        await git_review.git_graph(
+            project.id,
+            project.root,
+            limit,
+            grep=request.query.get("grep", ""),
+            author=request.query.get("author", ""),
+            regex=request.query.get("regex", "") in {"1", "true"},
+        )
+    )
 
 
 async def git_provenance(request: web.Request) -> web.Response:
     """Return durable commit associations for one Project, session, run, or OID set."""
-    extras = set(request.query) - {"project_id", "session_id", "agent_run_id", "commit", "limit"}
+    extras = set(request.query) - {
+        "project_id",
+        "session_id",
+        "agent_run_id",
+        "commit",
+        "limit",
+        "subject",
+    }
     if extras:
         raise git_review.GitReviewError(
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
@@ -14060,6 +14136,7 @@ async def git_provenance(request: web.Request) -> web.Response:
         not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
     ):
         return json_response({"error": "commit must contain full Git object IDs"}, 400)
+    subject = request.query.get("subject", "")[:200]
     history = request.app["history"]
     items = await history.git_provenance(
         project_id=project.id,
@@ -14067,13 +14144,20 @@ async def git_provenance(request: web.Request) -> web.Response:
         agent_run_id=request.query.get("agent_run_id") or None,
         commit_oids=commit_oids or None,
         limit=limit,
+        subject_query=subject,
     )
     await _decorate_provenance_identity(request.app, items)
     # Reference moves are checkout facts and are not filtered by session: asking
     # "what did this session do" and "what happened to this checkout" are
     # different questions, and answering the first with the second is what used to
     # put a merge nobody in the checkout had made on every session's ledger.
-    moves = await history.git_ref_moves(project_id=project.id, commit_oids=commit_oids or None)
+    # A subject search narrows the ledger, so the checkout facts beside it are narrowed
+    # to the same commits. Left unfiltered, "Reference movements" would go on listing the
+    # whole Project under a result set of three, which reads as the search having failed.
+    move_oids = commit_oids or None
+    if subject.strip() and not commit_oids:
+        move_oids = [str(item.get("commit_oid") or "") for item in items] or ["0" * 40]
+    moves = await history.git_ref_moves(project_id=project.id, commit_oids=move_oids)
     # `items` stays one row per session per commit, which is what each piece of
     # evidence is about. `commits` answers the reader's question — who made this
     # commit and whose work is in it — without a second round trip.

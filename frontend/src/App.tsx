@@ -2151,8 +2151,12 @@ export function App() {
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
           if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
-          // already ride the session snapshots, so `git_changed` needs no payload here.
-          if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
+          // already ride the session snapshots, so `git_changed` carries no state here —
+          // only *which Project* moved, which is the one thing the tab needs to decide
+          // whether the refetch is about the repository it is drawing. `git_changed` is
+          // raised by every session's five-second dirty tick, so an unfiltered listener
+          // was re-reading one Project's whole worktree map on another Project's poll.
+          if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
           // Its own event rather than folding into `mux:git-changed`: a land step
           // changes the queue on a five-second cadence, and re-reading the whole
           // worktree overview and provenance ledger each time is not free.

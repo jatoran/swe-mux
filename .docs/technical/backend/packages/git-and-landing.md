@@ -16,9 +16,14 @@ Project-scoped comparison-ref inference and bounded review reads.
 - `head_commit_dates` gives per-worktree branch-tip committer dates in one batched `git show` against the shared object database, keyed back by the oid asked for.
   It is deliberately not the checkout directory's `st_mtime`, which Windows freezes while a live session holds a file open there, so a directory clock reports the busiest worktree as the most dormant and any activity ordering built on it is inverted.
   Reading from the object database also means a locked or prunable tree still dates.
-- File-count and aggregate-byte-bounded worktree and commit summaries, numstat and porcelain parsing, commit graph reads, capped commit-message reads, patch snapshots, stale hashes, and typed review failures.
+- File-count and aggregate-byte-bounded worktree and commit summaries, numstat and porcelain parsing, commit graph reads and `--grep`/`--author` searches, capped commit-message reads, patch snapshots, stale hashes, and typed review failures.
+- The overview's branch memo (`_branch_memo`, `reset_overview_cache`), keyed `(worktree, HEAD, comparison oid)` and holding the ahead/behind counts and the branch delta.
+  Both are commit-to-commit, so the key is exact and the memo can never be stale; the local working-tree summaries are deliberately **not** memoized, because `status --porcelain=v2` carries no worktree blob hash and a fingerprint taken from it would go wrong about line counts while the status output stayed identical.
+  A reading Git refused is never memoized, so a locked index cannot pin "unavailable" onto a healthy checkout.
+- `summarize_overview` projects the same payload with per-file lists withheld and marked, and `worktree_overview(..., only=...)` measures one listed checkout, refusing an unlisted path rather than measuring it.
+- A commit-graph *search* drops `--graph`: Git draws lanes only for a contiguous walk, so lanes over a filtered subset would connect commits that are not connected.
 
-**Not:** network fetches, Git mutations, live-session polling, or browser presentation.
+**Not:** network fetches, Git mutations, live-session polling, HTTP caching (the `ETag` and its comparison are `server.list_worktrees`), or browser presentation.
 
 ## `git_monitor.py`
 
@@ -89,6 +94,7 @@ It owns the *kind* too, which decides exactly one thing - whether the fast-forwa
 
 And it owns whether the handback may reach its author **unattended** (`_reply_arming`): only the request's own origin session, only on the run that asked, only for an agent's request, only while the Project still permits landing, and once per request.
 The request is the consent, so the narrowing of the Phase 5 floor is exactly as wide as the request and no wider; the decision and its reason are recorded on the handback event, because a draft nobody delivered otherwise reads exactly like an answer that arrived.
+A **refusal** answers its author through the same `_solicited_reply` under the same bounds (`_refused_body`), and carries a machine-readable `code` plus the resolved worktree root in its detail - a reason string cannot be matched on, and the landing strip has to know which checkout's bytes to offer for approval.
 `origin_windows` is the other half - the open-request evidence `auto_delivery.py` reads so an origin's grant does not lapse while the pipeline is still computing the answer.
 
 **Not:** the precondition reads (`land_preconditions.py`), the allowlist itself (`land_classify.py`), durability and serialization (`land_store.py`), the gate's authority (`worktree_verify.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.

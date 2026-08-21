@@ -9,6 +9,7 @@ about either.
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from swe_mux.land_preconditions import evaluate_preconditions, read_repository_f
 from swe_mux.land_queue import LandQueueService, LandRefusal, handback_excerpt
 from swe_mux.land_store import LandConflict, LandStore
 from swe_mux.worktree_verify import (
+    MAX_APPROVED_DIGESTS,
     VerifyApprovalStore,
     describe_verify_command,
     run_worktree_verify,
@@ -383,6 +385,101 @@ async def test_a_failing_gate_reports_its_real_exit_code(
     assert result.status == "failed"
     assert result.exit_code == 3
     assert b"boom" in result.output
+
+
+async def test_approving_one_copy_never_un_approves_another(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The loop that made two landings block each other, and its fix.
+
+    The gate resolves per worktree, so two checkouts of one Project can present two
+    different sets of bytes. The store used to hold one slot per Project root, which
+    meant approving the second silently withdrew the first - and with a land queued on
+    each, the operator approved them in turn forever (observed 2026-08-21). Approving
+    bytes now says only what it says.
+    """
+    alpha = add_worktree(trunk, "alpha")
+    beta = add_worktree(trunk, "beta")
+    write_verify(alpha, noise="alpha gate")
+    write_verify(beta, noise="beta gate")
+    approvals = VerifyApprovalStore(tmp_path / "data")
+
+    approve(approvals, alpha, trunk)
+    approve(approvals, beta, trunk)
+
+    for worktree in (alpha, beta):
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        assert info.approved is True, worktree.name
+        result = await run_worktree_verify(
+            worktree, {}, approvals, project_root=str(trunk), request_id="req"
+        )
+        assert result.status == "passed", worktree.name
+
+
+def test_a_single_slot_trust_file_still_grants_what_it_granted(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A store written by an older daemon keeps its authority, and reading never rewrites it.
+
+    An approval store that migrated itself on read would be writing authority as a side
+    effect of answering a question about it.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    approvals = VerifyApprovalStore(tmp_path / "data")
+    info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+    assert info.digest is not None
+    approvals.path.parent.mkdir(parents=True, exist_ok=True)
+    approvals.path.write_text(
+        json.dumps(
+            {str(Path(trunk).resolve()): {"digest": info.digest, "snapshot": "old bytes"}}
+        ),
+        encoding="utf-8",
+    )
+
+    assert approvals.is_approved(str(trunk), info.digest) is True
+    assert approvals.approved_snapshot(str(trunk)) == "old bytes"
+    assert json.loads(approvals.path.read_text(encoding="utf-8")) == {
+        str(Path(trunk).resolve()): {"digest": info.digest, "snapshot": "old bytes"}
+    }
+
+    # The next approval carries the old grant forward into the new shape rather than
+    # replacing it, which is the whole point of the change.
+    approvals.approve(str(trunk), "b" * 64, snapshot="new bytes")
+    assert approvals.is_approved(str(trunk), info.digest) is True
+    assert approvals.is_approved(str(trunk), "b" * 64) is True
+    assert approvals.approved_snapshot(str(trunk)) == "new bytes"
+
+
+def test_retained_approvals_are_capped_and_the_oldest_is_withdrawn(tmp_path: Path) -> None:
+    """Bounded authority. The eviction is a real un-approval, so it is oldest-first."""
+    approvals = VerifyApprovalStore(tmp_path / "data")
+    root = str(tmp_path / "project")
+    digests = [f"{index:064x}" for index in range(MAX_APPROVED_DIGESTS + 2)]
+    for digest in digests:
+        approvals.approve(root, digest, snapshot=f"bytes {digest[-2:]}")
+
+    assert approvals.is_approved(root, digests[0]) is False
+    assert approvals.is_approved(root, digests[1]) is False
+    assert all(approvals.is_approved(root, digest) for digest in digests[2:])
+    # Only the newest keeps its bytes: the snapshot answers "what changed since you
+    # approved", which is asked against the last thing approved.
+    assert approvals.approved_snapshot(root) == f"bytes {digests[-1][-2:]}"
+    assert approvals.approved_digest(root) == digests[-1]
+
+
+def test_revoking_withdraws_exactly_what_it_names(tmp_path: Path) -> None:
+    approvals = VerifyApprovalStore(tmp_path / "data")
+    root = str(tmp_path / "project")
+    approvals.approve(root, "a" * 64, snapshot="a")
+    approvals.approve(root, "b" * 64, snapshot="b")
+
+    approvals.revoke(root, "a" * 64)
+    assert approvals.is_approved(root, "a" * 64) is False
+    assert approvals.is_approved(root, "b" * 64) is True
+
+    approvals.revoke(root)
+    assert approvals.ever_approved(root) is False
 
 
 def test_a_handback_excerpt_is_bounded_and_redacted() -> None:
@@ -810,7 +907,14 @@ async def test_a_verification_failure_hands_back_with_its_output(
 async def test_an_unapproved_gate_refuses_rather_than_handing_back(
     tmp_path: Path, trunk: Path
 ) -> None:
-    """Approval is the operator's business, so it does not become the agent's task."""
+    """Approval is the operator's business, so it does not become the agent's task.
+
+    The agent is still *told*, which is the half this used to get wrong: it refused
+    silently, so a session that asked to land and went quiet - which is what waiting for
+    a land is - sat idle while its request died. The message says the branch is not the
+    problem and that a human presses approve, which is precisely what keeps the approval
+    from becoming the agent's task while it reads.
+    """
     worktree = add_worktree(trunk, "alpha")
     write_verify(worktree)
     commit(worktree, "alpha.txt", "alpha\n", "alpha work")
@@ -823,11 +927,24 @@ async def test_an_unapproved_gate_refuses_rather_than_handing_back(
             worktree_root=str(worktree),
             origin="agent",
             origin_session_id="sess_1",
+            origin_run_id="run_1",
         )
         results = await service.tick()
         assert results[0]["state"] == "refused"
         assert "not approved" in results[0]["reason"]
-        assert queue.messages == []
+        assert results[0]["detail"]["code"] == "unapproved"
+        # The row's own spelling of the root, so the strip can offer *that* checkout's
+        # copy for approval without re-deriving which one refused.
+        assert results[0]["detail"]["worktree_root"] == results[0]["worktree_root"]
+        assert len(queue.messages) == 1
+        body = queue.messages[0]["body"]
+        assert "was refused" in body
+        assert "not a problem with your branch" in body
+        assert "You cannot approve it yourself" in body
+        # The same armed channel a handback rides, under the same bounds: this is the
+        # session's own request being answered.
+        assert queue.messages[0]["armed"] is True
+        assert queue.messages[0]["solicited_by"] == results[0]["id"]
     finally:
         store.close()
 

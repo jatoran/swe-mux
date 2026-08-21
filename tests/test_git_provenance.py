@@ -385,6 +385,57 @@ def test_summarize_keeps_a_landing_merges_three_answers_apart() -> None:
     assert summary[SIBLING]["contributors"][0]["paths"] == ["shared.py"]
 
 
+async def test_the_ledger_can_be_searched_by_commit_subject(tmp_path: Path) -> None:
+    """An indexed LIKE over one Project's ledger: instant, and about observed commits only.
+
+    It complements `git log --grep` rather than replacing it - Git has read every commit
+    message, this has read only the ones swe-mux watched happen - and what it adds is
+    that it knows which session made each of them.
+    """
+    history = HistoryIndex(tmp_path / "mux.db")
+    common = {
+        "session_id": "session-1",
+        "session_name": "Builder",
+        "agent_run_id": "run-1",
+        "project_id": "project-1",
+        "worktree_root": "C:/repo",
+        "parent_oids": (),
+        "committed_at": 10.0,
+        "previous_head": OLD,
+        "source_event_seq": 7,
+        "tool_call_id": None,
+        "observed_at": 12.0,
+        "relationship": "created",
+        "confidence": "exact",
+        "ambiguous": False,
+        "source": "session_tool",
+        "evidence_rank": 70,
+        "role": "committer",
+    }
+    await history.record_git_provenance(
+        **common, commit_oid=NEW, subject="Teach the rail to overflow"
+    )
+    await history.record_git_provenance(
+        **common, commit_oid=SIBLING, subject="A 100% literal _subject_"
+    )
+
+    # Case-insensitive by SQLite's own `LIKE`, which is what a search box means.
+    assert [row["commit_oid"] for row in await history.git_provenance(
+        project_id="project-1", subject_query="RAIL"
+    )] == [NEW]
+    # `%` and `_` are LIKE wildcards, so a subject containing them must be matched
+    # literally: without the escape, "100%" would match everything.
+    assert [row["commit_oid"] for row in await history.git_provenance(
+        project_id="project-1", subject_query="100% literal"
+    )] == [SIBLING]
+    assert await history.git_provenance(
+        project_id="project-1", subject_query="100xliteral"
+    ) == []
+    # An empty query is not a filter at all, rather than a `%%` that matches everything
+    # through a scan.
+    assert len(await history.git_provenance(project_id="project-1", subject_query="  ")) == 2
+
+
 async def test_store_promotes_observed_evidence_to_exact_without_duplication(
     tmp_path: Path,
 ) -> None:

@@ -477,7 +477,11 @@ class _FakeSession:
         state: str = "idle",
     ) -> None:
         self.subscribers = [object()] if attached else []
-        self.record = SimpleNamespace(id=cwd, git=git, git_cwd=cwd, state=state)
+        # `project_id` rides every `git_changed`: it is what lets the Git tab tell a
+        # poll about *its* repository from one about somebody else's.
+        self.record = SimpleNamespace(
+            id=cwd, git=git, git_cwd=cwd, state=state, project_id="project-1"
+        )
         self.published = 0
 
     def publish_update(self) -> None:

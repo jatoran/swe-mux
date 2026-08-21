@@ -97,6 +97,22 @@ Any edit un-approves it.
 The digest covers the command's *source kind* alongside its bytes, so approving a config string never silently approves a script with identical content.
 The script is fingerprinted from the **worktree's** copy, because that is the copy that will run: a branch that edits its verification script must present for approval again.
 
+### Approval is scoped to bytes, not to a Project
+
+The store holds a **set** of approved digests per Project root, not one slot.
+
+One slot is the wrong shape for the thing being approved.
+A Project's worktrees each carry their own copy of `.worktree-verify`, so a branch that edits the gate resolves to different bytes from the primary's - and with a single slot, approving the branch's copy silently un-approved the primary's and vice versa.
+Observed live 2026-08-21: two landings took turns un-approving each other, and neither could be cleared.
+Approving now says only what it says - *these* bytes may run - and says nothing about any other copy.
+
+It is still bounded, because an approval is authority and authority that only ever accumulates is authority nobody can account for: sixteen digests per root, oldest first out.
+The eviction is a real un-approval, which is why the cap is generous rather than tight.
+Only the newest approval retains its bytes, because the snapshot exists to answer "what changed since you approved" and that is asked against the last thing approved; retaining sixteen 128 KiB scripts per root would make the trust file - read on every gate resolution - the expensive thing about resolving a gate.
+
+A trust file written by an older daemon keeps its authority and is **read without being rewritten**: the single slot reads as a one-element set, and the next approval carries that grant forward into the new shape.
+An approval store that migrated itself on read would be writing authority as a side effect of answering a question about it.
+
 The gate's exit status is reported exactly as the process gave it.
 Nothing pipes, filters, or re-derives it; a gate command trimmed inside its own pipeline has already shipped a failing suite green in this repository once.
 Running under the daemon's own `base_session_env` rather than an agent shell also removes the known intermittent false failure `.worktree-verify` shows in an agent shell.
@@ -222,6 +238,20 @@ The gate *is* fingerprinted per worktree - a branch that edits `.worktree-verify
 Drawn per row it was the same paragraph about approved bytes under each of eight checkouts, which buries the thing an expanded row is for.
 A branch whose own script really does differ is reported by its land refusing, which names the branch, rather than by eight blocks that mostly agree.
 
+**And the refusal has to be actionable where it is drawn.**
+It was not: the strip drew the Project-resolved gate - the primary checkout's - so a land refused on a *worktree's* edited copy rendered as "verification approved" over a refusal for an unapproved command, with no control anywhere to approve the copy that had actually been refused.
+Clearing it meant being walked through `GET /api/land/verify-command?worktree_root=...` by hand and then the approve POST (observed 2026-08-21).
+So a refusal for unapproved bytes now surfaces **that checkout's own copy** in the strip: its bytes, a diff against what stands approved, and an approve control, reusing the same two routes - both of which already took `worktree_root`.
+What is new is that a human can reach them.
+
+Three rules keep that from becoming the per-row gate the strip retired.
+Only `unapproved` (a `not_configured` refusal has no bytes to show and no approval to give).
+Only a refusal that still stands, by the same supersession rule the attention row uses - a branch that has since landed or verified is not blocked on approving anything.
+And only a checkout other than the Project root, whose copy is the block the strip already draws.
+The blocks are bounded to three and are transient by construction, and the collapsed summary line names the count, because this is precisely the case where the Project gate reads approved and a land is refused anyway.
+
+The digest-scoped store above is what makes the control safe rather than a loop: before it, approving this copy withdrew the primary's, so a control here would have automated the very oscillation it exists to end.
+
 **Editing never approves, and the two are separate acts against separate routes.**
 An edit cannot produce an approved command even by accident: the approval is a digest over the bytes, so moving the bytes invalidates it without the write saying anything about approval at all.
 That is what keeps "an agent cannot approve the command its own land runs" true regardless of who reaches the editor - writing a verification script is a proposal, and a human turns it into an authority.
@@ -311,6 +341,16 @@ A conflict, a verification failure, or an expired hold returns the request to th
 A land announces itself by the trunk moving; a verify-only run leaves no such evidence, so the message *is* the result.
 It is the same authority under every one of the same bounds - the request is the consent, the target is the request's own origin, the template is fixed - and it spends the same single armed reply, which is why one request cannot both report a pass and hand back.
 The body says what was proven, says that **nothing was landed**, says that the trunk was merged into the branch to verify it, and says that a later land of this tree will reuse the result rather than spend the gate again.
+
+**A refusal rides it too, and did not.**
+A refusal ended the request without running anything and told nobody, so an agent that called `request_land` and went quiet - which is what waiting for a land *is* - sat idle while its request died of an unapproved gate or a branch that had moved.
+Observed twice in one evening, 2026-08-21.
+It is the same authority under the same five bounds below, for the same reason: it is the bounded, deterministic, daemon-authored answer to a request that session made.
+
+The template's job is to keep the reader from re-reading their own branch.
+A refusal is a statement about the *setup*, and an agent told only "your land was refused" goes looking for the defect in its own diff, which is the one place it is not.
+So the message names the cause, and for the two causes that are nobody's code - `unapproved`, `not_configured` - it says outright that this is not a problem with the branch, that nothing was run against it, that approving is a human act against the exact bytes in the Git tab's landing strip, and that the agent cannot approve it itself.
+A refusal also carries a machine-readable `code` in its detail beside the sentence, plus the worktree root it resolved: a reason string cannot be matched on, and the landing strip has to know *which* checkout's bytes to offer.
 
 ### It arrives armed, because the request is the consent
 

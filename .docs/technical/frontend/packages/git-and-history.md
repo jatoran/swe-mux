@@ -36,7 +36,21 @@ The main tree is pinned first as the anchor the rest are measured against, undat
 Parsing stays faithful to the payload; ordering is a presentation decision on top of it.
 
 Violet emphasis marks nonzero comparison-ahead counts.
+A row also states when the land queue last landed that branch (`landedAtByBranch`), from `landed` rows only and absent rather than guessed.
 Log draws TUI graph context, colored Git-authored lanes and nodes, semantic ref ordering, and exact commit-OID worktree-tip markers, without hiding any refs.
+
+### What each reading fetches
+
+Map reads `detail=summary` and holds no per-file lists; an expanded row fetches its own full reading for that one checkout, and `filesOmitted` is what keeps "12 local over an empty list" from parsing as an empty change set.
+A refresh drops every expanded row's detail rather than redrawing it, because a refresh means the trees moved; the effect that fetches the open row runs again.
+
+The `mux:git-changed` listener is **filtered by Project and debounced**: the event is every session's five-second dirty tick, so an unfiltered handler re-read one Project's map on another Project's poll, ten times over for ten sessions in this one.
+An event naming no Project (a reconnect, a worktree act) is never filtered out, because treating unknown as "not mine" would stop the tab refreshing after a reconnect.
+The provenance ledger is fetched only by Log and Provenance, never by Map, which drew none of it and fetched five hundred rows of it on every refresh.
+
+Each reading's search box belongs to that reading and is wired where the search is cheapest: Map filters the payload in the browser, Log and Provenance debounce at `HistoryBrowser`'s own 220 ms and ask the daemon.
+A refetch caused by the repository moving, or by loading more commits, is not a keystroke and waits for nothing.
+A filtered Log carries no lanes by construction (`filtered` on the payload), and the context strip's scope says what is being matched so their absence is explained.
 
 ### Pending removals and bulk select
 
@@ -68,7 +82,12 @@ A row that cannot land names the blocker and *opens the strip* instead of drawin
 `GitLandBar.tsx` is that strip, at the head of the map: one always-readable summary line (`landingSummary`) plus a disclosure holding everything Project-wide.
 Behind the disclosure: the Project's verification command with its source, approval, recorded plan and in-place editor; agent authority; and the queue in the order the pipeline will reach it.
 The queue is oldest first, because the daemon lists newest-first for history reads and the request about to run would therefore sit at the bottom.
-It opens itself only while landing is blocked - the install stop is off, or the bytes are unapproved - and its install-stop `GrantGate` renders *outside* the disclosure, because a gate hidden behind a summary is the same defect as a surface rendering empty.
+It opens itself only while landing is blocked - the install stop is off, the bytes are unapproved, or a worktree's own copy of the gate refused a land - and its install-stop `GrantGate` renders *outside* the disclosure, because a gate hidden behind a summary is the same defect as a surface rendering empty.
+
+`BlockedWorktreeGate` is the third of those: one compact block per checkout whose *own* gate copy refused a land, drawn only for an `unapproved` refusal that still stands, only for a root other than the Project's, and capped at three (`blockedVerifyWorktrees`, `MAX_BLOCKED_GATES`).
+It exists because the strip draws the Project-resolved gate - the primary's - so such a refusal rendered as "verification approved" over a refusal for an unapproved command with nothing anywhere to approve.
+It reuses the existing per-worktree read and approve routes, both of which already took `worktree_root`; what is new is that a human can reach them.
+The collapsed summary line names the count for the same reason, because this is exactly the case where the gate reads approved and a land is refused anyway.
 
 `landState.ts` owns the two daemon reads both parts share, mounted once by `GitTab.tsx` so the row and the strip cannot disagree about one request and so Log and Provenance pay for no poll.
 
@@ -91,6 +110,10 @@ It opens itself only while landing is blocked - the install stop is off, or the 
   It is derived at the reading rather than written back, because `land_events` and the history disclosure are an audit that must keep saying the handback happened.
 - `recentLandings` is what an idle summary says instead of the stalest historical row, and it is a floor rather than a total: `landed` only, a 24-hour window, over the newest 100 rows the daemon returns.
   `verified` is not counted, because nothing moved and the line says *landed*.
+- `refusalCode` is read only off a row that actually refused, and only for the two codes the strip can act on; a stale code on a landed row would offer an approval for a gate that ran.
+  Everything else - a branch that moved, a fast-forward Git would not do - parses to `''`, because naming it here would invite a control for something the strip cannot fix.
+- `landedAtByBranch` is the Map's landing date and is a floor for the same reason `recentLandings` is: `landed` only, newest per branch, over the newest 100 rows.
+  `already_landed` carries no moment a landing happened and is excluded rather than dated.
 
 `landSetupPrompt.ts` is the copyable prompt the strip offers for setting verification up in *another* repository, shown in a collapsed disclosure beside the editor rather than only copied.
 It is a frontend template because every fact in it is a property of the land queue's design rather than of an install, and the one variable is the script convention's name the gate payload already carries.

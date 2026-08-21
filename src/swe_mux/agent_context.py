@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,8 @@ MAX_MEMORY_ITEMS = 128
 MAX_DIFF_CHARS = 256 * 1024
 MAX_BACKUPS_RETURNED = 20
 MAX_BACKUP_SCAN = 2_000
+#: How many Projects' instruction inventories are retained at once.
+INVENTORY_CACHE_LIMIT = 8
 
 
 def _project_instruction_sources() -> dict[str, tuple[str, str, tuple[str, ...]]]:
@@ -211,6 +214,12 @@ class AgentContextService:
         self.home = Path(home) if home is not None else Path.home()
         self.repository_root = repository_root
         self._start_revisions: dict[tuple[str, str], str] = {}
+        #: (project id, root) -> (signature, payload). Bounded: the drawer reads one
+        #: Project at a time, and a fleet of them would otherwise retain one inventory
+        #: each for the life of the daemon.
+        self._inventory_cache: OrderedDict[
+            tuple[str, str], tuple[tuple[Any, ...], dict[str, Any]]
+        ] = OrderedDict()
         for _, relative_path, _ in GLOBAL_INSTRUCTION_SOURCES.values():
             path = self.home.joinpath(*relative_path)
             self._start_revisions[(str(path.parent.resolve()), path.name)] = self._file_revision(
@@ -474,8 +483,73 @@ class AgentContextService:
             return self._codex_provider(capability.detail)
         raise AssertionError(f"unhandled memory inventory kind: {capability.kind}")
 
-    def inventory(self, project_id: str, project_name: str, root: str | Path) -> dict[str, Any]:
+    def _inventory_signature(self, project_root: Path) -> tuple[Any, ...]:
+        """A cheap fingerprint of everything `inventory` reads.
+
+        Stat calls only. What makes the inventory expensive is *reading and normalizing*
+        every instruction file - up to four project files plus the global ones, decoded,
+        hashed, and compared against each other for the in-sync verdict - and that is
+        exactly the work this lets a repeat call skip.
+
+        Size beside mtime, because the two together are what an editor moves and either
+        alone is not: a rewrite can land in the same nanosecond as the read that
+        preceded it, and a same-size edit is common. Where even that is not enough, the
+        surface has an explicit rescan, which is the honest escape hatch - and the
+        reason this may be a stat signature rather than a content hash at all.
+        """
+        marks: list[Any] = []
+        paths = [project_root / filename for _p, filename, _r in INSTRUCTION_SOURCES.values()]
+        paths.extend(
+            self.home.joinpath(*relative_path)
+            for _p, relative_path, _l in GLOBAL_INSTRUCTION_SOURCES.values()
+        )
+        # The two directories whose *listing* is part of the answer. A file added to
+        # either changes the directory's own mtime, which is what has to be noticed.
+        directory, _error = self._claude_memory_directory(project_root)
+        paths.extend([directory, self.home / ".claude" / "settings.json"])
+        for path in paths:
+            try:
+                info = path.stat()
+                marks.append((str(path), info.st_mtime_ns, info.st_size))
+            except OSError:
+                # "Absent" is a state the inventory reports, so it is part of the
+                # signature: a file appearing must invalidate, not read as unchanged.
+                marks.append((str(path), None, None))
+        return tuple(marks)
+
+    def inventory(
+        self,
+        project_id: str,
+        project_name: str,
+        root: str | Path,
+        *,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        """The Agent tab's Instructions reading, memoized on what it reads.
+
+        The tab opens on this, and every open re-read and re-normalized every
+        instruction file with nothing retained on either side of the wire. The cache is
+        invalidated by the files themselves moving; `refresh` is the rescan control,
+        which bypasses it outright rather than trusting the signature.
+        """
         project_root = Path(root).resolve()
+        key = (project_id, str(project_root))
+        signature = self._inventory_signature(project_root)
+        if not refresh:
+            cached = self._inventory_cache.get(key)
+            if cached is not None and cached[0] == signature:
+                self._inventory_cache.move_to_end(key)
+                return cached[1]
+        payload = self._inventory(project_id, project_name, project_root)
+        self._inventory_cache[key] = (signature, payload)
+        self._inventory_cache.move_to_end(key)
+        while len(self._inventory_cache) > INVENTORY_CACHE_LIMIT:
+            self._inventory_cache.popitem(last=False)
+        return payload
+
+    def _inventory(
+        self, project_id: str, project_name: str, project_root: Path
+    ) -> dict[str, Any]:
         instructions = [
             self._instruction_item(project_root, source_id) for source_id in INSTRUCTION_SOURCES
         ]

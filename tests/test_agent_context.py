@@ -134,6 +134,49 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     assert changed["instructions"]["items"][1]["changed_since_start"] is True
 
 
+def test_the_inventory_is_memoized_on_the_files_it_reads(tmp_path: Path) -> None:
+    """Every open re-read and re-normalized every instruction file, with nothing retained.
+
+    The cache is keyed on a stat signature over exactly those files, so it invalidates
+    when they move and never when they do not - and `refresh` bypasses it outright,
+    which is what makes "rescan" mean rescan rather than "ask again politely".
+    """
+    root = tmp_path / "project"
+    home = tmp_path / "home"
+    root.mkdir()
+    (home / ".claude").mkdir(parents=True)
+    (root / "CLAUDE.md").write_text("# One\n", encoding="utf-8", newline="\n")
+    (root / "AGENTS.md").write_text("# One\n", encoding="utf-8", newline="\n")
+
+    reads: list[str] = []
+    service = AgentContextService(tmp_path / "backups", home=home)
+    original = service._instruction_item
+
+    def counted(source_root: Path, source_id: str) -> dict[str, object]:
+        reads.append(source_id)
+        return original(source_root, source_id)
+
+    service._instruction_item = counted  # type: ignore[method-assign]
+
+    first = service.inventory("p", "Project", root)
+    taken = len(reads)
+    assert taken > 0
+    second = service.inventory("p", "Project", root)
+    assert second is first
+    assert len(reads) == taken
+
+    # `refresh` reads again even though nothing moved.
+    service.inventory("p", "Project", root, refresh=True)
+    assert len(reads) == taken * 2
+
+    # And an edit invalidates on its own. Different size, so the signature moves whatever
+    # the filesystem's mtime resolution happens to be.
+    (root / "AGENTS.md").write_text("# One, revised\n", encoding="utf-8", newline="\n")
+    changed = service.inventory("p", "Project", root)
+    assert changed is not first
+    assert changed["instructions"]["comparison"] == "different"
+
+
 def test_repo_derived_claude_memory_uses_primary_checkout(tmp_path: Path) -> None:
     root = tmp_path / "worktree"
     primary = tmp_path / "primary checkout"

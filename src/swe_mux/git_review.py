@@ -8,10 +8,11 @@ import os
 import re
 import stat
 import time
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
@@ -61,6 +62,9 @@ class GitChangeSummary(TypedDict):
     binary_files: int
     files: list[GitFileChange]
     truncated: bool
+    #: Present and true only under `detail=summary`: the counts are real and the file
+    #: list was withheld. A reader must be able to tell that from an empty change set.
+    files_omitted: NotRequired[bool]
 
 
 class GitComparisonRef(TypedDict):
@@ -747,40 +751,70 @@ async def _diff_summary(worktree: str, revision_args: list[str]) -> GitChangeSum
     )
 
 
+def _needs_line_counts(files: list[GitFileChange]) -> bool:
+    """Whether any of these files has line counts `git diff --numstat` could supply.
+
+    Untracked files are measured from their own bytes and never appear in a diff, so a
+    change set that is only untracked files has nothing to ask `diff` about. A *clean*
+    scope has nothing at all. Both used to spawn a `git diff` anyway - two per worktree,
+    unconditionally, on a Map that at fifty checkouts is mostly clean ones.
+    """
+    return any(item["status"] != "??" for item in files)
+
+
 async def _local_summaries(
     worktree: str,
+    status_result: GitResult | None = None,
 ) -> tuple[GitChangeSummary | None, GitChangeSummary | None, GitChangeSummary | None]:
-    status_result = await _run_git_bytes(
-        worktree, "status", "--porcelain=v2", "-z", "--untracked-files=all"
-    )
+    """The three working-tree summaries, from one `status` read.
+
+    `status_result` lets a caller that already ran the status hand it in rather than
+    have it run twice: the overview needs the same bytes to decide whether its memo of
+    this checkout is still valid, and running `status` for the memo and again for the
+    summaries would spend the process the memo exists to save.
+    """
+    if status_result is None:
+        status_result = await _run_git_bytes(
+            worktree, "status", "--porcelain=v2", "-z", "--untracked-files=all"
+        )
     if status_result.code:
         return None, None, None
     staged, unstaged, conflicted = parse_porcelain_v2(status_result.stdout)
-    staged_stats_task = _run_git_bytes(
-        worktree,
-        "diff",
-        "--cached",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        "--find-renames",
-        "--numstat",
-        "-z",
-    )
-    unstaged_stats_task = _run_git_bytes(
-        worktree,
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        "--find-renames",
-        "--numstat",
-        "-z",
-    )
-    staged_stats, unstaged_stats = await asyncio.gather(staged_stats_task, unstaged_stats_task)
-    if not staged_stats.code:
+    stat_tasks: dict[str, asyncio.Task[GitResult]] = {}
+    if _needs_line_counts(staged):
+        stat_tasks["staged"] = asyncio.create_task(
+            _run_git_bytes(
+                worktree,
+                "diff",
+                "--cached",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--find-renames",
+                "--numstat",
+                "-z",
+            )
+        )
+    if _needs_line_counts(unstaged):
+        stat_tasks["unstaged"] = asyncio.create_task(
+            _run_git_bytes(
+                worktree,
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--find-renames",
+                "--numstat",
+                "-z",
+            )
+        )
+    if stat_tasks:
+        await asyncio.gather(*stat_tasks.values())
+    staged_stats = stat_tasks["staged"].result() if "staged" in stat_tasks else None
+    unstaged_stats = stat_tasks["unstaged"].result() if "unstaged" in stat_tasks else None
+    if staged_stats is not None and not staged_stats.code:
         _apply_numstat(staged, parse_numstat(staged_stats.stdout))
-    if not unstaged_stats.code:
+    if unstaged_stats is not None and not unstaged_stats.code:
         _apply_numstat(unstaged, parse_numstat(unstaged_stats.stdout))
     remaining_untracked_bytes = GIT_UNTRACKED_MEASURE_MAX_BYTES
     # Only returned files need content-derived line counts. Inspecting every path before
@@ -840,14 +874,149 @@ async def head_commit_dates(
     return {oid: dates[oid.lower()] for oid in unique if oid.lower() in dates}
 
 
+#: (worktree, head, comparison oid) -> (ahead/behind counts, branch delta).
+#:
+#: The Map's expensive half, and the half that can be memoized *exactly*. Both readings
+#: are commit-to-commit - `rev-list --left-right --count <ref>...HEAD` and a diff over
+#: the same range - so nothing in a working tree can change either one. Given the same
+#: two commits they are the same answer, and re-deriving it costs five `git`
+#: subprocesses per checkout.
+#:
+#: That is the whole reason this is keyed on two object IDs rather than on time. At the
+#: fifty worktrees this Project reached, the overview was spawning four hundred
+#: processes per request and retaining nothing between them; an unattended checkout is
+#: never polled, so a TTL would have been guessing about the one case it exists for.
+#: Object IDs do not go stale - a tree whose HEAD has not moved has not moved.
+_branch_memo: OrderedDict[
+    tuple[str, str, str], tuple[dict[str, int] | None, GitChangeSummary | None]
+] = OrderedDict()
+
+#: Bounded well above any real fleet: one entry per (checkout, HEAD, base), so a
+#: fifty-worktree Project churning branches still keeps every live tree memoized.
+BRANCH_MEMO_LIMIT = 512
+
+
+def reset_overview_cache() -> None:
+    """Drop every memoized branch reading. For tests and daemon restart."""
+    _branch_memo.clear()
+
+
+def _memoized_branch(
+    key: tuple[str, str, str],
+) -> tuple[dict[str, int] | None, GitChangeSummary | None] | None:
+    cached = _branch_memo.get(key)
+    if cached is None:
+        return None
+    _branch_memo.move_to_end(key)
+    return cached
+
+
+def _memoize_branch(
+    key: tuple[str, str, str],
+    counts: dict[str, int] | None,
+    delta: GitChangeSummary | None,
+) -> None:
+    # A reading Git refused to give is never memoized: a locked index or an interrupted
+    # command would otherwise pin "unavailable" onto a checkout that is fine, until its
+    # HEAD happened to move.
+    if counts is None and delta is None:
+        return
+    _branch_memo[key] = (counts, delta)
+    _branch_memo.move_to_end(key)
+    while len(_branch_memo) > BRANCH_MEMO_LIMIT:
+        _branch_memo.popitem(last=False)
+
+
+def _same_path(listed: str, normalized: str) -> bool:
+    """Whether a `git worktree list` path names the same directory as a normalized one.
+
+    Resolved and case-folded, because Windows says both `D:\\PROJECTS` and `d:\\projects`
+    for the same directory and a caller's spelling is whatever their client had.
+    """
+    try:
+        candidate = os.path.normcase(os.path.normpath(str(Path(listed).resolve())))
+    except OSError:
+        candidate = os.path.normcase(os.path.normpath(listed))
+    return candidate == normalized
+
+
+async def _comparison_oid(repository: str, ref: str | None) -> str:
+    """The commit a comparison ref names right now, or `''`.
+
+    One process for the whole overview rather than one per worktree: every checkout is
+    compared against the same base, and it is the *base moving* that has to invalidate
+    fifty memoized branch readings at once.
+    """
+    if not ref:
+        return ""
+    result = await _run_git_bytes(repository, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if result.code:
+        return ""
+    return result.stdout.decode("ascii", "replace").strip()
+
+
+def _summary_view(summary: GitChangeSummary | None) -> GitChangeSummary | None:
+    """The same summary with its file list withheld.
+
+    Map rows render counts; the file list is read on expand and nowhere else. Serving
+    up to four lists of two hundred records per worktree to draw a badge is the
+    payload's real cost, and it is one the compression on the way out cannot recover
+    (`network_usage.py`): gzip makes the bytes smaller, not absent.
+    """
+    if summary is None:
+        return None
+    withheld: GitChangeSummary = {**summary, "files": [], "files_omitted": True}
+    return withheld
+
+
+def summarize_overview(payload: dict[str, Any]) -> dict[str, Any]:
+    """`detail=summary`: the overview with every per-file list withheld."""
+    return {
+        **payload,
+        "detail": "summary",
+        "worktrees": [
+            {
+                **row,
+                **{
+                    scope: _summary_view(row.get(scope))
+                    for scope in ("unstaged", "staged", "conflicted", "branch_delta")
+                },
+            }
+            for row in payload.get("worktrees", [])
+        ],
+    }
+
+
 async def worktree_overview(
-    project_id: str, project_root: str, compare_override: str | None
+    project_id: str, project_root: str, compare_override: str | None, only: str | None = None
 ) -> dict[str, Any]:
+    """Every listed worktree, or - with `only` - exactly one of them.
+
+    `only` is what makes `detail=summary` usable rather than merely smaller: the Map
+    ships counts, and a row that is expanded asks for its own file lists. Measuring one
+    checkout is one checkout's worth of Git, which is the whole point of asking for one.
+    """
     started = time.monotonic()
     repository, common_dir = await repository_identity(project_root)
     comparison = await infer_comparison(repository, compare_override)
     items = await listed_worktrees(repository)
+    wanted: str | None = None
+    if only is not None:
+        try:
+            wanted = os.path.normcase(os.path.normpath(str(Path(only).resolve())))
+        except OSError:
+            wanted = os.path.normcase(os.path.normpath(only))
+        # A path Git does not list is not a worktree of this repository, whatever it is
+        # on disk. Refused rather than measured, because the caller supplied it.
+        if not any(
+            isinstance(listed := item.get("worktree"), str)
+            and _same_path(listed, wanted)
+            for item in items
+        ):
+            raise GitReviewError("worktree_not_found", "unknown worktree for this Project", 404)
+    compare_oid = await _comparison_oid(repository, comparison["ref"])
     semaphore = asyncio.Semaphore(GIT_CONCURRENCY)
+    reused = 0
 
     # Tip dates are read for *every* listed tree, including the ones below that return
     # unmeasured: the commit object is in the shared database, so a locked or prunable
@@ -868,8 +1037,18 @@ async def worktree_overview(
         )
         return row
 
+    def _keep(item: dict[str, Any]) -> bool:
+        if wanted is None:
+            return True
+        listed = item.get("worktree")
+        return isinstance(listed, str) and _same_path(listed, wanted)
+
     async def measure(index: int, item: dict[str, Any]) -> dict[str, Any]:
+        nonlocal reused
         row = dict(item)
+        # Read off the position in the *full* listing even when only one row is being
+        # served: `main` is "the first tree Git lists", and a single-row read that
+        # renumbered from its own filtered list would call every checkout the main one.
         row["main"] = index == 0
         head = row.get("HEAD")
         # Explicit `None` rather than an absent key: "unmeasured" and "unborn branch"
@@ -902,21 +1081,37 @@ async def worktree_overview(
                     reported_root,
                 )
                 return unmeasured(row)
-            local_task = _local_summaries(worktree)
+            # The branch half is keyed on two object IDs and is therefore either exactly
+            # right or absent - never stale. The local half is read live every time,
+            # because `status --porcelain=v2` carries no worktree blob hash: an edit
+            # that leaves a file `.M` produces byte-identical status output with
+            # different line counts, so a fingerprint taken from it would go quietly
+            # wrong about the one number the row shows.
+            memo_key = (exact_root, str(head or ""), compare_oid)
+            compares = bool(comparison["available"] and comparison["ref"] and head)
+            memoized = _memoized_branch(memo_key) if compares and compare_oid else None
             counts_task: asyncio.Task[GitResult] | None = None
             branch_task: asyncio.Task[GitChangeSummary | None] | None = None
-            if comparison["available"] and comparison["ref"] and row.get("HEAD"):
+            if compares and memoized is None:
                 ref = comparison["ref"]
                 counts_task = asyncio.create_task(
                     _run_git_bytes(worktree, "rev-list", "--left-right", "--count", f"{ref}...HEAD")
                 )
                 branch_task = asyncio.create_task(_diff_summary(worktree, [f"{ref}...HEAD"]))
-            unstaged, staged, conflicted = await local_task
+            status_result = await _run_git_bytes(
+                worktree, "status", "--porcelain=v2", "-z", "--untracked-files=all"
+            )
+            unstaged, staged, conflicted = await _local_summaries(worktree, status_result)
             row["unstaged"] = unstaged
             row["staged"] = staged
             row["conflicted"] = conflicted
             row["comparison_counts"] = None
             row["branch_delta"] = None
+            if memoized is not None:
+                reused += 1
+                row["comparison_counts"], row["branch_delta"] = memoized
+                return row
+            counts: dict[str, int] | None = None
             if counts_task is not None:
                 counts_result = await counts_task
                 parts = counts_result.stdout.decode("ascii", "replace").replace("\t", " ").split()
@@ -925,22 +1120,26 @@ async def worktree_overview(
                     and len(parts) == 2
                     and all(part.isdigit() for part in parts)
                 ):
-                    row["comparison_counts"] = {
-                        "behind": int(parts[0]),
-                        "ahead": int(parts[1]),
-                    }
-            if branch_task is not None:
-                row["branch_delta"] = await branch_task
+                    counts = {"behind": int(parts[0]), "ahead": int(parts[1])}
+            delta = await branch_task if branch_task is not None else None
+            row["comparison_counts"] = counts
+            row["branch_delta"] = delta
+            if compares and compare_oid:
+                _memoize_branch(memo_key, counts, delta)
         return row
 
-    worktrees = await asyncio.gather(*(measure(index, item) for index, item in enumerate(items)))
+    worktrees = await asyncio.gather(
+        *(measure(index, item) for index, item in enumerate(items) if _keep(item))
+    )
     _log_result(
         "overview",
         started,
         project_id=project_id,
         repository=repository,
         ref=comparison["ref"],
-        result="ok",
+        # How much of this answer was memoized, so "the Map got slow again" is a
+        # question the log can answer rather than one that needs a profiler.
+        result=f"ok reused={reused}/{len(worktrees)}",
         count=len(worktrees),
         truncated=any(
             bool(row.get(scope, {}).get("truncated"))
@@ -953,24 +1152,33 @@ async def worktree_overview(
         "repository": {"root": repository, "common_dir": common_dir},
         "comparison": comparison,
         "worktrees": worktrees,
+        # Stated rather than implied: a client that asked for `summary` and a client
+        # that asked for nothing get different payloads, and a row that renders "0
+        # files" is otherwise indistinguishable from one whose list was withheld.
+        "detail": "full",
     }
 
 
 _inflight_worktree_overviews: dict[
-    tuple[str, str, str | None], asyncio.Task[dict[str, Any]]
+    tuple[str, str, str | None, str | None], asyncio.Task[dict[str, Any]]
 ] = {}
 
 
 async def shared_worktree_overview(
-    project_id: str, project_root: str, compare_override: str | None
+    project_id: str, project_root: str, compare_override: str | None, only: str | None = None
 ) -> dict[str, Any]:
-    """Share one in-flight Map computation across clients and refreshes."""
+    """Share one in-flight Map computation across clients and refreshes.
 
-    key = (project_id, project_root, compare_override)
+    `only` is part of the key rather than folded away: a single-worktree read and a
+    whole-Project read are different answers, and joining one onto the other would hand
+    a row expansion the full inventory or - worse - hand the Map one row.
+    """
+
+    key = (project_id, project_root, compare_override, only)
     task = _inflight_worktree_overviews.get(key)
     if task is None or task.done():
         task = asyncio.create_task(
-            worktree_overview(project_id, project_root, compare_override),
+            worktree_overview(project_id, project_root, compare_override, only),
             name=f"git-overview:{project_id}",
         )
         _inflight_worktree_overviews[key] = task
@@ -1096,9 +1304,41 @@ async def commit_changes(
     }
 
 
-async def git_graph(project_id: str, project_root: str, limit: int) -> dict[str, Any]:
+#: The longest search pattern accepted, so an accidental paste cannot become a `git log`
+#: argument of unbounded size. Far above any real query.
+GIT_GRAPH_SEARCH_MAX_CHARS = 500
+
+
+async def git_graph(
+    project_id: str,
+    project_root: str,
+    limit: int,
+    *,
+    grep: str = "",
+    author: str = "",
+    regex: bool = False,
+) -> dict[str, Any]:
+    """A bounded commit graph, or - with a pattern - a bounded commit *search*.
+
+    Searching is Git's own `--grep`/`--author`, not a filter over what was already
+    fetched: the reason to search a log is to reach the commit that is *not* in the
+    first eighty, and a client-side filter over a bounded page can only ever hide rows
+    it already had.
+
+    **`--graph` is dropped while filtering, deliberately.** Git draws lanes for a
+    contiguous walk; over a filtered subset the ASCII it emits connects commits that
+    have no such relationship, which is a picture of a DAG that does not exist. A
+    filtered row therefore carries a bare node and no lanes, and the payload says so.
+
+    Patterns are case-insensitive, and literal unless `regex` is asked for. That is the
+    safe direction for a search box: `.` and `*` are ordinary characters in a commit
+    subject, and a reader typing one means it.
+    """
     started = time.monotonic()
     repository, _common = await repository_identity(project_root)
+    grep = grep.strip()[:GIT_GRAPH_SEARCH_MAX_CHARS]
+    author = author.strip()[:GIT_GRAPH_SEARCH_MAX_CHARS]
+    filtering = bool(grep or author)
     probe = await _run_git_bytes(repository, "rev-list", "--all", "--max-count=1")
     _require_success(probe, "reading the commit graph")
     if not probe.stdout.strip():
@@ -1111,15 +1351,27 @@ async def git_graph(project_id: str, project_root: str, limit: int) -> dict[str,
             count=0,
             truncated=False,
         )
-        return {"lines": [], "limit": limit, "has_more": False}
+        return {"lines": [], "limit": limit, "has_more": False, "filtered": filtering}
     marker = "%x00%H%x00%P%x00%D%x00%an%x00%at%x00%s"
+    search_args: list[str] = []
+    if filtering:
+        search_args.append("--regexp-ignore-case")
+        if not regex:
+            # Applies to `--grep`, `--author`, and `--committer` alike, which is why one
+            # flag covers both fields.
+            search_args.append("--fixed-strings")
+        if grep:
+            search_args.append(f"--grep={grep}")
+        if author:
+            search_args.append(f"--author={author}")
     result = await _run_git_bytes(
         repository,
         "log",
-        "--graph",
+        *([] if filtering else ["--graph"]),
         "--date-order",
         "--decorate=short",
         "--all",
+        *search_args,
         f"--max-count={limit + 1}",
         f"--format={marker}",
     )
@@ -1149,7 +1401,10 @@ async def git_graph(project_id: str, project_root: str, limit: int) -> dict[str,
         lines.append(
             {
                 "kind": "commit",
-                "graph": graph,
+                # A bare node while filtering: `--graph` was not asked for, so there is
+                # no prefix, and the row still has to draw *something* where every other
+                # row draws its node.
+                "graph": "* " if filtering else graph,
                 "oid": oid,
                 "parents": parents.split(),
                 "refs": refs,
@@ -1168,7 +1423,7 @@ async def git_graph(project_id: str, project_root: str, limit: int) -> dict[str,
         count=sum(line.get("kind") == "commit" for line in lines),
         truncated=has_more,
     )
-    return {"lines": lines, "limit": limit, "has_more": has_more}
+    return {"lines": lines, "limit": limit, "has_more": has_more, "filtered": filtering}
 
 
 async def _untracked_patch(worktree: str, path: str) -> GitResult:

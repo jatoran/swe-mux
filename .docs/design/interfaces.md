@@ -485,7 +485,7 @@ provides live follow, not concurrent-edit merging.
 ## Agent Context
 
 ```text
-GET  /projects/{project_id}/agent-context
+GET  /projects/{project_id}/agent-context[?refresh=1]
 GET  /projects/{project_id}/agent-context/sources/{source_id}
 POST /projects/{project_id}/agent-context/sources/{source_id}/reveal
 POST /projects/{project_id}/agent-context/sync/preview   {direction}
@@ -500,6 +500,12 @@ restore-point manifests. Source/provider status is typed:
 `available | missing | disabled | unsupported | unreadable | too_large`. Claude learned memory
 items and root instructions carry opaque source ids; `revealable` marks an existing regular
 non-symlink file. No route accepts a path.
+
+Inventory is memoized per Project on a stat signature - path, `st_mtime_ns`, and size - over exactly the
+files it reads, plus the Claude memory directory and `~/.claude/settings.json`; an absent file is part of
+the signature, so one appearing invalidates rather than reading as unchanged. `refresh=1` bypasses the
+memo outright and is what the tab's rescan control sends, because a stat signature cannot see a same-size
+rewrite landing in the same nanosecond and "rescan" has to mean rescan.
 
 Source reads return `{source, text}` and are UTF-8, regular-file, non-symlink, and 512 KiB
 bounded. Instruction sources carry `scope: project | global`; resolved global host paths never
@@ -1773,15 +1779,25 @@ It is `null` when there is no commit to date (an unborn branch) or the read fail
 This is the field an activity ordering must sort on: a worktree directory's `st_mtime` is frozen by Windows while a live session holds a file open there, so directory timestamps report the busiest checkout as the most dormant one.
 Each summary reports totals, additions, deletions, binary and submodule counts, the first 200 files, and a truncation flag.
 Content-derived counts for untracked files inspect only those first 200 rows and stop after 16 MiB across the summary.
-Concurrent requests with the same Project root and comparison ref await one shared overview task rather than launching duplicate Git subprocess sets.
+Concurrent requests with the same Project root, comparison ref, and worktree scope await one shared overview task rather than launching duplicate Git subprocess sets.
 
-`GET /git/graph?project_id=ID&limit=N` returns `{lines, limit, has_more}` for all local refs.
+`detail=summary` returns the same payload with every `files` list emptied and marked `files_omitted: true`; the counts are unchanged.
+The response states which reading it is as `detail`, because a row rendering "0 files" is otherwise indistinguishable from one whose list was withheld.
+`worktree=ABSOLUTE_PATH` restricts the overview to that one checkout at full detail, for a Map row that has just been expanded; a path absent from `git worktree list` is `404 worktree_not_found` rather than measured, and `main` is still decided by position in the full listing.
+The response carries a weak `ETag` over the exact bytes served, plus `Cache-Control: no-cache` (revalidate before every use, not "do not store"), and answers `304` to a matching `If-None-Match` by weak comparison.
+The two `detail` readings never share a tag.
+
+`GET /git/graph?project_id=ID&limit=N` returns `{lines, limit, has_more, filtered}` for all local refs.
 `limit` is 1 to 200 with a default of 80.
 Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`, `oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`.
 Git supplies the graph prefixes and the browser renders them without reconstructing topology.
+`grep=TEXT` and `author=TEXT` (each at most 500 characters, applied together as Git applies them) turn the read into a `git log` search across all refs, case-insensitive, and literal unless `regex=1`.
+Filtering sets `filtered: true` and **drops `--graph`**: Git draws lanes only for a contiguous walk, so lanes over a filtered subset would connect commits that are not connected.
+Every filtered commit row therefore carries a bare `"* "` node and there are no connector rows.
 
-`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items, commits, ref_moves}` from the durable session-to-commit evidence ledger.
+`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N][&subject=TEXT]` returns `{items, commits, ref_moves}` from the durable session-to-commit evidence ledger.
 `project_id` is required and must name a registered Project, `limit` is 1 to 500 with a default of 200, and repeated `commit` parameters select multiple full 40-to-64-character object IDs.
+`subject` (at most 200 characters) matches recorded commit subjects with a `LIKE` inside this Project's indexed rows, escaping `%` and `_` so a subject containing them is matched literally; it narrows `ref_moves` to the same commits, and an empty or whitespace value is not a filter at all.
 Every item carries its durable id, session id and captured label, nullable agent run id, Project, exact worktree root, full commit OID, parent OIDs, copied subject and commit time, previous HEAD, relationship, confidence, ambiguity flag, role, match method, contributed paths, source, nullable source event sequence and tool-call id, and first/latest observation times.
 Each item is additionally decorated on read with `display_name`, the session's current name under the rule every surface uses, resolved from the live session when the fleet holds it and from its History row otherwise, and with `history_id`, the conversation a reader can open.
 The stored `session_name` is left untouched: it is evidence of what the session was called at capture time, while `display_name` is what it is called now.

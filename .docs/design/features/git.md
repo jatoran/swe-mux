@@ -262,8 +262,30 @@ uncommitted work together.
   Nothing Project-wide is drawn on a row - a fact true of the Project drawn on a row is drawn once per worktree, which is what the verification block did under each of eight expansions before it moved up.
   The strip is one summary line with the rest behind a disclosure, so the tab still opens on a map; it opens itself only when landing is actually blocked.
 - The retired Land segment keeps its palette command and voice phrases, migrated onto Map (`RETIRED_DRAWER_SEGMENTS`), and so does a stored selection and a `drawer.git.land` keybinding.
-- The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
-- The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
+- The three readings are drawn **in the pane's heading row**, inline with the Project scope, rather than as a full-width strip under a heading.
+  Git is the one tab whose heading is always exactly its selected segment's label, so the row above the control was the control's own selected chip spelled out, costing a line of a panel people keep narrow.
+  Everywhere else the heading names something the segments do not (`Change Map` under Activity), and those tabs are unchanged.
+  It is the same control from the same registry (`DrawerSegmentControl`), with the same keyboard behaviour, drawn compactly and sized to its labels so the Project scope still fits beside it.
+- The toolbar under it carries one search box for the current reading at its leading edge; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
+
+### Searching each reading
+
+- Each reading searches the thing it is a reading *of*, and each searches it where that search is cheapest.
+  The three are complementary rather than three routes to one answer, and none of them is a filter over a page that was already fetched.
+- **Map** filters client-side over the payload it already has, matching a case-insensitive substring against the branch and the checkout path together.
+  Every name it matches on is on screen, so asking the daemon would be a round trip to re-send what the reader is looking at.
+  It is a substring rather than a fuzzy match: a filter that matches things the reader cannot see the reason for is worse than one that matches less.
+  The count of matches against the total is stated, so a filter that hides forty checkouts never reads as a repository with ten.
+- **Log** asks Git, over `--grep` or `--author` (`GET /api/git/graph`).
+  The reason to search a log is to reach the commit that is *not* in the first eighty, and a client-side filter over a bounded page can only ever hide rows it already had.
+  Patterns are case-insensitive, and literal unless the reader opts into `regex`: `.` and `*` are ordinary characters in a commit subject, and someone typing one means it.
+- **`--graph` is dropped while Log is filtering, deliberately.**
+  Git draws lanes for a contiguous walk; over a filtered subset the ASCII it emits connects commits that have no such relationship, which is a picture of a DAG that does not exist.
+  A filtered row carries a bare node and no lanes, the payload says `filtered`, and the context strip's scope changes from `all refs` to what is being matched so the missing lanes are explained rather than merely absent.
+- **Provenance** asks SQLite, with a `LIKE` over `git_provenance.subject` inside one Project's indexed rows - instant, and no subprocess.
+  User text is escaped against `%` and `_`, so a subject containing `100%` is matched literally rather than matching everything.
+  It covers only the commits swe-mux observed, which is a strictly smaller set than Git's, so its empty state says so and points at Log's search rather than implying the commit does not exist.
+  A subject search narrows the reference-movement list to the same commits, because leaving it listing the whole Project under a result set of three reads as the search having failed.
 
 ### A Project with no repository
 
@@ -310,6 +332,10 @@ uncommitted work together.
 - Activity is the **branch tip's committer date** (`head_committed_at`), never the worktree directory's modification time.
   Windows freezes a file's `st_mtime` while a handle is open on it, so a checkout a live session is working in reports a directory timestamp hours stale while every Win32 API agrees with it - ordering by directory mtime would sink the busiest worktree to the bottom.
   The tip date is read from the shared object database, so a locked or prunable checkout still reports when its branch last moved and does not sink for the wrong reason.
+- A row states **when its branch last landed**, when the land queue holds a record of it: the newest `landed` request for that branch, to the minute (`landedAtByBranch`).
+  It is a floor and never a guess.
+  `already_landed` is the queue saying the trunk already contained the branch, which is not a landing and carries no moment one happened, and `GET /api/land` returns the newest hundred rows for the Project - so a branch that landed long enough ago carries no date at all.
+  A row with no date means "this queue has no record of it landing", never "it has not landed".
 - A prunable worktree is unmeasured and shown as unavailable rather than clean.
   Overview measurement first requires Git's reported top-level to equal the exact listed root, so a broken nested worktree cannot inherit status from an enclosing checkout.
 - Each collapsed Map row gives the branch identity its own bounded line and wraps status metrics on a separate line, so divergence and state cannot overlap the title at narrow drawer widths.
@@ -411,9 +437,36 @@ uncommitted work together.
 ### Refresh and mutation boundary
 
 - Overview measurement is explicit drawer work with concurrency four and does not expand the five-second session monitor.
-- Concurrent overview requests for the same Project root and comparison ref share one daemon computation.
+- Concurrent overview requests for the same Project root, comparison ref, and worktree scope share one daemon computation.
   A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again.
-- Map refreshes on Git and worktree events; an open Log refreshes its graph while retaining immutable commit caches.
+
+#### What the Map costs, and what it stops re-deriving
+
+The Map recomputed everything on every request, and at the fifty worktrees this repository reached that was around eight `git` subprocesses per checkout - four hundred process spawns for one read, with nothing retained between them (diagnosed 2026-08-21).
+Four things changed, and the ordering principle across all of them is that **nothing is memoized that could be wrong**.
+
+- The **branch half is memoized on two object IDs**: `(worktree, HEAD, comparison oid)` -> the ahead/behind counts and the branch delta.
+  Both readings are commit-to-commit, so nothing in a working tree can affect either; given the same two commits they are the same answer, and re-deriving it costs five subprocesses.
+  That is why the key is object IDs rather than a clock: an unattended worktree is never polled, so a TTL would be guessing about exactly the case it exists for, while a tree whose HEAD has not moved has not moved.
+  The comparison ref is resolved to an OID once per request, not once per checkout, so the base advancing invalidates fifty memoized readings at once.
+  A reading Git refused is never memoized, so a locked index cannot pin "unavailable" onto a healthy checkout until its HEAD happens to move.
+- The **local half is read live every time**, and is not memoized at all.
+  `git status --porcelain=v2` carries the HEAD and index blob names but no *worktree* blob hash, so an edit that leaves a file `.M` produces byte-identical status output with different line counts - a fingerprint taken from it would go quietly wrong about the one number the row shows.
+  What is saved there instead is unconditional work: the two `git diff --numstat` calls now run only for a scope that actually has tracked modifications, so a clean checkout spends none.
+  A clean, unchanged worktree therefore costs two processes rather than eight.
+- `detail=summary` **withholds every per-file list** and is what the Map asks for.
+  A row draws counts; the files are needed on expand and nowhere else, and serving four lists of up to two hundred file records per worktree to draw a badge is the payload's real cost - one compression on the way out cannot recover, because gzip makes bytes smaller rather than absent.
+  A withheld list is marked `files_omitted` rather than left empty, because "12 local" over an empty list is otherwise indistinguishable from an empty change set.
+  An expanded row fetches its own full reading for that one checkout (`worktree=<path>`), which is one checkout's worth of Git rather than the Project's; a path Git does not list is refused rather than measured, and `main` is still read off the *full* listing so a single-row read cannot call every checkout the main one.
+- The overview is the daemon's first **conditional** response: a weak `ETag` over the exact bytes being served, plus `Cache-Control: no-cache`, which means "revalidate before every use" rather than "do not store" and is what makes a browser send `If-None-Match` at all.
+  The client code is unchanged - `fetch` turns the 304 back into a 200 from its own cache - so only the bytes on the wire go away.
+  The two readings never share a tag, so a client holding the summary is never told the full reading is unchanged.
+- Map refreshes on Git and worktree events, **filtered by Project and debounced**.
+  `git_changed` is raised by every session's five-second dirty tick, so an unfiltered listener re-read one Project's whole worktree map on another Project's poll, and ten sessions in one repository raised it ten times inside a few hundred milliseconds for one answer.
+  The event carries its Project; an event naming none (a reconnect, a worktree act) is never filtered out, because treating "unknown" as "not mine" would stop the tab refreshing after a reconnect.
+- The provenance ledger is fetched only by the readings that draw it - Log's per-commit session links and Provenance itself.
+  Map draws none of it and used to fetch five hundred rows of it on every one of the refreshes above.
+- An open Log refreshes its graph while retaining immutable commit caches.
 - Explicit Refresh covers Git changes created outside swe-mux event paths.
 - The Git surface mutates only through the worktree create and remove operations and the one-time repository initialization offered to a Project whose folder has no repository.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.

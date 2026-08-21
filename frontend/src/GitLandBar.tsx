@@ -94,7 +94,7 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   const queued = landQueueOrder(queue?.requests || [])
   const history = landHistoryOrder(queue?.requests || [])
   const shown = error || localError
-  const summary = landingSummary(queue, gate)
+  const summary = landingSummary(queue, gate, undefined, project?.root || '')
   // Blocked means the tab cannot land anything: the install stop is off, or the bytes a
   // land would run are not approved. That is the setting-links "inert surface" case, and
   // the act that clears it is inside this strip - so it opens itself.
@@ -129,6 +129,17 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
     {isOpen && <div class="git-landing-body">
       <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
         onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
+
+      {/* One block per checkout whose *own* gate copy refused a land. The strip draws
+          the Project-resolved command, which is the primary checkout's; a worktree that
+          edited `.worktree-verify` presents different bytes, and when its land refused
+          for `unapproved` there was nothing here to approve at all. These are bounded
+          and transient by construction - a refusal that has been answered stops
+          standing - so they are not the per-row gate the strip retired. */}
+      {project && summary.blockedWorktrees.map(item => <BlockedWorktreeGate
+        key={item.worktreeRoot} project={project} worktreeRoot={item.worktreeRoot}
+        branch={item.branch} busy={busy} setBusy={setBusy} onError={setLocalError}
+        onApproved={onChanged} />)}
 
       {/* Who besides you may start one. Project-wide, and therefore here rather than on
           a row: a control that answers "for every branch in this repository" would be a
@@ -346,6 +357,91 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
     </div>
 
     <SetupPromptDisclosure scriptName={gate?.scriptName || '.worktree-verify'} />
+  </div>
+}
+
+/**
+ * One blocked checkout's own copy of the gate, and the approval that unblocks it.
+ *
+ * The strip's main block is the Project-resolved gate, which resolves against the
+ * Project root - the primary checkout. That is right for the Project-wide fact it
+ * states and wrong for the one case it cannot state: the gate is resolved *per
+ * worktree*, because `.worktree-verify` travels with the branch, so a branch that
+ * edited it presents bytes the primary's approval says nothing about. When such a land
+ * refused, the strip drew "verification approved" over a refusal for an unapproved
+ * command and offered no control at all; clearing it meant `GET
+ * /api/land/verify-command?worktree_root=...` by hand, then the approve POST (observed
+ * 2026-08-21).
+ *
+ * It reuses the existing per-worktree route and the existing approve route, both of
+ * which already took `worktree_root`. What is new is that a human can reach them.
+ *
+ * Approving here approves *these bytes* and nothing else. That is the digest-scoped
+ * store (`worktree_verify.py`): before it, approving this copy silently un-approved
+ * the primary's, so the two took turns blocking each other and neither could be
+ * cleared - which is the loop this control would otherwise have automated.
+ */
+function BlockedWorktreeGate({ project, worktreeRoot, branch, busy, setBusy, onError, onApproved }: {
+  project: Project
+  worktreeRoot: string
+  branch: string
+  busy: boolean
+  setBusy: (value: boolean) => void
+  onError: (value: string) => void
+  onApproved: () => void | Promise<void>
+}) {
+  const { gate, refresh } = useVerifyCommand(project.id, worktreeRoot, true)
+  const [showing, setShowing] = useState(false)
+
+  // Approved between the refusal and this render: the row is history now and the block
+  // would only be a control for something already done.
+  if (gate?.approved) return null
+
+  const approve = async () => {
+    if (!gate?.digest) return
+    setBusy(true)
+    try {
+      await api('POST', '/api/land/verify-command/approve', {
+        project_id: project.id, worktree_root: worktreeRoot, digest: gate.digest,
+      })
+      onError(''); await refresh(); await onApproved()
+    } catch (cause) { onError(landErrorText(cause)); await refresh() }
+    finally { setBusy(false) }
+  }
+
+  return <div class="git-land-gate warn git-land-gate-worktree">
+    <div class="git-land-gate-head">
+      <strong>This worktree's own verification command is not approved</strong>
+      <code>{branch}</code>
+      {gate?.configured && <button onClick={() => setShowing(value => !value)}>
+        {showing ? 'Hide' : 'Review'}
+      </button>}
+    </div>
+    <p class="git-state">
+      <code>{worktreeRoot}</code> resolves a different {gate?.source === 'project_config'
+        ? 'command' : gate?.scriptName || '.worktree-verify'} from the one above, so its
+      land was refused rather than run. Approving here approves <em>these</em> bytes and
+      leaves every other copy exactly as it stands.
+    </p>
+    {gate === null && <p class="git-state">Reading this worktree's command…</p>}
+    {gate && !gate.configured && <p class="git-state">
+      This checkout resolves no verification command at all, so there is nothing to
+      approve. Add an executable <code>{gate.scriptName}</code> to the branch.
+    </p>}
+    {showing && gate?.configured && <div class="git-land-gate-body">
+      {gate.approvedSource && gate.approvedSource !== gate.currentSource && <>
+        <h5>Approved on this machine</h5>
+        <pre class="git-land-source">{gate.approvedSource}</pre>
+      </>}
+      <h5>What this worktree would run</h5>
+      <pre class="git-land-source">{gate.currentSource || gate.display}</pre>
+    </div>}
+    {gate?.configured && <div class="git-map-actions">
+      <button disabled={busy || !gate.digest} onClick={() => void approve()}>
+        Approve this worktree's bytes
+      </button>
+      {!showing && <small>Review them first — approving is what lets them run unattended.</small>}
+    </div>}
   </div>
 }
 

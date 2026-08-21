@@ -3583,6 +3583,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-pane-heading{position:relative;z-index:6;flex:none;min-height:27px;display:flex;align-items:center;gap:6px;padding:3px 7px;border-bottom:1px solid var(--line);background:var(--panel)}
 .drawer-pane-heading .drawer-panel-title{position:static;flex:0 1 auto;width:auto;max-width:55%;cursor:help}
 .drawer-scope-context{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:7px}
+/* Segments inline in the heading row (Git), replacing a heading that only ever repeated the
+   selected segment's own label. `flex:0 1 auto` and content-sized buttons, not the full-width
+   strip: this shares the row with the Project scope, so it takes the width its three labels
+   need and no more. */
+.drawer-pane-heading .drawer-segmented-inline{flex:0 1 auto;min-width:0;border-bottom:0;background:transparent}
+.drawer-pane-heading .drawer-segmented-inline button{flex:0 1 auto;min-height:21px;padding:0 7px;font-size:9px;letter-spacing:.02em}
+/* The title is what reserved this inset; a heading row that draws the segments instead has no
+   absolutely-positioned title to clear. */
+.drawer-body-git>.drawer-pane-heading.with-segments~.drawer-status{padding-left:9px}
 /* One per drawer, on the pane holding its top-right corner, because the drawer collapses as
    a whole. It replaces the launcher rail's toggle, which is not on screen while the drawer is
    open. Sized for touch on the mobile overlay, where it is the only close control besides the
@@ -4022,6 +4031,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    The compact row is the default reading. Paths, filenames, and destructive actions
    exist only in the expanded detail so they do not compete with branch state. */
 .git-toolbar{flex:none;display:flex;align-items:center;gap:5px;min-height:34px;padding:4px 7px;border-bottom:1px solid var(--line);background:var(--panel2)}
+/* One search box per reading, left of the actions. `flex:1 1 auto` with a small basis so it
+   takes the row's slack without pushing the actions off a narrow drawer. */
+.git-search{flex:1 1 90px;min-width:0;display:flex}
+.git-search input{width:100%;min-width:0;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:9px}
+.git-search input:focus{border-color:var(--accent);outline:0}
+.git-search-regex{flex:none;display:flex;align-items:center;gap:3px;color:var(--muted);font-size:8px;white-space:nowrap;cursor:pointer}
 .git-view-switch{display:flex;align-items:stretch;border:1px solid var(--line)}
 .git-view-switch button,.git-toolbar-action{min-height:24px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
 .git-view-switch button{padding:0 8px;border-right:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}

@@ -107,6 +107,26 @@ Successful sync/restore emits `agent_context_changed` with Project identity, ope
 or direction, and resulting revision. The initiating drawer refreshes immediately. Other clients
 can manually rescan; no filesystem watcher is kept alive for hidden provider directories.
 
+### The inventory is cached on both ends
+
+Opening the tab re-read and re-normalized every instruction file - up to four project files plus the
+global ones, decoded, hashed, and compared against each other for the in-sync verdict - with nothing
+retained on either side of the wire. This tab is not `keepMounted`, so every visit paid it in full, in
+front of an empty pane.
+
+The daemon memoizes the inventory per Project on a **stat signature** over exactly the files it reads
+(`_inventory_signature`): path, `st_mtime_ns`, and size, for the project and global instruction files,
+the Claude memory directory, and `~/.claude/settings.json`. Size beside mtime, because the two together
+are what an editor moves and either alone is not. An absent file is part of the signature, so a file
+appearing invalidates rather than reading as unchanged. The browser keeps the last reading per Project
+in a bounded module-scoped store, the same shape the sibling Agent Environment segment already uses, so a
+remount draws immediately and the fetch replaces it.
+
+**`rescan` bypasses both.** That is what keeps the stat signature honest: it cannot see a same-size
+rewrite landing in the same nanosecond as the read before it, and a reader who believes they are looking
+at one presses rescan. Every ordinary write reaches the caches through `agent_context_changed` and the
+path-filtered `project_files_changed` refresh above.
+
 ## Non-goals and future boundary
 
 - no automatic instruction synchronization or canonical-file policy;
