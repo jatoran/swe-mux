@@ -1145,7 +1145,7 @@ Its rules, and what each one is defending:
   The overlay wrappers are in the recognizer's target allowlist solely to carry it, and the list is every wrapper rather than the most common one: `.modal-layer`, `.settings-layer`, `.usage-layer` (usage, automation, fleet queue, observations, bandwidth), `.process-layer`, `.folder-picker-layer`, and `.palette-layer`.
   Listing only `.modal-layer` left the swipe silently dead on most of the app's large surfaces.
   Every class in that list belongs to a surface that registers a dismiss level, which is the condition for adding one: a listed surface that registered nothing would let a swipe run its workspace binding behind the overlay.
-  The floating voice overlay is deliberately excluded on exactly that ground.
+  The floating voice dock is deliberately excluded on exactly that ground.
   Overlays remain immune to gesture *hijacking* by a stronger rule than the old one: whenever the dismiss stack is non-empty, `resolveGestureCommand` resolves the back slots to `nav.back` and **every other slot to nothing**, so no binding can run behind a modal.
   Turning off the hot-reloadable `mobile_gesture_overlay_back` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour of an overlay swallowing every gesture, rather than letting the old bindings back through.
   The platform back gesture is unaffected by that switch.
@@ -1351,7 +1351,7 @@ Its rules, and what each one is defending:
   operation with nothing open (`features/auto-delivery.md`).
 - The pane header is `[name] [cwd] [voice] [tools]` and **must stay one row**.
   It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
-  The pane-local voice group contains read-aloud only; workspace talk is in the app-level Conversation layer.
+  The pane-local voice group contains read-aloud only; workspace talk is in the app-level voice dock.
   Overflow is absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade and never grows the bar.
   Phones drop the cwd column, and every device caps the name track so the group keeps room.
 - The header's first field is the session's display name (`sessionNames.ts`), not its status.
@@ -1382,12 +1382,17 @@ Its rules, and what each one is defending:
   Settings rather than listening - off and unconfigured both mean "not listening", but only one
   of them can start.
   `aria-pressed` and the `aria-label` carry the same three states for anyone not reading the glyph.
-  Active Talk renders in the focused terminal pane's `.voice-overlay`, immediately after the read-aloud strip, while its capture, draft, target, and history remain app-owned (`features/voice.md`).
-  The Talk history header is its disclosure control, and its expanded or collapsed state persists device-locally across focus-driven view remounts.
-  The compact panel header contains phase and last latency only; response and transcript prose belongs in Talk history, while transient phase detail remains screen-reader text and a badge tooltip.
-  The player strip and Talk actions both open the shared voice-command catalog as a root viewport modal, so pane overflow cannot clip it and terminal geometry does not change.
-  Voice Comms remains a Talk-panel toggle and spoken command, not a utility-drawer tab.
-  A fixed top `.conversation-layer` is only the fallback when no visible terminal can host the view.
+  Beside the microphone sits the **voice dock chip**, a second, separate button: the microphone starts and stops capture, the chip opens and closes the panel, and neither does the other's job.
+  Collapsing the panel therefore never stops listening, which is what "close" used to mean when the surface existed only while capture ran.
+  The chip carries a count when confirmation cards are open and a dot when a reply landed while the dock was collapsed.
+  The dock itself is **one app-level surface** (`.voice-dock`) holding both the dictation draft and the assistant conversation, mounted once for the life of the app and never moved.
+  It hangs from `.voice-dock-anchor`, a zero-height grid item in the main stage's own cell, so it floats over the top of the workspace and every pane's row count is identical at every dock size.
+  It has three sizes: `full`, a one-row `peek` (the newest line plus every open confirmation card, with no composer), and `chip`, where `display:none` clears the workspace completely while the conversation inside keeps streaming and speaking.
+  `chip` hides rather than unmounts, which is load-bearing: the per-device set of already-announced cards lives in the mounted component, so a remount speaks an open card's line a second time.
+  The Talk history header is its disclosure control, and its expanded or collapsed state persists device-locally across remounts.
+  The dock header contains the two size steps, the talk/chat tabs, phase, last latency, and the action row; response and transcript prose belongs in Talk history, while transient phase detail remains screen-reader text and a badge tooltip.
+  The player strip and dock actions both open the shared voice-command catalog as a root viewport modal, so pane overflow cannot clip it and terminal geometry does not change.
+  Voice Comms remains a dock toggle and spoken command, not a utility-drawer tab.
   Any new pane-local overlay belongs on the pane anchor, and any view placed there must remain out of flow.
   Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
   pane declares no columns, so a second item with an auto column is auto-placed into an

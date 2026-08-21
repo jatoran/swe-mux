@@ -172,6 +172,12 @@ The assistant is text-first and voice-attached, not voice-only:
   A card joins the stream already speaking rather than starting one, so the sentence the operator is mid-way through hearing is not cut — an announcement that interrupted is what turned the repeat above into the same sentence restarting over and over instead of being said once.
   The deterministic `confirm`/`cancel` verdict is the deliberate opposite: the operator has just answered the card being read out, so finishing the question is worse than cutting it.
 - Earcons (`earcons.ts`, WebAudio oscillator blips — no assets, no fetch) acknowledge the endpoint instantly and mark turn completion and pending actions, which is what makes 1-2 s of model latency feel attended rather than dead.
+- **The conversation view is mounted exactly once, and its size is somebody else's business.**
+  It lives in the app-level voice dock (`features/voice.md`), which draws it at full size, as a one-row peek, or not at all, by passing a `variant` — never by mounting or unmounting it.
+  This is the client half of the once-per-card announcement cut: `announcedRef` is per-instance and in memory, so a remount is indistinguishable from a device that has never seen the card and speaks a scheduled card's line a second time.
+  It used to be re-parented between the focused pane's overlay and a fixed top layer as focus moved, which remounted it on an ordinary pane change.
+  Collapsing the dock to the top-bar chip therefore leaves the dialog live: turns arrive, replies are spoken, cards open, and the chip carries the open-card count and an unread mark.
+  A card opening raises the dock to at least the peek row, where cards keep their buttons and countdown — a confirmation the operator cannot see is one answered by timeout.
 
 ## HTTP surface
 
@@ -203,8 +209,8 @@ correctness does not depend on it either way, only time-to-first-word).
 - `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control).
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
 - `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.
-- `frontend/src/AssistantPanel.tsx` — the conversation view and action cards.
+- `frontend/src/AssistantPanel.tsx` — the conversation view and action cards, at all three `variant`s (`full`, `peek`, `hidden`), plus the open-card and reply signals the dock's chip reads.
 - `frontend/src/voiceFuzzy.ts` — tier 2, the conservative fuzzy pass in front of the fallback.
 - `frontend/src/earcons.ts` — the synthesized acknowledgment sounds.
-- `frontend/src/App.tsx` — tier wiring in the voice catch-all, the UI-action executor, surface placement.
+- `frontend/src/App.tsx` — tier wiring in the voice catch-all, the UI-action executor, the single mount point, and the dock's size state (`voiceDock.ts`).
 - `tests/test_assistant.py`, `frontend/test/assistantEvents.test.ts`, `frontend/test/voiceFuzzy.test.ts`.

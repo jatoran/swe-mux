@@ -1,5 +1,4 @@
 import { render } from 'preact'
-import { ConversationSurface, type Conversation } from '../../src/ConversationControl'
 import { VoicePlayer } from '../../src/VoicePlayer'
 import { MobileTerminalDraft } from '../../src/TerminalDraftComposer'
 import type { Command } from '../../src/commands'
@@ -7,11 +6,14 @@ import type { Session, VoiceStatus } from '../../src/types'
 import '../../src/style.css'
 
 // The pane's own layout, with the real components and the real stylesheet. What it exists
-// to pin is the geometry contract in `ui.md`: a pane is two rows, and the voice surfaces
-// float rather than taking one. Two shipped regressions came from breaking that in CSS
+// to pin is the geometry contract in `ui.md`: a pane is two rows, and the read-aloud strip
+// floats rather than taking one. Two shipped regressions came from breaking that in CSS
 // alone — a phantom track that left dead black space, then a missing `grid-column` that
 // auto-placed the terminal into an implicit second column and halved it. Both resized the
 // PTY under a live agent, and neither was visible to tsc or to the unit suite.
+//
+// The conversation surface used to float from this same anchor. It is app-level chrome
+// now (`voice-dock-harness.html`, `voiceDockHarness.tsx`) and no longer touches a pane.
 
 const parameters = new URLSearchParams(location.search)
 const overlay = parameters.get('overlay') !== '0'
@@ -40,21 +42,6 @@ const status = {
 // "append without sending") with no registry commands, which is what these tests pin.
 const commands: Command[] = []
 
-// Enough of the controller for the panel to render every state it draws; the panel is
-// presentational, so no capture is started here.
-const conversation: Conversation = {
-  target: {kind:'session',id:session.id,label:'Agent · harness',available:()=>true,agentRunId:()=>null,voiceMode:()=>null,voiceContent:()=>null},
-  targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, hold: false, holdBuffer: '', comms:false, wake: 'mux',
-  detail: 'Listening. Say “mux, send” to submit.', landedAt: 0, latency: null, detector: 'silero',
-  history:[
-    {id:'1',role:'you',text:'Mux, list active sessions.',at:1},
-    {id:'2',role:'mux',text:'2 matching sessions\n\nSession 1 - Alpha\nStatus: working',at:2},
-  ],
-  draft: 'refactor the scrollback ring so it keeps bracketed paste mode across replay',
-  toggle: () => {}, togglePin: () => {}, stop: () => {}, send: () => {}, append:()=>{}, undo: () => {}, clear: () => {},
-  clearHistory:()=>{},toggleStandby: () => {},toggleComms:()=>{},releaseHold:()=>{},discardHold:()=>{}, edit: () => {},
-}
-
 // The strip lists clips on mount. The harness has no daemon; VoicePlayer already treats a
 // failed load as "no clips", which is the state the layout has to hold anyway.
 globalThis.fetch = async () => new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -71,7 +58,6 @@ const pane = <section class="terminal-pane focused">
   </div>
   {overlay && <div class="voice-overlay-anchor"><div class="voice-overlay">
     <VoicePlayer session={session} status={status} mode="auto" commands={commands} onSession={() => {}} onOpenSettings={() => {}} />
-    <ConversationSurface conversation={conversation} commands={commands} onOpenSettings={() => {}} placement="pane"/>
   </div></div>}
   <div class="terminal-surface">
     <div class="terminal-host" />

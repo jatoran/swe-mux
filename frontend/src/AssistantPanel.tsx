@@ -8,15 +8,25 @@ import {
   beginTurnSpeech, cancelTurnSpeech, endTurnSpeech, speakAnnouncement, speakTurnText,
 } from './assistantSpeech'
 import { playEarcon } from './earcons'
+import type { VoiceBodyVariant } from './voiceDock'
 
 /**
- * The conversation view inside the voice overlay (Phase 10.6).
+ * The conversation view inside the voice dock (Phase 10.6).
  *
  * Dialog state is daemon-owned; this component rebuilds its view from one
  * detail fetch and then advances it from `mux:assistant-event` window events,
  * so two devices watching the same dialog render the same turn. Confirmation
  * is typed state rendered as cards, never prose — voice mode drives the same
  * cards through spoken confirm/cancel.
+ *
+ * It is mounted exactly once, at one fixed place in the tree, for the life of
+ * the app: `variant` changes what it draws, never whether it exists. That is a
+ * correctness rule, not a nicety — `announcedRef` below is the client half of
+ * the once-per-card announcement cut, and it lives in this component's memory,
+ * so a remount is indistinguishable from a device that has never seen the card
+ * and would speak an open card's line again. Collapsing the dock, switching the
+ * microphone's addressee, and moving between breakpoints must all leave this
+ * component mounted.
  */
 export function AssistantPanel({
   enabled,
@@ -24,6 +34,9 @@ export function AssistantPanel({
   speechEnabled,
   voiceActive,
   pendingSpeech = '',
+  variant = 'full',
+  onOpenActions,
+  onReply,
 }: {
   enabled: boolean
   clientContext: () => AssistantClientContext
@@ -38,6 +51,16 @@ export function AssistantPanel({
    * turns it into a real turn, which replaces this bubble with the message.
    */
   pendingSpeech?: string
+  /** Full conversation, the dock's one-row peek, or mounted and drawing nothing. */
+  variant?: VoiceBodyVariant
+  /**
+   * How many confirmation cards are open. The dock raises itself off the chip on
+   * the first one, because a countdown nobody can see is a decision made by
+   * timeout rather than by a human.
+   */
+  onOpenActions?: (count: number) => void
+  /** A turn finished; the chip marks it unseen while the dock is collapsed. */
+  onReply?: () => void
 }) {
   const [dialogId, setDialogId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AssistantMessage[]>([])
@@ -52,6 +75,7 @@ export function AssistantPanel({
   const speechRef = useRef(speechEnabled); speechRef.current = speechEnabled
   const voiceActiveRef = useRef(voiceActive); voiceActiveRef.current = voiceActive
   const dialogRef = useRef<string | null>(null); dialogRef.current = dialogId
+  const onReplyRef = useRef(onReply); onReplyRef.current = onReply
   /** True while this turn's speech may be spoken: decided once, at turn start. */
   const speakingTurnRef = useRef<string | null>(null)
   /** Cards already announced on this device; an announcement is per card, not per event. */
@@ -119,6 +143,7 @@ export function AssistantPanel({
         setTurnRunning(false)
         if (event.type === 'assistant_turn_done') {
           playEarcon('done')
+          onReplyRef.current?.()
           if (speakingTurnRef.current === turnId) {
             openFollowUpWindow()
             // `speech` here is only a fallback for a turn that produced no
@@ -171,7 +196,15 @@ export function AssistantPanel({
   useLayoutEffect(() => {
     const element = logRef.current
     if (element) element.scrollTop = element.scrollHeight
-  }, [messages, actions, thinking, pendingSpeech])
+  }, [messages, actions, thinking, pendingSpeech, variant])
+
+  const openActions = actions.filter(item => item.status === 'pending' || item.status === 'scheduled')
+  const openActionCount = openActions.length
+  // Reported rather than rendered upward: the dock owns whether it is on screen, and this
+  // is the one signal that may raise it. Keyed on the count so a re-render with the same
+  // cards does not re-fire.
+  const reportActionsRef = useRef(onOpenActions); reportActionsRef.current = onOpenActions
+  useEffect(() => { reportActionsRef.current?.(openActionCount) }, [openActionCount])
 
   const submit = async () => {
     const text = input.trim()
@@ -196,12 +229,36 @@ export function AssistantPanel({
     }
   }
 
+  // `hidden` is still a render, never an unmount: the event listener, the dialog state,
+  // the speech streams, and the announced-card set all live here and must survive the
+  // dock being collapsed to the top bar or switched to the dictation body.
+  if (variant === 'hidden') return <div class="assistant-panel hidden-variant" hidden />
   if (!enabled) {
-    return <div class="assistant-panel disabled">
-      <p>The assistant is off. Enable it in Settings → Assistant to converse with the fleet.</p>
+    return variant === 'peek'
+      ? <div class="assistant-panel peek disabled"><p>The assistant is off.</p></div>
+      : <div class="assistant-panel disabled">
+        <p>The assistant is off. Enable it in Settings → Assistant to converse with the fleet.</p>
+      </div>
+  }
+  if (variant === 'peek') {
+    // One row: what was last said, what is being thought, and every open card in full.
+    // The cards are the reason peek exists — they are the only part of a conversation
+    // that expires, so they keep their buttons and their countdown here rather than
+    // being summarised into a badge the operator would have to expand to act on.
+    const latest = messages[messages.length - 1]
+    return <div class="assistant-panel peek">
+      {error && <p class="assistant-error" role="alert">{error}</p>}
+      {thinking
+        ? <p class="assistant-thinking">{thinking}</p>
+        : latest
+          ? <p class="assistant-peek-line" title={latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}>
+            <b>{latest.role === 'user' ? 'you' : 'mux'}</b>
+            <span>{latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}</span>
+          </p>
+          : <p class="assistant-peek-line empty"><span>No conversation yet — expand to start one.</span></p>}
+      {openActions.map(action => <AssistantActionCard key={action.id} action={action} />)}
     </div>
   }
-  const openActions = actions.filter(item => item.status === 'pending' || item.status === 'scheduled')
   return <div class="assistant-panel">
     <div ref={logRef} class="assistant-log" role="log" aria-live="polite">
       {messages.length === 0 && !thinking && <p class="assistant-empty">

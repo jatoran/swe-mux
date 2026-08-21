@@ -105,7 +105,12 @@ import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
-import { ConversationSurface, ConversationToggle, useConversation, type VoicePanelMode } from './ConversationControl'
+import { ConversationToggle, useConversation, VoiceDock, VoiceDockChip } from './ConversationControl'
+import {
+  canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, loadVoiceDock,
+  reduceVoiceDock, saveVoiceDock, voiceBodyVariant,
+  type VoiceDockEvent, type VoiceDockModel, type VoicePanelMode,
+} from './voiceDock'
 import { AssistantPanel } from './AssistantPanel'
 import {
   ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
@@ -2287,7 +2292,6 @@ export function App() {
   const [approvalConfirmation,setApprovalConfirmation]=useState<{sessionId:string;confirmationId:string;operation:string}|null>(null)
   // ---- Mux assistant (Phase 10.6): tier 3 behind the grammar, plus the chat view ----
   const [assistantInfo,setAssistantInfo]=useState<AssistantStatus|null>(null)
-  const [assistantOpen,setAssistantOpen]=useState(false)
   // Chat is the default addressee: the assistant lane is the one people reach
   // for, while talk (the free deterministic dictation draft) stays one tab away
   // as the degradation path for budget exhaustion, outages, or verbatim
@@ -2299,6 +2303,28 @@ export function App() {
     setVoicePanelModeState(mode)
     try{localStorage.setItem('mux.voice.panelMode',mode)}catch{/* private mode */}
   }
+  /**
+   * How much of the voice dock is on screen (`voiceDock.ts`) — a third axis, kept apart
+   * from the microphone and from the addressee above. Collapsing to the top-bar chip is
+   * presentation only: capture keeps running, the dialog keeps streaming, and the
+   * assistant view below stays mounted at every state.
+   */
+  const [voiceDock,setVoiceDockModel]=useState<VoiceDockModel>(loadVoiceDock)
+  const voiceDockRef=useRef(voiceDock)
+  // Reduced against the ref rather than inside the state updater: two dispatches in one
+  // tick (a card opening as capture stops, say) must compose, and persisting is a side
+  // effect that does not belong inside a state function.
+  const dispatchVoiceDock=(event:VoiceDockEvent)=>{
+    const next=reduceVoiceDock(voiceDockRef.current,event)
+    if(next===voiceDockRef.current)return
+    voiceDockRef.current=next
+    setVoiceDockModel(next)
+    saveVoiceDock(next)
+  }
+  /** A reply that landed while the dock was collapsed; the chip carries the mark. */
+  const [assistantUnseen,setAssistantUnseen]=useState(false)
+  const [assistantPendingActions,setAssistantPendingActions]=useState(0)
+  useEffect(()=>{if(voiceDock.state!=='chip')setAssistantUnseen(false)},[voiceDock.state])
   useEffect(()=>{void assistantStatus().then(setAssistantInfo).catch(()=>setAssistantInfo(null))},[])
   const assistantContextRef=useRef<AssistantClientContext>({})
   assistantContextRef.current={
@@ -2341,7 +2367,11 @@ export function App() {
       return spokenOutcome
     }
     const dialogId=await ensureDialog()
-    setAssistantOpen(true);setVoicePanelMode('chat')
+    // A spoken question routed to the assistant never seizes the workspace back: a dock
+    // the operator collapsed to the chip stays collapsed, the reply is spoken, and the
+    // chip carries the unread mark. An already-open dock does switch to the chat body,
+    // because otherwise the answer to what was just asked lands behind the talk tab.
+    if(voiceDockRef.current.state!=='chip')setVoicePanelMode('chat')
     // Speaking over a running turn used to be refused, and the refusal had
     // nowhere to put the words — so they were simply lost. It is queued now,
     // and saying which of the two happened is the difference between "it
@@ -2481,24 +2511,43 @@ export function App() {
     voiceStatus, updateSession, conversationTarget, handleVoiceIntent, sendAssistantTurn,
     ()=>voicePanelMode==='chat'&&!!assistantInfo?.enabled,
   )
-  // One assistant view instance shared by both surface placements, so switching
-  // between pane overlay and the fixed top layer never remounts the chat.
+  const talkActive=conversation.phase!=='off'
+  // Who plain speech reaches right now. Named for the addressee rather than the "mode" it
+  // is stored as, because `effectiveVoiceMode` in this file is already the read-aloud
+  // mode of one session, which is an unrelated thing.
+  const voiceAddressee=effectiveVoicePanelMode(voicePanelMode,talkActive)
+  // Capture start/stop is a dock *event*, not a dock setter: only the reducer decides
+  // whether it may open anything, and it may only ever open the dictation draft, which
+  // has no other surface. A chat-addressed microphone leaves a collapsed dock collapsed.
+  const captureAddressee=voiceAddressee==='chat'?'assistant' as const:'dictation' as const
+  const captureAddresseeRef=useRef(captureAddressee);captureAddresseeRef.current=captureAddressee
+  useEffect(()=>{
+    dispatchVoiceDock({kind:'capture',active:talkActive,addressee:captureAddresseeRef.current})
+  },[talkActive])
+  // Mounted exactly once, here, for the life of the app. It is handed to the dock, which
+  // hides it rather than dropping it: `AssistantPanel` holds the per-device set of cards
+  // it has already announced, and a remount reads as a device that has never seen them
+  // and speaks an open card's line a second time.
   const assistantView=<AssistantPanel
     enabled={!!assistantInfo?.enabled}
     clientContext={assistantClientContext}
     speechEnabled={!!voiceStatus?.enabled}
-    voiceActive={conversation.phase!=='off'}
+    voiceActive={talkActive}
     pendingSpeech={conversation.hold?conversation.holdBuffer:''}
+    variant={voiceBodyVariant(voiceDock.state,voiceAddressee,'chat')}
+    onOpenActions={count=>{
+      setAssistantPendingActions(count)
+      // A countdown nobody can see is a decision made by timeout. One-way, and only as
+      // far as the peek row, so it never grabs the workspace back on its own.
+      if(count>0)dispatchVoiceDock({kind:'floor',state:'peek'})
+    }}
+    onReply={()=>{if(voiceDockRef.current.state==='chip')setAssistantUnseen(true)}}
   />
 
   // Sessions on screen right now (visible pane of the displayed project). Being
   // on screen is half of what marks a row read; a human at the window is the
   // other half (humanPresence.ts).
   const visibleSessionIds=visibleTerminalIds(activeLayout)
-  const conversationPaneCandidate=focusedViewId||activeId
-  const conversationPaneId=conversation.phase!=='off'&&conversationPaneCandidate&&visibleSessionIds.includes(conversationPaneCandidate)
-    ?conversationPaneCandidate
-    :null
   const visibleSessionKey=visibleSessionIds.join('\n')
   const [humanPresent,setHumanPresent]=useState(isHumanPresent)
   useEffect(()=>watchHumanPresence(setHumanPresent),[])
@@ -5042,13 +5091,17 @@ export function App() {
         return voiceQueryHandler.current(query)
       },
     }},
-    { id:'assistant.toggle',label:assistantOpen?'Close the assistant chat':'Open the assistant chat',category:'voice',available:true,run:()=>{
-      setAssistantOpen(open=>{
-        const next=!open
-        if(next)setVoicePanelMode('chat')
-        return next
-      })
+    // Keeps its id: it is reachable from saved keybindings and mobile gesture slots. What
+    // changed underneath is that it moves the dock between the chip and whatever was last
+    // expanded, rather than flipping a separate "assistant is open" flag — and that it
+    // never touches capture. Asking for the assistant by name does set the addressee,
+    // because "open the assistant" and "talk to the dictation draft" cannot both be true.
+    { id:'assistant.toggle',label:voiceDock.state==='chip'?'Open the voice panel':'Collapse the voice panel to the top bar',category:'voice',available:true,run:()=>{
+      if(voiceDockRef.current.state==='chip')setVoicePanelMode('chat')
+      dispatchVoiceDock({kind:'toggle'})
     },voice:{phrases:['assistant','open assistant','open the assistant','chat','close assistant','close the assistant']}},
+    { id:'voice.dockExpand',label:'Expand the voice panel',category:'voice',available:canExpandVoiceDock(voiceDock.state),disabledReason:'The voice panel is already at full size',run:()=>dispatchVoiceDock({kind:'expand'}),voice:{phrases:['expand the voice panel','expand voice panel','expand the panel']}},
+    { id:'voice.dockCollapse',label:'Collapse the voice panel',category:'voice',available:canCollapseVoiceDock(voiceDock.state),disabledReason:'The voice panel is already in the top bar',run:()=>dispatchVoiceDock({kind:'collapse'}),voice:{phrases:['collapse the voice panel','collapse voice panel','collapse the panel']}},
     { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
       phrases:['approve','review approval','confirm tool use'],
       execute:async()=>{
@@ -5924,13 +5977,13 @@ export function App() {
     </>:null
     const openVoiceSettings=()=>openSettings('Voice')
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} commands={commands} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
-    // The read-aloud strip hangs off a zero-height pane anchor. Dictation no longer
-    // participates in pane layout at all.
-    const conversationSurface=id===conversationPaneId
-      ?<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus?.commands} onOpenSettings={openVoiceSettings} placement="pane" mode={voicePanelMode} onMode={setVoicePanelMode} assistantView={assistantView} assistantOpen={assistantOpen} onCloseAssistant={()=>setAssistantOpen(false)}/>
-      :null
-    const voiceOverlayNode=voiceStripNode||conversationSurface
-      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
+    // The read-aloud strip hangs off a zero-height pane anchor, and is now the only thing
+    // that does. The conversation surface used to move into this stack whenever its sink
+    // had a visible pane, which meant it was mounted in a different parent depending on
+    // focus — every hop remounted the assistant view inside it and reset the set of cards
+    // that device had already spoken. It is one app-level dock now (`voice-dock-anchor`).
+    const voiceOverlayNode=voiceStripNode
+      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}</div></div>
       :null
     // The header names the session and nothing else. Its state is on the tab, on the sidebar
     // row, and in the terminal the reader is already looking at, whereas the *name* is the one
@@ -6302,6 +6355,8 @@ export function App() {
           it, so a second tap could never collapse what the first opened. */}
       <button class="mobile-project-name" type="button" data-menu-toggle aria-haspopup="menu" aria-expanded={!!projectMenu} disabled={!activeProject} title={activeProject?`${activeProject.name} — Project actions`:'No Project selected'} onClick={event=>{if(!activeProject)return;if(projectMenu){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(activeProject,rect.left,rect.bottom+4)}} onContextMenu={event=>{if(!activeProject)return;event.preventDefault();if(projectMenu){setProjectMenu(null);return}openProjectMenuAt(activeProject,event.clientX,event.clientY)}}>{activeProject?.name||'No Project'}</button>
       {voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>}
+      {/* The panel's control, beside the microphone and deliberately not part of it. */}
+      <VoiceDockChip state={voiceDock.state} talkActive={talkActive} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggle={()=>dispatchVoiceDock({kind:'toggle'})}/>
       {/* Tap opens the launcher; hold repeats the last launch straight away,
           which is the common case once a Project settles on one backend. The
           long-press fires while the finger is down, so the click it is followed
@@ -6333,7 +6388,6 @@ export function App() {
         one that started the redeploy. Non-blocking: during the build stage there
         is a working app underneath it. */}
     <RedeployChip state={redeploy} />
-    {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus.commands} onOpenSettings={()=>openSettings('Voice')} mode={voicePanelMode} onMode={setVoicePanelMode} assistantView={assistantView} assistantOpen={assistantOpen} onCloseAssistant={()=>setAssistantOpen(false)}/>}
 
     <ContinuityBanner />
     {uiUpdateAvailable && <div class="ui-update-banner" role="status" aria-live="polite">
@@ -6345,7 +6399,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>}<VoiceDockChip state={voiceDock.state} talkActive={talkActive} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggle={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
@@ -6689,6 +6743,27 @@ export function App() {
           </div>
         </div>
       </main>
+      {/* The one voice surface, mounted once for the life of the app and never moved.
+          It is a grid item in the main stage's own cell rather than a track of its own, so
+          it floats over the top of the workspace without changing any pane's row count —
+          a pane that resizes when a voice panel opens reflows a live agent's terminal, and
+          the reflowed scrollback does not come back when it closes.
+          Rendered unconditionally, at every dock state including the collapsed chip:
+          `.voice-dock.chip` hides it in CSS, which keeps the assistant conversation inside
+          it mounted, streaming, and speaking while the workspace is clear. */}
+      <div class="voice-dock-anchor">
+        <VoiceDock
+          conversation={conversation}
+          commands={commands}
+          configuredCommands={voiceStatus?.commands}
+          onOpenSettings={()=>openSettings('Voice')}
+          mode={voicePanelMode}
+          onMode={setVoicePanelMode}
+          assistantView={assistantView}
+          dock={voiceDock.state}
+          onDock={step=>dispatchVoiceDock({kind:step})}
+        />
+      </div>
     </div>
 
     {launcherOpen && <div class="quick-launcher" role="dialog" aria-modal="true" aria-label="New terminal custom">

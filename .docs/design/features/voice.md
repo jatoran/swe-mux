@@ -553,11 +553,26 @@ into mobile-voice setup instead.
 - **Read aloud remains session-scoped.** Each Agent pane header carries only its `tts:` chip (off / tap / auto).
   The player strip (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay) floats from the pane's zero-height `.voice-overlay-anchor`.
   It never changes terminal geometry.
-- **Conversation state is app-level and its primary view is pane-attached.** The Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
-  While Talk is on and an Agent pane is focused, the panel floats at the top of that pane in the same `.voice-overlay` stack as the read-aloud player strip.
-  The zero-height anchor keeps both surfaces out of terminal layout.
-  A fixed top `.conversation-layer` is used only when the active sink has no visible terminal pane, such as a note or Queue composer.
-  Capture, draft, target pin, and history stay mounted across Project, pane, and target changes.
+- **There is one voice surface, and it is app-level: the voice dock** (`.voice-dock`, `voiceDock.ts`).
+  It holds the dictation draft and the assistant conversation as two bodies behind the talk/chat tabs, and it is mounted **once**, at one fixed place in the tree, for the life of the app.
+  It hangs from `.voice-dock-anchor`, a zero-height grid item in the main stage's own cell, so it floats over the top of the workspace and never takes a track: a pane's row count *is* its PTY's row count, and a surface that took a row would resize a live agent's terminal every time it opened.
+  It used to move between the focused pane's `.voice-overlay` and a fixed `.conversation-layer` depending on where the sink was, which meant a focus change remounted the assistant view inside it - see the announced-card rule in `assistant.md` for why that is a correctness problem and not a cosmetic one.
+  Capture, draft, target pin, and history stay mounted across Project, pane, and target changes, as they always did.
+- **Three axes, deliberately separate: capture, addressee, and size.**
+  - *Capture* is the microphone. The Talk toggle sits directly before Run in the mobile toolbar and desktop app header and does nothing but start and stop listening.
+  - *Addressee* is the talk/chat tabs (`VoicePanelMode`): who plain speech reaches, and therefore which body the dock draws. With capture off there is no draft to dictate into, so the dock shows the assistant whatever the stored addressee says; the stored value is left alone.
+  - *Size* is the dock state: `full`, `peek`, or `chip`. It is presentation only.
+  They were one thing before, and the cost was concrete: the surface rendered only while capture ran and its close button appeared only while capture was stopped, so the sole way to clear the panel off the workspace mid-conversation was `stop mic`.
+- **Collapsing is not closing.** At `chip` the dock is `display:none` and the workspace is completely clear, while the dialog keeps streaming, speaking, and opening cards from the same mounted component.
+  Hiding rather than unmounting is load-bearing, not an optimisation: the set of cards this device has already announced lives in `AssistantPanel`, and a remount reads as a device that has never seen an open card and speaks its line again.
+  The way back is the **voice dock chip** beside the microphone in both top bars - a separate button, carrying a count while confirmation cards are open and a dot when a reply landed while collapsed.
+  The chip reopens into the size it was collapsed from, so a deliberate `peek` does not come back as a full panel.
+- **`peek` is one row: the newest line, plus every open confirmation card with its buttons and countdown, and no composer.**
+  The cards are the reason peek exists rather than a straight open/closed toggle - they are the only part of a conversation that expires, and a scheduled one runs on its own.
+  A card opening therefore raises the dock to at least `peek`, one-way and never further, because a countdown nobody can see is a decision made by timeout.
+- **The microphone may open the dictation draft, and only that.** Starting Talk from the chip opens the dock when the addressee is dictation, because the draft has no other surface; it is a loan, returned when capture stops, and any dock action by the operator clears the loan for good.
+  A chat-addressed microphone leaves a collapsed dock collapsed, which is the whole point of the chip: the assistant speaks its replies.
+  A spoken question routed to the assistant never reopens a collapsed dock either - the reply is spoken and the chip marks it unread.
 - **Talk keeps a reviewable conversation history.** Every recognized utterance and every final Mux outcome is stored in a device-local, app-wide 120-entry ring.
   Lists and help retain their line-broken display text while TTS receives the separately paced speech form.
   Last-reply requests retain the generated reply text, not only a playback status message.
@@ -575,12 +590,14 @@ into mobile-voice setup instead.
   `Ctrl`/`Cmd`+`Enter` sends from the textarea; `Escape` releases its keyboard focus.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- The player strip and Talk panel each expose a `? Commands` action backed by the complete live catalog shown in Settings, plus a gear into Settings → Voice.
+- The player strip and the voice dock each expose a `? Commands` action backed by the complete live catalog shown in Settings, plus a gear into Settings → Voice.
   The command catalog is a viewport modal and is not a utility-drawer tab.
   Spoken drawer aliases always open the named tab rather than toggling it closed.
   Spoken `open Notes` also claims the selected drawer note as the current text sink without raising the mobile keyboard; a later pointer or keyboard focus change overrides that claim normally.
   Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
+  So are the dock's own: `assistant.toggle` (chip ↔ last expanded size, keeping its id because it is reachable from saved keybindings and gesture slots), `voice.dockExpand`, and `voice.dockCollapse`.
+  None of them touches capture.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
 
 ## Session sounds (unrelated audio path)
@@ -657,9 +674,10 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `frontend/src/assistantSpeech.ts` — one speech stream per assistant turn (`assistant.md`).
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/voiceNavigation.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, canonical hierarchical indexes, and fleet speech projection.
 - `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
+- `frontend/src/voiceDock.ts` - the dock's size axis and the addressee type: the pure reducer (`reduceVoiceDock`), the loan rule for capture-opened docks, the card floor, `voiceBodyVariant`, and device-local persistence. Covered by `frontend/test/voiceDock.test.ts` and `frontend/test/renderer/voice-dock.spec.ts`.
 - `frontend/src/spokenListContext.ts` - validated five-minute device-local membership and paging context for recent spoken lists.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (toolbar control), `ConversationSurface` (pane placement or top fallback), and `DictationPanel` (draft and history surface).
+- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (the microphone, in both top bars), `VoiceDockChip` (the dock's control, beside it), and `VoiceDock` (the one voice surface: header, dictation body, assistant slot).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.
