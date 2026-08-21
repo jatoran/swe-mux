@@ -113,3 +113,6 @@ test-tmp-codex/
 tests/.phase2-*.db*
 # playwright-cli session output (snapshots, console logs) from driving the live UI
 .playwright-cli/
+
+.tmp/
+.swe-mux/
