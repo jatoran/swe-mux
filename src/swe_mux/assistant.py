@@ -49,6 +49,7 @@ from .path_identity import same_path
 from .projects import RESERVED_PROJECT_FOLDER_NAMES
 from .session import TERMINAL_SESSION_STATES
 from .session_titles import generated_titles, record_display_name, record_run_id
+from .spawn_contract import resolve_spawn_model
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -260,6 +261,10 @@ chance to review. When the operator asks for text staged, input, or left unsent,
 stage_text and never seed_text. type_into_session also stages text, but only into a \
 session whose terminal is already open on the operator's device, so it is the wrong tool \
 immediately after a spawn.
+When the operator names a model - "open an opus session", "start a codex on gpt-5.1" - pass \
+it as spawn_session's model, in the harness's own spelling. Whether a harness takes one at \
+all is not something you know: the tool answers it, refusing before anything spawns and \
+naming what that harness accepts, so relay that refusal rather than trying another name.
 
 A project's actions are commands a human already approved: list_project_actions shows them \
 with their approval state, and run_project_action starts one. You cannot approve an action \
@@ -973,13 +978,26 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
         return f"{mode} to {target}:{preview}" if preview else f"{mode} to {target}"
     if kind == "spawn_session":
         backend = str(arguments.get("backend") or "default harness")
+        # The model is on the card whenever one was asked for, spoken form
+        # included: it is the difference between the session the operator wanted
+        # and an ordinary one, and it costs three words to say. Preflight has
+        # already rewritten it to the exact spelling the CLI will be given, so
+        # confirming the card confirms the launch.
+        model = str(arguments.get("model") or "").strip()
+        on_model = f" on {model}" if model else ""
         # The card is where the operator learns whether the prompt will run or
         # wait: the two parameters differ in exactly that, so the card says it.
         if str(arguments.get("stage_text") or ""):
-            return f"spawn a {backend} session in {target}, prompt staged unsent{preview}"
+            return (
+                f"spawn a {backend} session{on_model} in {target}, "
+                f"prompt staged unsent{preview}"
+            )
         if str(arguments.get("seed_text") or ""):
-            return f"spawn a {backend} session in {target}, running the prompt{preview}"
-        return f"spawn a {backend} session in {target}{preview}"
+            return (
+                f"spawn a {backend} session{on_model} in {target}, "
+                f"running the prompt{preview}"
+            )
+        return f"spawn a {backend} session{on_model} in {target}{preview}"
     if kind == "create_project":
         # The absolute path is the whole point of this card: the operator
         # confirms exactly what lands on disk, not a name they must resolve.
@@ -1915,6 +1933,18 @@ class AssistantService:
                             "seed_text."
                         ),
                     },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "The model the new session's CLI should run, when the "
+                            "operator names one ('open an opus session'). Use the "
+                            "harness's own spelling — a short alias like opus, "
+                            "sonnet or haiku, or a full model id. Omit it "
+                            "otherwise. Whether a model can be chosen at all is "
+                            "per harness: the tool refuses before anything spawns "
+                            "and names what that harness accepts."
+                        ),
+                    },
                 },
                 ["project"],
             ),
@@ -2414,6 +2444,10 @@ class AssistantService:
                     "prompt, stage_text leaves it unsent — pick the one the operator asked for"
                 )
             }
+        if kind == "spawn_session":
+            refusal = self._preflight_spawn_model(arguments)
+            if refusal is not None:
+                return refusal
         if kind == "create_project":
             refusal = await self._preflight_create_project(arguments)
             if refusal is not None:
@@ -2446,6 +2480,53 @@ class AssistantService:
             "send_to_session", "type_into_session",
         } and not str(text or "").strip():
             return {"error": "text must not be empty"}
+        return None
+
+    def _preflight_spawn_model(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
+        """Answer "can this harness even be told that model" before a card opens.
+
+        The point of doing it here rather than at spawn: an unusable model becomes
+        a sentence the operator hears, not a pane that appears and dies with the
+        flag echoed back at it. Everything the answer depends on is resolved now -
+        the harness, because the vocabulary is a per-CLI declaration, and the
+        model's canonical spelling, which is stamped back into the arguments so the
+        card restates exactly what will run.
+
+        A project with no default harness is asked for one rather than validated
+        against a guess. Guessing would mean the card names a CLI the spawn's own
+        default chain might not pick, and being told which harness to name costs a
+        round while being wrong costs the whole point of the check.
+        """
+        model = str(arguments.get("model") or "").strip()
+        if not model:
+            # Not an argument that can be blank: an empty string here is the model
+            # saying "no model", and carrying it forward would put `--model ''` on
+            # a command line.
+            arguments.pop("model", None)
+            return None
+        project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
+        backend = str(arguments.get("backend") or "").strip() or (
+            str(getattr(project, "default_backend", "") or "") if project else ""
+        )
+        if not backend:
+            return {
+                "error": (
+                    "name the harness as well (backend): this project has no default "
+                    "one, and whether a model can be chosen — and which names are "
+                    "accepted — is a property of the CLI"
+                )
+            }
+        try:
+            arguments["model"] = resolve_spawn_model(backend, model)
+        except ValueError as exc:
+            detail = exc.args[0] if exc.args else str(exc)
+            message = detail.get("model", str(detail)) if isinstance(detail, dict) else str(detail)
+            return {"error": str(message)}
+        # Pinned, so the harness the model was validated against is the harness the
+        # card names and the spawn uses. Only when a model was asked for: an
+        # ordinary spawn keeps falling through the daemon's full default chain,
+        # which reads the Project's committed configuration this layer cannot see.
+        arguments["backend"] = backend
         return None
 
     async def _preflight_create_project(
@@ -2636,6 +2717,10 @@ class AssistantService:
             )
             seed = str(arguments.get("seed_text") or "").strip()
             stage = str(arguments.get("stage_text") or "").strip()
+            # Already resolved to the CLI's own spelling by preflight, which also
+            # pinned the backend it was validated against, so nothing here has to
+            # re-decide either.
+            model = str(arguments.get("model") or "").strip()
             if str(arguments.get("client_id") or ""):
                 # The operator's device spawns through its own launch path, so
                 # the new session opens as a tab in the currently active pane
@@ -2655,6 +2740,10 @@ class AssistantService:
                         "backend": backend or self.config.default_backend,
                         "seed_text": seed or None,
                         "stage_text": stage or None,
+                        # Passed as a name, not as argv: the device posts it back on
+                        # its spawn request and the daemon maps it to the harness's
+                        # own flag, so the browser still never names a harness.
+                        "model": model or None,
                     },
                 )
                 return {"spawned": True, "detail": outcome.get("detail") or "spawned"}
@@ -2665,8 +2754,15 @@ class AssistantService:
                 body["seed_text"] = seed
             if stage:
                 body["stage_text"] = stage
+            if model:
+                body["model"] = model
             session = await self.spawn_op(body)
             result: dict[str, Any] = {"spawned": True, "session": session.record.name}
+            if model:
+                # Stated so the model reports the launch it got rather than the one
+                # it asked for; the two differ whenever preflight canonicalized a
+                # spoken name.
+                result["model"] = model
             if stage:
                 # Said explicitly so the model reports it truthfully: the text is
                 # parked in the composer and nothing has been submitted.

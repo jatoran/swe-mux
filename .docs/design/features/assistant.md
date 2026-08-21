@@ -84,6 +84,13 @@ Interrupt cancels the running task; nothing already executed is undone.
   The primer and both schema descriptions state the split, the confirmation card says "prompt staged unsent" or "running the prompt", and the tool result carries `staged`/`submitted` so the model reports truthfully which happened.
   The two are mutually exclusive at every layer (assistant preflight and `SpawnRequest.parse`).
   `type_into_session` also stages text but needs the session's terminal already mounted on the device, so it is the wrong tool immediately after a spawn.
+- **`spawn_session` also carries the model, and an unusable one is a sentence rather than a dead pane.**
+  "Open an opus session in X" passes `model` in the harness's own spelling; the daemon owns the mapping to that CLI's argv (`launch-profiles.md`, `backends.md`), so neither the assistant nor the browser ever names a flag.
+  The check happens in preflight, before a card exists, because the failure it replaces is a pane that appears and dies with the flag echoed back at it: a harness that declares no model argument and a name that harness would not recognize are both refused there, each naming what would work instead.
+  Preflight also rewrites the argument to the canonical spelling and **pins the harness it validated against**, so the card the operator confirms and the launch they get cannot differ - "opus 5" is restated and spawned as `claude-opus-5`.
+  Pinning happens only when a model was asked for; an ordinary spawn still falls through the daemon's full default chain, which reads the Project's committed configuration this layer cannot see.
+  A model asked for in a Project with no default harness is answered by asking for one rather than validated against a guess, because a guess would make the card name a CLI the spawn might not pick.
+  The card says the model whenever one was asked for, spoken form included: it is the difference between the session the operator wanted and an ordinary one.
 - **An identical proposal is answered with the existing action, never a second card** (`_duplicate_action`).
   A pending or scheduled duplicate is refused for every kind: two cards for one intent means answering either leaves the other armed.
   An already-executed duplicate is refused only for `DUPLICATE_GUARDED_KINDS` - note writes, project creation, queued messages - where repeating is itself the damage; spawning two identical sessions is something operators genuinely ask for.

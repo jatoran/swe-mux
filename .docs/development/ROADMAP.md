@@ -3949,11 +3949,23 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
 
 ### Assistant reach: spawn with a specified model
 
-- [ ] An optional `model` argument on `spawn_session`, mapped per harness by the adapter (claude
+- [x] An optional `model` argument on `spawn_session`, mapped per harness by the adapter (claude
   and codex take `--model`; a harness with no model flag refuses honestly at the card, before
   anything spawns).
-- [ ] A request-level model overrides the launch profile's, and an unrecognized model name fails
+  The per-harness declaration is `HarnessDescriptor.model_selection` rather than adapter code:
+  it carries the argv, the aliases the CLI takes *as* a model, and the namespaces a full id
+  belongs to, so `omp`/`pi`/`opencode` answer `None` and their refusal names a launch profile
+  as the way to set a model anyway. Recognition is namespace-plus-alias, never an enumerated
+  catalogue of released models - a catalogue lags every vendor release and would refuse a
+  model that works, while a namespace still catches `codex --model opus`.
+- [x] A request-level model overrides the launch profile's, and an unrecognized model name fails
   at the card rather than as a dead session.
+  The override is a **replacement** (`strip_model_args`), not a fourth argument slot: two
+  `--model` flags on one command line is a per-CLI coin toss. `--model` deliberately stays
+  unreserved so a profile pinning a model keeps working, and a test holds the two apart.
+  The card check also pins the harness it validated against and restates the canonical
+  spelling, so "opus 5" is confirmed and spawned as `claude-opus-5`; a model asked for in a
+  Project with no default harness is answered by asking for one rather than by guessing.
 
 ### Phase 15 exit criteria
 
@@ -3974,6 +3986,9 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
 - [ ] The assistant lists actions, runs an approved one behind a card, refuses an unapproved one
   by naming the file, and reports success or an issue flag with no output read-back.
 - [ ] "Open an opus session in X" spawns with that model, and a bad model name fails at the card.
+  Both halves are built and tested end to end in-process - the composed argv, the card
+  refusal, and the canonical restatement - and the criterion stays open until an operator
+  runs the spoken form against a real CLI, which no test can stand in for.
 
 ## Decision-gated capabilities
 

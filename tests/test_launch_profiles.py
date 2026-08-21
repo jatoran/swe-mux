@@ -272,6 +272,72 @@ async def test_an_explicitly_requested_missing_profile_still_refuses(tmp_path: P
         await spawn_session(cast(Any, request))
 
 
+async def test_a_requested_model_replaces_the_profiles_and_precedes_the_seed_prompt(
+    tmp_path: Path,
+) -> None:
+    """The fourth thing a launch can carry, and it *replaces* rather than appends.
+
+    A profile pinning `--model` is supported, so a request naming its own model has
+    to win outright: two `--model` flags on one command line is a per-CLI coin toss
+    and the promised precedence would be a hope. The seed prompt stays last, because
+    it is the positional the flags come before.
+    """
+    config = Config(
+        shell_profiles=[agent_profile("claude-sonnet", args=["--model", "sonnet", "--verbose"])]
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def spawn(**kwargs: Any) -> Any:
+        captured.append(kwargs)
+        return SimpleNamespace(record=SimpleNamespace(snapshot=lambda: kwargs))
+
+    request = _spawn_request(
+        tmp_path,
+        config,
+        spawn,
+        {
+            "backend": "claude",
+            "project_id": "default",
+            "profile_id": "claude-sonnet",
+            "model": "opus 5",
+            "seed_text": "fix the tests",
+        },
+    )
+
+    await spawn_session(cast(Any, request))
+
+    args = captured[0]["args"]
+    assert "sonnet" not in args
+    assert args[:3] == ["--verbose", "--model", "claude-opus-5"]
+    assert args[-1] == "fix the tests"
+
+
+async def test_a_model_the_resolved_harness_cannot_take_refuses_the_spawn(
+    tmp_path: Path,
+) -> None:
+    """The backstop under the assistant's card: no pane is ever started to die.
+
+    The refusal is here rather than only in the assistant because the backend is
+    only fully resolved at this layer - the Project record and its committed
+    configuration both feed the chain - so this is the last point that knows which
+    CLI would actually receive the flag.
+    """
+    config = Config(shell_profiles=[agent_profile()])
+
+    async def spawn(**kwargs: Any) -> Any:  # pragma: no cover - must never run
+        raise AssertionError("a refused model must not spawn anything")
+
+    request = _spawn_request(
+        tmp_path,
+        config,
+        spawn,
+        {"backend": "codex", "project_id": "default", "model": "opus"},
+    )
+
+    with pytest.raises(ValueError, match="does not recognize"):
+        await spawn_session(cast(Any, request))
+
+
 # --- configuration ------------------------------------------------------------
 
 
