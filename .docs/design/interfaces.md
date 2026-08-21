@@ -1250,8 +1250,9 @@ It omits the text preview the written `restatement` keeps, because synthesis tim
 Its wording is the trust policy talking: a `scheduled` card can only be stopped, a `pending` one only runs if the operator agrees, and a client must not reconstruct that distinction itself.
 
 `/assistant/actions/{id}/announced` restarts a `scheduled` card's cancel window from the moment a device begins reading it aloud, so the window measures reaction time rather than synthesis time.
-It only ever moves the deadline forward, is clamped to `CANCEL_WINDOW_MAX_SECONDS` from the action's creation, and is a no-op for anything not currently scheduled.
-A client that never calls it keeps the original window.
+**It moves the deadline once per action and never again**, because extending re-emits the card and a device announces a card when it sees one - a second extension would close that cycle into a loop (it did, on 2026-08-20).
+A repeat call is a logged no-op returning `extended: false`; so is a call for anything not currently scheduled.
+The deadline only ever moves forward, is clamped to `CANCEL_WINDOW_MAX_SECONDS` from the action's creation, and a client that never calls this keeps the original window.
 
 Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 16 kHz.
 Whisper decodes the validated PCM from memory and never writes it to disk.

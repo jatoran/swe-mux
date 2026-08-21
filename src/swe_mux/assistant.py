@@ -81,6 +81,10 @@ CANCEL_WINDOW_SECONDS = 6.0
 # announcement cannot hold an action armed indefinitely.
 CANCEL_WINDOW_SPOKEN_SECONDS = 10.0
 CANCEL_WINDOW_MAX_SECONDS = 30.0
+# Action ids whose announcement has already extended their window. Bounded only
+# so a very long-lived daemon cannot accumulate them; a dialog never has enough
+# cards for the cap to be reached in practice.
+ANNOUNCED_MEMORY = 512
 # A model that re-proposes an action it already ran (or that is still pending)
 # would double-write a note. Within this window an identical proposal is
 # answered with the existing action instead of a second card.
@@ -695,6 +699,8 @@ class AssistantService:
         # UI actions wait here for the originating device's acknowledgement.
         self._ui_acks: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._window_tasks: dict[str, asyncio.Task[None]] = {}
+        # Cards whose spoken announcement has already moved their cancel window.
+        self._announced: set[str] = set()
 
     # ------------------------------------------------------------------ status
 
@@ -1507,16 +1513,39 @@ class AssistantService:
 
         Only scheduled actions care: their window is the operator's whole
         opportunity to object, and it must not be spent on synthesizing the
-        sentence that tells them there is something to object to. Idempotent and
-        clamped from creation, so repeated calls (two devices, a retry) cannot
-        keep an action armed indefinitely, and a client that never calls this
-        simply keeps the original window.
+        sentence that tells them there is something to object to.
+
+        **Exactly once per action, and that is a structural requirement rather
+        than tidiness.** Extending re-emits the card so its countdown stays
+        honest, and a device announces a card when it sees one — so an extension
+        that could happen twice is a loop: emit, announce, extend, emit. It ran
+        in production (2026-08-20): 80 extensions ~25 ms apart, each spawning its
+        own speech clip, which then played for minutes after the operator had
+        closed the microphone. The `_announced` set is the cut. In-memory is the
+        correct lifetime: a restart expires every scheduled action anyway, so
+        there is nothing left to re-announce.
+
+        A client that never calls this simply keeps the original window.
         """
         row = await self.store.action(action_id)
         if row is None:
             raise AssistantError("unknown action")
+        if action_id in self._announced:
+            # Logged rather than silently absorbed: a client announcing a card
+            # twice is the shape of the loop this guard exists to stop, and a
+            # future regression should be visible in the log instead of only in
+            # the operator's ears.
+            log.warning(
+                "assistant card announced again action=%s kind=%s status=%s; "
+                "the cancel window moves once per card",
+                action_id, row["kind"], row["status"],
+            )
+            return {"extended": False, "action": action_snapshot(row)}
         if row["status"] != "scheduled":
             return {"extended": False, "action": action_snapshot(row)}
+        self._announced.add(action_id)
+        if len(self._announced) > ANNOUNCED_MEMORY:
+            self._announced = set(list(self._announced)[-ANNOUNCED_MEMORY:])
         ceiling = float(row["created_at"]) + CANCEL_WINDOW_MAX_SECONDS
         deadline = min(time.time() + CANCEL_WINDOW_SPOKEN_SECONDS, ceiling)
         updated = await self.store.extend_action_window(action_id, deadline)

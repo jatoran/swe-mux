@@ -1097,16 +1097,52 @@ async def test_announcing_a_scheduled_card_restarts_its_cancel_window(
         outcome = await service.announce_action(action_id)
         assert outcome["extended"] is True
         assert float(outcome["action"]["expires_at"]) > before
-        # Bounded from creation, so repeated announcements cannot hold an action
-        # armed indefinitely.
         row = await service.store.action(action_id)
         assert row is not None
         ceiling = float(row["created_at"]) + CANCEL_WINDOW_MAX_SECONDS
-        for _ in range(5):
-            await service.announce_action(action_id)
+        assert float(row["expires_at"]) <= ceiling + 0.001
+    finally:
+        for task in service._window_tasks.values():
+            task.cancel()
+        service.store.close()
+
+
+async def test_a_card_is_announced_exactly_once(tmp_path: Path) -> None:
+    """The loop this closes ran in production on 2026-08-20.
+
+    Extending re-emits the card so its countdown stays honest, and a device
+    announces a card when it sees one - so an extension that can happen twice is
+    a cycle: emit, announce, extend, emit. It produced 80 extensions about 25 ms
+    apart, each spawning its own speech clip, which then played for minutes after
+    the operator had closed the microphone. The second announcement must change
+    nothing and, above all, must emit nothing.
+    """
+    service, emitted, _appended = note_service(
+        tmp_path,
+        [tool_turn("", [note_call()]), tool_turn("Proposed.")],
+        trust="cancel_window",
+    )
+    try:
+        await run_turn(service, "note that")
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action"
+            and event.payload.get("status") == "scheduled"
+        ][0]
+        action_id = str(card.payload["id"])
+        before = len([e for e in emitted if e.type == "assistant_action"])
+
+        assert (await service.announce_action(action_id))["extended"] is True
+        after_first = len([e for e in emitted if e.type == "assistant_action"])
+        assert after_first == before + 1, "the extension re-emits the card once"
+        deadline = float((await service.store.action(action_id) or {})["expires_at"])
+
+        for _ in range(10):
+            assert (await service.announce_action(action_id))["extended"] is False
+        assert len([e for e in emitted if e.type == "assistant_action"]) == after_first
         final = await service.store.action(action_id)
         assert final is not None
-        assert float(final["expires_at"]) <= ceiling + 0.001
+        assert float(final["expires_at"]) == deadline, "and never moves it again"
     finally:
         for task in service._window_tasks.values():
             task.cancel()

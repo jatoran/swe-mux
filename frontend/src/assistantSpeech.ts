@@ -21,14 +21,15 @@
  */
 import { api } from './api.ts'
 import {
-  beginRequestedStream, cancelRequestedStream, newVoiceStreamId,
-  playRequestedStreamFirst, unlockPlayback,
-} from './voice'
+  beginRequestedStream, cancelRequestedStream, claimRequestedStream, newVoiceStreamId,
+  playRequestedStreamFirst, requestedStreamActive, unlockPlayback,
+} from './voice.ts'
 
 type VoiceClip = { id: string; stream_id?: string }
 
-type TurnSpeech = {
-  turnId: string
+type Speech = {
+  /** The turn this stream belongs to, or null for speech outside any turn. */
+  turnId: string | null
   streamId: string
   /** Serializes appends; also the handle a caller awaits to know speech landed. */
   chain: Promise<void>
@@ -36,12 +37,19 @@ type TurnSpeech = {
   opened: boolean
   spoke: boolean
   closed: boolean
+  /** Pending idle-close for a loose stream, cancelled by the next append. */
+  idle: ReturnType<typeof setTimeout> | null
 }
 
-let active: TurnSpeech | null = null
+// A loose stream stays open this long after its last append, so a second
+// out-of-turn utterance joins it instead of opening a stream of its own — and
+// opening one is what cuts the previous utterance off.
+const LOOSE_IDLE_MS = 1_500
 
-/** Visible for tests: the turn currently being spoken, if any. */
-export function activeTurnSpeech(): { turnId: string; streamId: string; spoke: boolean } | null {
+let active: Speech | null = null
+
+/** Visible for tests: the stream currently being spoken into, if any. */
+export function activeTurnSpeech(): { turnId: string | null; streamId: string; spoke: boolean } | null {
   return active ? { turnId: active.turnId, streamId: active.streamId, spoke: active.spoke } : null
 }
 
@@ -51,11 +59,46 @@ export function activeTurnSpeech(): { turnId: string; streamId: string; spoke: b
  * answer rendered on screen with Talk off) costs nothing.
  */
 export function beginTurnSpeech(turnId: string): void {
-  if (active && !active.closed) void closeStream(active.streamId)
+  retire()
   const streamId = newVoiceStreamId()
   unlockPlayback()
+  // A new turn takes the floor: the operator asked something else, so the reply
+  // they moved on from stops.
   beginRequestedStream(streamId, 'system', 'system')
-  active = { turnId, streamId, chain: Promise.resolve(), opened: false, spoke: false, closed: false }
+  active = open(turnId, streamId)
+}
+
+function open(turnId: string | null, streamId: string): Speech {
+  return {
+    turnId, streamId, chain: Promise.resolve(),
+    opened: false, spoke: false, closed: false, idle: null,
+  }
+}
+
+/**
+ * The stream still worth appending to, or null.
+ *
+ * Playback is the authority: anything that stops the assistant talking cuts the
+ * claim, and a stream whose claim is gone is a stream nobody will hear. Checked
+ * *before* choosing between appending and opening, so an utterance arriving
+ * after a barge-in opens a fresh stream instead of being appended into silence.
+ */
+function liveStream(): Speech | null {
+  const current = active
+  if (!current || current.closed) return null
+  if (!requestedStreamActive(current.streamId)) { retire(); return null }
+  return current
+}
+
+/** Close whatever stream is open, without cutting audio that is still playing. */
+function retire(): void {
+  const previous = active
+  active = null
+  if (!previous || previous.closed) return
+  previous.closed = true
+  if (previous.idle) clearTimeout(previous.idle)
+  if (previous.opened) void closeStream(previous.streamId)
+  else cancelRequestedStream(previous.streamId)
 }
 
 /** Append one sentence of the running turn. Ignored once the turn has closed. */
@@ -68,18 +111,30 @@ export function speakTurnText(turnId: string, text: string): Promise<void> {
 }
 
 /**
- * Speak a confirmation card's announcement. It joins the turn that opened it
- * when there is one — the card and the sentences before it are one utterance,
- * and a separate stream would cut the sentences off mid-word. A card that
- * arrives with no turn speaking (a replayed view, a second device) opens its
- * own one-shot stream.
+ * Speak a confirmation card's announcement.
+ *
+ * **This never takes the floor.** It joins the turn that opened it when there is
+ * one — the card and the sentences before it are one utterance. A card arriving
+ * with no turn speaking (one whose turn already ended, a replayed view, a second
+ * device) joins the loose stream, opening one only if none is live, and that
+ * stream is claimed without interrupting. An announcement that cut whatever was
+ * speaking is how the same sentence came to restart over and over instead of
+ * being said once.
  */
-export function speakAnnouncement(turnId: string, text: string): Promise<void> {
+export function speakAnnouncement(text: string): Promise<void> {
   const speech = text.trim()
   if (!speech) return Promise.resolve()
-  const turn = active
-  if (turn && turn.turnId === turnId && !turn.closed) return append(turn, speech)
-  return speakOnce(speech)
+  // Any live stream will do, whichever turn it belongs to: the point is that
+  // the operator hears both, in order, rather than the second cutting the first.
+  // A card is new information, so unlike a turn's own sentences it is spoken on
+  // a fresh stream when the previous one was cut rather than dropped with it.
+  const current = liveStream()
+  if (current) return append(current, speech)
+  const streamId = newVoiceStreamId()
+  unlockPlayback()
+  claimRequestedStream(streamId, 'system', 'system')
+  active = open(null, streamId)
+  return append(active, speech)
 }
 
 /**
@@ -90,39 +145,41 @@ export function speakAnnouncement(turnId: string, text: string): Promise<void> {
 export async function endTurnSpeech(turnId: string, fallback = ''): Promise<void> {
   const turn = active
   if (!turn || turn.turnId !== turnId || turn.closed) return
-  if (!turn.spoke && fallback.trim()) await append(turn, fallback.trim())
-  turn.closed = true
-  const streamId = turn.streamId
-  const chain = turn.chain
-  if (active === turn) active = null
-  await chain.catch(() => {})
-  if (!turn.opened) {
-    // Nothing was ever spoken, so the daemon has no stream to close; only this
-    // tab's claim needs releasing, which `beginRequestedStream` will do for the
-    // next turn anyway.
-    cancelRequestedStream(streamId)
-    return
-  }
-  await closeStream(streamId)
+  if (!turn.spoke && fallback.trim()) await append(turn, fallback.trim()).catch(() => {})
+  // Drained before closing, so a sentence still in flight is not cut off by the
+  // close it should have preceded.
+  await turn.chain.catch(() => {})
+  if (active === turn) retire()
 }
 
 /** Abandon the running turn's speech without closing it gracefully. */
 export function cancelTurnSpeech(turnId: string): void {
-  const turn = active
-  if (!turn || turn.turnId !== turnId) return
-  turn.closed = true
-  active = null
-  if (turn.opened) void closeStream(turn.streamId)
-  else cancelRequestedStream(turn.streamId)
+  if (!active || active.turnId !== turnId) return
+  retire()
 }
 
 /**
- * One self-contained utterance outside any turn: the deterministic spoken
- * verdict on a confirmation card, which is not a model turn at all.
+ * Stop feeding whatever the assistant is currently saying.
+ *
+ * Playback already self-heals through the claim check, so this exists for the
+ * cases that know sooner than playback does — a surface going away, a test
+ * starting from a clean slate. It closes the stream rather than cutting audio;
+ * silencing what is already playing is `bargeInPlayback`'s job.
+ */
+export function cancelAssistantSpeech(): void {
+  retire()
+}
+
+/**
+ * One self-contained utterance that supersedes whatever is being said: the
+ * deterministic spoken verdict on a confirmation card, which is not a model turn
+ * at all. Taking the floor is the point here — the operator has just answered
+ * the card being read out, so finishing the question is worse than cutting it.
  */
 export async function speakOnce(text: string): Promise<void> {
   const speech = text.trim()
   if (!speech) return
+  retire()
   const streamId = newVoiceStreamId()
   unlockPlayback()
   beginRequestedStream(streamId, 'system', 'system')
@@ -135,9 +192,30 @@ export async function speakOnce(text: string): Promise<void> {
   }
 }
 
-function append(turn: TurnSpeech, speech: string): Promise<void> {
+/**
+ * A loose stream closes shortly after its last append so the daemon is not left
+ * holding it, but not immediately: a sibling utterance arriving right behind it
+ * should join rather than open a stream of its own.
+ */
+function scheduleIdleClose(turn: Speech): void {
+  if (turn.turnId !== null || turn.closed) return
+  if (turn.idle) clearTimeout(turn.idle)
+  turn.idle = setTimeout(() => {
+    turn.idle = null
+    if (turn.closed || active !== turn) return
+    retire()
+  }, LOOSE_IDLE_MS)
+}
+
+function append(turn: Speech, speech: string): Promise<void> {
+  if (turn.idle) { clearTimeout(turn.idle); turn.idle = null }
   const next = turn.chain.then(async () => {
     if (turn.closed && turn.opened) return
+    // Playback is the authority on whether this stream still matters. Anything
+    // that stops the assistant talking — barge-in, releasing the microphone,
+    // read aloud switched off — cuts the claim, and continuing to post text
+    // into a stream nobody will play just spends synthesis on silence.
+    if (!requestedStreamActive(turn.streamId)) { turn.closed = true; return }
     if (!turn.opened) {
       const clip = await api<VoiceClip>('POST', '/api/voice/speak', {
         text: speech, stream_id: turn.streamId, final: false,
@@ -147,12 +225,14 @@ function append(turn: TurnSpeech, speech: string): Promise<void> {
       // The response is the fallback for a `voice_clip_ready` that was lost or
       // delayed; the live event usually starts playback first and this dedupes.
       await playRequestedStreamFirst(clip.id, clip.stream_id || turn.streamId, 'system', 'system')
+      scheduleIdleClose(turn)
       return
     }
     await api('POST', '/api/voice/speak', {
       text: speech, stream_id: turn.streamId, continue_stream: true, final: false,
     })
     turn.spoke = true
+    scheduleIdleClose(turn)
   })
   // The chain must survive a failed segment: one clip that could not be
   // synthesized should not silence the rest of the reply.

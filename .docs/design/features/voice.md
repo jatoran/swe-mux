@@ -169,6 +169,12 @@ affect the PTY, session state, transcripts, history, or projects.
   a clip is loaded and unfinished - not merely while audio is audible, since between assigning
   `src` and the `play` event the element is occupied while reporting otherwise, and a stream's
   segments arrive close enough together to hit that window.
+- **Barge-in and every stop switch silence claimed streams, not just audible ones.**
+  A claim outlives its clip: synthesis runs behind the request, so a stream with nothing playing yet is still going to speak.
+  Suppressing only the audible stream let a backlog keep talking for minutes after the operator had released the microphone, with no gesture left that could stop it (2026-08-20).
+  `bargeInPlayback` and `stopAllPlayback` therefore suppress every entry in the claim map, and an in-flight `speak` response cannot re-claim a suppressed stream through its playback fallback.
+  Autoplayed agent read-aloud is untouched by barge-in - that is a separate switch, turned off by a pane's chip or the device toggle.
+  `claimRequestedStream` is the non-interrupting counterpart to `beginRequestedStream`, for app-initiated speech that is *additional* rather than superseding.
 - Barge-in is a hard stream stop.
   The first credible speech frame sidechain-mutes the singleton audio element instead of requiring the user's voice to overpower the phone speaker.
   Capture ignores three 32 ms frames while speaker echo drains, then requires three consecutive speech frames against the quiet microphone.

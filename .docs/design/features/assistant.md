@@ -140,10 +140,16 @@ The assistant is text-first and voice-attached, not voice-only:
 - **An open card changes what the microphone is waiting for.**
   The chat patience that keeps thinking-out-loud from being answered at every breath (`voice_chat_patience_ms`) is dropped while a card is open, and a recognized verdict lets a speculative decode commit the same way a wake-worded command does — the operator is answering a closed question, not composing a thought.
   The real decode stays on the `dictation` profile: an answer that turns out to be conversational still has to be transcribed accurately, and the speculation already carries the latency win.
-- **A scheduled card's cancel window starts when it is announced.**
-  Six seconds is generous for a card that appeared on screen and too short for one being read aloud, where the window would be spent synthesizing the sentence that announces it.
-  A device that begins speaking one posts `/announced`, which restarts the window (`CANCEL_WINDOW_SPOKEN_SECONDS`, clamped to `CANCEL_WINDOW_MAX_SECONDS` from creation).
-  It fails safe in both directions: the deadline only ever moves forward, and a client that never calls it keeps the original window.
+- **A card is announced exactly once, per card and per device, and its window moves exactly once.**
+  This is the load-bearing rule, not an optimization.
+  Six seconds is generous for a card that appeared on screen and too short for one being read aloud, so a device that speaks one posts `/announced` and the window restarts (`CANCEL_WINDOW_SPOKEN_SECONDS`, clamped to `CANCEL_WINDOW_MAX_SECONDS` from creation).
+  Extending re-emits the card so its countdown stays honest — and a device announces a card when it sees one, which closes the cycle: emit, announce, extend, emit.
+  It ran in production on 2026-08-20: eighty extensions about twenty-five milliseconds apart, each spawning its own speech clip, still speaking minutes after the operator had closed the microphone and killed only by killing the app.
+  Two independent cuts now hold it open. The daemon extends a given action once (`_announced`, in memory because a restart expires every scheduled action anyway) and logs a warning on any repeat; the client announces a given action id once, because the unit is the *card*, never the event.
+  Both fail safe: a client that never calls `/announced` keeps the original window, and the deadline only ever moves forward.
+- **Announcing never takes the floor; a spoken verdict does.**
+  A card joins the stream already speaking rather than starting one, so the sentence the operator is mid-way through hearing is not cut — an announcement that interrupted is what turned the repeat above into the same sentence restarting over and over instead of being said once.
+  The deterministic `confirm`/`cancel` verdict is the deliberate opposite: the operator has just answered the card being read out, so finishing the question is worse than cutting it.
 - Earcons (`earcons.ts`, WebAudio oscillator blips — no assets, no fetch) acknowledge the endpoint instantly and mark turn completion and pending actions, which is what makes 1-2 s of model latency feel attended rather than dead.
 
 ## HTTP surface

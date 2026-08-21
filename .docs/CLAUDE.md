@@ -249,6 +249,10 @@
   everything the model says afterwards is display-only, and an identical proposal is answered
   with the existing action rather than a second card - because a confirmation is never a turn,
   so nothing in the message log records that the operator already said yes.
+  A card is announced **once per card**, never per event, and its cancel window moves **once**:
+  extending re-emits the card and a device announces a card when it sees one, so a second
+  extension closes that into a loop that talks over the operator with no way to stop it
+  (2026-08-20). Announcing joins the stream already speaking; only a spoken verdict interrupts.
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion

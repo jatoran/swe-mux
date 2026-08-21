@@ -54,6 +54,8 @@ export function AssistantPanel({
   const dialogRef = useRef<string | null>(null); dialogRef.current = dialogId
   /** True while this turn's speech may be spoken: decided once, at turn start. */
   const speakingTurnRef = useRef<string | null>(null)
+  /** Cards already announced on this device; an announcement is per card, not per event. */
+  const announcedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!enabled) return
@@ -130,7 +132,16 @@ export function AssistantPanel({
       }
       if (event.type === 'assistant_action') {
         const status = String(payload.status || '')
-        if (status === 'scheduled' || status === 'pending') {
+        const actionId = String(payload.id || '')
+        // A card is announced at most once, ever, per device. The event is not
+        // the unit — the *card* is: a scheduled card is re-emitted whenever its
+        // countdown moves, and announcing per event turned that into a loop
+        // that spoke the same sentence eighty times and kept speaking after the
+        // microphone was closed. Nothing may reintroduce a per-event
+        // announcement here, whatever else re-emits the row.
+        if ((status === 'scheduled' || status === 'pending')
+          && actionId && !announcedRef.current.has(actionId)) {
+          announcedRef.current.add(actionId)
           playEarcon('tick')
           // Eyes-free confirmation: the card's line is spoken so the operator
           // can say "confirm" or "cancel" without looking. The wording comes
@@ -138,19 +149,13 @@ export function AssistantPanel({
           // card runs on its own and can only be stopped. The spoken verdict
           // then resolves deterministically (assistant.ts), never via the model.
           const announcement = String(payload.announcement || '')
-          const actionId = String(payload.id || '')
           if (announcement && voiceActiveRef.current && speechRef.current) {
-            const spoken = speakAnnouncement(turnId, announcement)
-            if (status === 'scheduled' && actionId) {
-              // Restart the cancel window rather than spending it on synthesis.
-              // Twice, because neither call alone is the right moment: the first
-              // covers the announcement being queued behind an earlier sentence,
-              // the second covers its own synthesis. The endpoint only ever
-              // moves the deadline forward and is clamped from the action's
-              // creation, so the pair is safe and the later bound wins.
-              void announceAction(actionId).catch(() => {})
-              void spoken.then(() => announceAction(actionId)).catch(() => {})
-            } else void spoken.catch(() => {})
+            void speakAnnouncement(announcement).catch(() => {})
+            // Restart the cancel window from now rather than spending it on
+            // synthesizing the sentence that announces it. Fired on arrival,
+            // not on playback: the daemon accepts one extension per card, so
+            // there is no second chance to spend on a better moment.
+            if (status === 'scheduled') void announceAction(actionId).catch(() => {})
           }
         }
       }

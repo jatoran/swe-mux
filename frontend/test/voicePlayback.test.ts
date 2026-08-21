@@ -191,6 +191,44 @@ test('closing a stream releases the claim without cutting queued audio',async()=
   voice.bargeInPlayback()
 })
 
+test('barge-in silences streams whose audio has not arrived yet',async()=>{
+  // A claim outlives the clip: synthesis runs behind the request, so a stream
+  // with nothing playing is still going to speak. Suppressing only the audible
+  // stream let a backlog keep talking for minutes after the operator had closed
+  // the microphone and had no way left to say stop (2026-08-20).
+  const speaking='55555555-5555-4555-8555-555555555555'
+  const pending='66666666-6666-4666-8666-666666666666'
+  voice.beginRequestedStream(speaking,'system','system')
+  voice.claimRequestedStream(pending,'system','system')
+  voice.enqueueRequestedStreamClip('loud-1',speaking,0,0)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'loud-1')
+
+  voice.bargeInPlayback()
+  assert.equal(voice.getPlayback().clipId,null)
+  // The clip the daemon was still synthesizing when the user said stop.
+  voice.enqueueRequestedStreamClip('late-1',pending,0,0)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,null,'a stream cut before it spoke stays silent')
+  assert.equal(voice.requestedStreamActive(pending),false)
+})
+
+test('a non-interrupting claim queues behind what is already speaking',async()=>{
+  const first='77777777-7777-4777-8777-777777777777'
+  const second='88888888-8888-4888-8888-888888888888'
+  voice.beginRequestedStream(first,'system','system')
+  voice.enqueueRequestedStreamClip('one',first,0,1)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'one')
+  voice.claimRequestedStream(second,'system','system')
+  voice.enqueueRequestedStreamClip('two',second,0,1)
+  assert.equal(voice.getPlayback().clipId,'one','claiming must not take the floor')
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'two')
+  voice.bargeInPlayback()
+})
+
 test('a segment arriving while the previous one is still loading queues behind it',async()=>{
   // Between assigning src and the `play` event the element reports not-playing
   // while being entirely occupied. Segments of one stream arrive close enough

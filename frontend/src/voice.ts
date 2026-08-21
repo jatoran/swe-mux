@@ -9,6 +9,10 @@ export type PlaybackOrigin = 'agent' | 'system'
 export type PlaybackState = { clipId: string | null; playing: boolean; position: number; duration: number; origin: PlaybackOrigin | null }
 
 const AUTOPLAY_KEY = 'mux:voice-autoplay'
+// How many finished/abandoned stream ids stay remembered as suppressed. Only
+// large enough that a clip synthesized long after its stream was cut still
+// finds it here; the ids themselves are UUIDs and cost nothing to keep.
+const SUPPRESSED_STREAM_MEMORY = 256
 // Minimal valid silent wav used purely to unlock the element inside a gesture.
 const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
 
@@ -96,7 +100,11 @@ export function newVoiceStreamId():string{
   return `${hex()}${hex()}-${hex()}-4${hex().slice(1)}-${(8+Math.floor(Math.random()*4)).toString(16)}${hex().slice(1)}-${hex()}${hex()}${hex()}`
 }
 
-/** Claim a user-requested stream before its first server event can arrive. */
+/**
+ * Claim a user-requested stream before its first server event can arrive, and
+ * take the floor: whatever is speaking now is cut. That is right for a stream
+ * the user just asked for — a new question supersedes the answer to the old one.
+ */
 export function beginRequestedStream(streamId:string,sessionId:string|null,origin:PlaybackOrigin):void{
   suppressCurrentStream()
   queue=[]
@@ -104,9 +112,25 @@ export function beginRequestedStream(streamId:string,sessionId:string|null,origi
   requestedStreams.set(streamId,{sessionId,origin})
 }
 
+/**
+ * Claim a stream without taking the floor: its clips queue behind whatever is
+ * already speaking. For app-initiated speech that is *additional* rather than
+ * superseding — a confirmation card announcing itself while the reply that
+ * produced it is still being read — where interrupting would cut a sentence the
+ * operator is mid-way through hearing.
+ */
+export function claimRequestedStream(streamId:string,sessionId:string|null,origin:PlaybackOrigin):void{
+  requestedStreams.set(streamId,{sessionId,origin})
+}
+
+/** Whether this tab still intends to play a stream, or has cut it. */
+export function requestedStreamActive(streamId:string):boolean{
+  return requestedStreams.has(streamId)&&!suppressedStreams.has(streamId)
+}
+
 export function cancelRequestedStream(streamId:string):void{
   requestedStreams.delete(streamId)
-  suppressedStreams.add(streamId)
+  suppress(streamId)
 }
 
 /**
@@ -209,15 +233,42 @@ export function enqueueAutoplay(clipId: string, streamId: string | null = null, 
 
 function suppressCurrentStream():void{
   if(!currentStreamId)return
-  suppressedStreams.add(currentStreamId)
+  suppress(currentStreamId)
   requestedStreams.delete(currentStreamId)
-  if(suppressedStreams.size>64)suppressedStreams.delete(suppressedStreams.values().next().value as string)
 }
 
+// Bounded, and trimmed on every insert rather than only on the single-stream
+// path: barge-in suppresses a whole claim map at once, and a trim that only ran
+// for one of them would let the set grow without limit.
+function suppress(streamId:string):void{
+  suppressedStreams.add(streamId)
+  while(suppressedStreams.size>SUPPRESSED_STREAM_MEMORY){
+    suppressedStreams.delete(suppressedStreams.values().next().value as string)
+  }
+}
+
+/**
+ * Stop talking, now — the user interrupted, or released the microphone.
+ *
+ * Every *claimed* stream is suppressed, not only the one making noise. A claim
+ * outlives the clip: synthesis runs behind the request, so a stream whose audio
+ * has not arrived yet is still going to speak. Suppressing one stream let a
+ * backlog keep talking for minutes after the operator had closed the microphone
+ * and had no way left to say "stop" (2026-08-20). Autoplayed agent read-aloud is
+ * deliberately untouched — that is a different switch, and a pane's own chip or
+ * the device toggle turns it off.
+ */
 export function bargeInPlayback():void{
   suppressCurrentStream()
+  suppressClaimedStreams()
   queue=[]
   haltCurrentClip()
+}
+
+/** Suppress every claimed stream, including ones whose first clip has not arrived. */
+function suppressClaimedStreams():void{
+  for(const streamId of requestedStreams.keys())suppress(streamId)
+  requestedStreams.clear()
 }
 
 /** Sidechain mute used only while capture verifies a possible human interruption. */
@@ -257,7 +308,10 @@ export function stopSessionPlayback(sessionId: string): void {
 // toggle): nothing should keep playing anywhere.
 export function stopAllPlayback(): void {
   suppressCurrentStream()
+  // Suppressed, not merely unclaimed: a `speak` request in flight when the
+  // switch was thrown still has its HTTP response as a playback fallback, and
+  // that fallback re-claims the stream it is about to play.
+  suppressClaimedStreams()
   queue = []
-  requestedStreams.clear()
   haltCurrentClip()
 }
