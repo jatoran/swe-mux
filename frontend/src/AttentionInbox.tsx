@@ -13,8 +13,12 @@
 // Nothing here is pushed. This is a surface you open; the daemon holds no push
 // route for ranked items.
 import { useEffect, useState } from 'preact/hooks'
-import { SettingLink } from './SettingLink'
-import { PROJECT_AUTOMATIONS_CHANGED, fetchProjectAutomations } from './projectAutomations'
+import { GrantGate } from './GrantGate'
+import {
+  PROJECT_AUTOMATIONS_CHANGED,
+  fetchProjectAutomations,
+  forgetProjectAutomations,
+} from './projectAutomations'
 import type { Project } from './types'
 import {
   CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
@@ -88,10 +92,12 @@ export function AttentionInbox({onOpenSession,project}:{
         quiet fleet; without it, nothing will ever be ranked for this Project however busy it
         gets, and the switch is one click away. */}
     {total===0&&(rankingOn===false&&project
-      ? <div class="setting-gate">
-        <p><strong>Attention ranking is off for {project.name}.</strong> Findings from its sessions are recorded, but nothing is ranked into this inbox until the Project opts in.</p>
-        <SettingLink target="project.attentionRanking" projectId={project.id}>Turn on Attention ranking</SettingLink>
-      </div>
+      ? <GrantGate ids={['project.attentionRanking']} projectId={project.id}
+        heading={`Attention ranking is off for ${project.name}.`}
+        onGranted={()=>{forgetProjectAutomations(project.id);void load()}}>
+        <p>Findings from its sessions are recorded either way. Ranking is what decides
+        which of them are worth interrupting you for, and routes those into this inbox.</p>
+      </GrantGate>
       : <p class="notification-empty">Nothing is ranked. Enable attention ranking for a Project to route its findings here.</p>)}
     {channels.map(channel=>{
       const items=data.channels[channel]||[]

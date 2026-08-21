@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  buildSpendRows, callHealth, exactMoney, formatCount, formatDuration, formatMoney, formatPercent,
-  type SpendBreakdown,
+  buildSpendRows, cacheHit, cacheHitDetail, callHealth, exactMoney, formatCount, formatDuration,
+  formatMoney, formatPercent, type SpendBreakdown,
 } from '../src/automationCost.ts'
 
 const rule = (overrides: Partial<SpendBreakdown['rules'][number]> & { rule_id: string }) => ({
@@ -103,4 +103,46 @@ test('call health separates the failures from the total', () => {
     total: 681, failed: 235, failureRate: 235 / 681,
   })
   assert.deepEqual(callHealth(undefined), { total: 0, failed: 0, failureRate: 0 })
+})
+
+/**
+ * Null and 0% are different answers: null is "nothing was billed in this window", which is
+ * what an unused rule and a pre-cache-accounting daemon both look like, and printing 0% for
+ * either accuses a working cache of being broken.
+ */
+test('a cache hit rate needs billed prompt tokens to exist at all', () => {
+  assert.equal(cacheHit(undefined, undefined), null)
+  assert.equal(cacheHit(0, 0), null)
+  assert.deepEqual(cacheHit(4000, 0), { rate: 0, cached: 0, prompt: 4000 })
+})
+
+test('the rate is measured against prompt tokens, never the token total', () => {
+  const hit = cacheHit(4000, 3000)
+  assert.deepEqual(hit, { rate: 0.75, cached: 3000, prompt: 4000 })
+  assert.equal(formatPercent(hit?.rate), '75%')
+})
+
+test('a provider over-reporting its cache cannot print more than a full hit', () => {
+  assert.equal(cacheHit(100, 250)?.rate, 1)
+  assert.equal(cacheHit(100, -5)?.rate, 0)
+})
+
+test('the tooltip carries the two exact figures the percentage came from', () => {
+  assert.match(cacheHitDetail(cacheHit(4000, 3000)), /3,000 of 4,000 prompt tokens/)
+  assert.equal(cacheHitDetail(null), 'no billed prompt tokens in this window')
+})
+
+test('spend rows carry the cached figures through untouched', () => {
+  const rows = buildSpendRows({
+    days: 7, today: '2026-08-20', start_day: '2026-08-14',
+    totals: { calls: 0, tokens: 0, cost_usd: 0, today_calls: 0, today_tokens: 0, today_cost_usd: 0 },
+    rules: [rule({
+      rule_id: 'builtin:assistant', calls: 2, cost_usd: 0.02,
+      input_tokens: 4000, cached_tokens: 2000,
+      today_input_tokens: 4000, today_cached_tokens: 2000,
+    })],
+  })
+
+  assert.equal(cacheHit(rows[0].input_tokens, rows[0].cached_tokens)?.rate, 0.5)
+  assert.equal(cacheHit(rows[0].today_input_tokens, rows[0].today_cached_tokens)?.rate, 0.5)
 })

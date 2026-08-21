@@ -11,7 +11,8 @@ import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import {
   autoplayEnabled, bargeInPlayback, beginRequestedStream, cancelRequestedStream, getPlayback,
-  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPlaybackDucked, unlockPlayback,
+  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPinnedPlaybackSession,
+  setPlaybackDucked, unlockPlayback,
 } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
@@ -28,7 +29,14 @@ import { insertIntoTerminal } from './terminalActions'
 import { voiceCommsMessage } from './voiceComms'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
 import { assistantFollowUpActive, latestOpenAction, spokenConfirmation } from './assistant'
+import { chatPatienceMs, deferralExtensionMs, endpointPatienceMs } from './utteranceCompleteness'
+import { DeferralPen } from './utteranceDeferral'
+import type { DeferredUtterance } from './utteranceDeferral'
 import { playEarcon } from './earcons'
+import {
+  canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, voiceBodyVariant,
+} from './voiceDock'
+import type { VoiceDockState, VoicePanelMode } from './voiceDock'
 import type { ComponentChildren } from 'preact'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
@@ -48,6 +56,17 @@ type Phase='off'|'starting'|'warming'|'listening'|'hearing'|'heard'|'transcribin
 // own trigger word rather than a hardcoded "Mux".
 const primaryWake=(words?:string[])=>(words&&words.find(word=>word.trim())||DEFAULT_WAKE_WORDS[0])
 
+/**
+ * How a deferred fragment left the holding pen; reported for every deferral.
+ *
+ * The pair that matters is `merged` versus `submitted`: the first means the
+ * trigger caught a real trail-off, the second means the operator was finished
+ * after all and the word cost them one extension, so the ratio of the two IS the
+ * heuristic's false-positive rate. `held` and `discarded` are neither and are
+ * counted apart so they cannot be mistaken for either verdict.
+ */
+type DeferralOutcome='merged'|'submitted'|'discarded'|'held'
+
 export type Conversation={
   /** Current commit destination. Capture stays live when this changes. */
   target:ConversationTarget|null
@@ -63,6 +82,12 @@ export type Conversation={
   hold:boolean
   /** Speech accumulated while holding; released as one assistant turn. */
   holdBuffer:string
+  /**
+   * The dangling token that is currently holding a chat turn back, or ''.
+   * At most one utterance is ever deferred, so this is a single value rather
+   * than a queue, and it clears the moment the turn resolves.
+   */
+  deferredTrigger:string
   comms:boolean
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
@@ -120,6 +145,7 @@ export function useConversation(
   const [standby,setStandby]=useState(false)
   const [hold,setHoldState]=useState(false)
   const [holdBuffer,setHoldBufferState]=useState('')
+  const [deferredTrigger,setDeferredTrigger]=useState('')
   const [commsTargetId,setCommsTargetId]=useState<string|null>(null)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
@@ -140,6 +166,21 @@ export function useConversation(
   const standbyRef=useRef(false)
   const holdRef=useRef(false)
   const holdBufferRef=useRef('')
+  /**
+   * The holding pen for one unfinished utterance (`utteranceDeferral.ts`), and
+   * the release timer that empties it.
+   *
+   * The pen owns the decisions and this component owns the effects: arming the
+   * timer, reporting the outcome, and dispatching the turn. A `useRef` and not
+   * state, because the capture callbacks that read it outlive the render that
+   * built them.
+   */
+  const penRef=useRef(new DeferralPen())
+  const deferralTimerRef=useRef<ReturnType<typeof setTimeout>|null>(null)
+  /** Speech is arriving right now, per the gate. Read by the release timer. */
+  const speakingRef=useRef(false)
+  /** How many utterances are mid-decode. A continuation in flight is not silence. */
+  const decodingRef=useRef(0)
   const draftRef=useRef<Draft>(EMPTY_DRAFT)
   const queueRef=useRef<Promise<void>>(Promise.resolve())
   const commsTargetRef=useRef<string|null>(null);commsTargetRef.current=commsTargetId
@@ -182,10 +223,46 @@ export function useConversation(
   })
   const respond=(text:string)=>{setDetail(text);recordHistory('mux',text)}
 
+  /**
+   * Report a resolved deferral to the daemon, with the token that triggered it.
+   *
+   * Sent on resolution rather than at the deferral, because the outcome is what
+   * makes the heuristic measurable: `merged` means the trigger caught a real
+   * trail-off, `submitted` means the operator was finished after all and the
+   * word cost them one extension. Fire-and-forget - a diagnostic that can fail
+   * an utterance is worse than no diagnostic.
+   */
+  const reportDeferral=(deferred:DeferredUtterance,outcome:DeferralOutcome)=>{
+    void api('POST','/api/voice/deferral-diagnostic',{
+      outcome,trigger:deferred.trigger,kind:deferred.kind,words:deferred.words,
+      heldMs:Math.round(performance.now()-deferred.at),
+    },{timeoutMs:4000}).catch(()=>{})
+  }
+  /** Cancel a pending release and clear the chip. Safe to call with nothing held. */
+  const clearDeferralTimer=()=>{
+    if(deferralTimerRef.current!==null)clearTimeout(deferralTimerRef.current)
+    deferralTimerRef.current=null
+    setDeferredTrigger('')
+  }
+  /** Empty the pen for a non-dispatch reason, reporting the deferral it ends. */
+  const resolveDeferral=(outcome:DeferralOutcome):DeferredUtterance|null=>{
+    const deferred=penRef.current.take()
+    clearDeferralTimer()
+    if(deferred)reportDeferral(deferred,outcome)
+    return deferred
+  }
+
   const stop=(record=true)=>{
     bargeInPlayback()
     if(record&&enabledRef.current)recordHistory('mux','Talk stopped.')
     enabledRef.current=false;enterStandby(false);enterHold(false);setHoldBuffer('')
+    // A held fragment dies with the microphone. Submitting it after the operator
+    // stopped Talk would answer a question they withdrew. `speakingRef` goes with
+    // it: a microphone released mid-utterance never raises the endpoint that
+    // would clear it, and a stale "still speaking" would make the next
+    // deferral's release re-arm against nothing.
+    resolveDeferral('discarded')
+    speakingRef.current=false
     speculationRef.current?.controller.abort();speculationRef.current=null
     startingRef.current?.stop();startingRef.current=null
     captureRef.current?.stop();captureRef.current=null
@@ -292,6 +369,7 @@ export function useConversation(
       }
       if(commsPreviousAutoplay.current!==null)setAutoplayEnabled(commsPreviousAutoplay.current)
       commsPreviousAutoplay.current=null
+      setPinnedPlaybackSession(activeId,false)
       setPinnedTarget(commsPreviousPin.current);commsPreviousPin.current=null
       if(restoreFailure){reportFailure(restoreFailure);return}
       setPhase('listening');respond('Voice comms off. Normal agent replies restored.');return
@@ -306,6 +384,11 @@ export function useConversation(
     }catch(cause){reportFailure(cause);return}
     commsPreviousAutoplay.current=autoplayEnabled()
     setAutoplayEnabled(true)
+    // Playback is otherwise focus-driven, and Voice Comms is the one mode where that
+    // is wrong: the operator is talking to *this* agent hands-free, so its replies
+    // have to speak even while their eyes are on another pane. The pin is released
+    // when comms is turned off, above.
+    setPinnedPlaybackSession(target.id,true)
     commsPreviousPin.current=pinnedTargetRef.current
     commsTargetRef.current=target.id;setCommsTargetId(target.id);setPinnedTarget(target)
     setPhase('listening');respond(`Voice comms on for ${target.label}. Replies will be short and read aloud.`)
@@ -349,7 +432,66 @@ export function useConversation(
    * utterance the way a wake-worded command is.
    */
   const awaitingVerdict=()=>chatAddressee()&&latestOpenAction()!==null
+  /** The operator's own chat patience, clamped; one number the deferral derives from. */
+  const configuredPatience=()=>chatPatienceMs(statusRef.current?.chat_patience_ms)
+
+  // ---- Unfinished-utterance deferral: a trailed-off clause is not a question. ----
+  // Deterministic and pre-model by design. The heuristic runs BEFORE a chat turn
+  // is dispatched, an utterance ending mid-clause earns exactly ONE patience
+  // extension instead of submitting, and the model is never asked to decide
+  // whether the operator was finished - a model told to sometimes return nothing
+  // returns nothing when it should have answered. The daemon's queue-merge
+  // remains the safety net for fragments this rule set does not recognize.
+
+  /** Send one body to the assistant and report it, shared by both dispatch paths. */
+  const askAssistant=async(body:string):Promise<boolean>=>{
+    const handler=onAssistantRef.current
+    if(!handler)return false
+    setPhase('sending');setDetail('Asking the assistant…')
+    const outcome=await handler(body)
+    if(outcome===false){setPhase('listening');return false}
+    setPhase('listening');respond(outcome||'Asked the assistant.')
+    return true
+  }
+  /**
+   * The release timer fired. The pen decides; this only carries out the verdict.
+   *
+   * `busy` is "the operator is still mid-thought": speech arriving, or an
+   * utterance mid-decode. The pen re-arms rather than submitting then, because
+   * answering half a sentence whose other half is already in flight is the
+   * precise failure being fixed - bounded by its own hold ceiling, so a detector
+   * wedged in "speaking" cannot hold a turn forever.
+   */
+  const releaseDeferral=(deferred:DeferredUtterance,holdMs:number)=>{
+    const busy=speakingRef.current||decodingRef.current>0
+    const verdict=penRef.current.release(deferred,busy)
+    if(verdict.kind==='gone')return
+    if(verdict.kind==='wait'){
+      deferralTimerRef.current=setTimeout(()=>releaseDeferral(deferred,holdMs),holdMs)
+      return
+    }
+    clearDeferralTimer()
+    reportDeferral(verdict.deferred,'submitted')
+    void (async()=>{
+      if(!enabledRef.current)return
+      try{await askAssistant(verdict.deferred.text)}
+      catch(cause){reportFailure(cause)}
+    })()
+  }
+  /** Arm the single extension the pen just granted, and say why on screen. */
+  const armDeferral=(deferred:DeferredUtterance)=>{
+    const holdMs=deferralExtensionMs(configuredPatience())
+    deferralTimerRef.current=setTimeout(()=>releaseDeferral(deferred,holdMs),holdMs)
+    setDeferredTrigger(deferred.trigger)
+    setPhase('listening')
+    setDetail(`That sounded unfinished after “${deferred.trigger}” - keep going, or pause and it goes as-is.`)
+  }
   const beginHold=()=>{
+    // A fragment held by the heuristic is thinking-out-loud text, which is
+    // exactly what the brainstorm buffer is for: fold it in rather than
+    // answering it behind the operator's back.
+    const pending=resolveDeferral('held')
+    if(pending)setHoldBuffer([holdBufferRef.current,pending.text].map(part=>part.trim()).filter(Boolean).join(' '))
     enterHold(true);setPhase('listening')
     respond('Holding — thinking out loud is buffered, not answered. Say “go ahead” when you want the assistant to respond.')
   }
@@ -390,6 +532,10 @@ export function useConversation(
       setPhase('standby');setDetail(`Standby — say “${wakeWord}, resume” to continue.`);return
     }
     if(parsed.command==='standby'){
+      // Standby and cancel are both "stop paying attention to what I just said",
+      // so a fragment held by the heuristic goes with them rather than surfacing
+      // as a turn seconds after the operator asked for quiet.
+      resolveDeferral('discarded')
       enterStandby(true);setPhase('standby')
       respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
     }
@@ -438,12 +584,16 @@ export function useConversation(
         // A bare "hold on" enters the brainstorm hold without the wake word;
         // exact-match only, so a sentence merely containing it is never eaten.
         if(matchesBarePhrase(rawText,HOLD_ENTER_PHRASES)){beginHold();return}
-        setPhase('sending');setDetail('Asking the assistant…')
+        // The pen decides whether this is a turn or half of one. A held fragment
+        // merges and dispatches whatever the merged text looks like - the
+        // heuristic deliberately does not run again, which is what makes "one
+        // deferral per utterance" bounded rather than a rule to remember.
+        const routed=penRef.current.offer(rawText)
+        if(routed.kind==='defer'){armDeferral(routed.deferred);return}
+        if(routed.merged){clearDeferralTimer();reportDeferral(routed.merged,'merged')}
         try{
-          const outcome=await onAssistantRef.current(rawText.trim())
-          if(outcome!==false){setPhase('listening');respond(outcome||'Asked the assistant.');return}
+          if(await askAssistant(routed.text))return
         }catch(cause){reportFailure(cause);return}
-        setPhase('listening')
       }
     }
     if(parsed.command===null&&onIntentRef.current){
@@ -456,7 +606,9 @@ export function useConversation(
       }
     }
     if(parsed.command==='cancel'){
-      setDraft(clearDraft());setPhase('listening');respond('Voice message cleared. Still listening.');return
+      const dropped=resolveDeferral('discarded')
+      setDraft(clearDraft());setPhase('listening')
+      respond(dropped?'Voice message cleared, and the unfinished sentence was dropped. Still listening.':'Voice message cleared. Still listening.');return
     }
     if(parsed.command==='undo'){
       const next=undoUtterance(draftRef.current);setDraft(next);setPhase('listening')
@@ -549,6 +701,14 @@ export function useConversation(
 
   const transcribe=async(audio:Blob,marks:CaptureMarks)=>{
     if(!enabledRef.current)return
+    // Counted around the whole decode-and-act path so a held fragment's release
+    // timer can tell "the room went quiet" from "the continuation is in flight".
+    decodingRef.current++
+    try{await transcribeInner(audio,marks)}
+    finally{decodingRef.current=Math.max(0,decodingRef.current-1)}
+  }
+
+  const transcribeInner=async(audio:Blob,marks:CaptureMarks)=>{
     if(!standbyRef.current){setPhase('transcribing');setDetail('Transcribing locally on muxd…')}
     // Whisper models are cached for the life of the *daemon*, not the tab, so the
     // first utterance after a restart or a redeploy waits seconds on a model load.
@@ -675,12 +835,12 @@ export function useConversation(
         setDetail(current=>current===STALL_DETAIL||current===STALL_ENDED_DETAIL?'Microphone recovered. Listening…':current)
         recordHistory('mux','Microphone recovered.')
       },
-      onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
+      onSpeechStart:()=>{speakingRef.current=true;if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
       onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail('Playback stopped. Listening…')}},
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the
       // decode does, or the pause reads as a failure.
-      onSpeechEnd:()=>{if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail('Heard you.')},
+      onSpeechEnd:()=>{speakingRef.current=false;if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail('Heard you.')},
       onSpeculative:(audio,marks)=>{void speculate(audio,marks)},
       onSpeculativeAbort:utteranceId=>{
         const pending=speculationRef.current
@@ -711,8 +871,11 @@ export function useConversation(
         // ordinary tail — holding a one-word reply for another 1.2 s is the
         // difference between the confirmation feeling instant and feeling stuck.
         if(awaitingVerdict())return 0
-        const configured=statusRef.current?.chat_patience_ms
-        return Math.max(0,Math.min(5000,typeof configured==='number'?configured:1200))
+        // The adaptive half of the deferral: while an unfinished utterance is
+        // held, the continuation gets a roomier tail so the second breath is not
+        // itself chopped in half. It ends when the deferral resolves, and a
+        // deferral resolves exactly once, so the extension cannot compound.
+        return endpointPatienceMs(configuredPatience(),penRef.current.pending!==null)
       },
     })
     startingRef.current=capture
@@ -737,7 +900,7 @@ export function useConversation(
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,hold,holdBuffer,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
+    detail,draft:draft.text,active,standby,hold,holdBuffer,deferredTrigger,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()
@@ -813,84 +976,95 @@ export function ConversationToggle({
   ><MicIcon slashed={!active}/></button>
 }
 
-export type VoicePanelMode='dictation'|'chat'
-
 /**
- * The global voice surface: the dictation draft card, and (toggleable inside
- * the same floating panel) the assistant conversation view. It renders while
- * capture runs, and also with the microphone off when the chat was opened
- * explicitly — the assistant is voice-first, not voice-only.
+ * The voice dock's collapsed state, and the one control that is always on screen.
+ *
+ * It sits beside the microphone in the top bar and is deliberately NOT the microphone:
+ * that button starts and stops capture, this one opens and closes the panel, and neither
+ * does the other's job. Collapsing the dock to this chip leaves everything running -
+ * turns arrive, replies are spoken, confirmation cards open - which is why the chip
+ * carries what is waiting rather than only an arrow.
  */
-export function ConversationSurface({
-  conversation,
-  commands,
-  configuredCommands,
-  onOpenSettings,
-  placement='fallback',
-  mode='dictation',
-  onMode,
-  assistantView,
-  assistantOpen=false,
-  onCloseAssistant,
+export function VoiceDockChip({
+  state,talkActive,pendingActions,unseen,onToggle,
 }:{
-  conversation:Conversation
-  commands:Command[]
-  configuredCommands?:{action:string;phrases:string[]}[]
-  onOpenSettings:()=>void
-  placement?:'pane'|'fallback'
-  mode?:VoicePanelMode
-  onMode?:(mode:VoicePanelMode)=>void
-  assistantView?:ComponentChildren
-  assistantOpen?:boolean
-  onCloseAssistant?:()=>void
+  state:VoiceDockState
+  /** Capture is live, so there is dictation or an addressee behind the chip. */
+  talkActive:boolean
+  /** Open confirmation cards. They expire, so they outrank an unread reply. */
+  pendingActions:number
+  /** A reply landed while the dock was collapsed. */
+  unseen:boolean
+  onToggle:()=>void
 }){
-  const talkActive=conversation.phase!=='off'
-  if(!talkActive&&!assistantOpen)return null
-  const effectiveMode:VoicePanelMode=talkActive?mode:'chat'
-  const panel=<DictationPanel
-    conversation={conversation}
-    commands={commands}
-    configuredCommands={configuredCommands}
-    onOpenSettings={onOpenSettings}
-    mode={effectiveMode}
-    onMode={onMode}
-    assistantView={assistantView}
-    onCloseAssistant={onCloseAssistant}
-  />
-  return placement==='pane'?panel:<div class="conversation-layer active">{panel}</div>
+  const collapsed=state==='chip'
+  const detail=pendingActions
+    ?`${pendingActions} confirmation${pendingActions===1?'':'s'} waiting`
+    :unseen
+      ?'a reply you have not read'
+      :talkActive?'the microphone is live':'nothing waiting'
+  return <button
+    class={`voice-dock-chip ${collapsed?'collapsed':'open'}${talkActive?' talking':''}${pendingActions?' pending':''}`}
+    aria-label={collapsed?'Open the voice panel':'Collapse the voice panel to the top bar'}
+    aria-expanded={!collapsed}
+    title={`${collapsed?'Open':'Collapse'} the voice panel - ${detail}. The microphone beside it is a separate control and keeps running either way.`}
+    onClick={onToggle}
+  >
+    <ChatIcon/>
+    {pendingActions>0
+      ?<i class="voice-dock-badge">{pendingActions>9?'9+':pendingActions}</i>
+      :unseen?<i class="voice-dock-dot" aria-hidden="true"/>:null}
+  </button>
+}
+
+function ChatIcon(){
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10.5H10l-5.5 3.5z"/></svg>
 }
 
 /**
- * The app-level dictation state can render in a pane overlay without belonging to that pane.
- * Moving the view follows focus; capture, history, target pinning, and the draft stay alive.
+ * The one voice surface: a floating row under the top bar carrying the dictation draft
+ * and the assistant conversation, drawn at whichever size the dock is set to.
+ *
+ * Three things are kept apart here on purpose, having previously been one:
+ *
+ * - **Capture** is `conversation.phase`, owned by the microphone in the top bar. The dock
+ *   never starts or stops it. Before the split, this surface existed only while capture
+ *   ran, so the only way to clear it off the workspace was to stop the microphone.
+ * - **The addressee** is `mode`, the talk/chat tabs. It decides which body is drawn and
+ *   who plain speech reaches; it says nothing about how much of the dock is on screen.
+ * - **Size** is `dock` (`voiceDock.ts`): full, a one-row peek, or collapsed to the chip.
+ *
+ * It floats rather than taking a workspace track for the same reason the read-aloud strip
+ * does: a pane whose row count changes with a voice toggle resizes the PTY under a live
+ * agent, and the reflowed scrollback does not come back when the panel closes.
+ *
+ * The section always renders, at every dock state, and both bodies are always in the tree.
+ * `assistantView` is mounted once by App and must never be unmounted by a size or mode
+ * change - the announced-card set that stops a scheduled card being spoken twice lives
+ * inside it (`AssistantPanel.tsx`).
  */
-export function DictationPanel({
-  conversation,commands,configuredCommands,onOpenSettings,
-  mode='dictation',onMode,assistantView,onCloseAssistant,
+export function VoiceDock({
+  conversation,commands,configuredCommands,onOpenSettings,mode,onMode,assistantView,dock,onDock,
 }:{
   conversation:Conversation
   commands:Command[]
   configuredCommands?:{action:string;phrases:string[]}[]
   onOpenSettings:()=>void
-  mode?:VoicePanelMode
-  onMode?:(mode:VoicePanelMode)=>void
-  assistantView?:ComponentChildren
-  onCloseAssistant?:()=>void
+  mode:VoicePanelMode
+  onMode:(mode:VoicePanelMode)=>void
+  /** The assistant conversation view, mounted once by App. */
+  assistantView:ComponentChildren
+  dock:VoiceDockState
+  onDock:(step:'expand'|'collapse')=>void
 }){
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
   const historyRef=useRef<HTMLDivElement|null>(null)
   const [landed,setLanded]=useState(false)
   const [historyOpen,setHistoryOpen]=useState(()=>loadVoiceConversationHistoryOpen())
-  // Device-local, like the Talk-history disclosure: a folded chat should stay
-  // folded across remounts of the floating panel.
-  const [chatCollapsed,setChatCollapsed]=useState(()=>{
-    try{return localStorage.getItem('mux.voice.chatCollapsed')==='1'}catch{return false}
-  })
-  const toggleChatCollapsed=()=>setChatCollapsed(value=>{
-    const next=!value
-    try{localStorage.setItem('mux.voice.chatCollapsed',next?'1':'0')}catch{/* private mode */}
-    return next
-  })
+  const talkActive=conversation.phase!=='off'
+  const effectiveMode=effectiveVoicePanelMode(mode,talkActive)
+  const chat=effectiveMode==='chat'
+  const talkVariant=voiceBodyVariant(dock,effectiveMode,'dictation')
   // Whisper returns whole utterances, never partial words, so there is no stream to
   // animate. A brief flash is the honest signal that something arrived.
   useEffect(()=>{
@@ -903,6 +1077,10 @@ export function DictationPanel({
   // while an utterance lands must not throw the caret to the end, so the value is
   // written imperatively and the selection restored around it (utterances always
   // append, so an offset from before the append stays meaningful).
+  //
+  // `talkVariant` is a dependency because the textarea only exists in the full body:
+  // reopening the dock mounts a fresh, unsized one, and without a re-run it would sit
+  // at one line under a five-line draft.
   useLayoutEffect(()=>{
     const element=draftRef.current
     if(!element)return
@@ -921,120 +1099,139 @@ export function DictationPanel({
       // away from a correction they are making in the middle of a long draft.
       }else element.scrollTop=element.scrollHeight
     }
-    // Grow to fit, bounded by the min/max in CSS. Affordable only because the panel floats
+    // Grow to fit, bounded by the min/max in CSS. Affordable only because the dock floats
     // — measuring requires collapsing to `auto` first, and `scrollHeight` excludes the
     // border that `box-sizing:border-box` makes the inline height responsible for.
     element.style.height='auto'
     element.style.height=`${element.scrollHeight+element.offsetHeight-element.clientHeight}px`
-  },[conversation.draft])
+  },[conversation.draft,talkVariant])
   useLayoutEffect(()=>{
     if(historyOpen&&historyRef.current)historyRef.current.scrollTop=historyRef.current.scrollHeight
-  },[conversation.history.length,historyOpen])
+  },[conversation.history.length,historyOpen,talkVariant])
   const toggleHistory=()=>setHistoryOpen(value=>{
     const next=!value
     saveVoiceConversationHistoryOpen(next)
     return next
   })
   const send=()=>conversation.send()
-  const talkActive=conversation.phase!=='off'
-  const chat=mode==='chat'
-  const modeToggle=(assistantView!==undefined&&onMode)?<div class="voice-mode-toggle" role="tablist" aria-label="Voice panel mode">
-    <button role="tab" aria-selected={!chat} class={chat?'':'active'} disabled={!talkActive} title={talkActive?'Dictation draft and Talk history':'Start Talk to dictate'} onClick={()=>onMode('dictation')}>talk</button>
-    <button role="tab" aria-selected={chat} class={chat?'active':''} title="Converse with the Mux assistant" onClick={()=>onMode('chat')}>chat</button>
-  </div>:null
-  if(chat){
-    // Chat mode: the same floating panel holding the assistant conversation,
-    // bounded to roughly half the viewport and collapsible to its header —
-    // a dialog you consult, not a takeover. Capture (when running) keeps
-    // listening underneath it, and the collapsed body stays *mounted* (hidden
-    // by CSS) so streaming events, card speech, and earcons keep working
-    // while the panel is folded away.
-    return <section class={`dictation-panel chat-mode${chatCollapsed?' chat-collapsed':''} ${conversation.phase}`} aria-label="Mux assistant conversation">
-      <header>
-        <button class="conversation-history-toggle chat-collapse" aria-expanded={!chatCollapsed} title={chatCollapsed?'Expand the assistant conversation':'Collapse to the header — the conversation keeps running'} onClick={toggleChatCollapsed}>
-          <span class="conversation-history-caret" aria-hidden="true">{chatCollapsed?'▸':'▾'}</span>
-        </button>
-        {modeToggle}
-        {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={`${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
-        {talkActive&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
-        {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
-        <div class="dictation-actions">
-          {talkActive&&conversation.hold&&<button class="dictation-stop" title="Send the buffered brainstorm to the assistant now" onClick={()=>conversation.releaseHold()}>go ahead</button>}
-          {talkActive&&conversation.hold&&<button class="dictation-stop" title="Discard the buffered brainstorm and leave hold" onClick={()=>conversation.discardHold()}>discard</button>}
-          {talkActive&&<button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop mic</button>}
-          <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
-          <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings" onClick={onOpenSettings}>⚙</button>
-          {!talkActive&&onCloseAssistant&&<button class="dictation-stop" title="Close the assistant panel" onClick={onCloseAssistant}>close</button>}
-        </div>
-      </header>
-      <div class="assistant-body" hidden={chatCollapsed}>{assistantView}</div>
-    </section>
-  }
-  return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">
+  const draftPreview=conversation.draft.trim().replace(/\s+/g,' ')
+  const phaseHint=chat
+    ? `${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`
+    : `${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null
+      ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
+      : conversation.detector==='silero'
+        ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
+        : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}`
+  return <section
+    class={`voice-dock ${dock} ${chat?'chat-mode':'talk-mode'} ${conversation.phase}${landed?' landed':''}`}
+    aria-label="Voice panel"
+    aria-hidden={dock==='chip'?'true':undefined}
+  >
     <header>
-      {modeToggle}
-      <span
-        class={`dictation-phase ${conversation.phase}`}
-        title={`${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null
-          ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
-          : conversation.detector==='silero'
-            ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
-            : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}`}
-      >talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>
+      {/* Two steps rather than one cycling button, so neither direction is a guess and
+          each can be disabled at its end. The chip in the top bar is the third stop and
+          the way back from it. */}
+      <div class="voice-dock-size" role="group" aria-label="Voice panel size">
+        <button
+          class="voice-dock-step"
+          aria-label="Collapse the voice panel one step"
+          title={dock==='peek'?'Collapse to the top bar — the conversation and the microphone keep running':'Collapse to a single row'}
+          disabled={!canCollapseVoiceDock(dock)}
+          onClick={()=>onDock('collapse')}
+        >▴</button>
+        <button
+          class="voice-dock-step"
+          aria-label="Expand the voice panel one step"
+          title={dock==='peek'?'Expand to the full conversation':'Expand'}
+          disabled={!canExpandVoiceDock(dock)}
+          onClick={()=>onDock('expand')}
+        >▾</button>
+      </div>
+      <div class="voice-mode-toggle" role="tablist" aria-label="Voice panel mode">
+        <button role="tab" aria-selected={!chat} class={chat?'':'active'} disabled={!talkActive} title={talkActive?'Dictation draft and Talk history':'Start Talk to dictate'} onClick={()=>onMode('dictation')}>talk</button>
+        <button role="tab" aria-selected={chat} class={chat?'active':''} title="Converse with the Mux assistant" onClick={()=>onMode('chat')}>chat</button>
+      </div>
+      {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={phaseHint}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
+      {talkActive&&chat&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
+      {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
+      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
       <span class="sr-only" role="status" aria-live="polite">{conversation.detail}</span>
-      {conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
+      {!chat&&conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">
-        <button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>
-        <button title="Append the draft to the target without submitting" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>append</button>
-        <button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>
-        <button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>
-        <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
-        <button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>
-        <button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop</button>
+        {!chat&&<button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>}
+        {!chat&&<button title="Append the draft to the target without submitting" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>append</button>}
+        {!chat&&<button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>}
+        {!chat&&<button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>}
+        {!chat&&talkActive&&<button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>}
+        {!chat&&<button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>}
+        {chat&&talkActive&&conversation.hold&&<button class="dictation-stop" title="Send the buffered brainstorm to the assistant now" onClick={()=>conversation.releaseHold()}>go ahead</button>}
+        {chat&&talkActive&&conversation.hold&&<button class="dictation-stop" title="Discard the buffered brainstorm and leave hold" onClick={()=>conversation.discardHold()}>discard</button>}
+        {/* Stops capture and nothing else. It is the microphone's control living beside
+            the microphone's readout; the dock's own size controls are at the other end
+            of the header, and neither button reaches the other's state. */}
+        {talkActive&&<button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop mic</button>}
         <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
     </header>
-    <div class={`dictation-target${conversation.targetAvailable?'':' unavailable'}`}>
-      <span>to:</span>
-      <strong title={conversation.target?.label||'No target'}>{conversation.target?.label||'No target focused'}</strong>
-      <button
-        class={conversation.pinned?'active':''}
-        aria-pressed={conversation.pinned}
-        disabled={!conversation.target}
-        title={conversation.pinned?'Follow workspace focus again':'Stay on this target while focus moves'}
-        onClick={()=>conversation.togglePin()}
-      >{conversation.pinned?'unpin':'pin'}</button>
+    {/* Both bodies are always in the tree; `hidden` decides which one is drawn. */}
+    {/* The talk body may be dropped when it is not the addressee — unlike the assistant
+        view below it, everything it renders is a view of `conversation`, which lives in
+        the app-level controller and outlives it. Keeping a hidden textarea mounted would
+        also leave the composer in the accessibility tree at the peek. */}
+    <div class="voice-dock-body voice-dock-talk" hidden={talkVariant==='hidden'}>
+      {talkVariant==='hidden'
+        ?null
+        :talkVariant==='peek'
+        ?<p class="voice-dock-line" title={draftPreview||'The dictation draft is empty.'}>
+          <b>to</b>
+          <em class={conversation.targetAvailable?'':'unavailable'}>{conversation.target?.label||'no target'}</em>
+          <span>{draftPreview||'draft empty'}</span>
+        </p>
+        :<>
+          <div class={`dictation-target${conversation.targetAvailable?'':' unavailable'}`}>
+            <span>to:</span>
+            <strong title={conversation.target?.label||'No target'}>{conversation.target?.label||'No target focused'}</strong>
+            <button
+              class={conversation.pinned?'active':''}
+              aria-pressed={conversation.pinned}
+              disabled={!conversation.target}
+              title={conversation.pinned?'Follow workspace focus again':'Stay on this target while focus moves'}
+              onClick={()=>conversation.togglePin()}
+            >{conversation.pinned?'unpin':'pin'}</button>
+          </div>
+          <section class={`conversation-history-shell${historyOpen?'':' collapsed'}`} aria-label="Talk transcript history">
+            <header>
+              <button class="conversation-history-toggle" aria-expanded={historyOpen} aria-controls="talk-transcript-history" onClick={toggleHistory}>
+                <span class="conversation-history-caret" aria-hidden="true">{historyOpen?'▾':'▸'}</span>
+                <strong>Talk history</strong>
+                <span>{conversation.history.length} message{conversation.history.length===1?'':'s'}</span>
+              </button>
+              <button class="conversation-history-clear" disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>clear</button>
+            </header>
+            {historyOpen&&<div id="talk-transcript-history" ref={historyRef} class="conversation-history" role="log" aria-live="polite">
+              {conversation.history.length?conversation.history.map(entry=><article key={entry.id} class={entry.role}>
+                <header><strong>{entry.role}</strong><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></header>
+                <p>{entry.text}</p>
+              </article>):<p class="conversation-history-empty">Your transcripts and Mux responses will appear here.</p>}
+            </div>}
+          </section>
+          <textarea
+            ref={draftRef}
+            class="dictation-draft"
+            spellcheck={false}
+            aria-label="Voice dictation draft — editable"
+            placeholder={`Speak, then say “${conversation.wake}, send” — or type here to fix a word.`}
+            onInput={event=>conversation.edit(event.currentTarget.value)}
+            onKeyDown={event=>{
+              if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();send();return}
+              // Escape hands the keyboard back to the terminal rather than bubbling into
+              // the app's global shortcuts, which would close an unrelated overlay.
+              if(event.key==='Escape'){event.preventDefault();event.stopPropagation();draftRef.current?.blur()}
+            }}
+          />
+        </>}
     </div>
-    <section class={`conversation-history-shell${historyOpen?'':' collapsed'}`} aria-label="Talk transcript history">
-      <header>
-        <button class="conversation-history-toggle" aria-expanded={historyOpen} aria-controls="talk-transcript-history" onClick={toggleHistory}>
-          <span class="conversation-history-caret" aria-hidden="true">{historyOpen?'▾':'▸'}</span>
-          <strong>Talk history</strong>
-          <span>{conversation.history.length} message{conversation.history.length===1?'':'s'}</span>
-        </button>
-        <button class="conversation-history-clear" disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>clear</button>
-      </header>
-      {historyOpen&&<div id="talk-transcript-history" ref={historyRef} class="conversation-history" role="log" aria-live="polite">
-        {conversation.history.length?conversation.history.map(entry=><article key={entry.id} class={entry.role}>
-          <header><strong>{entry.role}</strong><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></header>
-          <p>{entry.text}</p>
-        </article>):<p class="conversation-history-empty">Your transcripts and Mux responses will appear here.</p>}
-      </div>}
-    </section>
-    <textarea
-      ref={draftRef}
-      class="dictation-draft"
-      spellcheck={false}
-      aria-label="Voice dictation draft — editable"
-      placeholder={`Speak, then say “${conversation.wake}, send” — or type here to fix a word.`}
-      onInput={event=>conversation.edit(event.currentTarget.value)}
-      onKeyDown={event=>{
-        if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();send();return}
-        // Escape hands the keyboard back to the terminal rather than bubbling into
-        // the app's global shortcuts, which would close an unrelated overlay.
-        if(event.key==='Escape'){event.preventDefault();event.stopPropagation();draftRef.current?.blur()}
-      }}
-    />
+    <div class="voice-dock-body voice-dock-chat" hidden={chat?undefined:true}>{assistantView}</div>
   </section>
 }

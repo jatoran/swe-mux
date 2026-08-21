@@ -247,6 +247,24 @@ An agent-started action goes through the same trust check, substitution, spawn p
 arming as the Run menu, because the two share `_start_project_action`. A second implementation
 would be a second authority path.
 
+## The assistant surface
+
+The Mux assistant (`assistant.md`) is the third caller over the same service, and it inherits the
+same sentence: it can run only what a human approved, and it cannot approve anything.
+It adds two things the other two callers do not need.
+
+- **Resolution from a spoken name.** `preview_action_run` maps a title, an id, or a fragment onto
+  exactly one action and answers a miss or an ambiguity with candidates, because running the
+  wrong approved command is worse than asking which one was meant. It also performs the trust
+  check and validates inputs (through `substituted_action`) *before* a confirmation card opens,
+  so nothing pends that the executor would refuse.
+- **An outcome that arrives later.** A step is a one-shot terminal, so its exit code lands after
+  the confirmation, with no turn open to carry it. A bounded watch reports one terse sentence:
+  clean, or an issue flag on a nonzero exit, an unhealthy output tail, or a step still running at
+  the bound. It never reads output back - the tail is classified and discarded - which is the same
+  boundary `get_session(output_bytes:)` draws from the other side: an agent that asks for the tail
+  gets it, redacted; a spoken report never volunteers it.
+
 ## API and UI
 
 ```text
@@ -276,7 +294,7 @@ On a phone the menu is bounded rather than full-bleed: one readable column wide 
 
 ## Key files
 
-- `src/swe_mux/project_actions.py` (`parse_native_actions`, `read_actions_source`, `write_actions_source`, `STARTER_ACTIONS_TOML`)
+- `src/swe_mux/project_actions.py` (`parse_native_actions`, `read_actions_source`, `write_actions_source`, `preview_action_run`, `STARTER_ACTIONS_TOML`)
 - `src/swe_mux/assets/project-actions-schema.md` (the authoring reference)
 - `.swe-mux/actions.toml` (this repository's own worked example)
 - `src/swe_mux/spawn_contract.py`
@@ -295,5 +313,6 @@ On a phone the menu is bounded rather than full-bleed: one readable column wide 
 - `sessions.md`: task processes are ordinary daemon-owned sessions.
 - `workspace-layout.md`: action terminals join the focused pane as tabs.
 - `mux-mcp.md`: the agent-facing tools and their bounds.
+- `assistant.md`: the conversational caller, its confirmation card, and its outcome notification.
 - `processes-and-previews.md`: task listeners become Project routing registrations; users still
   choose which Preview tabs to open.

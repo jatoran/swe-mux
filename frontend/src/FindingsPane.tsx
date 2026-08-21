@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { SettingLink } from './SettingLink'
+import { GrantButton, GrantGate } from './GrantGate'
+import type { GrantId } from './grants'
+import { INSTALL_CONFIG_CHANGED, installSwitch } from './installSwitches'
 import { PROJECT_AUTOMATIONS_CHANGED, fetchProjectAutomations } from './projectAutomations'
 import type { Project, Session } from './types'
 
@@ -44,6 +47,11 @@ const SOURCE_LABELS: Record<Source, string> = {
 const PROVENANCE_TAG = 'provenance'
 /** The opt-ins that write what this pane reads (`automation_registry.py`). */
 const DETECTOR_AUTOMATIONS = ['loop_detection', 'declared_vs_verified', 'doc_debt', 'provenance_graph']
+/** The same four as grants, in the order they are offered. `test/grants.test.ts` holds
+ *  the two lists to each other, so adding a detector cannot leave the gate behind. */
+const DETECTOR_GRANTS: GrantId[] = [
+  'project.loopDetection', 'project.declaredVsVerified', 'project.docDebt', 'project.provenanceGraph',
+]
 const stamp = (value: number) =>
   new Date(value * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const tagLabel = (tag: string) => tag.replace(/-/g, ' ')
@@ -58,6 +66,7 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
   const [source, setSource] = useState<Source>('all')
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [detectors, setDetectors] = useState<string[] | null>(null)
+  const [engine, setEngine] = useState<boolean | null>(null)
   const [data, setData] = useState<FindingsResponse | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -99,6 +108,17 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
     window.addEventListener(PROJECT_AUTOMATIONS_CHANGED, read)
     return () => { stale = true; window.removeEventListener(PROJECT_AUTOMATIONS_CHANGED, read) }
   }, [projectId])
+  // The install half of the same question, for the observer notes the detectors do not
+  // write. Same three-valued shape and same invalidation as the Project read above.
+  useEffect(() => {
+    let stale = false
+    const read = () => {
+      void installSwitch('automation_enabled').then(value => { if (!stale) setEngine(value) })
+    }
+    read()
+    window.addEventListener(INSTALL_CONFIG_CHANGED, read)
+    return () => { stale = true; window.removeEventListener(INSTALL_CONFIG_CHANGED, read) }
+  }, [])
   // Findings land on a turn boundary, the same event the timeline listens for.
   useEffect(() => {
     const refresh = () => void load()
@@ -141,6 +161,9 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
   // The four deterministic detectors this pane reads. A Project with none of them permitted
   // produces nothing here, ever — which is a different statement from "nothing found yet".
   const detectorsOff = detectors !== null && !DETECTOR_AUTOMATIONS.some(id => detectors.includes(id))
+  // Three-valued on purpose: `null` is "not read", and rendering that as "off" would be
+  // the same lie the gate exists to remove, one layer down.
+  const engineOff = engine === false
 
   return <section class="findings-pane">
     <header class="findings-header">
@@ -152,10 +175,25 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
       </div>
     </header>
     <p class="findings-exclusion">{exclusion}</p>
-    {detectorsOff && <div class="setting-gate">
-      <p><strong>This Project has not permitted any finding detectors.</strong> Loop detection, declared-vs-verified, the doc-debt ledger, and the provenance graph are per-Project opt-ins, so nothing will appear here until one is on.</p>
-      <SettingLink target="project.automations" projectId={projectId}>Choose detectors for this Project</SettingLink>
-    </div>}
+    {/* All four at once, named on the button. The old link went to `project.automations`,
+        which is an *area* rather than a switch: it revealed a heading above twenty
+        checkboxes and left the reader to pick four of them out by name. All four are
+        model-free and ship together, so offering them together is also the honest
+        granularity — a Project running one of them and not the others is a preference,
+        not a starting point. */}
+    {detectorsOff && <GrantGate ids={DETECTOR_GRANTS} projectId={projectId}
+      heading="This Project has not permitted any finding detectors."
+      confirmLabel="Turn on all four detectors"
+      onGranted={load}
+      extra={<p class="findings-gate-alt">
+        Prefer some and not others? <SettingLink variant="link" target="project.automations"
+          projectId={projectId}>Choose them individually</SettingLink>.
+      </p>}
+    >
+      <p>Loop and stall detection, declared-vs-verified, the doc-debt ledger, and the
+      provenance graph read this Project’s transcripts and write what they conclude here.
+      Nothing appears on this pane until at least one is on.</p>
+    </GrantGate>}
     {/* Its own row rather than another chip: a source is not a tag, and mixing the two in
         one strip made "doc debt" and "deterministic" look like alternatives. Drawn only
         when both kinds are actually present, so a Project running deterministic detectors
@@ -180,6 +218,16 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
     </div>}
     {selectedTag === null && provenanceCount > 0 && <p class="findings-hint">
       Provenance edges ({provenanceCount}) are hidden here by volume. Open the Provenance chip to read them.
+    </p>}
+    {/* The second half of "off vs quiet" on this pane. The four detectors above are
+        per-Project and model-free; the observer notes beside them come from the
+        automation engine, which is an install switch that is off by default. With the
+        detectors permitted and the engine off, half of this table can never appear and
+        nothing said so — the Source filter simply never grew its second button. */}
+    {engineOff && !detectorsOff && <p class="findings-hint findings-engine-off">
+      Observer notes are switched off for this install, so everything here is from the
+      model-free detectors.{' '}
+      <GrantButton id="automation.engine">Turn on the automation engine</GrantButton>
     </p>}
     {error && <p class="usage-error">{error}</p>}
     <div class="findings-list">

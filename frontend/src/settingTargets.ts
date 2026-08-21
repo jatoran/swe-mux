@@ -100,6 +100,13 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Automation', setting: 'automation_daily_budget_usd',
     label: 'Automation budgets', where: 'Settings → Automation',
   },
+  // The land queue's install-wide emergency stop. Its own switch rather than a facet of
+  // the automation engine: the sweep that moves a trunk checks this and nothing else, so
+  // a queue with it off accepts requests and then silently never advances one.
+  'automation.landQueue': {
+    surface: 'settings', section: 'Automation', setting: 'land_queue_enabled',
+    label: 'Let the land queue move trunks', where: 'Settings → Automation',
+  },
   // Per-Project opt-ins. Every one of these is off until a human turns it on for that
   // Project, so a surface reading from one is inert rather than empty until then.
   'project.automations': {
@@ -129,6 +136,53 @@ export const SETTING_TARGETS = {
   'project.spawnReview': {
     surface: 'project', setting: 'automation:observation_inbox',
     label: 'Spawn request review', where: 'Project settings',
+  },
+  // The four model-free detectors the Findings pane reads. Named individually rather
+  // than behind `project.automations`, because that target is an *area*: it reveals the
+  // heading above twenty checkboxes and leaves the reader to find four of them by name.
+  'project.provenanceGraph': {
+    surface: 'project', setting: 'automation:provenance_graph',
+    label: 'Provenance graph', where: 'Project settings',
+  },
+  'project.loopDetection': {
+    surface: 'project', setting: 'automation:loop_detection',
+    label: 'Loop / stall detection', where: 'Project settings',
+  },
+  'project.declaredVsVerified': {
+    surface: 'project', setting: 'automation:declared_vs_verified',
+    label: 'Declared vs verified', where: 'Project settings',
+  },
+  'project.docDebt': {
+    surface: 'project', setting: 'automation:doc_debt',
+    label: 'Doc-debt ledger', where: 'Project settings',
+  },
+  'project.landQueue': {
+    surface: 'project', setting: 'automation:land_queue',
+    label: 'Land queue', where: 'Project settings',
+  },
+  'project.sessionControl': {
+    surface: 'project', setting: 'automation:session_control',
+    label: 'Agent session control', where: 'Project settings',
+  },
+  // The authority fields. Each is an opt-in's second half: the automation decides
+  // whether an agent may ask, and these decide whether a human still approves each
+  // time. They had no control anywhere until now - only a line in a committed TOML
+  // file - which made "draft" unreachable to change and invisible to discover.
+  'project.landGrant': {
+    surface: 'project', setting: 'land_grant',
+    label: 'Agent-initiated landing', where: 'Project settings',
+  },
+  'project.sessionControlGrant': {
+    surface: 'project', setting: 'session_control_grant',
+    label: 'Agent interrupt and end', where: 'Project settings',
+  },
+  'project.spawnGrant': {
+    surface: 'project', setting: 'spawn_grant',
+    label: 'Agent-initiated spawn', where: 'Project settings',
+  },
+  'project.interjectGrant': {
+    surface: 'project', setting: 'interject_grant',
+    label: 'Mid-turn agent messages', where: 'Project settings',
   },
   'project.settings': {
     surface: 'project',

@@ -42,11 +42,21 @@ export type LandRequest = {
   finishedAt: number | null
 }
 
+/** The Project's authority for *agent*-initiated landing. An operator never needs it. */
+export type LandGrant = 'draft' | 'granted'
+
 export type LandQueue = {
   requests: LandRequest[]
   hourlyBudget: number
   holdTimeoutSeconds: number
   retryVerification: boolean
+  /** The install-wide stop. With it off the sweep never runs, so a request enqueues and
+   *  then sits at `queued` forever — which looked exactly like a busy queue. */
+  installedEnabled: boolean
+  /** Whether this Project opted into the land queue. Only agent requests are refused
+   *  without it; the operator is the authority the opt-in defers to. */
+  projectEnabled: boolean
+  agentGrant: LandGrant
 }
 
 export type LandVerifyCommand = {
@@ -103,7 +113,13 @@ function parseRequest(raw: unknown): LandRequest | null {
 }
 
 export function parseLandQueue(raw: unknown): LandQueue {
-  const empty: LandQueue = { requests: [], hourlyBudget: 0, holdTimeoutSeconds: 0, retryVerification: false }
+  const empty: LandQueue = {
+    requests: [], hourlyBudget: 0, holdTimeoutSeconds: 0, retryVerification: false,
+    // An unparseable payload must not read as "the queue is switched off": the panel
+    // would draw a gate over a queue that is running fine. Absent defaults to on, the
+    // way the daemon's own field does.
+    installedEnabled: true, projectEnabled: false, agentGrant: 'draft',
+  }
   if (!raw || typeof raw !== 'object') return empty
   const body = raw as Record<string, unknown>
   const rows = Array.isArray(body.requests) ? body.requests : []
@@ -112,6 +128,9 @@ export function parseLandQueue(raw: unknown): LandQueue {
     hourlyBudget: num(body.hourly_budget),
     holdTimeoutSeconds: num(body.hold_timeout_seconds),
     retryVerification: body.retry_verification === true,
+    installedEnabled: body.installed_enabled !== false,
+    projectEnabled: body.project_enabled === true,
+    agentGrant: body.agent_grant === 'granted' ? 'granted' : 'draft',
   }
 }
 

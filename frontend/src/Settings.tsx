@@ -21,6 +21,7 @@ import { currentProfile } from './deviceSettings'
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
 import { canHideDrawerTab } from './drawerVisibility'
 import { enableMobileVoice } from './mobileVoice'
+import { autoplayEnabled, setAutoplayEnabled } from './voice'
 import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatus, type FirewallStatus } from './remoteConnection'
 import { WslBridgePanel } from './WslBridgePanel'
 import { type WslBridgeStatus } from './wslBridge'
@@ -109,6 +110,7 @@ type Config = {
   // Config-file only. The Project context card has no Settings control of its own,
   // so this is read to report the model it resolves to, never written here.
   project_card_model:string
+  land_queue_enabled:boolean;land_hourly_budget:number
   scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
   scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
@@ -257,6 +259,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [argsText, setArgsText] = useState('')
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
+  // Layer 3 of the read-aloud policy lives in this browser's localStorage, not in the
+  // config, so it is read once and mirrored in local state. Deliberately not a
+  // `subscribePlayback` subscription: that listener fires on every `timeupdate` of a
+  // playing clip, and re-rendering the whole Settings panel four times a second to
+  // keep one checkbox live is a bad trade for a value only this panel changes.
+  const [deviceAutoplay, setDeviceAutoplay] = useState(() => autoplayEnabled())
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
   const completeVoiceCatalog=useMemo(()=>completeVoiceReference(voiceCommands,draft?.voice_commands||[]),[voiceCommands,draft?.voice_commands])
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
@@ -317,6 +325,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     api<WslBridgeStatus>('GET','/api/wsl/bridge').then(setWsl).catch(()=>setWsl(null))
     api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites').then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
     api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
+    // Re-read on open: the player strip and the command palette also flip it.
+    setDeviceAutoplay(autoplayEnabled())
     api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
     // One bundled request instead of nine — on a high-RTT client (phone over
     // Tailscale) per-request connection setup dominated the panel's open delay.
@@ -612,7 +622,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // does not have yet.
     setWslMessage(enabled?'Enabling…':'Disabling…')
     try{
-      await api('PUT','/api/config',{values:{wsl_bridge_enabled:enabled}})
+      // `PATCH /api/config` with a flat field map. It was `PUT` with a `{values:{…}}`
+      // wrapper, which is neither the method the daemon routes nor the body it parses,
+      // so this switch answered 405 every time it was pressed.
+      await api('PATCH','/api/config',{wsl_bridge_enabled:enabled})
       await refreshWsl(false)
       setWslMessage(enabled?'Enabled. Restart the daemon so it binds the WSL adapter.':'Disabled.')
     }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
@@ -1492,6 +1505,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Run history days<input type="number" min="1" max="3650" value={draft.scheduled_run_retention_days} onInput={event=>change('scheduled_run_retention_days',Number(event.currentTarget.value))}/><small>Long enough to answer "has this been failing all week".</small></label>
           </section>
 
+          {/* The land queue's install-wide stop. It has always been enforced - the sweep
+              checks it before reading anything else - and has never had a control, so the
+              only way to reach it was to hand-edit the daemon's config file, and a queue
+              stopped by it looked exactly like a busy one. */}
+          <section><h3>Land queue</h3>
+          <p>Landing a branch is reconcile, verify, then a fast-forward onto the trunk - the same two commands a person would run, serialized so two branches never race. Which branches are queued lives in a Project's <strong>Git → Land</strong> segment, and each Project opts in separately before an <em>agent</em> may ask for one.</p>
+          <label class="settings-toggle" data-setting="land_queue_enabled"><input type="checkbox" checked={draft.land_queue_enabled} onChange={event=>change('land_queue_enabled',event.currentTarget.checked)}/>Let the land queue move trunks<small>The emergency stop. Off, requests still queue and the sweep never runs one, so nothing moves anywhere.</small></label>
+          <label>Agent requests per session per hour<input type="number" min="0" max="1000" value={draft.land_hourly_budget} onInput={event=>change('land_hourly_budget',Number(event.currentTarget.value))}/><small>Bounds a session that has been granted direct landing. Your own Land button is not counted against it.</small></label>
+          </section>
+
           <section><h3>Scan timeline</h3>
           <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
           <label class="settings-toggle" data-setting="scan_timeline_enabled"><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={event=>change('scan_timeline_enabled',event.currentTarget.checked)}/>Allow scan timeline<small>The install-wide gate. Off, nothing is scanned anywhere, whatever any Project permitted.</small></label>
@@ -1519,10 +1542,37 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
         {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
-          <p>Mark an observed agent session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
           <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
-          <label class="check" data-setting="tts_enabled"><span>Enable read aloud</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
-          <label>Default mode for agent sessions<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
+          {/* Three switches decide whether a word is ever spoken, and they used to sit in
+              three unrelated places — a checkbox here, a pane chip there, a button on a
+              floating strip — so the honest answer to "why is it talking / why is it
+              silent" needed all three. They are one numbered block now: each layer says
+              what it governs and where its per-item control lives, in the order the
+              question is actually asked. */}
+          <div class="policy-stack" data-policy="read-aloud">
+            <h4>Policy · what speaks, and where</h4>
+            <div class="policy-layer">
+              <span class="policy-step">1</span>
+              <div class="policy-body">
+                <label class="check" data-setting="tts_enabled"><span>Read aloud is on (master)</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
+                <small>Off means no session generates audio and nothing plays, on any device. Everything below is inert while it is off.</small>
+              </div>
+            </div>
+            <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
+              <span class="policy-step">2</span>
+              <div class="policy-body">
+                <label data-setting="tts_default_mode">Each session: does it generate?<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
+                <small>The default for agent sessions. Any pane overrides it with its <code>tts:</code> chip, so a session that should never speak can be set off on its own.</small>
+              </div>
+            </div>
+            <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
+              <span class="policy-step">3</span>
+              <div class="policy-body">
+                <label class="check"><span>Autoplay on this device (browser)</span><input type="checkbox" checked={deviceAutoplay} onChange={e=>{const next=e.currentTarget.checked;setAutoplayEnabled(next);setDeviceAutoplay(next)}} /></label>
+                <small>Stored in this browser, not in the config, so each device answers for itself. When it is on, only the session you are focused on plays here; every other session finishes its clip, keeps it, and offers it as <strong>▶ n held</strong> on that pane's player strip.</small>
+              </div>
+            </div>
+          </div>
           <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select></label>
           <label>Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="sapi">OS voice (offline, no download)</option><option value="kokoro">Kokoro-82M (local neural, one-time download)</option></select></label>
           {draft.tts_engine==='sapi'&&<>

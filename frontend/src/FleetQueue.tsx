@@ -6,7 +6,7 @@ import {
   type QueueMessage, type SpawnRequestRow,
 } from './queueApi'
 import { useModalFocus } from './modalFocus'
-import { SettingLink } from './SettingLink'
+import { GrantButton } from './GrantGate'
 import type { Project } from './types'
 
 // The prompt queue's fleet-scoped review surface.
@@ -230,7 +230,8 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
           {/* The emergency pause is a state to read here (its controls are on the Queue tab),
               but "off for this install" is not a state — it is a switch nobody has turned on,
               and the reader is one click from it. */}
-          {auto && !auto.master_enabled && <SettingLink variant="link" target="queue.autoDelivery">turn it on</SettingLink>}
+          {auto && !auto.master_enabled && <GrantButton id="queue.autoDelivery"
+            onGranted={refresh}>turn it on</GrantButton>}
           {promotion && (
             <span class="queue-promotion">
               auto sends {promotion.auto_sends}/{promotion.required_sends} · proving{' '}

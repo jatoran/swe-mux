@@ -278,6 +278,8 @@ PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
+GET     /grants
+POST    /grants   {install?, project_id?, automations?, values?, revision?}
 GET     /schedules?project_id=                every schedule, or one Project's
 POST    /schedules/preview                    {definition}          next fire times, unsaved
 GET     /projects/{project_id}/schedules
@@ -290,7 +292,6 @@ GET     /projects/{project_id}/project-context
 PUT     /projects/{project_id}/project-context {markdown, revision}
 GET     /sessions/{session_id}/scan-timeline
 PUT     /sessions/{session_id}/scan-timeline  {enabled}
-PUT     /sessions/{session_id}/scan-timeline/project {enabled}
 POST    /sessions/{session_id}/scan-timeline/scan
 POST    /sessions/{session_id}/scan-timeline/backfill
 DELETE  /sessions/{session_id}/scan-timeline/backfill
@@ -1228,6 +1229,7 @@ POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
 POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
 POST   /voice/capture-diagnostic         bounded stalled/recovered capture watchdog report
+POST   /voice/deferral-diagnostic        one resolved unfinished-utterance deferral
 GET    /voice/clips[?session=&run=&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
@@ -1255,6 +1257,15 @@ running), `assistant_turn_started`, `assistant_sentence`
 (dual-form `display`/`speech`), `assistant_tool_status`, `assistant_action` (the typed
 pending/scheduled/executed confirmation state), `assistant_turn_done`, and
 `assistant_turn_failed`, each carrying `dialog_id` and `turn_id`.
+
+`assistant_notice` is the one assistant event belonging to **no turn**:
+`{dialog_id, message_id, display, speech}`, published when the daemon has something to say
+after the turn that started it ended. Today that is a Project Action's outcome, which arrives
+when its step sessions finish - minutes later, with nobody's turn open to carry it.
+It is stored as an ordinary assistant message, so it survives a reload and rides the next
+turn's context, and a client renders it complete rather than streaming.
+Spoken, it takes the announcement path (join the live stream, never take the floor), because an
+outcome landing mid-sentence must not cut that sentence off.
 
 Text posted while a turn is running is **queued, never refused**: the response carries
 `queued: true`, `assistant_turn_queued` announces it under the id it will run as, and
@@ -1318,6 +1329,16 @@ A stall logs at WARNING because it is the durable evidence a dead phone micropho
 the moment it dies — the failure this exists for was reconstructed from the access log hours
 later while the UI said "listening" throughout.
 
+`/voice/deferral-diagnostic` records one resolved unfinished-utterance deferral:
+`{outcome, kind, trigger, words, heldMs}`, where `outcome` is `merged`, `submitted`, `held`, or
+`discarded` and `kind` is `conjunction`, `preposition`, or `article`.
+The trigger token is required and is narrowed to alphanumerics, spaces, apostrophes, and hyphens
+before it reaches a log line; the counts are clamped.
+It is posted on resolution rather than at the deferral, because the outcome is what judges the
+heuristic: `merged` caught a real trail-off while `submitted` cost the operator one patience
+extension for nothing, so the ratio of the two is the false-positive rate the word lists are
+tuned against (`design/features/voice.md`).
+
 The Talk client first calls `/voice/prepare-submit` to recheck the live Agent target, bounded text, and non-overridable delivery protections without writing input.
 It then sends Agent drafts through the mounted terminal's ordinary xterm/WebSocket input path, not through `/voice/submit`.
 That is the only path that can append to text already held by the interactive application composer and then use the exact carriage return used by the visible Send control.
@@ -1352,6 +1373,7 @@ Ordering is the invariant: one worker drains one FIFO per stream, so clip indice
 `/sessions/{id}/voice/generate` reads the latest assistant reply using the session/global effective content mode unless `content_mode` is supplied.
 The request override is validated, applies to one clip only, and never mutates the session's persistent read-aloud preference.
 The optional stream ID has the same claim-before-request role as `/voice/speak`.
+Both it and `/voice/speak` refuse with `409 read aloud is off` while the `tts_enabled` master is off: the master gates generation everywhere, not only on the automatic `turn_ended` path.
 
 Automatic, manual, and application-text synthesis returns the first coherent clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
 Agent replies of at most 420 characters stay in that one clip; longer replies prefer a complete opening sentence before continuing.
@@ -1844,8 +1866,13 @@ content: requested and resolved model, generation, provider, finish reason, HTTP
 retryability, token and cost usage, latency, and response content type and length.
 
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
-row has `rule_id`, `calls`, `tokens`, `cost_usd`, the same three figures scoped to today, the
-requested models, and `last_at`. The daemon labels each row with `label`, `detail`, `kind`
+row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cost_usd`, the same five
+figures scoped to today, the requested models, and `last_at`.
+`cached_tokens` is the prompt-cache hit and is a *subset* of `input_tokens`, never added to it;
+`input_tokens` rides along because it is the only honest denominator for a hit rate, `tokens`
+being input plus output and output never cacheable.
+`GET /api/assistant` and every other reader of the ledger's `spend()` helper carry the same two
+figures beside `tokens` and `cost_usd`. The daemon labels each row with `label`, `detail`, `kind`
 (`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because several
 features bill the observer budget without being automation rules and a raw `rule_id` names
 neither them nor the setting that governs them.
@@ -1865,6 +1892,22 @@ registered Project in sidebar order — `project_id`, `project_name`, config `st
 `scan_timeline_auto_enable`. Projects that opted into nothing are listed rather than omitted.
 Drawn by the Automation dashboard's `projects` view; it has no write half — the
 revision-checked `PUT /api/projects/{project_id}/automations` stays the only editor.
+
+`POST /api/grants` is the one write behind every gate notice in the app: the way a surface
+that cannot work turns on the thing it needs without sending the reader to an overlay
+(`features/setting-links.md`). It takes `install` (a table of install switches), `project_id`
+plus `automations` (ids, whose dependency closure the daemon computes) and/or `values` (typed
+Project fields), and an optional `revision`. It is **additive only** — a `false`, a `draft`,
+or an `off` is refused with `grant_is_additive`, so no surface but the owning editor can take
+a permission away, which is what lets many surfaces grant while one owns each switch. Keys
+outside `GRANTABLE_INSTALL_KEYS` / `GRANTABLE_PROJECT_VALUES` are refused with `not_grantable`;
+both sets are validated against `Config` and `PROJECT_CONFIG_FIELDS` at import. The whole
+request is validated before the first write and a refusal writes nothing; the Project write
+goes first because it is the one that can fail. Success returns `applied` (per scope),
+`spends`, the public config, and the Project's resolved automation state, and emits one
+`grant_applied` audit event listing every scope-qualified key. `GET /api/grants` returns the
+same allowlists plus the registry and `recommended_project_automations`, and is the contract
+`frontend/test/grants.test.ts` holds the browser's catalogue against.
 
 `GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).

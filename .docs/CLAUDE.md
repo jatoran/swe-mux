@@ -45,11 +45,20 @@
   read-only index of them all instead of a second set of controls, and `modelRouting.ts` is that
   index. Whether a blank value is legal is the whole distinction: an **override** falls through to
   the cheap model, a **pin** is a validation error, and the two must never render the same.
-- Adding a surface that goes inert behind a switch, or changing how one reaches that switch
-  (the deep link, the scroll-and-flash arrival, the `data-setting` marks):
-  `design/features/setting-links.md`, `design/features/ui.md`,
+- Adding a surface that goes inert behind a switch, changing how one reaches that switch
+  (the deep link, the scroll-and-flash arrival, the `data-setting` marks), or adding a
+  switch a gate may turn on: `design/features/setting-links.md`, `design/features/ui.md`,
   `technical/frontend/packages.md`; per-Project opt-ins themselves:
-  `design/features/automation-enablement.md`
+  `design/features/automation-enablement.md`.
+  The rule the design turns on: a gate **grants** in place and can only ever turn something
+  **on**, so many surfaces may switch a thing on while exactly one editor may switch it off -
+  that asymmetry is what makes a write reachable from a drawer pane safe. Two things follow
+  and are enforced rather than trusted: the grantable keys are closed sets checked against
+  `Config` and `PROJECT_CONFIG_FIELDS` at import (`src/swe_mux/grants.py`), and every
+  grantable Project field must have a control in the Projects registry
+  (`frontend/test/settingTargets.test.ts`) - four authority fields once shipped enforced and
+  reachable only by hand-editing a committed TOML file, which is the failure that test
+  exists to prevent recurring.
 - Changing what shows or hides the mobile soft keyboard: `design/features/ui.md`,
   `technical/frontend/packages.md`; open ask against the vendored note editor:
   `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`
@@ -315,6 +324,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`) because that clip *is* time-to-first-sound, and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
+  Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
   **Silero VAD** (`sileroVad.ts`, lazy ~11 MB WASM runtime + ~2.3 MB ONNX model assets; energy detector as fallback) → the
@@ -344,7 +354,15 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   releases it as one consolidated turn (bare exact phrases "hold on"/"go ahead" also work);
   `voice_chat_patience_ms` separately lengthens the chat-addressee endpoint tail while
   wake-worded commands keep short-circuiting it, and an open assistant confirmation card
-  suspends it entirely (a closed question is being answered, not composed). Hold `Ctrl+Alt+Space` for push-to-talk with
+  suspends it entirely (a closed question is being answered, not composed).
+  A completeness heuristic (`utteranceCompleteness.ts`, pure) runs BEFORE a chat turn is
+  dispatched: an utterance ending mid-clause on a dangling conjunction, preposition, or article
+  earns exactly one adaptive patience extension instead of submitting, and the held fragment
+  merges into the next utterance, submits alone when the extension expires, or folds into a
+  brainstorm hold. One deferral per utterance, so the wait is bounded structurally; the model is
+  never instructed to return nothing; queue-merge stays the safety net; and every deferral is
+  reported to `POST /api/voice/deferral-diagnostic` with its trigger token so the
+  false-positive rate is measurable before anyone tunes the word lists. Hold `Ctrl+Alt+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.

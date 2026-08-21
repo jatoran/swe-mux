@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 # The enablement DAG for the control-plane substrate and consumers.
@@ -26,13 +27,20 @@ class Automation:
     # switch on something that then does nothing — and would contradict the
     # published design while looking authoritative.
     implemented: bool = True
+    # True when switching this on can cost money. Whether an opt-in spends was
+    # documented only in the comments here, which meant a one-click grant gate
+    # could not tell the operator the one thing they most need to know before
+    # pressing it. It travels in the registry payload so the disclosure is read
+    # from the same source as the dependency edges rather than restated in the
+    # browser, where it would drift.
+    spends: bool = False
 
 
 _AUTOMATIONS: tuple[Automation, ...] = (
     # Substrate.
     Automation("raw_store", SUBSTRATE, "Raw transcript store"),
     Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",)),
-    Automation("scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store")),
+    Automation("scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store"), spends=True),
     # Consumers. The deterministic four (control-plane step 3) are model-free
     # queries over Tier 0 and ship together; everything below them needs a layer
     # that does not exist yet and is marked unimplemented rather than toggleable.
@@ -70,6 +78,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         CONSUMER,
         "Adaptive session title",
         ("scan_timeline",),
+        spends=True,
     ),
     Automation(
         "cross_session_interlocks",
@@ -134,7 +143,9 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # The model tier, and the only automation here that spends tokens. It is a
     # "why" over items ranking has already produced, so it depends on ranking
     # rather than on the detectors: with ranking off there is nothing to narrate.
-    Automation("model_narration", CONSUMER, "Model narration", ("attention_ranking",)),
+    Automation(
+        "model_narration", CONSUMER, "Model narration", ("attention_ranking",), spends=True
+    ),
     # Keep the persisted id for settings compatibility. The human observation
     # inbox UI is retired; this now names review of agent spawn requests in the
     # Fleet Queue.
@@ -272,3 +283,67 @@ def resolve_config(
     defaults: dict[str, bool] | None = None,
 ) -> Resolution:
     return resolve(requested_from_config(project_map, defaults))
+
+
+def enabling_closure(automation_ids_wanted: Iterable[str]) -> frozenset[str]:
+    """Everything that must be opted in for `automation_ids_wanted` to be effective.
+
+    The requested ids plus their whole transitive dependency closure. This is what a
+    grant actually writes, and naming it here rather than in each caller is what keeps
+    the browser's disclosure ("...plus Deterministic fact capture and Raw transcript
+    store") and the daemon's write from drifting apart.
+
+    Unknown ids raise: a grant that silently dropped one would report success for a
+    switch it never touched.
+    """
+    wanted = list(automation_ids_wanted)
+    unknown = sorted({item for item in wanted if item not in REGISTRY})
+    if unknown:
+        raise ValueError(f"unknown automations: {', '.join(unknown)}")
+    result: set[str] = set()
+    for automation_id in wanted:
+        result.add(automation_id)
+        result |= dependency_closure(automation_id)
+    return frozenset(result)
+
+
+def spends_money(automation_ids_wanted: Iterable[str]) -> bool:
+    """Whether enabling these (with their closure) can cost money.
+
+    Asked of the closure, not the named ids: `phase_transitions` costs nothing by
+    itself and cannot be switched on without `scan_timeline`, which does.
+    """
+    return any(REGISTRY[item].spends for item in enabling_closure(automation_ids_wanted))
+
+
+# The model-free starting set offered to a newly registered Project.
+#
+# Every id here parses transcripts the daemon already has and never calls a model, so
+# the whole set is free to run - which is what makes it safe to offer as one choice at
+# creation instead of leaving a new user to pick from twenty checkboxes whose costs are
+# not written down anywhere they can see. `scan_timeline` is deliberately absent: it is
+# the one substrate that spends, and it is offered separately with its budget attached.
+#
+# This is *not* an inherited default template. It is written into the new Project's own
+# `.swe-mux/config.toml`, so "nothing runs on a Project that did not opt in" stays
+# literally true and no existing Project changes behaviour because this constant did.
+RECOMMENDED_PROJECT_AUTOMATIONS: tuple[str, ...] = (
+    "provenance_graph",
+    "declared_vs_verified",
+    "loop_detection",
+    "doc_debt",
+    "code_graph",
+)
+
+
+def _validate_recommended() -> None:
+    for automation_id in RECOMMENDED_PROJECT_AUTOMATIONS:
+        if automation_id not in REGISTRY:
+            raise ValueError(f"recommended set names unknown automation {automation_id}")
+        if not REGISTRY[automation_id].implemented:
+            raise ValueError(f"recommended set names unimplemented {automation_id}")
+    if spends_money(RECOMMENDED_PROJECT_AUTOMATIONS):
+        raise ValueError("the recommended starting set must be free to run")
+
+
+_validate_recommended()

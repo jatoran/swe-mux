@@ -158,6 +158,45 @@ async def test_a_request_enqueues_and_lists(tmp_path: Path, trunk: Path) -> None
         store.close()
 
 
+async def test_the_status_reports_the_two_switches_that_stop_the_pipeline(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A queue nobody can advance must not read like a busy one.
+
+    The install switch is checked by the sweep before it reads anything else, so with it
+    off a request enqueues and then sits at `queued` forever. That looked identical to a
+    pipeline working through a backlog, and the switch had no control in any overlay
+    either. The Project opt-in and the agent grant ride along for the same reason: they
+    decide what happens to an agent's `request_land`, and nothing said what they were.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        listed = await (await client.get("/api/land?project_id=proj-1")).json()
+        assert listed["installed_enabled"] is True
+        assert listed["agent_grant"] == "granted"
+        # No automation gate wired in this fixture means the service cannot refuse on
+        # one, which is the honest reading of "permitted".
+        assert listed["project_enabled"] is True
+
+        app["config"].land_queue_enabled = False
+        stopped = await (await client.get("/api/land?project_id=proj-1")).json()
+        assert stopped["installed_enabled"] is False
+
+        # An operator request is still accepted with the switch off - the refusal is not
+        # this route's - and the reported state is what lets the panel say why nothing
+        # will move it.
+        created = await client.post(
+            "/api/land", json={"project_id": "proj-1", "worktree_root": str(worktree)}
+        )
+        assert created.status == 201, await created.text()
+        assert (await app["land_queue"].tick()) == []
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_a_second_request_for_one_branch_is_refused(
     tmp_path: Path, trunk: Path
 ) -> None:

@@ -94,6 +94,11 @@ Retries are bounded and explicit: at most one, only when `land_retry_verificatio
 An operator request bypasses the grant, because the operator is the authority the grant defers to.
 It passes every precondition unchanged.
 
+All three are reported by `GET /api/land` (`installed_enabled`, `project_enabled`, `agent_grant`) and drawn by the Land segment, because none of them could be told apart from an ordinary quiet queue.
+The install stop is the sharpest case: it is checked by the sweep before anything else, so with it off a request enqueues and then sits at `queued` forever - identical, on screen, to a pipeline working through a backlog.
+It also had no control in any overlay until it gained one in Settings → Automation → Land queue.
+The Land segment now grants both the install switch and the Project opt-in in place, and raises `land_grant` from its inert `draft`, through the ordinary additive grant path (`setting-links.md`); the Projects registry's **Agent authority** table is where any of them is lowered again.
+
 A drafted request writes an inert `land_request` observation that appears as a Fleet Queue approval row; approval is what enqueues it, and the originating session is retained as the request's origin so a handback reaches the agent that asked rather than the human who approved.
 
 ## The handback

@@ -9,7 +9,7 @@ const css = readFileSync(join(dir, 'style.css'), 'utf8')
 
 const toggle = control.slice(
   control.indexOf('export function ConversationToggle'),
-  control.indexOf('export function ConversationSurface'),
+  control.indexOf('export function VoiceDockChip'),
 )
 
 test('the Talk toggle is lit only while capture is running', () => {

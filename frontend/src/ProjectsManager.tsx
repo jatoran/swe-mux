@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { ProjectContextEditor } from './ProjectContextEditor'
 import { revealSetting } from './settingReveal'
@@ -47,6 +47,9 @@ type AutomationEntry = {
   label: string
   requires: string[]
   implemented: boolean
+  /** Whether switching it on can cost money. Straight from the registry, so the editor
+   *  and every gate that offers the same switch say the same thing about it. */
+  spends: boolean
 }
 type AutomationState = {
   revision: string
@@ -126,6 +129,10 @@ function AutomationOptIns({ project, busy, onError }: {
       <label class="check">
         <span class="project-setting-name">{item.label}
           <em class="project-setting-chip">{item.kind}</em>
+          {/* The one fact a reader most needs before ticking twenty checkboxes, and it
+              lived only in a Python comment until now. Marked rather than unmarked,
+              because most of this list is free and a chip on every row says nothing. */}
+          {item.spends && <em class="project-setting-chip spends">spends</em>}
           {!item.implemented && <em class="project-setting-chip">not built yet</em>}
         </span>
         <input type="checkbox" disabled={disabled} checked={on}
@@ -181,6 +188,106 @@ function AutomationOptIns({ project, busy, onError }: {
       </li>
     </ul>
     {scanOn && <ProjectContextEditor projectId={project.id} busy={busy || saving} onError={onError} />}
+  </div>
+}
+
+/**
+ * What an agent may do here without asking, and what it must draft for a human first.
+ *
+ * These four fields decide the *authority* behind four capabilities whose on/off is an
+ * automation above. Every one of them shipped with no control in any overlay: they were
+ * lines in a committed `.swe-mux/config.toml` and nothing else, which made the inert
+ * default both impossible to discover and unreachable to change - one of them told the
+ * agent to go and edit the file by hand (`agent_messaging.py`).
+ *
+ * They live here, beside the opt-ins they qualify, because this is the Project's editor
+ * and only an editor may take a permission away. A gate elsewhere may raise one; nothing
+ * but this can lower it.
+ */
+function AgentAuthority({ project, busy, onError }: {
+  project: Project
+  busy: boolean
+  onError: (message: string) => void
+}) {
+  const [config, setConfig] = useState<ProjectConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const read = useCallback(() => {
+    api<ProjectConfig>('GET', `/api/project/config?cwd=${encodeURIComponent(project.root)}&project_id=${encodeURIComponent(project.id)}`)
+      .then(setConfig)
+      .catch(cause => onError(cause instanceof Error ? cause.message : String(cause)))
+  }, [project.id, project.root])
+  useEffect(() => { setConfig(null); read() }, [read])
+
+  const write = async (field: string, value: string) => {
+    if (!config) return
+    setSaving(true)
+    try {
+      // Written straight through rather than into the panel's Save draft: an authority
+      // change is a decision of its own, and staging it behind a button that also
+      // renames the Project would leave the other rows describing a state the daemon
+      // does not have yet.
+      setConfig(await api<ProjectConfig>('PUT', '/api/project/config', {
+        cwd: project.root,
+        project_id: project.id,
+        values: { ...config.values, [field]: value },
+        revision: config.revision,
+      }))
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+      read()
+    } finally { setSaving(false) }
+  }
+
+  const rows: { field: string; setting: string; label: string; draft: string; granted: string; note: string }[] = [
+    {
+      field: 'session_control_grant', setting: 'session_control_grant',
+      label: 'Interrupt and end sessions',
+      draft: 'A human approves each one', granted: 'Acts directly',
+      note: 'Needs the Agent session control opt-in above. Draft writes an inert request into the Fleet Queue.',
+    },
+    {
+      field: 'spawn_grant', setting: 'spawn_grant',
+      label: 'Start new sessions here',
+      draft: 'A human approves each one', granted: 'Creates them directly',
+      note: 'Also gated by Agent session control. Granted still bounds an agent to a per-origin budget.',
+    },
+    {
+      field: 'land_grant', setting: 'land_grant',
+      label: 'Land a branch onto the trunk',
+      draft: 'A human approves each one', granted: 'Starts the pipeline directly',
+      note: 'Needs the Land queue opt-in above. Either way the pipeline is fast-forward-only and runs only the verification command you approved.',
+    },
+    {
+      field: 'interject_grant', setting: 'interject_grant',
+      label: 'Write into a running turn',
+      draft: 'Never (waits for the queue)', granted: 'May interject',
+      note: 'Off by default. Granted still requires the receiving session to be interruptible and not opted out for its run.',
+    },
+  ]
+  const inertFor = (field: string) => field === 'interject_grant' ? 'off' : 'draft'
+  const value = (field: string) =>
+    String((config?.values as Record<string, unknown> | undefined)?.[field] || inertFor(field))
+
+  return <div class="project-automations project-authority">
+    <h4 data-setting="agent_authority">Agent authority<em class="project-setting-chip">repo</em></h4>
+    <p>The opt-ins above decide whether an agent may <em>ask</em>. These decide whether you
+    still approve each time. Every one starts at the inert setting, and the whole table
+    is meaningless until its automation is on.</p>
+    {!config && <p>Loading…</p>}
+    {config && <ul class="project-automation-list">
+      {rows.map(row => <li key={row.field} data-setting={row.setting}>
+        <label class="check">
+          <span class="project-setting-name">{row.label}</span>
+          <select disabled={busy || saving || config.status !== 'ready'}
+            value={value(row.field)}
+            onChange={event => void write(row.field, event.currentTarget.value)}>
+            <option value={inertFor(row.field)}>{row.draft}</option>
+            <option value="granted">{row.granted}</option>
+          </select>
+        </label>
+        <p class="project-automation-deps">{row.note}</p>
+      </li>)}
+    </ul>}
   </div>
 }
 
@@ -452,6 +559,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               </section>
               <div><button disabled={busy||!config} onClick={()=>setValues({})}>Reset repo options to inherited</button></div>
               <AutomationOptIns project={selected} busy={busy} onError={setError} />
+              <AgentAuthority project={selected} busy={busy} onError={setError} />
             </div>
           </div>
           {confirmRemove&&<section class="project-removal-summary" aria-label="Remove Project confirmation">

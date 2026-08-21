@@ -11,7 +11,7 @@ import {
   modeUnavailableReason,
 } from './approvals'
 import { isAgentBackend } from './harnessRegistry'
-import { SettingLink } from './SettingLink'
+import { GrantButton } from './GrantGate'
 import { useDismissLevel } from './modalFocus'
 import type { ApprovalMode, ApprovalStatus, Session } from './types'
 
@@ -221,7 +221,9 @@ export function ApprovalChip({ session }: Props) {
                   `.swe-mux/config.toml`, which has no control to scroll to. */}
               {!status.enabled && (
                 <p class="approval-menu-note">
-                  <SettingLink variant="link" target="approvals.autoAnswer">Allow swe-mux to answer approvals</SettingLink>
+                  <GrantButton id="approvals.autoAnswer" onGranted={load}
+                    title="Lets swe-mux answer permission requests · writes to this machine’s configuration"
+                  >Allow swe-mux to answer approvals</GrantButton>
                 </p>
               )}
               {status.policy.mode === 'allowlisted' && (

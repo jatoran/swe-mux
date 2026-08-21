@@ -15,11 +15,21 @@ export type ProjectCreateDraft = {
   folderTouched:boolean
   group_id:string
   scripts:string[]
+  /** Whether to opt the new Project into the free, model-free analysis automations.
+   *  Every automation is off for a new Project, which is correct as a rule and made
+   *  every analysis surface in the drawer inert on the first day. This is the one
+   *  choice that fixes that, asked once, where a new user is already deciding things
+   *  about the Project - rather than left to be discovered one empty pane at a time. */
+  automations:boolean
 }
 
 export const emptyProjectCreateDraft = ():ProjectCreateDraft => ({
   mode:'existing', name:'', root:'', parent:'', folder:'', folderTouched:false,
   group_id:'', scripts:[],
+  // Defaulted on because the whole set is free to run and reads only what swe-mux
+  // already captures; the daemon's `_validate_recommended` refuses to let a spending
+  // automation into it, so that stays true.
+  automations:true,
 })
 
 // Windows is the primary platform and its separator is also the one a drive-letter

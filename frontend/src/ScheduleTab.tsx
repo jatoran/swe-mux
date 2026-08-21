@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { SettingLink } from './SettingLink'
+import { GrantButton, GrantGate } from './GrantGate'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import {
   branchModeFor, branchPointEligible, branchPointPreview, branchPointsEmptyMessage,
@@ -190,10 +190,13 @@ export function ScheduleTab({
     {/* The install stop is not a row-level condition — it silences every schedule in every
         Project at once — so it is stated once above the list rather than repeated on each
         row that happens to be loaded. */}
-    {status && !status.enabled && <div class="setting-gate">
-      <p><strong>Scheduled runs are switched off for this install.</strong> Nothing below can fire, whatever any Project opted into.</p>
-      <SettingLink target="schedules.install">Let schedules start sessions</SettingLink>
-    </div>}
+    {status && !status.enabled && <GrantGate ids={['schedules.install']}
+      heading="Scheduled runs are switched off for this install."
+      onGranted={load}>
+      <p>Nothing below can fire, whatever any Project opted into. Turning it on starts
+      nothing by itself: each Project still permits scheduled runs separately, and the
+      schedules themselves stay exactly as they are.</p>
+    </GrantGate>}
     <div class="schedule-body">
       {loading && !ordered.length && <p class="schedule-empty">Reading schedules…</p>}
       {error && <p class="schedule-error" role="alert">{error}</p>}
@@ -236,12 +239,13 @@ export function ScheduleTab({
             find the switch. */}
         {schedule.blocked && <p class="schedule-blocked">
           {BLOCKED_LABELS[schedule.blocked] || schedule.blocked}
-          {schedule.blocked === 'automation_disabled' && <SettingLink
-            variant="link" target="project.scheduledRuns" projectId={schedule.project_id}
-          >Turn it on</SettingLink>}
-          {schedule.blocked === 'install_disabled' && <SettingLink
-            variant="link" target="schedules.install"
-          >Turn it on</SettingLink>}
+          {' '}
+          {schedule.blocked === 'automation_disabled' && <GrantButton
+            id="project.scheduledRuns" projectId={schedule.project_id} onGranted={load}
+          >Permit them here</GrantButton>}
+          {schedule.blocked === 'install_disabled' && <GrantButton
+            id="schedules.install" onGranted={load}
+          >Turn it on</GrantButton>}
         </p>}
         <div class="schedule-meta">
           <span title={schedule.last_reason || undefined}>

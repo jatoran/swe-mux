@@ -145,10 +145,13 @@ test('the tab never computes a fire time of its own', () => {
 test('the tab renders a blocked schedule as blocked and offers the fix', () => {
   const tab = readFileSync(join(import.meta.dirname, '..', 'src', 'ScheduleTab.tsx'), 'utf8')
   assert.ok(tab.includes('schedule.blocked &&'), 'a row that cannot fire must say so')
-  // Both reasons a row cannot fire are switches, and each offers the one that is holding
-  // it: the Project's opt-in, or the install-wide stop.
-  assert.ok(tab.includes("target=\"project.scheduledRuns\" projectId={schedule.project_id}"), 'and point at the opt-in')
-  assert.ok(tab.includes("target=\"schedules.install\""), 'and at the install switch')
+  // Both reasons a row cannot fire are switches, and each *grants* the one that is
+  // holding it rather than linking to an overlay: a blocked row is exactly the moment
+  // the decision is being made, and walking to a settings panel and back to make it is
+  // the cost this replaced.
+  assert.ok(tab.includes("id=\"project.scheduledRuns\" projectId={schedule.project_id}"), 'and grant the opt-in')
+  assert.ok(tab.includes("id=\"schedules.install\""), 'and the install switch')
+  assert.ok(tab.includes('<GrantButton'), 'through the shared grant control')
   // Revealing a session or opening settings is acting on something other than the
   // terminal underneath, so the mobile drawer gets out of the way.
   assert.ok(tab.includes('onDone()'))

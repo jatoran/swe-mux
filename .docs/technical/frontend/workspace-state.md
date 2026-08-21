@@ -28,6 +28,7 @@
 | worktree file tab identity | `worktree-file:<project_id>:<encoded_root>:<encoded_relative_path>` layout leaf | durable, multi-client |
 | open Git review snapshot and annotations | `GitReviewModal` component memory | one modal |
 | sessions removed on screen but not yet gone from the daemon | `pendingKills.current` keyed by session ID | until that session's DELETE settles |
+| daemon-started sessions whose automatic join the server refused | `joinAttempts.current` keyed by session ID | browser session, pruned to the live fleet |
 
 ## Utility drawer authority and migration
 
@@ -227,6 +228,50 @@ Focus still moves only when the killed session held it.
 It is fed from the *settled* active session in an effect, the same discipline `viewHistory.ts` uses, because `setActiveId` has dozens of call sites and per-call-site recording rots the first time a new flow forgets.
 `killNow` drops the killed id from every Project's stack before handing focus on, so a dead id cannot sit at the head shadowing the live session behind it; reads additionally skip anything not in the surviving set.
 
+## Joining daemon-started sessions
+
+`sessionJoin.ts` is the placement rule for a session that reached the fleet without a leaf, and it
+is pure so the rule can be tested without a browser: `joinSessions(layout, ids, preferredViewId)`
+returns the layout those sessions belong in, or the same object when nothing was missing.
+
+It runs inside `refresh`, in the same pass that reconciles terminals and previews, because that
+GET is the authoritative snapshot: it already carries whatever the daemon attached server-side
+(`attach_terminal` for branch, resume, and review spawns), so a session the daemon placed itself is
+seen as placed rather than joined a second time somewhere else.
+
+The pass computes the next layout map outside the `setLayoutMap` updater and issues the join
+PATCHes after it. The updater stays free of side effects, and the write goes through the ordinary
+optimistic `updateLayout` chain - with `quiet: true`, which suppresses only the failure toast and
+never the reload behind it.
+
+Four guards keep the join from writing something it should not:
+
+- **`layoutWriteChains`** already skips a Project with a PATCH in flight, so the join inherits
+  that: it never bases itself on a layout an in-flight drag has already moved past.
+- **`pendingSpawns[…].resolvedId`** excludes a session this device just spawned. Its leaf exists
+  under the client-only pending id, and `replaceTerminal` is about to swap the real id into it;
+  joining as well would leave the layout holding that id twice.
+- **A pending spawn with no `resolvedId` withholds the whole pass from that Project.** The daemon
+  creates and announces the session before the POST returns, so a refresh landing in that window
+  carries a session that is ours under an id this client does not know yet, and nothing
+  distinguishes it from a daemon-started one. The next refresh joins whatever is still floating.
+- **`MAX_JOIN_ATTEMPTS`** retires a session whose PATCH the server keeps refusing. A Project at
+  `MAX_LAYOUT_LEAVES` refuses every write and each refusal refreshes, which would otherwise
+  recompute the same join forever. The record is pruned to the live fleet on every refresh so it
+  cannot grow without bound.
+
+Multi-device needs no coordination beyond that. Every connected client computes the same join from
+the same fleet; the first PATCH wins and the others take a stale revision, refresh, find the leaf
+present and propose nothing. Convergence is structural - a leaf id exists at exactly one place in
+one tree - so the worst case is that whichever device wrote first chose the pane.
+
+A reload cannot duplicate or re-float a joined session for the same reason: the leaf is persisted,
+and `joinSessions` proposes only ids no leaf in the layout holds.
+
+Mobile needs nothing of its own. `mobileWorkspaceProjection` derives the rail from the pane tree,
+so a joined leaf appears there as soon as it exists - which is the mobile half of the defect, since
+an unpanned session had no leaf for the rail to project at all.
+
 ## Worktree file leaves
 
 Canonical `file:` resource IDs are unchanged.
@@ -302,7 +347,13 @@ handler stayed API-free.
 
 - `frontend/test/layout.test.ts`: migrations and all stack/split transforms.
 - `frontend/test/mobileWorkspace.test.ts`: complete flattening, selection priority, close fallback,
-  and that the projection takes no order argument for a stale permutation to re-enter through.
+  that the projection takes no order argument for a stale permutation to re-enter through, and that
+  a joined daemon session reaches the rail without moving the selection.
+- `frontend/test/sessionJoin.test.ts`: the anchor rule (focused pane, terminal pane, new pane only
+  for an empty layout), that the receiving pane keeps its active tab except when the joining
+  session is the focused one, fleet ordering into a single pane, idempotence across a reload, the
+  refusal budget and its pruning, and (by source inspection) the two `refresh` guards and the quiet
+  write.
 - `frontend/test/randomId.test.ts`: secure and non-secure browser identity fallbacks.
 - `frontend/test/warmPanes.test.ts`: eviction order, the on-screen and closed-tab exclusions, the
   recency cap, and (by source inspection) that a warm pane is hidden from layout/pointer/assistive

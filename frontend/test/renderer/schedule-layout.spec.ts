@@ -63,7 +63,12 @@ test('a schedule that cannot fire says so on its own row, with the way to fix it
   const blocked = page.locator('.schedule-row.blocked')
   await expect(blocked).toHaveCount(1)
   await expect(blocked.locator('.schedule-blocked')).toContainText('Scheduled runs is off for this Project')
-  await expect(blocked.locator('.schedule-blocked button')).toHaveText('Turn it on')
+  // The control on the row now *grants* the opt-in rather than linking to the Projects
+  // registry, so it names what it will do to this Project instead of naming a switch the
+  // reader would have to go and find. Its title carries the scope disclosure.
+  const fix = blocked.locator('.schedule-blocked button')
+  await expect(fix).toHaveText('Permit them here')
+  await expect(fix).toHaveAttribute('title', /travels with the checkout/)
   // The paused one is dimmed but not marked as broken: someone chose that.
   await expect(page.locator('.schedule-row.paused')).toHaveCount(1)
   await expect(page.locator('.schedule-row.paused.blocked')).toHaveCount(0)

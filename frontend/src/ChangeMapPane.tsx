@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { api } from './api'
-import { SettingLink } from './SettingLink'
+import { GrantGate } from './GrantGate'
 import { MOBILE_QUERY } from './deviceSettings'
 import {
   DEFAULT_ROLE_PALETTE, HOP_CHOICES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_ORDER,
@@ -424,12 +424,16 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
     const gated = data.disabled_reason === 'automation_disabled' && !!projectId
     return <section class="change-map-pane">
       {header}
-      <div class={`change-map-off${gated ? ' setting-gate' : ''}`}>
-        <p>{note}</p>
-        <p class="change-map-off-hint">{hint}</p>
-        {gated && <SettingLink target="project.codeGraph" projectId={projectId}>Turn on Code-structure graph</SettingLink>}
-        {!projectId && <p class="change-map-off-hint">This session is not attached to a registered Project.</p>}
-      </div>
+      {gated
+        ? <GrantGate ids={['project.codeGraph']} projectId={projectId} heading={note}
+            onGranted={() => void load()}>
+            <p class="change-map-off-hint">{hint}</p>
+          </GrantGate>
+        : <div class="change-map-off">
+            <p>{note}</p>
+            <p class="change-map-off-hint">{hint}</p>
+            {!projectId && <p class="change-map-off-hint">This session is not attached to a registered Project.</p>}
+          </div>}
       {footer}
     </section>
   }

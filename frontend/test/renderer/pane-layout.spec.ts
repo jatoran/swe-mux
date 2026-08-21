@@ -2,11 +2,11 @@ import { expect, test } from 'playwright/test'
 
 /**
  * The pane geometry contract (`design/features/ui.md`): a terminal pane is two rows —
- * header and surface - and pane voice playback floats over the terminal while dictation
- * lives at app level. The pane's remaining height *is* the PTY's row count, so any layout
- * change that moves or resizes `.terminal-surface` resizes a live agent's terminal and
- * makes its TUI reflow; the damage outlives the overlay because the reflowed scrollback
- * does not come back when it closes.
+ * header and surface - and pane voice playback floats over the terminal while the
+ * conversation surface lives at app level (`voice-dock.spec.ts`). The pane's remaining
+ * height *is* the PTY's row count, so any layout change that moves or resizes
+ * `.terminal-surface` resizes a live agent's terminal and makes its TUI reflow; the damage
+ * outlives the overlay because the reflowed scrollback does not come back when it closes.
  *
  * Both regressions this pins were pure CSS, invisible to tsc and to the unit suite:
  * a template that declared one track too few (the surface fell into an implicit `auto`
@@ -24,7 +24,7 @@ const bounds = () => {
   return {
     pane: box('.terminal-pane')!, bar: box('.pane-bar')!, surface: box('.terminal-surface')!,
     host: box('.terminal-host')!, overlay: box('.voice-overlay'), strip: box('.voice-strip'),
-    panel: box('.dictation-panel'), anchor: box('.voice-overlay-anchor'),
+    anchor: box('.voice-overlay-anchor'),
     draft: box('.mobile-terminal-draft'), rail: box('.terminal-action-rail'),
   }
 }
@@ -49,7 +49,7 @@ test('the mobile Draft composer overlays the host without resizing the terminal'
 })
 
 for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }, { name: 'mobile', width: 390, height: 780, mobile: 1 }]) {
-  test(`voice surfaces float without moving the terminal on ${viewport.name}`, async ({ page }) => {
+  test(`the read-aloud strip floats without moving the terminal on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
 
     await page.goto(`/pane-harness.html?overlay=0&mobile=${viewport.mobile}`)
@@ -57,10 +57,10 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
     const off = await page.evaluate(bounds)
 
     await page.goto(`/pane-harness.html?overlay=1&mobile=${viewport.mobile}`)
-    await expect(page.locator('.dictation-panel')).toBeVisible()
+    await expect(page.locator('.voice-strip')).toBeVisible()
     const on = await page.evaluate(bounds)
 
-    // The entire point of floating: the terminal is untouched while both surfaces are up.
+    // The entire point of floating: the terminal is untouched while the strip is up.
     expect(on.surface).toEqual(off.surface)
     expect(on.host).toEqual(off.host)
 
@@ -70,16 +70,19 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
     expect(on.surface.y).toBe(on.bar.y + on.bar.height)
     expect(on.surface.height).toBe(on.pane.height - on.bar.height)
 
-    // Both voice surfaces stay in the focused pane's floating stack.
+    // The strip stays inside the focused pane's floating stack, near its top.
     expect(on.overlay!.x).toBeGreaterThanOrEqual(on.pane.x)
     expect(on.overlay!.x + on.overlay!.width).toBeLessThanOrEqual(on.pane.x + on.pane.width)
     expect(on.overlay!.y).toBeGreaterThanOrEqual(on.surface.y)
     expect(on.overlay!.y).toBeLessThan(on.surface.y + 40)
     expect(on.overlay!.height).toBeLessThan(on.surface.height * 0.6)
-    expect(on.panel!.x).toBeGreaterThanOrEqual(on.overlay!.x)
-    expect(on.panel!.x + on.panel!.width).toBeLessThanOrEqual(on.overlay!.x + on.overlay!.width)
-    expect(on.panel!.y).toBeGreaterThanOrEqual(on.strip!.y + on.strip!.height + 4)
-    expect(on.panel!.y + on.panel!.height).toBeLessThan(on.surface.y + on.surface.height)
+    expect(on.strip!.x).toBeGreaterThanOrEqual(on.overlay!.x)
+    expect(on.strip!.x + on.strip!.width).toBeLessThanOrEqual(on.overlay!.x + on.overlay!.width)
+    expect(on.strip!.y + on.strip!.height).toBeLessThan(on.surface.y + on.surface.height)
+
+    // And the conversation surface is not in the pane at all any more: it moved to one
+    // app-level dock so that following focus can never remount the assistant inside it.
+    expect(await page.locator('.voice-dock').count()).toBe(0)
   })
 }
 
@@ -152,10 +155,10 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
   })
 }
 
-test('the pane-local dictation layer stays below modal overlays', async ({ page }) => {
+test('the pane-local voice layer stays below modal overlays', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 })
   await page.goto('/pane-harness.html?overlay=1&mobile=0')
-  await expect(page.locator('.dictation-panel')).toBeVisible()
+  await expect(page.locator('.voice-strip')).toBeVisible()
   const bands = await page.evaluate(() => {
     const layer = document.querySelector<HTMLElement>('.voice-overlay-anchor')!
     const modal = document.createElement('div')
@@ -169,44 +172,4 @@ test('the pane-local dictation layer stays below modal overlays', async ({ page 
     return result
   })
   expect(bands.conversation).toBeLessThan(bands.modal)
-})
-
-test('Talk history collapses from its own header without moving the terminal', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 760 })
-  await page.goto('/pane-harness.html?overlay=1&mobile=0')
-  const toggle=page.locator('.conversation-history-toggle')
-  await expect(toggle).toHaveAttribute('aria-expanded','true')
-  const before=await page.evaluate(bounds)
-  await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded','false')
-  await expect(page.locator('.conversation-history')).toHaveCount(0)
-  const after=await page.evaluate(bounds)
-  expect(after.surface).toEqual(before.surface)
-  expect(after.host).toEqual(before.host)
-})
-
-test('the Talk header keeps transient detail accessible without repeating history text', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 780 })
-  await page.goto('/pane-harness.html?overlay=1&mobile=1')
-  await expect(page.locator('.dictation-detail')).toHaveCount(0)
-  await expect(page.locator('.dictation-panel>header .sr-only')).toHaveText('Listening. Say “mux, send” to submit.')
-  await expect(page.locator('.dictation-phase')).toHaveAttribute('title',/Listening\. Say/)
-})
-
-test('the Talk commands button opens the shared catalog above the pane', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 780 })
-  await page.goto('/pane-harness.html?overlay=1&mobile=1')
-  const before=await page.evaluate(bounds)
-  await page.locator('.dictation-actions .voice-commands-open').click()
-  const dialog=page.locator('.voice-command-dialog')
-  await expect(dialog).toBeVisible()
-  await expect(dialog.getByText('append without sending')).toBeVisible()
-  const box=await dialog.boundingBox()
-  expect(box!.x).toBeGreaterThanOrEqual(0)
-  expect(box!.x+box!.width).toBeLessThanOrEqual(390)
-  await page.keyboard.press('Escape')
-  await expect(dialog).toHaveCount(0)
-  const after=await page.evaluate(bounds)
-  expect(after.surface).toEqual(before.surface)
-  expect(after.host).toEqual(before.host)
 })

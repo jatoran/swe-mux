@@ -1,22 +1,38 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import {
-  announceAction, applyAssistantEvent, cancelAction, confirmAction, dialogDetail, ensureDialog,
-  interruptTurn, openFollowUpWindow, rememberDialogId, sendTurn,
+  announceAction, applyAssistantEvent, ASSISTANT_DIALOG_RESET_EVENT, cancelAction, confirmAction,
+  dialogDetail, ensureDialog, interruptTurn, openFollowUpWindow, sendTurn, startNewDialog,
 } from './assistant'
 import type { AssistantAction, AssistantClientContext, AssistantMessage } from './assistant'
 import {
   beginTurnSpeech, cancelTurnSpeech, endTurnSpeech, speakAnnouncement, speakTurnText,
 } from './assistantSpeech'
 import { playEarcon } from './earcons'
+import type { VoiceBodyVariant } from './voiceDock'
 
 /**
- * The conversation view inside the voice overlay (Phase 10.6).
+ * The conversation view inside the voice dock (Phase 10.6).
  *
  * Dialog state is daemon-owned; this component rebuilds its view from one
  * detail fetch and then advances it from `mux:assistant-event` window events,
  * so two devices watching the same dialog render the same turn. Confirmation
  * is typed state rendered as cards, never prose — voice mode drives the same
  * cards through spoken confirm/cancel.
+ *
+ * It is mounted exactly once, at one fixed place in the tree, for the life of
+ * the app: `variant` changes what it draws, never whether it exists. That is a
+ * correctness rule, not a nicety — `announcedRef` below is the client half of
+ * the once-per-card announcement cut, and it lives in this component's memory,
+ * so a remount is indistinguishable from a device that has never seen the card
+ * and would speak an open card's line again. Collapsing the dock, switching the
+ * microphone's addressee, and moving between breakpoints must all leave this
+ * component mounted.
+ *
+ * Starting a fresh conversation is likewise not a local action: both the `new`
+ * button and the voice alias call `startNewDialog`, and the panel reacts to the
+ * `mux:assistant-dialog-reset` it announces. The cleared conversation is stashed
+ * behind a disclosure rather than dropped, which is what lets clearing context
+ * run with no confirmation.
  */
 export function AssistantPanel({
   enabled,
@@ -24,6 +40,9 @@ export function AssistantPanel({
   speechEnabled,
   voiceActive,
   pendingSpeech = '',
+  variant = 'full',
+  onOpenActions,
+  onReply,
 }: {
   enabled: boolean
   clientContext: () => AssistantClientContext
@@ -38,9 +57,27 @@ export function AssistantPanel({
    * turns it into a real turn, which replaces this bubble with the message.
    */
   pendingSpeech?: string
+  /** Full conversation, the dock's one-row peek, or mounted and drawing nothing. */
+  variant?: VoiceBodyVariant
+  /**
+   * How many confirmation cards are open. The dock raises itself off the chip on
+   * the first one, because a countdown nobody can see is a decision made by
+   * timeout rather than by a human.
+   */
+  onOpenActions?: (count: number) => void
+  /** A turn finished; the chip marks it unseen while the dock is collapsed. */
+  onReply?: () => void
 }) {
   const [dialogId, setDialogId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AssistantMessage[]>([])
+  /**
+   * The conversation the last "new conversation" cleared, kept behind a
+   * disclosure. This is what makes clearing context reversible enough to run
+   * with no confirmation, by voice as well as by the button, so it is part of
+   * the feature rather than a convenience.
+   */
+  const [previousMessages, setPreviousMessages] = useState<AssistantMessage[]>([])
+  const [previousOpen, setPreviousOpen] = useState(false)
   const [actions, setActions] = useState<AssistantAction[]>([])
   const [thinking, setThinking] = useState<string | null>(null)
   const [turnRunning, setTurnRunning] = useState(false)
@@ -52,6 +89,8 @@ export function AssistantPanel({
   const speechRef = useRef(speechEnabled); speechRef.current = speechEnabled
   const voiceActiveRef = useRef(voiceActive); voiceActiveRef.current = voiceActive
   const dialogRef = useRef<string | null>(null); dialogRef.current = dialogId
+  const onReplyRef = useRef(onReply); onReplyRef.current = onReply
+  const messagesRef = useRef<AssistantMessage[]>([]); messagesRef.current = messages
   /** True while this turn's speech may be spoken: decided once, at turn start. */
   const speakingTurnRef = useRef<string | null>(null)
   /** Cards already announced on this device; an announcement is per card, not per event. */
@@ -119,6 +158,7 @@ export function AssistantPanel({
         setTurnRunning(false)
         if (event.type === 'assistant_turn_done') {
           playEarcon('done')
+          onReplyRef.current?.()
           if (speakingTurnRef.current === turnId) {
             openFollowUpWindow()
             // `speech` here is only a fallback for a turn that produced no
@@ -132,6 +172,17 @@ export function AssistantPanel({
             cancelTurnSpeech(turnId)
             speakingTurnRef.current = null
           }
+        }
+      }
+      // A notice belongs to no turn, so it is spoken on the announcement path:
+      // it joins whatever stream is live rather than taking the floor, which is
+      // the same rule a confirmation card follows. A Project Action's outcome
+      // arriving mid-sentence must not cut the sentence off.
+      if (event.type === 'assistant_notice') {
+        const notice = String(payload.speech || '')
+        playEarcon('tick')
+        if (notice && voiceActiveRef.current && speechRef.current) {
+          void speakAnnouncement(notice).catch(() => {})
         }
       }
       if (event.type === 'assistant_action') {
@@ -168,10 +219,37 @@ export function AssistantPanel({
     return () => window.removeEventListener('mux:assistant-event', handler)
   }, [])
 
+  // One reset path for both surfaces. The `new` button and the voice alias both
+  // call `startNewDialog`, which announces here; the panel never clears itself
+  // directly, so a conversation started by voice and one started by the button
+  // leave the panel in exactly the same state.
+  useEffect(() => {
+    const handler = (raw: Event) => {
+      const id = String(((raw as CustomEvent).detail as { dialog_id?: string } || {}).dialog_id || '')
+      if (!id) return
+      // Kept, not deleted. The cleared conversation stays readable right here,
+      // which is the whole reason clearing needs no confirmation. An empty one
+      // must not displace a real previous conversation.
+      if (messagesRef.current.length) { setPreviousMessages(messagesRef.current); setPreviousOpen(false) }
+      setMessages([]); setActions([]); setThinking(null); setError(null)
+      setDialogId(id)
+    }
+    window.addEventListener(ASSISTANT_DIALOG_RESET_EVENT, handler)
+    return () => window.removeEventListener(ASSISTANT_DIALOG_RESET_EVENT, handler)
+  }, [])
+
   useLayoutEffect(() => {
     const element = logRef.current
     if (element) element.scrollTop = element.scrollHeight
-  }, [messages, actions, thinking, pendingSpeech])
+  }, [messages, actions, thinking, pendingSpeech, variant])
+
+  const openActions = actions.filter(item => item.status === 'pending' || item.status === 'scheduled')
+  const openActionCount = openActions.length
+  // Reported rather than rendered upward: the dock owns whether it is on screen, and this
+  // is the one signal that may raise it. Keyed on the count so a re-render with the same
+  // cards does not re-fire.
+  const reportActionsRef = useRef(onOpenActions); reportActionsRef.current = onOpenActions
+  useEffect(() => { reportActionsRef.current?.(openActionCount) }, [openActionCount])
 
   const submit = async () => {
     const text = input.trim()
@@ -186,24 +264,58 @@ export function AssistantPanel({
   }
 
   const newDialog = async () => {
-    rememberDialogId(null)
-    setMessages([]); setActions([]); setThinking(null); setError(null)
     try {
-      const id = await ensureDialog()
-      setDialogId(id)
+      await startNewDialog()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
   }
 
+  // `hidden` is still a render, never an unmount: the event listener, the dialog state,
+  // the speech streams, and the announced-card set all live here and must survive the
+  // dock being collapsed to the top bar or switched to the dictation body.
+  if (variant === 'hidden') return <div class="assistant-panel hidden-variant" hidden />
   if (!enabled) {
-    return <div class="assistant-panel disabled">
-      <p>The assistant is off. Enable it in Settings → Assistant to converse with the fleet.</p>
+    return variant === 'peek'
+      ? <div class="assistant-panel peek disabled"><p>The assistant is off.</p></div>
+      : <div class="assistant-panel disabled">
+        <p>The assistant is off. Enable it in Settings → Assistant to converse with the fleet.</p>
+      </div>
+  }
+  if (variant === 'peek') {
+    // One row: what was last said, what is being thought, and every open card in full.
+    // The cards are the reason peek exists — they are the only part of a conversation
+    // that expires, so they keep their buttons and their countdown here rather than
+    // being summarised into a badge the operator would have to expand to act on.
+    const latest = messages[messages.length - 1]
+    return <div class="assistant-panel peek">
+      {error && <p class="assistant-error" role="alert">{error}</p>}
+      {thinking
+        ? <p class="assistant-thinking">{thinking}</p>
+        : latest
+          ? <p class="assistant-peek-line" title={latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}>
+            <b>{latest.role === 'user' ? 'you' : 'mux'}</b>
+            <span>{latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}</span>
+          </p>
+          : <p class="assistant-peek-line empty"><span>No conversation yet — expand to start one.</span></p>}
+      {openActions.map(action => <AssistantActionCard key={action.id} action={action} />)}
     </div>
   }
-  const openActions = actions.filter(item => item.status === 'pending' || item.status === 'scheduled')
   return <div class="assistant-panel">
     <div ref={logRef} class="assistant-log" role="log" aria-live="polite">
+      {previousMessages.length > 0 && <details
+        class="assistant-previous"
+        open={previousOpen}
+        onToggle={event => setPreviousOpen(event.currentTarget.open)}
+      >
+        <summary>
+          previous conversation · {previousMessages.length} message{previousMessages.length === 1 ? '' : 's'} · kept, not deleted
+        </summary>
+        {previousMessages.map(message => <article key={`previous-${message.id}`} class={`assistant-message ${message.role}`}>
+          <header>{message.role === 'user' ? 'you' : 'mux'}</header>
+          <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
+        </article>)}
+      </details>}
       {messages.length === 0 && !thinking && <p class="assistant-empty">
         Ask about the fleet, queue or reword messages, spawn sessions, or navigate — in plain language.
       </p>}
@@ -234,7 +346,7 @@ export function AssistantPanel({
       {turnRunning
         ? <button class="assistant-stop" title="Interrupt the running turn" onClick={() => { if (dialogId) void interruptTurn(dialogId) }}>stop</button>
         : <button class="assistant-send" disabled={!input.trim()} onClick={() => void submit()}>send</button>}
-      <button class="assistant-new" title="Start a fresh conversation" onClick={() => void newDialog()}>new</button>
+      <button class="assistant-new" title="Start a fresh conversation. The current one is kept, not deleted." onClick={() => void newDialog()}>new</button>
     </footer>
   </div>
 }

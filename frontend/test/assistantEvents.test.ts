@@ -86,6 +86,23 @@ test('action events upsert by id so status transitions replace the card', () => 
   assert.equal(state.actions[0].status, 'executed')
 })
 
+test('a notice lands as a finished assistant message, once', () => {
+  // A Project Action's outcome arrives minutes after the turn that started it
+  // ended, so it belongs to no turn: it renders complete rather than streaming,
+  // and a replayed event must not double it.
+  const notice = payload({
+    message_id: 'n1', display: 'The "Verify" action finished cleanly.',
+    speech: 'The Verify action finished cleanly.',
+  })
+  let state = applyAssistantEvent(empty(), { type: 'assistant_notice', payload: notice })
+  assert.equal(state.messages.length, 1)
+  assert.equal(state.messages[0].role, 'assistant')
+  assert.equal(state.messages[0].status, 'done')
+  assert.equal(state.messages[0].display, 'The "Verify" action finished cleanly.')
+  state = applyAssistantEvent(state, { type: 'assistant_notice', payload: notice })
+  assert.equal(state.messages.length, 1)
+})
+
 test('a failed turn lands as a failed assistant message', () => {
   const state = applyAssistantEvent(empty(), {
     type: 'assistant_turn_failed', payload: payload({ error: 'budget exhausted' }),

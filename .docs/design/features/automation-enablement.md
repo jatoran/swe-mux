@@ -10,7 +10,14 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 ## Key concepts
 
 - **Automation**: one registry entry with `id`, `kind` (`substrate` | `consumer`), `label`,
-  `requires` (direct dependency ids), and `implemented`.
+  `requires` (direct dependency ids), `implemented`, and `spends`.
+- **`spends`**: whether switching it on can cost money. It rides the registry payload so the
+  toggle surface's chip and every gate that offers the same switch read one fact from one
+  source; previously it was documented only in this file and in comments, which meant a
+  one-click grant could not tell the operator the thing they most need to know before
+  pressing it. Asked of the whole closure, never of the named id alone: `catch_me_up` costs
+  nothing and cannot be enabled without `scan_timeline`, which does (`enabling_closure`,
+  `spends_money`).
 - **`implemented`**: false while an id is reserved with no code behind it. The toggle
   surface renders dependencies straight from this registry, so a placeholder edge presented
   as a complete dependency set would let a user switch on something that then does nothing.
@@ -105,14 +112,49 @@ enabled-and-working:
   is revision-checked like every other project-config write.
 - `scan_timeline` also carries `scan_timeline_auto_enable` and the Project context editor in
   this editor, because both are Project-wide and the per-run toggle in the drawer is not.
+- An automation that spends is chipped as such. Marked rather than unmarked: most of the list
+  is free, and a chip on every row would say nothing.
 - Spending limits are **not** per-project. Scan timeline's budgets are global settings
   (Settings → Automation → Scan timeline); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
   left in an existing Project file parses, is ignored, and is dropped on the next write.
   Project permission never enables a run; the current conversation must still be enabled from
   its Timeline tab.
-- The Timeline tab exposes a Project-scoped Scan timeline shortcut.
-  Enabling it adds `scan_timeline` plus `raw_store` and `tier0`; disabling it also disables consumers that depend on the timeline.
-  This shortcut creates the blank Project context file but does not backfill or enable the current run.
+
+## Agent authority
+
+Four Project fields decide whether an agent still needs a human after the automation above it
+is on. All four shipped enforced and unreachable - a line in a committed `.swe-mux/config.toml`
+with no control in any overlay, which made the inert default impossible to discover and
+impossible to change from the app; one of them told the agent to go and edit the file by hand
+(`agent_messaging.py`). They live in the Projects registry beside the opt-ins they qualify,
+because only an editor may take a permission away.
+
+| Field | Inert default | Granted | Gated by |
+|---|---|---|---|
+| `session_control_grant` | `draft` — a human approves each | acts directly | `session_control` |
+| `spawn_grant` | `draft` | creates sessions directly | `session_control` |
+| `land_grant` | `draft` | starts the pipeline directly | `land_queue` |
+| `interject_grant` | `off` — waits for the queue | may write mid-turn | (delivery readiness) |
+
+`frontend/test/settingTargets.test.ts` holds every grantable Project field to having a control
+here, so a fifth arriving the same way fails a test.
+
+## Grants
+
+Every opt-in above can also be switched on from the surface that needs it, through
+`POST /api/grants`. That path is additive only - it can never turn an automation off - so the
+editor here remains the single owner of withdrawal. The dependency closure is computed by the
+daemon rather than sent by the caller, and the whole grant lands or none of it does.
+The contract, the disclosures, and the refusals: `setting-links.md`.
+
+## First-use starting set
+
+`RECOMMENDED_PROJECT_AUTOMATIONS` is the model-free set offered as one checkbox when a Project
+is created: the four detectors plus `code_graph`, with `raw_store` and `tier0` under them.
+It is applied through the ordinary grant path, and it is **not** an inherited default template
+- it is written into that Project's own file, so "nothing runs on a Project that did not opt
+in" stays literally true and no existing Project changes behaviour because the constant did.
+`_validate_recommended` refuses at import to let a spending automation into it.
 
 ## Configuration
 
@@ -121,10 +163,11 @@ enabled-and-working:
 ## API surface
 
 ```text
-GET /api/projects/{project_id}/automations
-PUT /api/projects/{project_id}/automations   {automations: {id: bool}, revision?}
-GET /api/automation/projects
-PUT /api/sessions/{session_id}/scan-timeline/project   {enabled: bool}
+GET  /api/projects/{project_id}/automations
+PUT  /api/projects/{project_id}/automations   {automations: {id: bool}, revision?}
+GET  /api/automation/projects
+GET  /api/grants
+POST /api/grants   {install?, project_id?, automations?, values?, revision?}
 ```
 
 `GET` returns the registry (id, kind, label, `requires`, `implemented`), the project's

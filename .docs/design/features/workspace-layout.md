@@ -57,6 +57,33 @@ PaneLeaf = terminal | note | preview | history | queue
   already shows.
 - New terminals and resources join the focused pane by default; explicit directional actions
   create a split left/right/above/below.
+- **A session the daemon started joins the tab layout on its own, the moment a client learns of
+  it.** Only a device launch used to write a leaf (`spawnTerminal`), so an approved
+  `request_spawn`, the assistant's daemon spawn path, and a scheduled run all arrived in the
+  fleet with no leaf anywhere: a sidebar row attached to no pane group, rendered as a synthetic
+  pane covering the whole workspace, joining the tabs only once the operator tapped it. That made
+  the operator perform a placement decision they never asked to make, once per spawned session,
+  and on a phone the unified rail had nowhere to draw the session at all.
+  The placement rule is `spawnTerminal`'s own, because the point is that a daemon-started session
+  lands where the same session launched from this device would have: the focused pane of the
+  Project on screen, otherwise the pane that already holds that Project's terminal tabs, and a new
+  pane only when the Project's layout has no pane at all. Fleet order decides the tab order when
+  several arrive together, and they all land in one pane rather than one pane each.
+  **Joining never takes focus.** The receiving pane keeps showing the tab it was showing and the
+  app-level focus does not move, because the operator is mid-turn in something else; the tab
+  simply appears. The single exception is a session the operator is *already* looking at - an
+  unpanned focused view is that full-workspace synthetic pane, so restoring some other tab would
+  hide what is on screen. Following focus there is not taking it.
+- Ended sessions are deliberately left out of that join. A pane is *kept* for a session that ended
+  in one (above), never minted for one nobody ever opened: a Project's archive of finished
+  daemon runs would otherwise spend the 64-leaf budget at boot on sessions with nothing running.
+  They stay listed after the tree and a tap still opens them.
+- The join is a write nobody asked for, which constrains it twice. It is persisted quietly, so a
+  revision race lost to another device reports nothing - each device computes the same join from
+  the same fleet, the first PATCH wins, and the loser's refresh finds the leaf already there and
+  proposes nothing, so the two converge rather than fight. And it retires after a few refused
+  writes (`MAX_JOIN_ATTEMPTS`): a Project already at the leaf cap refuses every PATCH, and each
+  refusal refreshes, so without that bound the join would be an unbounded retry loop.
 - Placement has no per-resource exceptions and no implicit splits. Every open — terminal, note,
   file editor, preview — is a tab in the anchor's pane, and an unanchored open lands in the
   first pane. The old Files-pane and terminal-owned-note exceptions are gone. Nothing
@@ -83,6 +110,9 @@ PaneLeaf = terminal | note | preview | history | queue
   dropping it into the list opens it at that slot, which is the only reading a position has for a
   session that has none. A pending terminal is likewise not a target: its leaf is client-only and
   about to be replaced.
+  Since daemon-started sessions join on their own, what is left down there is what the join
+  deliberately declines: ended sessions, a Project whose own launch is still in flight, and a
+  session whose join the server kept refusing.
 - The app-level Conversation surface is not a `PaneLeaf`, does not participate in layout persistence or focus traversal, and cannot add tracks or resize a terminal.
   Pane-local read-aloud playback remains a zero-height overlay over its owning terminal surface.
 - Desktop pane boundaries use four-pixel neutral gutters and a quiet one-pixel pane frame.
@@ -255,6 +285,7 @@ participating in PTY geometry. Mechanics: `technical/frontend/workspace-state.md
 
 - `frontend/src/layout.ts`
 - `frontend/src/mobileWorkspace.ts`
+- `frontend/src/sessionJoin.ts`
 - `frontend/src/warmPanes.ts`
 - `frontend/src/App.tsx`
 - `frontend/src/dragReorder.ts`
@@ -262,6 +293,7 @@ participating in PTY geometry. Mechanics: `technical/frontend/workspace-state.md
 - `src/swe_mux/layouts.py`
 - `src/swe_mux/history.py`
 - `frontend/test/layout.test.ts`
+- `frontend/test/sessionJoin.test.ts`
 - `frontend/test/warmPanes.test.ts`
 - `frontend/test/mobileWorkspace.test.ts`
 - `frontend/test/randomId.test.ts`

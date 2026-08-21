@@ -66,6 +66,33 @@ test('the spend view answers which automation costs what, ranked', async ({ page
   expect(headline).toBe('$0.0006')
 })
 
+/**
+ * Caching is measured rather than assumed, and the three readings are different answers.
+ *
+ * A row with billed prompt tokens and no cached ones reads 0% - a real, actionable "this is
+ * not caching". A row with no billed prompt tokens at all reads as a dash, because an unused
+ * rule and a daemon predating cache accounting look identical and neither is a broken cache.
+ */
+test('the prompt-cache hit rate sits beside the spend it explains', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openSpend(page)
+
+  const cached = page.locator('.cost-summary article', { hasText: 'prompt cache' })
+  await expect(cached.locator('strong')).toHaveText('77%')
+  await expect(cached.locator('small')).toContainText('72% over 7d')
+
+  const scan = page.locator('.cost-table tbody tr', { hasText: 'Scan timeline' })
+  await expect(scan.locator('td').nth(5)).toHaveText('77%')
+  await expect(scan.locator('td').nth(5)).toHaveAttribute(
+    'title', '3,000,000 of 3,900,000 prompt tokens served from cache')
+
+  const titler = page.locator('.cost-table tbody tr', { hasText: 'Session titler' })
+  await expect(titler.locator('td').nth(5)).toHaveText('0%')
+
+  const retired = page.locator('.cost-table tbody tr', { hasText: 'builtin.removed-triage' })
+  await expect(retired.locator('td').nth(5)).toHaveText('—')
+})
+
 test('a cost too small to print never renders as free', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await openSpend(page)
@@ -141,7 +168,7 @@ test('at phone width every table row becomes a labelled card', async ({ page }) 
       ? [...document.querySelectorAll('.cost-table tbody tr:first-child td')]
         .map(cell => cell.getAttribute('data-label'))
       : [])
-  expect(labels).toEqual(['automation', 'today', '7 days', 'calls', 'tokens', 'model'])
+  expect(labels).toEqual(['automation', 'today', '7 days', 'calls', 'tokens', 'cached', 'model'])
   await expect(page.locator('.cost-table thead')).toBeHidden()
 })
 
