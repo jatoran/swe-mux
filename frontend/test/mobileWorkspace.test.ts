@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { parseLayout } from '../src/layout.ts'
 import { adjacentMobileTab, mobileWorkspaceProjection } from '../src/mobileWorkspace.ts'
+import { joinSessions } from '../src/sessionJoin.ts'
 
 const layout=parseLayout({
   version:6,
@@ -41,4 +42,14 @@ test('rail order is the layout, with no device-local permutation left to apply',
   const projection=mobileWorkspaceProjection(layout,null,'term-b')
   assert.deepEqual(projection.tabs.map(tab=>tab.id),['term-a','note-a','term-b','preview-a','history:archive'])
   assert.equal(adjacentMobileTab(projection.tabs,'term-a')?.id,'note-a')
+})
+
+test('a daemon-started session that joined the layout reaches the rail without moving selection',()=>{
+  // The rail is a projection, so the join needs no mobile-specific placement - but it does have
+  // to be a real leaf. While these sessions floated outside the pane tree the phone had nowhere
+  // to draw them at all, which is the mobile half of the same defect.
+  const joined=joinSessions(layout,['daemon-1'],'term-b')
+  const projection=mobileWorkspaceProjection(joined,'term-b','term-b')
+  assert.deepEqual(projection.tabs.map(tab=>tab.id),['term-a','note-a','term-b','preview-a','history:archive','daemon-1'])
+  assert.equal(projection.selected?.id,'term-b')
 })

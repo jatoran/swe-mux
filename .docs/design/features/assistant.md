@@ -106,10 +106,15 @@ assistant and never picks a pane:
 - `spawn_session` from a turn with a connected workspace dispatches to that device's
   own launch path (`spawnTerminal`), so the new session opens as a **tab in the
   currently active pane** with the optimistic leaf and focus every other launch entry
-  point gets — instead of the layout reconciler's default new pane. There is
+  point gets. There is
   deliberately no daemon fallback when the dispatch fails: a lost acknowledgement plus
   a daemon retry would spawn twice. A turn with no `client_id` (old client, headless)
-  keeps the daemon `spawn_op` path.
+  keeps the daemon `spawn_op` path - which is no longer the difference it was: a
+  daemon-started session is joined to the layout by the client's own reconciler, also as
+  a tab in a sensible pane, but deliberately without taking focus
+  (`workspace-layout.md` § Placement and persistence). Dispatching to the device is
+  still the better path for a spawn the operator just asked for out loud, because that
+  one *should* land in front of them.
 
 Every client-executed action is stamped with the originating tab's per-tab
 `client_id` (sent in the turn's `client_context`, persisted in the action's

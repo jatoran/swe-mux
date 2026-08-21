@@ -2011,8 +2011,11 @@ class AssistantService:
             if str(arguments.get("client_id") or ""):
                 # The operator's device spawns through its own launch path, so
                 # the new session opens as a tab in the currently active pane
-                # instead of the layout reconciler's default new pane. No
-                # daemon fallback on failure: a lost acknowledgement plus a
+                # and takes focus, which is what a launch the operator just
+                # asked for should do. A daemon spawn is joined to the layout
+                # by the client's reconciler instead (`sessionJoin.ts`) - also
+                # as a tab, but deliberately without taking focus. No daemon
+                # fallback on failure: a lost acknowledgement plus a
                 # daemon retry would spawn the session twice. The backend is
                 # fully resolved here — the frontend may not name harnesses.
                 # Staging still happens daemon-side (the client passes
