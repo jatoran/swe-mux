@@ -28,6 +28,10 @@ import logging
 import time
 from typing import Any
 
+from . import budget
+from .budget import coerce_budget
+from .config import BUDGET_FIELDS
+
 log = logging.getLogger(__name__)
 
 NARRATION_RULE_ID = "builtin:attention-narration"
@@ -97,10 +101,14 @@ class AttentionNarrator:
             return None, "no_model"
         if self._failed_at and time.monotonic() - self._failed_at < RETRY_AFTER_FAILURE_SECONDS:
             return None, "failed"
-        budget = float(getattr(self.config, "attention_narration_daily_budget_usd", 0.10))
+        cap = coerce_budget(
+            getattr(self.config, "attention_narration_daily_budget", None),
+            fallback=BUDGET_FIELDS["attention_narration_daily_budget"].default,
+        )
         spend = await self.store.spend(rule_id=NARRATION_RULE_ID)
-        if float(spend["cost_usd"]) >= budget:
-            log.info("attention narration skipped for %s: daily budget spent", item["id"])
+        verdict = budget.spent_out(cap, spend, label="the daily attention-narration")
+        if verdict.exhausted:
+            log.info("attention narration skipped for %s: %s", item["id"], verdict.reason)
             return None, "budget"
         prompt = build_slice(item)
         call_id = await self.store.observer_started(
@@ -147,7 +155,8 @@ class AttentionNarrator:
             model=completion.resolved_model,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
-            cost_usd=completion.cost_usd or 0,
+            # `None` is unmeasured, not free (`budget.py`).
+            cost_usd=completion.cost_usd,
             call_id=call_id,
         )
         self._failed_at = None

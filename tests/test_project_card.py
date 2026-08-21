@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ import pytest
 
 from swe_mux import automation_registry as registry
 from swe_mux.automation_store import AutomationStore
+from swe_mux.budget import Budget
 from swe_mux.openrouter import OpenRouterError, OpenRouterResult
 from swe_mux.project_card import (
     PROJECT_CARD_RULE_ID,
@@ -36,7 +37,9 @@ class FakeConfig:
     automation_enabled: bool = True
     openrouter_cheap_model: str = "cheap/model"
     project_card_model: str = ""
-    project_card_daily_budget_usd: float = 0.25
+    project_card_daily_budget: Budget = field(
+        default_factory=lambda: Budget(usd=0.25, mode="usd")
+    )
     project_card_max_input_tokens: int = 6000
     project_card_max_output_tokens: int = 600
 
@@ -397,7 +400,10 @@ async def test_an_exhausted_budget_yields_no_card(tmp_path: Path, store_path: Pa
     provider = FakeProvider()
     try:
         service = _service(
-            store, tmp_path, provider, config=FakeConfig(project_card_daily_budget_usd=0.0)
+            store,
+            tmp_path,
+            provider,
+            config=FakeConfig(project_card_daily_budget=Budget(usd=0.0, mode="usd")),
         )
         assert await service.card_for_session("s1") is None
         assert provider.calls == []

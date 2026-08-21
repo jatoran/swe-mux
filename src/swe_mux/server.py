@@ -38,7 +38,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
-from . import git_init, git_review, session_titles
+from . import budget, git_init, git_review, session_titles
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -4585,16 +4585,16 @@ async def _run_observer_batch(
             spend = await store.spend()
             rule_id = f"batch.{kind}"
             rule_spend = await store.spend(rule_id=rule_id)
-            if (
-                spend["tokens"] >= config.automation_daily_token_budget
-                or spend["cost_usd"] >= config.automation_daily_budget_usd
+            for verdict in (
+                budget.spent_out(
+                    config.automation_daily_budget, spend, label="the global daily observer"
+                ),
+                budget.spent_out(
+                    config.automation_rule_daily_budget, rule_spend, label="the batch observer rule"
+                ),
             ):
-                raise ValueError("global daily observer budget is exhausted")
-            if (
-                rule_spend["tokens"] >= config.automation_rule_daily_token_budget
-                or rule_spend["cost_usd"] >= config.automation_rule_daily_budget_usd
-            ):
-                raise ValueError("batch observer rule budget is exhausted")
+                if verdict.exhausted:
+                    raise ValueError(verdict.reason)
             hour_ago = time.time() - 3600
             if await store.observer_call_count(hour_ago) >= config.automation_hourly_call_cap:
                 raise ValueError("global hourly observer call cap is exhausted")
@@ -4652,7 +4652,7 @@ async def _run_observer_batch(
                     model=completion.resolved_model,
                     input_tokens=completion.input_tokens,
                     output_tokens=completion.output_tokens,
-                    cost_usd=completion.cost_usd or 0,
+                    cost_usd=completion.cost_usd,
                     call_id=call_id,
                 )
             except Exception as exc:

@@ -42,6 +42,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import budget
+from .budget import coerce_budget
+from .config import BUDGET_FIELDS
 from .deterministic_consumers import build_doc_ownership, normalize_target
 
 log = logging.getLogger(__name__)
@@ -505,10 +508,14 @@ class ProjectCardService:
     async def _build(
         self, project_id: str, project_root: str, sources: CardSources, model: str
     ) -> ProjectCard:
-        budget = float(getattr(self.config, "project_card_daily_budget_usd", 0.0))
+        cap = coerce_budget(
+            getattr(self.config, "project_card_daily_budget", None),
+            fallback=BUDGET_FIELDS["project_card_daily_budget"].default,
+        )
         spend = await self.store.spend(rule_id=PROJECT_CARD_RULE_ID)
-        if float(spend["cost_usd"]) >= budget:
-            raise ProjectCardError("the daily project-card budget is exhausted")
+        verdict = budget.spent_out(cap, spend, label="the daily project-card")
+        if verdict.exhausted:
+            raise ProjectCardError(verdict.reason)
         max_input_tokens = int(getattr(self.config, "project_card_max_input_tokens", 6000))
         max_output_tokens = int(getattr(self.config, "project_card_max_output_tokens", 600))
         prompt_text = sources.prompt_text(max_chars=max_input_tokens * 4)
@@ -551,7 +558,7 @@ class ProjectCardService:
             model=completion.resolved_model,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
-            cost_usd=completion.cost_usd or 0,
+            cost_usd=completion.cost_usd,
             call_id=call_id,
         )
         summary = str(completion.value.get("summary") or "").strip()

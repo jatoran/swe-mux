@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .budget import Budget, coerce_budget
+from .budget import validate as validate_budget
 from .harness import (
     HARNESSES,
     host_executable,
@@ -74,7 +76,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -419,6 +421,124 @@ class LaunchProfile:
     cwd_integration: bool = False
     enabled: bool = True
     backend: str = "shell"
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetSpec:
+    """One spending cap: where it lives, what it replaced, and its bounds.
+
+    Every model-cost ceiling in the install is described here exactly once, and
+    the three things that used to be scattered - the field, its validation
+    range, and the pre-`Budget` keys it must absorb without loosening - are one
+    record so they cannot drift apart.
+
+    `legacy_tokens` / `legacy_usd` name the scalar settings this budget replaced,
+    and `default` carries the value each of those scalars defaulted to. That
+    pairing is what makes the upgrade lossless: a config that set only one half
+    of a pair had the *other* half enforced at its default by the previous
+    build, so migration must fill it from here rather than leave it unset.
+    """
+
+    field: str
+    default: Budget
+    max_tokens: int
+    max_usd: float
+    legacy_tokens: str = ""
+    legacy_usd: str = ""
+    min_tokens: int = 0
+    min_usd: float = 0.0
+    label: str = ""
+
+
+#: The install's complete set of spending caps.
+#:
+#: The mode each one defaults to is the unit the pre-`Budget` build enforced:
+#: the automation ceilings and the scan-timeline daily budget checked tokens
+#: *and* dollars, which is `either`; the scan run budget checked tokens only;
+#: the assistant, read-aloud summaries, the Project card, and attention
+#: narration checked dollars only. Migration reads the mode from here, so no
+#: existing cap can silently widen.
+#:
+#: Rate limits are deliberately absent. `automation_hourly_call_cap`,
+#: `agent_message_hourly_budget`, `attention_daily_interrupt_budget`, and the
+#: rest count *acts*, not spend; they never read the ledger, and forcing them
+#: into a tokens-or-dollars choice would ask the operator to denominate a thing
+#: that has no price. Per-call ceilings (`automation_max_output_tokens` and its
+#: siblings) are absent for the same reason: they bound one request's size
+#: rather than a period's spend.
+BUDGET_SPECS: tuple[BudgetSpec, ...] = (
+    BudgetSpec(
+        field="automation_daily_budget",
+        default=Budget(tokens=10_000_000, usd=20.0, mode="either"),
+        max_tokens=100_000_000,
+        max_usd=10_000.0,
+        legacy_tokens="automation_daily_token_budget",
+        legacy_usd="automation_daily_budget_usd",
+        label="All automation",
+    ),
+    BudgetSpec(
+        field="automation_rule_daily_budget",
+        default=Budget(tokens=4_000_000, usd=10.0, mode="either"),
+        max_tokens=100_000_000,
+        max_usd=10_000.0,
+        legacy_tokens="automation_rule_daily_token_budget",
+        legacy_usd="automation_rule_daily_budget_usd",
+        label="Per automation rule",
+    ),
+    BudgetSpec(
+        field="scan_timeline_daily_budget",
+        default=Budget(tokens=3_000_000, usd=5.0, mode="either"),
+        max_tokens=100_000_000,
+        max_usd=1_000.0,
+        legacy_tokens="scan_timeline_daily_token_budget",
+        legacy_usd="scan_timeline_daily_budget_usd",
+        min_tokens=512,
+        label="Scan timeline, daily",
+    ),
+    BudgetSpec(
+        field="scan_timeline_run_budget",
+        default=Budget(tokens=500_000, usd=None, mode="tokens"),
+        max_tokens=20_000_000,
+        max_usd=1_000.0,
+        legacy_tokens="scan_timeline_run_token_budget",
+        min_tokens=512,
+        label="Scan timeline, per conversation",
+    ),
+    BudgetSpec(
+        field="assistant_daily_budget",
+        default=Budget(tokens=None, usd=2.0, mode="usd"),
+        max_tokens=100_000_000,
+        max_usd=1_000.0,
+        legacy_usd="assistant_daily_budget_usd",
+        label="Assistant, daily",
+    ),
+    BudgetSpec(
+        field="tts_daily_budget",
+        default=Budget(tokens=None, usd=1.0, mode="usd"),
+        max_tokens=100_000_000,
+        max_usd=100.0,
+        legacy_usd="tts_daily_budget_usd",
+        label="Read-aloud summaries, daily",
+    ),
+    BudgetSpec(
+        field="project_card_daily_budget",
+        default=Budget(tokens=None, usd=0.25, mode="usd"),
+        max_tokens=100_000_000,
+        max_usd=100.0,
+        legacy_usd="project_card_daily_budget_usd",
+        label="Project context card, daily",
+    ),
+    BudgetSpec(
+        field="attention_narration_daily_budget",
+        default=Budget(tokens=None, usd=0.10, mode="usd"),
+        max_tokens=100_000_000,
+        max_usd=100.0,
+        legacy_usd="attention_narration_daily_budget_usd",
+        label="Attention narration, daily",
+    ),
+)
+
+BUDGET_FIELDS: dict[str, BudgetSpec] = {spec.field: spec for spec in BUDGET_SPECS}
 
 
 @dataclass(slots=True)
@@ -828,17 +948,23 @@ class Config:
     # under half a cent. The token axis must never be the binding constraint
     # while the dollar axis sits at 0.2% - the dollar figures are the ones that
     # describe real cost, so the token caps are now headroom rather than policy.
-    automation_daily_token_budget: int = 10_000_000
-    automation_daily_budget_usd: float = 20.0
-    automation_rule_daily_token_budget: int = 4_000_000
-    automation_rule_daily_budget_usd: float = 10.0
+    # Both axes are enforced (`either`), which is what the two scalar settings
+    # these replaced did together; see `BUDGET_SPECS`.
+    automation_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["automation_daily_budget"].default
+    )
+    automation_rule_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["automation_rule_daily_budget"].default
+    )
     automation_hourly_call_cap: int = 1_200
     automation_rule_hourly_call_cap: int = 600
     # Control-plane project card (CP §5.4). Per-project opt-in gates whether it
     # runs at all; these bound what one build may cost. Empty model falls back
     # to the automation cheap model; with neither set there is simply no card.
     project_card_model: str = ""
-    project_card_daily_budget_usd: float = 0.25
+    project_card_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["project_card_daily_budget"].default
+    )
     project_card_max_input_tokens: int = 6000
     project_card_max_output_tokens: int = 600
     # Phase 5.5 semantic timeline. The global switch is an emergency/master
@@ -854,19 +980,25 @@ class Config:
     # budget and hourly call cap and is exempt from the per-rule caps; the
     # global automation ceilings above still apply as an emergency bound, and
     # the dollar budgets (global, per-rule, and the Project's own) are the real
-    # ceiling. At the observed ~$0.08 per million tokens the daily budget below
+    # ceiling. At the observed ~$0.08 per million tokens the daily token figure
     # is about a quarter of a dollar.
-    scan_timeline_daily_token_budget: int = 3_000_000
+    #
+    # The daily budget enforces both axes (`either`), matching the two scalar
+    # settings it replaced. Its dollar half was once a per-Project field in a
+    # committed `.swe-mux/config.toml`, which meant the cap that could stop
+    # scanning lived in a file nobody opens, defaulted differently per checkout,
+    # and had to be raised once per Project; it is one global setting now,
+    # edited in Settings -> Automation.
+    #
+    # The per-conversation budget migrates as `tokens`, because tokens is the
+    # only unit it ever enforced. It can now be given a dollar figure too.
+    scan_timeline_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["scan_timeline_daily_budget"].default
+    )
     scan_timeline_hourly_call_cap: int = 600
-    scan_timeline_run_token_budget: int = 500_000
-    # The feature's dollar ceiling, and the one number worth adjusting. It was a
-    # per-Project field in a committed `.swe-mux/config.toml`, which meant the
-    # cap that could stop scanning lived in a file nobody opens, defaulted
-    # differently per checkout, and had to be raised once per Project. One
-    # global setting, edited in Settings -> Automation. At the observed ~$0.08
-    # per million tokens this is far above the daily token budget above, so the
-    # tokens run out first - which is the intended order.
-    scan_timeline_daily_budget_usd: float = 5.0
+    scan_timeline_run_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["scan_timeline_run_budget"].default
+    )
     # The schema permits ~2,600 characters of prose across five fields. 420
     # output tokens could not hold its own worst case, and a truncated strict
     # JSON body is an unparseable response that costs a record.
@@ -887,7 +1019,9 @@ class Config:
     # Narration is the one model-cost part of the phase, off until asked for.
     attention_narration_enabled: bool = False
     attention_narration_model: str = ""
-    attention_narration_daily_budget_usd: float = 0.10
+    attention_narration_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["attention_narration_daily_budget"].default
+    )
     attention_narration_max_output_tokens: int = 200
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
@@ -913,7 +1047,9 @@ class Config:
     # budget under the `builtin:assistant` ledger rule.
     assistant_enabled: bool = False
     assistant_model: str = "openai/gpt-5.6-terra"
-    assistant_daily_budget_usd: float = 2.0
+    assistant_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["assistant_daily_budget"].default
+    )
     assistant_max_output_tokens: int = 700
     # How many stored dialog messages one turn's prompt may carry. The fleet
     # snapshot and command catalog ride every turn regardless; this bounds only
@@ -963,7 +1099,9 @@ class Config:
     tts_summary_model: str = ""
     tts_summary_max_tokens: int = 500
     tts_verbatim_max_chars: int = 6000
-    tts_daily_budget_usd: float = 1.0
+    tts_daily_budget: Budget = field(
+        default_factory=lambda: BUDGET_FIELDS["tts_daily_budget"].default
+    )
     tts_cache_mb: int = 200
     # Off by default so a fresh install never downloads the multi-hundred-MB
     # Whisper model and the Silero VAD assets on the first Talk without warning.
@@ -991,6 +1129,15 @@ class Config:
     # from different git worktrees will otherwise contend over the same mux.db.
     data_dir: Path = field(default_factory=default_data_dir)
     config_path: Path | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        # `Config(**asdict(other))` is how `update_config` builds a candidate and
+        # how several tests build a variant, and `asdict` flattens a nested
+        # dataclass to a plain dict. Coercing here means a `Budget` field is a
+        # `Budget` however the instance was constructed, so enforcement never has
+        # to ask whether it is holding the shape or the mapping.
+        for name, spec in BUDGET_FIELDS.items():
+            setattr(self, name, coerce_budget(getattr(self, name), fallback=spec.default))
 
     @property
     def database_path(self) -> Path:
@@ -1078,6 +1225,19 @@ def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> No
 
 def _validate(config: Config) -> None:
     errors: dict[str, str] = {}
+    # Every spending cap validates through one implementation against the bounds
+    # declared beside it, so a new budget cannot ship without a range and an
+    # existing one cannot drift from the range its surface advertises.
+    for spec in BUDGET_SPECS:
+        validate_budget(
+            coerce_budget(getattr(config, spec.field), fallback=spec.default),
+            field=spec.field,
+            errors=errors,
+            max_tokens=spec.max_tokens,
+            max_usd=spec.max_usd,
+            min_tokens=spec.min_tokens,
+            min_usd=spec.min_usd,
+        )
     if config.host not in LOOPBACK_HOSTS:
         errors["host"] = (
             "must be a loopback address (127.0.0.1, localhost, or ::1); "
@@ -1345,44 +1505,26 @@ def _validate(config: Config) -> None:
         errors["automation_max_input_tokens"] = "must be between 128 and 128000"
     if not 16 <= config.automation_max_output_tokens <= 8192:
         errors["automation_max_output_tokens"] = "must be between 16 and 8192"
-    if not 0 <= config.automation_daily_token_budget <= 100_000_000:
-        errors["automation_daily_token_budget"] = "must be between 0 and 100000000"
-    if not 0 <= config.automation_daily_budget_usd <= 10_000:
-        errors["automation_daily_budget_usd"] = "must be between 0 and 10000"
-    if not 0 <= config.automation_rule_daily_token_budget <= 100_000_000:
-        errors["automation_rule_daily_token_budget"] = "must be between 0 and 100000000"
-    if not 0 <= config.automation_rule_daily_budget_usd <= 10_000:
-        errors["automation_rule_daily_budget_usd"] = "must be between 0 and 10000"
     if not 1 <= config.automation_hourly_call_cap <= 10_000:
         errors["automation_hourly_call_cap"] = "must be between 1 and 10000"
     if not 1 <= config.automation_rule_hourly_call_cap <= 10_000:
         errors["automation_rule_hourly_call_cap"] = "must be between 1 and 10000"
-    if not 0 <= config.project_card_daily_budget_usd <= 100:
-        errors["project_card_daily_budget_usd"] = "must be between 0 and 100"
     if not 512 <= config.project_card_max_input_tokens <= 128_000:
         errors["project_card_max_input_tokens"] = "must be between 512 and 128000"
     if not 128 <= config.project_card_max_output_tokens <= 4096:
         errors["project_card_max_output_tokens"] = "must be between 128 and 4096"
     if not config.scan_timeline_model.strip() or len(config.scan_timeline_model) > 200:
         errors["scan_timeline_model"] = "must be an exact OpenRouter model id"
-    if not 512 <= config.scan_timeline_run_token_budget <= 20_000_000:
-        errors["scan_timeline_run_token_budget"] = "must be between 512 and 20000000"
-    if not 512 <= config.scan_timeline_daily_token_budget <= 100_000_000:
-        errors["scan_timeline_daily_token_budget"] = "must be between 512 and 100000000"
     if not 1 <= config.scan_timeline_hourly_call_cap <= 100_000:
         errors["scan_timeline_hourly_call_cap"] = "must be between 1 and 100000"
     if not 256 <= config.scan_timeline_max_output_tokens <= 8_192:
         errors["scan_timeline_max_output_tokens"] = "must be between 256 and 8192"
-    if not 0 <= config.scan_timeline_daily_budget_usd <= 1_000:
-        errors["scan_timeline_daily_budget_usd"] = "must be between 0 and 1000"
     if not 0 <= config.attention_daily_interrupt_budget <= 100:
         errors["attention_daily_interrupt_budget"] = "must be between 0 and 100"
     if not 0 <= config.attention_hourly_interrupt_cap <= 100:
         errors["attention_hourly_interrupt_cap"] = "must be between 0 and 100"
     if not 60 <= config.attention_incident_window_seconds <= 86_400:
         errors["attention_incident_window_seconds"] = "must be between 60 and 86400"
-    if not 0 <= config.attention_narration_daily_budget_usd <= 100:
-        errors["attention_narration_daily_budget_usd"] = "must be between 0 and 100"
     if not 32 <= config.attention_narration_max_output_tokens <= 2048:
         errors["attention_narration_max_output_tokens"] = "must be between 32 and 2048"
     if not 1 <= config.openrouter_request_timeout_seconds <= 120:
@@ -1400,8 +1542,6 @@ def _validate(config: Config) -> None:
             errors["custom_llm_model"] = error
     if not config.assistant_model.strip() or len(config.assistant_model) > 200:
         errors["assistant_model"] = "must be an exact OpenRouter model id"
-    if not 0 <= config.assistant_daily_budget_usd <= 1_000:
-        errors["assistant_daily_budget_usd"] = "must be between 0 and 1000"
     if not 128 <= config.assistant_max_output_tokens <= 8_192:
         errors["assistant_max_output_tokens"] = "must be between 128 and 8192"
     if not 2 <= config.assistant_context_messages <= 200:
@@ -1443,8 +1583,6 @@ def _validate(config: Config) -> None:
         errors["tts_summary_max_tokens"] = "must be between 64 and 2000"
     if not 200 <= config.tts_verbatim_max_chars <= 40_000:
         errors["tts_verbatim_max_chars"] = "must be between 200 and 40000"
-    if not 0 <= config.tts_daily_budget_usd <= 100:
-        errors["tts_daily_budget_usd"] = "must be between 0 and 100"
     if not 10 <= config.tts_cache_mb <= 5000:
         errors["tts_cache_mb"] = "must be between 10 and 5000"
     if config.stt_engine not in {"sapi", "whisper"}:
@@ -1589,6 +1727,12 @@ def _serialize(config: Config) -> str:
     values = asdict(config)
     values.pop("config_path", None)
     values["data_dir"] = str(config.data_dir)
+    # TOML has no null, so an unset axis is written as an absent key rather than
+    # as a zero - which would be a *total* ceiling, the strictest possible cap,
+    # arrived at by a serializer rather than by the operator.
+    for name in BUDGET_FIELDS:
+        budget = getattr(config, name)
+        values[name] = budget.as_toml_dict()
     profiles = values.pop("shell_profiles")
     lines = ["# swe-mux configuration (canonical, schema versioned)"]
     for key, value in values.items():
@@ -1675,6 +1819,88 @@ def _is_auto_managed_windows_powershell_default(config: Config) -> bool:
         and profile.enabled
         and profile.backend == "shell"
     )
+
+
+#: Schema 23 raised the call caps that a continuous sampler exhausted in ten
+#: calls. Only untouched schema-22 values are lifted, so a deliberately lowered
+#: cap survives the upgrade.
+SCHEMA_23_LEGACY_CALL_CAPS: dict[str, int] = {
+    "automation_hourly_call_cap": 60,
+    "automation_rule_hourly_call_cap": 20,
+}
+
+#: The same release's token and dollar figures, keyed by the pre-`Budget` scalar
+#: they were written under. Read by `_migrate_budget_fields`, which is where the
+#: legacy scalars are still visible.
+SCHEMA_23_LEGACY_BUDGET_SCALARS: dict[str, float] = {
+    "automation_daily_token_budget": 200_000,
+    "automation_daily_budget_usd": 2.0,
+    "automation_rule_daily_token_budget": 50_000,
+    "automation_rule_daily_budget_usd": 0.5,
+    "scan_timeline_run_token_budget": 100_000,
+}
+
+
+def _migrate_budget_fields(
+    cfg: Config, raw: dict[str, Any], *, source_schema: int
+) -> bool:
+    """Fold the pre-`Budget` scalar caps into the one budget shape, losslessly.
+
+    The non-negotiable rule: a config written by the previous build must enforce
+    exactly what it enforced before. That means the mode is dictated by the unit
+    the old code checked, never by what looks tidy - the automation and
+    scan-timeline daily ceilings checked tokens *and* dollars, so they arrive as
+    `either`; the four dollar caps arrive as `usd`; the scan run cap arrives as
+    `tokens`. Each spec's `default` carries both the mode and the value the old
+    scalar defaulted to, so a config that set one half of a pair keeps the other
+    half at the figure that was silently enforcing it all along.
+
+    A config already carrying the new table wins outright: it was written by this
+    build or a later one, and the legacy keys beside it (if a rollback wrote any)
+    are stale.
+    """
+    migrated = False
+    lifted = SCHEMA_23_LEGACY_BUDGET_SCALARS if source_schema < 23 else {}
+    for spec in BUDGET_SPECS:
+        if isinstance(raw.get(spec.field), dict):
+            setattr(cfg, spec.field, coerce_budget(raw[spec.field], fallback=spec.default))
+            continue
+        tokens = spec.default.tokens
+        usd = spec.default.usd
+        touched = False
+        for key, axis in ((spec.legacy_tokens, "tokens"), (spec.legacy_usd, "usd")):
+            if not key or key not in raw:
+                continue
+            touched = True
+            value = raw[key]
+            if key in lifted and value == lifted[key]:
+                # Still the untouched schema-22 figure, which schema 23 raised.
+                continue
+            if axis == "tokens":
+                tokens = _coerce_int(value, tokens)
+            else:
+                usd = _coerce_float(value, usd)
+        setattr(cfg, spec.field, Budget(tokens=tokens, usd=usd, mode=spec.default.mode))
+        migrated = migrated or touched
+    return migrated
+
+
+def _coerce_int(value: Any, fallback: int | None) -> int | None:
+    if isinstance(value, bool):
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_float(value: Any, fallback: float | None) -> float | None:
+    if isinstance(value, bool):
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -1794,24 +2020,17 @@ def load_config(path: Path | None = None) -> Config:
                     migrated = True
                     break
         if source_schema < 23:
-            # The automation token caps and the scan-timeline run budget were
-            # sized for episodic observers and made the token axis bind at a
-            # fraction of a cent, which silently stopped the scan timeline
-            # mid-session. Lift only values that are still the untouched
-            # schema-22 defaults, so a deliberately lowered cap survives.
-            legacy_caps = {
-                "automation_daily_token_budget": 200_000,
-                "automation_daily_budget_usd": 2.0,
-                "automation_rule_daily_token_budget": 50_000,
-                "automation_rule_daily_budget_usd": 0.5,
-                "automation_hourly_call_cap": 60,
-                "automation_rule_hourly_call_cap": 20,
-                "scan_timeline_run_token_budget": 100_000,
-            }
-            for key, legacy in legacy_caps.items():
+            # The hourly call caps were sized for episodic observers and starved
+            # the continuous sampler. Lift only values that are still the
+            # untouched schema-22 defaults, so a deliberately lowered cap
+            # survives. Their token/dollar siblings were lifted by the same
+            # release and are handled in `_migrate_budget_fields`, which has to
+            # read the pre-`Budget` scalars anyway.
+            for key, legacy in SCHEMA_23_LEGACY_CALL_CAPS.items():
                 if key not in raw or raw[key] == legacy:
                     setattr(cfg, key, Config.__dataclass_fields__[key].default)
                     migrated = True
+        migrated = _migrate_budget_fields(cfg, raw, source_schema=source_schema) or migrated
         if source_schema < 28:
             # The brainstorm hold/proceed pair did not exist before schema 28.
             # Add only the new actions, preserving every phrase and omission the
@@ -1878,6 +2097,11 @@ def update_config(config: Config, changes: dict[str, Any]) -> tuple[set[str], se
     candidate.shell_profiles = list(config.shell_profiles)
     changed: set[str] = set()
     for key, value in changes.items():
+        if key in BUDGET_FIELDS:
+            # Coerce before comparing: the browser round-trips the JSON object it
+            # was handed, and a dict never equals the `Budget` it describes, so
+            # comparing raw would report every save as a change to every budget.
+            value = coerce_budget(value, fallback=BUDGET_FIELDS[key].default)
         if key == "shell_profiles":
             if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
                 raise ValueError({"shell_profiles": "must be an array of profile objects"})

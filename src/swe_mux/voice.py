@@ -35,6 +35,7 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from . import budget
 from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
@@ -1653,8 +1654,11 @@ class VoiceService:
                 "or the automation cheap model in Settings, or switch content to verbatim"
             )
         spend = await self.automation_store.spend(rule_id=VOICE_RULE_ID)
-        if float(spend["cost_usd"]) >= self.config.tts_daily_budget_usd:
-            raise VoiceError("the daily read-aloud summary budget is exhausted")
+        verdict = budget.spent_out(
+            self.config.tts_daily_budget, spend, label="the daily read-aloud summary"
+        )
+        if verdict.exhausted:
+            raise VoiceError(verdict.reason)
         call_id = await self.automation_store.observer_started(
             firing_id=f"voice:{row['id']}",
             rule_id=VOICE_RULE_ID,
@@ -1698,7 +1702,7 @@ class VoiceService:
             model=completion.resolved_model,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
-            cost_usd=completion.cost_usd or 0,
+            cost_usd=completion.cost_usd,
             call_id=call_id,
         )
         row["model"] = completion.resolved_model
@@ -2262,7 +2266,10 @@ class VoiceService:
             "voice": self._voice_label(),
             "summary_model": self.config.tts_summary_model or self.config.openrouter_cheap_model,
             "spend_today": spend,
-            "daily_budget_usd": self.config.tts_daily_budget_usd,
+            "daily_budget": self.config.tts_daily_budget.as_dict(),
+            "budget_status": budget.spent_out(
+                self.config.tts_daily_budget, spend, label="the daily read-aloud summary"
+            ).as_dict(),
             "cache_bytes": stats["bytes"],
             "cache_limit_bytes": self.config.tts_cache_mb * 1024 * 1024,
             "clip_count": stats["count"],

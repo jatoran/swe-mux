@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+from . import budget
 from .automation_store import AutomationStore
 from .background_tasks import background
 from .config import Config
@@ -1956,14 +1957,23 @@ class AutomationEngine:
             raise ValueError(f"OpenRouter {model_setting} model is not configured")
         global_spend = await self.store.spend()
         rule_spend = await self.store.spend(rule_id=rule.id)
-        if global_spend["tokens"] >= self.config.automation_daily_token_budget:
-            raise ValueError("global daily observer token budget is exhausted")
-        if global_spend["cost_usd"] >= self.config.automation_daily_budget_usd:
-            raise ValueError("global daily observer dollar budget is exhausted")
-        if rule_spend["tokens"] >= self.config.automation_rule_daily_token_budget:
-            raise ValueError("rule daily observer token budget is exhausted")
-        if rule_spend["cost_usd"] >= self.config.automation_rule_daily_budget_usd:
-            raise ValueError("rule daily observer dollar budget is exhausted")
+        # Which axes bind is the budget's own business now (`budget.py`); this
+        # site only says which budget and what to call it. Both ceilings default
+        # to `either`, which is what the two scalar settings they replaced did.
+        for verdict in (
+            budget.spent_out(
+                self.config.automation_daily_budget,
+                global_spend,
+                label="the global daily observer",
+            ),
+            budget.spent_out(
+                self.config.automation_rule_daily_budget,
+                rule_spend,
+                label="the rule daily observer",
+            ),
+        ):
+            if verdict.exhausted:
+                raise ValueError(verdict.reason)
         hour_ago = time.time() - 3600
         if await self.store.observer_call_count(hour_ago) >= self.config.automation_hourly_call_cap:
             raise ValueError("global hourly observer call cap is exhausted")
@@ -2039,16 +2049,6 @@ class AutomationEngine:
         if transcript.estimated_tokens > self.config.automation_max_input_tokens:
             raise ValueError("observer input exceeds the configured token limit")
         maximum_call_tokens = transcript.estimated_tokens + self.config.automation_max_output_tokens
-        if (
-            int(global_spend["tokens"]) + maximum_call_tokens
-            > self.config.automation_daily_token_budget
-        ):
-            raise ValueError("conservative preflight estimate exceeds the global token budget")
-        if (
-            int(rule_spend["tokens"]) + maximum_call_tokens
-            > self.config.automation_rule_daily_token_budget
-        ):
-            raise ValueError("conservative preflight estimate exceeds the rule token budget")
         catalog = await self.store.model_cache()
         metadata = next((item for item in catalog["models"] if item.get("id") == model), None)
         if metadata:
@@ -2061,10 +2061,26 @@ class AutomationEngine:
             # entirely, so an empty catalog (first run, a failed refresh) silently
             # disabled the dollar bound. Price it conservatively instead.
             estimate = UNPRICED_CALL_ESTIMATE_USD
-        if estimate > self.config.automation_daily_budget_usd - float(global_spend["cost_usd"]):
-            raise ValueError("conservative preflight estimate exceeds the global budget")
-        if estimate > self.config.automation_rule_daily_budget_usd - float(rule_spend["cost_usd"]):
-            raise ValueError("conservative preflight estimate exceeds the rule budget")
+        # One preflight over both axes, run after the dollar estimate exists so a
+        # single pass can refuse on whichever axis the budget actually enforces.
+        for verdict in (
+            budget.would_exceed(
+                self.config.automation_daily_budget,
+                global_spend,
+                label="the global",
+                tokens=maximum_call_tokens,
+                usd=estimate,
+            ),
+            budget.would_exceed(
+                self.config.automation_rule_daily_budget,
+                rule_spend,
+                label="the rule",
+                tokens=maximum_call_tokens,
+                usd=estimate,
+            ),
+        ):
+            if verdict.exhausted:
+                raise ValueError(verdict.reason)
         schema_name = str(action["schema"])
         prompt = str(action.get("prompt") or "Analyze the transcript and return JSON.")
         call_id = await self.store.observer_started(
@@ -2118,7 +2134,7 @@ class AutomationEngine:
                     model=exc.resolved_model or model,
                     input_tokens=exc.input_tokens,
                     output_tokens=exc.output_tokens,
-                    cost_usd=exc.cost_usd or 0,
+                    cost_usd=exc.cost_usd,
                     call_id=call_id,
                 )
                 if exc.cost_usd is None and exc.generation_id:
@@ -2188,7 +2204,9 @@ class AutomationEngine:
             model=completion.resolved_model,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
-            cost_usd=completion.cost_usd or 0,
+            # `None` records the call as unpriced rather than free; the
+            # reconcile below upgrades it if `/generation` can answer.
+            cost_usd=completion.cost_usd,
             call_id=call_id,
         )
         if completion.cost_usd is None and completion.generation_id:

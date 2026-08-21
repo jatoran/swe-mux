@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 10
+AUTOMATION_SCHEMA_VERSION = 11
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS automation_budget_ledger (
   project_id TEXT, agent_run_id TEXT,
   requested_model TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
   cached_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL, observer_call_id TEXT, created_at REAL NOT NULL
+  cost_usd REAL NOT NULL, cost_known INTEGER NOT NULL DEFAULT 1,
+  observer_call_id TEXT, created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_budget_day_rule
   ON automation_budget_ledger(day,rule_id);
@@ -362,6 +363,18 @@ class AutomationStore:
             self._db.execute(
                 "ALTER TABLE automation_budget_ledger "
                 "ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0"
+            )
+        if budget_ledger and "cost_known" not in budget_ledger:
+            # Backfilled to 1, which is the opposite direction to `cached_tokens`
+            # above and for the same reason - it is the *true* reading, not a
+            # convenient one. Every pre-migration row went to OpenRouter, which
+            # reports cost on every completion, so its zero means "free", never
+            # "unmeasured". Backfilling 0 would retroactively declare the whole
+            # historical ledger unpriced and light the cost-blind warning on every
+            # install that has never seen a custom endpoint.
+            self._db.execute(
+                "ALTER TABLE automation_budget_ledger "
+                "ADD COLUMN cost_known INTEGER NOT NULL DEFAULT 1"
             )
 
     async def _run(self, fn: Callable[[], T]) -> T:
@@ -791,18 +804,30 @@ class AutomationStore:
         model: str,
         input_tokens: int,
         output_tokens: int,
-        cost_usd: float,
+        cost_usd: float | None,
         call_id: str,
         project_id: str | None = None,
         agent_run_id: str | None = None,
         cached_tokens: int = 0,
     ) -> None:
+        """Record one call's spend. `cost_usd=None` means *unmeasured*, not free.
+
+        The distinction is the whole reason the column exists. OpenRouter reports
+        a cost on every completion; a bring-your-own OpenAI-compatible endpoint
+        usually reports none, and writing that call in as `$0.00` would make a
+        dollar cap look enforced while it silently never approached its limit.
+        The stored figure stays 0 so every existing `SUM(cost_usd)` keeps meaning
+        "the cost we actually know about", and `cost_known` is what says the
+        total is a floor rather than the whole bill (see `budget.py`).
+        """
+        measured = cost_usd is not None
+
         def op() -> None:
             self._db.execute(
                 "INSERT INTO automation_budget_ledger"
                 "(id,day,rule_id,project_id,agent_run_id,requested_model,input_tokens,"
-                "output_tokens,cached_tokens,cost_usd,observer_call_id,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "output_tokens,cached_tokens,cost_usd,cost_known,observer_call_id,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     str(uuid.uuid4()),
                     time.strftime("%Y-%m-%d", time.gmtime()),
@@ -817,7 +842,8 @@ class AutomationStore:
                     # discount. Summing the two would inflate every token figure
                     # on the page by the amount caching saved.
                     max(0, int(cached_tokens)),
-                    cost_usd,
+                    float(cost_usd) if cost_usd is not None else 0.0,
+                    1 if measured else 0,
                     call_id,
                     time.time(),
                 ),
@@ -827,13 +853,21 @@ class AutomationStore:
         await self._run(op)
 
     async def reconcile_spend(self, call_id: str, cost_usd: float) -> None:
+        """Fill in a cost that arrived after the call, from `/generation`.
+
+        This is the one path that can turn an unpriced row into a priced one, so
+        it clears `cost_known` alongside the figure. Only OpenRouter reaches
+        here; an endpoint with no cost lookup has nothing to reconcile.
+        """
+
         def op() -> None:
             self._db.execute(
                 "UPDATE automation_observer_calls SET cost_usd=? WHERE id=?",
                 (cost_usd, call_id),
             )
             self._db.execute(
-                "UPDATE automation_budget_ledger SET cost_usd=? WHERE observer_call_id=?",
+                "UPDATE automation_budget_ledger SET cost_usd=?, cost_known=1 "
+                "WHERE observer_call_id=?",
                 (cost_usd, call_id),
             )
             self._db.commit()
@@ -851,7 +885,9 @@ class AutomationStore:
             "SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
             "COALESCE(SUM(input_tokens),0) input_tokens,"
             "COALESCE(SUM(cached_tokens),0) cached_tokens,"
-            "COALESCE(SUM(cost_usd),0) cost FROM automation_budget_ledger WHERE day=?"
+            "COALESCE(SUM(cost_usd),0) cost,"
+            "COALESCE(SUM(CASE WHEN cost_known=0 THEN 1 ELSE 0 END),0) unpriced "
+            "FROM automation_budget_ledger WHERE day=?"
         )
         args: list[Any] = [time.strftime("%Y-%m-%d", time.gmtime())]
         if rule_id:
@@ -874,6 +910,11 @@ class AutomationStore:
                 # which was never cacheable.
                 "input_tokens": int(row["input_tokens"]),
                 "cached_tokens": int(row["cached_tokens"]),
+                # How many of the calls behind `cost_usd` reported no cost at
+                # all. Nonzero means the dollar figure is a floor, which is what
+                # `budget.py` renders as `cost_blind` and what stops a dollar cap
+                # from quietly claiming to bound a provider it cannot price.
+                "unpriced_calls": int(row["unpriced"]),
             }
 
         return await self._run(op)
@@ -1732,10 +1773,13 @@ class AutomationStore:
                 "COALESCE(SUM(CASE WHEN day=? THEN cached_tokens ELSE 0 END),0)"
                 " today_cached_tokens,"
                 "COALESCE(SUM(CASE WHEN day=? THEN cost_usd ELSE 0 END),0) today_cost,"
+                "COALESCE(SUM(CASE WHEN cost_known=0 THEN 1 ELSE 0 END),0) unpriced_calls,"
+                "COALESCE(SUM(CASE WHEN day=? AND cost_known=0 THEN 1 ELSE 0 END),0)"
+                " today_unpriced_calls,"
                 "MAX(created_at) last_at "
                 "FROM automation_budget_ledger WHERE day>=? "
                 "GROUP BY rule_id ORDER BY cost DESC,calls DESC",
-                (today, today, today, today, today, start),
+                (today, today, today, today, today, today, start),
             ).fetchall()
             models = self._db.execute(
                 "SELECT rule_id,requested_model,COUNT(*) calls "
@@ -1760,6 +1804,11 @@ class AutomationStore:
                         "today_input_tokens": int(row["today_input_tokens"]),
                         "today_cached_tokens": int(row["today_cached_tokens"]),
                         "today_cost_usd": float(row["today_cost"]),
+                        # Calls this rule made whose cost the provider never
+                        # reported. A nonzero count is why `cost_usd` beside it
+                        # is a floor rather than a total.
+                        "unpriced_calls": int(row["unpriced_calls"]),
+                        "today_unpriced_calls": int(row["today_unpriced_calls"]),
                         "models": by_rule.get(str(row["rule_id"]), []),
                         "last_at": float(row["last_at"] or 0),
                     }
@@ -1777,6 +1826,7 @@ class AutomationStore:
             for key in (
                 "calls", "tokens", "input_tokens", "cached_tokens",
                 "today_calls", "today_tokens", "today_input_tokens", "today_cached_tokens",
+                "unpriced_calls", "today_unpriced_calls",
             )
         } | {
             key: round(sum(rule[key] for rule in rules), 6)

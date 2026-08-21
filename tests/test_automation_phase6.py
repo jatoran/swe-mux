@@ -23,6 +23,7 @@ from swe_mux.automation import (
     serialize_rules,
 )
 from swe_mux.automation_store import AUTOMATION_SCHEMA_VERSION, AutomationStore
+from swe_mux.budget import Budget
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.git_projects import ProjectIdentity
@@ -568,7 +569,7 @@ def _titler_engine(
             data_dir=tmp_path,
             automation_enabled=True,
             observer_titler_enabled=True,
-            automation_rule_daily_budget_usd=2.0,
+            automation_rule_daily_budget=Budget(tokens=4_000_000, usd=2.0, mode="either"),
             openrouter_cheap_model="vendor/cheap",
             openrouter_standard_model=standard_model,
         ),
@@ -1313,6 +1314,7 @@ async def test_dry_run_is_repeatable_and_writes_no_automation_records(tmp_path: 
         "cost_usd": 0.0,
         "input_tokens": 0,
         "cached_tokens": 0,
+        "unpriced_calls": 0,
     }
     store.close()
 
@@ -1419,7 +1421,7 @@ async def test_rule_token_budget_blocks_call_before_provider_use(tmp_path: Path)
             data_dir=tmp_path,
             automation_enabled=True,
             openrouter_cheap_model="vendor/cheap",
-            automation_rule_daily_token_budget=1,
+            automation_rule_daily_budget=Budget(tokens=1, usd=10.0, mode="either"),
         ),
         FakeProvider(),  # type: ignore[arg-type]
     )

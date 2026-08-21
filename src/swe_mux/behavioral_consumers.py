@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from . import budget
 from .openrouter import OpenRouterError
 from .scan_consumers import first_nonempty, target_set
 
@@ -449,9 +450,9 @@ class BehavioralConsumerService:
         if not model:
             return None
         global_spend = await self.store.spend()
-        if int(global_spend["tokens"]) >= int(self.config.automation_daily_token_budget):
-            return None
-        if float(global_spend["cost_usd"]) >= float(self.config.automation_daily_budget_usd):
+        if budget.spent_out(
+            self.config.automation_daily_budget, global_spend, label="the global daily automation"
+        ).exhausted:
             return None
         recent = [
             {
@@ -504,7 +505,7 @@ class BehavioralConsumerService:
                     model=exc.resolved_model or model,
                     input_tokens=exc.input_tokens,
                     output_tokens=exc.output_tokens,
-                    cost_usd=float(exc.cost_usd or 0.0),
+                    cost_usd=exc.cost_usd,
                     call_id=call_id,
                     project_id=project_id,
                     agent_run_id=run_id,
@@ -527,7 +528,7 @@ class BehavioralConsumerService:
             model=completion.resolved_model or model,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
-            cost_usd=float(completion.cost_usd or 0.0),
+            cost_usd=completion.cost_usd,
             call_id=call_id,
             project_id=project_id,
             agent_run_id=run_id,

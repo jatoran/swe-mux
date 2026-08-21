@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from swe_mux.budget import Budget
 from swe_mux.config import (
     BUILTIN_THEME_PAIRS,
     DEFAULT_PROJECT_IGNORE_PATTERNS,
@@ -59,8 +60,10 @@ def test_scan_timeline_budgets_leave_the_token_axis_non_binding(tmp_path: Path) 
     """
     config = load_config(tmp_path / "config.toml")
 
-    assert config.scan_timeline_run_token_budget == 500_000
-    assert config.scan_timeline_daily_token_budget == 3_000_000
+    assert config.scan_timeline_run_budget == Budget(tokens=500_000, usd=None, mode="tokens")
+    assert config.scan_timeline_daily_budget == Budget(
+        tokens=3_000_000, usd=5.0, mode="either"
+    )
     assert config.scan_timeline_hourly_call_cap == 600
     assert config.scan_timeline_max_output_tokens == 900
     # One global dollar ceiling, editable in Settings -> Automation. It used to
@@ -68,12 +71,15 @@ def test_scan_timeline_budgets_leave_the_token_axis_non_binding(tmp_path: Path) 
     # to stop scanning somewhere nobody looks, with a different value per
     # checkout. It must sit above what the daily token budget can cost, or the
     # dollars bind first and the token budget becomes decoration.
-    assert config.scan_timeline_daily_budget_usd == 5.0
+    #
     # The global ceiling still applies to a scan, so it has to sit above the
     # scan's own daily budget or it becomes the new invisible binding cap.
-    assert config.automation_daily_token_budget >= config.scan_timeline_daily_token_budget
+    assert config.automation_daily_budget.tokens is not None
+    assert config.scan_timeline_daily_budget.tokens is not None
+    assert config.scan_timeline_run_budget.tokens is not None
+    assert config.automation_daily_budget.tokens >= config.scan_timeline_daily_budget.tokens
     assert config.automation_hourly_call_cap >= config.scan_timeline_hourly_call_cap
-    assert config.scan_timeline_daily_token_budget >= config.scan_timeline_run_token_budget
+    assert config.scan_timeline_daily_budget.tokens >= config.scan_timeline_run_budget.tokens
 
 
 def test_untouched_legacy_automation_caps_are_lifted_on_upgrade(tmp_path: Path) -> None:
@@ -88,11 +94,11 @@ def test_untouched_legacy_automation_caps_are_lifted_on_upgrade(tmp_path: Path) 
         encoding="utf-8",
     )
     migrated = load_config(legacy)
-    assert migrated.automation_rule_daily_token_budget == 4_000_000
+    assert migrated.automation_rule_daily_budget.tokens == 4_000_000
     assert migrated.automation_hourly_call_cap == 1_200
-    assert migrated.scan_timeline_run_token_budget == 500_000
+    assert migrated.scan_timeline_run_budget.tokens == 500_000
     # Not a schema-22 default, so it was a deliberate choice and survives.
-    assert migrated.automation_daily_token_budget == 123_456
+    assert migrated.automation_daily_budget.tokens == 123_456
 
 
 def test_conversation_stt_defaults_and_untouched_sapi_pair_migrate_to_whisper(

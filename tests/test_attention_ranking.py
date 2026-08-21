@@ -39,6 +39,7 @@ from swe_mux.attention_ranking import (
     score_for,
 )
 from swe_mux.automation_store import AutomationStore
+from swe_mux.budget import Budget
 from swe_mux.deterministic_consumers import ConsumerContext
 
 WORSENING = KindPolicy("stuck", EXPENSIVE_BLOCKING, True, 0.9, "Redirect the run.")
@@ -617,7 +618,7 @@ async def test_a_narration_failure_costs_the_aside_and_not_the_finding(
             config(
                 attention_narration_enabled=True,
                 attention_narration_model="test/model",
-                attention_narration_daily_budget_usd=1.0,
+                attention_narration_daily_budget=Budget(usd=1.0, mode="usd"),
                 attention_narration_max_output_tokens=200,
             ),
             Provider(),

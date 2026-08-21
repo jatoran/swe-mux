@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from swe_mux.automation import TranscriptSlice
+from swe_mux.budget import Budget
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
@@ -130,13 +131,11 @@ def config(tmp_path: Path, **overrides: Any) -> Config:
         data_dir=tmp_path,
         scan_timeline_enabled=True,
         scan_timeline_model=DEFAULT_SCAN_MODEL,
-        automation_daily_token_budget=10_000,
-        automation_daily_budget_usd=10,
+        automation_daily_budget=Budget(tokens=10_000, usd=10.0, mode="either"),
         # Deliberately tiny. Scan timeline must not consult these; a regression
         # that reconnects it to the per-rule caps fails here rather than in
         # production three hours into a session.
-        automation_rule_daily_token_budget=1,
-        automation_rule_daily_budget_usd=0.0,
+        automation_rule_daily_budget=Budget(tokens=1, usd=0.0, mode="either"),
         automation_rule_hourly_call_cap=1,
         **overrides,
     )
@@ -614,7 +613,8 @@ async def test_scan_ignores_the_per_rule_caps_and_reports_the_binding_gate(
 @pytest.mark.asyncio
 async def test_an_exhausted_scan_budget_names_itself_in_the_snapshot(tmp_path: Path) -> None:
     service, store, _provider, _sessions = await build_service(
-        tmp_path, scan_timeline_daily_token_budget=512
+        tmp_path,
+        scan_timeline_daily_budget=Budget(tokens=512, usd=5.0, mode="either"),
     )
     try:
         await service.set_enabled("session-1", True)
@@ -630,7 +630,8 @@ async def test_an_exhausted_scan_budget_names_itself_in_the_snapshot(tmp_path: P
 async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
     """No Project file is read to decide what a scan may cost."""
     service, store, _provider, _sessions = await build_service(
-        tmp_path, scan_timeline_daily_budget_usd=0.0
+        tmp_path,
+        scan_timeline_daily_budget=Budget(tokens=3_000_000, usd=0.0, mode="either"),
     )
     try:
         # Straight to the store: `set_enabled` also schedules a background scan,
@@ -644,7 +645,7 @@ async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
         assert await service.scan_now("session-1", "test") is None
         state = await service.snapshot("session-1")
         assert state["skip_reason"] == "the daily Scan timeline dollar budget is exhausted"
-        assert state["daily_budget_usd"] == 0.0
+        assert state["daily_budget"] == {"tokens": 3_000_000, "usd": 0.0, "mode": "either"}
     finally:
         await service.stop()
         store.close()
@@ -652,7 +653,8 @@ async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
     generous = tmp_path / "generous"
     generous.mkdir()
     service, store, _provider, _sessions = await build_service(
-        generous, scan_timeline_daily_budget_usd=25.0
+        generous,
+        scan_timeline_daily_budget=Budget(tokens=3_000_000, usd=25.0, mode="either"),
     )
     try:
         await store.set_scan_run_enabled(
@@ -828,7 +830,7 @@ async def test_full_session_scan_stops_on_a_terminal_budget_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, store, _provider, _sessions = await build_service(
-        tmp_path, scan_timeline_run_token_budget=2_000
+        tmp_path, scan_timeline_run_budget=Budget(tokens=2_000, mode="tokens")
     )
     monkeypatch.setattr(
         "swe_mux.scan_timeline.parse_transcript_cached",

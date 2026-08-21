@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from . import budget
 from .automation import (
     TranscriptSlice,
     TranscriptSliceService,
@@ -20,6 +21,10 @@ from .automation import (
 )
 from .background_tasks import background
 from .behavioral_consumers import ADAPTIVE_TITLE_CHECKPOINT_PREFIX
+from .budget import Budget, coerce_budget
+from .budget import gauges as budget_gauges
+from .config import BUDGET_FIELDS
+from .llm_endpoint import resolve_endpoint
 from .event_bus import EventBus
 from .models import MuxEvent
 from .openrouter import OpenRouterError
@@ -455,20 +460,23 @@ class ScanTimelineService:
             self._schedule(session_id, "enabled", delay=0)
         return cast(dict[str, Any], row)
 
-    def _run_token_budget(self) -> int:
-        return int(getattr(self.config, "scan_timeline_run_token_budget", 500_000))
+    def _run_budget(self) -> Budget:
+        return coerce_budget(
+            getattr(self.config, "scan_timeline_run_budget", None),
+            fallback=BUDGET_FIELDS["scan_timeline_run_budget"].default,
+        )
 
-    def _daily_token_budget(self) -> int:
-        return int(getattr(self.config, "scan_timeline_daily_token_budget", 3_000_000))
+    def _daily_budget(self) -> Budget:
+        return coerce_budget(
+            getattr(self.config, "scan_timeline_daily_budget", None),
+            fallback=BUDGET_FIELDS["scan_timeline_daily_budget"].default,
+        )
 
     def _hourly_call_cap(self) -> int:
         return int(getattr(self.config, "scan_timeline_hourly_call_cap", 600))
 
     def _max_output_tokens(self) -> int:
         return int(getattr(self.config, "scan_timeline_max_output_tokens", 900))
-
-    def _daily_budget_usd(self) -> float:
-        return float(getattr(self.config, "scan_timeline_daily_budget_usd", 5.0))
 
     async def _grant_for(
         self, session_id: str, context: ScanContext
@@ -523,21 +531,33 @@ class ScanTimelineService:
         )
         hour_ago = time.time() - 3600
         calls = await self.store.observer_call_count(hour_ago, rule_id=SCAN_RULE_ID)
+        # Only *enforced* axes are drawn. A budget in `tokens` mode still
+        # remembers a dollar figure so switching modes does not lose it, and
+        # showing that figure here would name a limit that cannot stop anything.
+        daily = budget_gauges(
+            self._daily_budget(),
+            rule_spend,
+            id_prefix="scan_daily",
+            token_label="Scan tokens today",
+            usd_label="Scan cost today",
+        )
+        run = budget_gauges(
+            self._run_budget(),
+            run_spend,
+            id_prefix="scan_run",
+            token_label="This conversation",
+            usd_label="This conversation cost",
+        )
+        automation = budget_gauges(
+            self.config.automation_daily_budget,
+            global_spend,
+            id_prefix="automation_daily",
+            token_label="All automation tokens",
+            usd_label="All automation cost",
+        )
         return [
-            {
-                "id": "scan_daily_tokens",
-                "label": "Scan tokens today",
-                "unit": "tokens",
-                "used": int(rule_spend["tokens"]),
-                "limit": self._daily_token_budget(),
-            },
-            {
-                "id": "scan_run_tokens",
-                "label": "This conversation",
-                "unit": "tokens",
-                "used": int(run_spend["tokens"]),
-                "limit": self._run_token_budget(),
-            },
+            *[gauge for gauge in daily if gauge["unit"] == "tokens"],
+            *run,
             {
                 "id": "scan_hourly_calls",
                 "label": "Scans this hour",
@@ -545,27 +565,8 @@ class ScanTimelineService:
                 "used": int(calls),
                 "limit": self._hourly_call_cap(),
             },
-            {
-                "id": "scan_daily_usd",
-                "label": "Scan cost today",
-                "unit": "usd",
-                "used": float(rule_spend["cost_usd"]),
-                "limit": self._daily_budget_usd(),
-            },
-            {
-                "id": "automation_daily_tokens",
-                "label": "All automation tokens",
-                "unit": "tokens",
-                "used": int(global_spend["tokens"]),
-                "limit": int(self.config.automation_daily_token_budget),
-            },
-            {
-                "id": "automation_daily_usd",
-                "label": "All automation cost",
-                "unit": "usd",
-                "used": float(global_spend["cost_usd"]),
-                "limit": float(self.config.automation_daily_budget_usd),
-            },
+            *[gauge for gauge in daily if gauge["unit"] == "usd"],
+            *automation,
         ]
 
     async def liveness(
@@ -668,9 +669,9 @@ class ScanTimelineService:
             **await self.liveness(session_id, gates=gates),
             "project_id": project_id or None,
             "model": str(getattr(self.config, "scan_timeline_model", DEFAULT_SCAN_MODEL)),
-            "daily_budget_usd": self._daily_budget_usd(),
+            "daily_budget": self._daily_budget().as_dict(),
             "spend_today": spend,
-            "run_token_budget": self._run_token_budget(),
+            "run_budget": self._run_budget().as_dict(),
             "run_spend": run_spend,
             "gates": gates,
             # Phase 7.7: the adaptive-titler's own measurement. A stable-subject
@@ -1307,17 +1308,37 @@ class ScanTimelineService:
         # continuously, and sharing the envelope stopped the whole feature after
         # ten calls costing under half a cent. It carries its own token budget
         # and call cap, and the global ceilings below still apply.
-        if int(global_spend["tokens"]) + max_tokens > int(
-            self.config.automation_daily_token_budget
-        ):
-            self._skip(session_id, "the global daily automation token budget is exhausted")
-            return None
-        if int(rule_spend["tokens"]) + max_tokens > self._daily_token_budget():
-            self._skip(session_id, "the daily Scan timeline token budget is exhausted")
-            return None
-        if int(run_spend["tokens"]) + max_tokens > self._run_token_budget():
-            self._skip(session_id, "the run Scan timeline token budget is exhausted")
-            return None
+        token_preflight = (
+            budget.would_exceed(
+                self.config.automation_daily_budget,
+                global_spend,
+                label="the global daily automation",
+                tokens=max_tokens,
+                phrasing="exhausted",
+            ),
+            budget.would_exceed(
+                self._daily_budget(),
+                rule_spend,
+                label="the daily Scan timeline",
+                tokens=max_tokens,
+                phrasing="exhausted",
+            ),
+            budget.would_exceed(
+                self._run_budget(),
+                run_spend,
+                label="the run Scan timeline",
+                tokens=max_tokens,
+                phrasing="exhausted",
+            ),
+        )
+        # Tokens first, dollars after the catalog estimate exists below: the
+        # dollar half of each of these budgets needs a price this code has not
+        # looked up yet, and a token cap that has already run out should not pay
+        # for a catalog read to find that out.
+        for verdict in token_preflight:
+            if verdict.axis == "tokens":
+                self._skip(session_id, verdict.reason)
+                return None
         hour_ago = time.time() - 3600
         if await self.store.observer_call_count(hour_ago) >= self.config.automation_hourly_call_cap:
             self._skip(session_id, "the global hourly observer call cap is reached")
@@ -1335,20 +1356,29 @@ class ScanTimelineService:
             estimated_cost = estimated_input_tokens * float(
                 metadata.get("prompt_price") or 0
             ) + max_output_tokens * float(metadata.get("completion_price") or 0)
-        if float(global_spend["cost_usd"]) + estimated_cost > float(
-            self.config.automation_daily_budget_usd
+        # `automation_rule_daily_budget` is skipped entirely, on both axes: it
+        # bounds an episodic observer, and charging a continuous sampler to it
+        # stopped the whole feature after ten calls costing under half a cent.
+        # The ceilings that do apply are the scan's own budgets and the global
+        # automation one. The scan's dollar half was once per Project, which put
+        # the cap most likely to stop scanning inside a committed file nobody
+        # opens, with a different value in every checkout.
+        for candidate, spend, label in (
+            (self.config.automation_daily_budget, global_spend, "the global daily automation"),
+            (self._daily_budget(), rule_spend, "the daily Scan timeline"),
+            (self._run_budget(), run_spend, "the run Scan timeline"),
         ):
-            self._skip(session_id, "the global daily automation dollar budget is exhausted")
-            return None
-        # `automation_rule_daily_budget_usd` is skipped for the same reason as
-        # the per-rule token cap: it bounds an episodic observer. The dollar
-        # ceilings that do apply to a scan are its own global budget below and
-        # the global automation budget above. This one was per Project, which
-        # put the cap most likely to stop scanning inside a committed file
-        # nobody opens, with a different value in every checkout.
-        if float(rule_spend["cost_usd"]) + estimated_cost > self._daily_budget_usd():
-            self._skip(session_id, "the daily Scan timeline dollar budget is exhausted")
-            return None
+            verdict = budget.would_exceed(
+                candidate,
+                spend,
+                label=label,
+                tokens=max_tokens,
+                usd=estimated_cost,
+                phrasing="exhausted",
+            )
+            if verdict.axis == "usd":
+                self._skip(session_id, verdict.reason)
+                return None
 
         facts = await self.tier0.facts_for_run(
             context.agent_run_id,
@@ -1647,15 +1677,35 @@ class ScanTimelineService:
                 model=completion.resolved_model or model,
                 input_tokens=completion.input_tokens,
                 output_tokens=completion.output_tokens,
-                cost_usd=float(
-                    completion.cost_usd if completion.cost_usd is not None else estimated_cost
-                ),
+                cost_usd=self._ledger_cost(completion.cost_usd, estimated_cost),
                 call_id=call_id,
                 project_id=context.project_id,
                 agent_run_id=context.agent_run_id,
             )
             return completion, semantic, repairs
         raise last or RuntimeError("scan timeline made no provider attempt")
+
+    def _ledger_cost(self, reported: float | None, estimated: float) -> float | None:
+        """What this call costs the ledger, or `None` when nobody can say.
+
+        A scan has no cost-reconcile pass, so a completion that reports no cost
+        falls back to the catalog estimate that was already computed for the
+        preflight. That stand-in is honest against OpenRouter, where the model is
+        in the catalog and the figure is bounded by the same prices the preflight
+        trusted.
+
+        It is not honest against a bring-your-own endpoint. That model is in no
+        catalog, so `estimated_cost` is the bare 0.01 fallback - a number nobody
+        measured, about a server that may bill nothing at all. Recording it would
+        both invent spend and hide the fact that the dollar axis is blind here,
+        which is exactly what `cost_known` exists to prevent. So an endpoint that
+        cannot report cost records `None`, and the token axis is what bounds it.
+        """
+        if reported is not None:
+            return reported
+        if resolve_endpoint(self.config).supports_generation_cost:
+            return estimated
+        return None
 
     async def _charge_failed_attempt(
         self,
@@ -1677,7 +1727,7 @@ class ScanTimelineService:
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cost_usd=float(cost_usd if cost_usd is not None else estimated_cost),
+            cost_usd=self._ledger_cost(cost_usd, estimated_cost),
             call_id=call_id,
             project_id=context.project_id,
             agent_run_id=context.agent_run_id,
@@ -1699,8 +1749,8 @@ class ScanTimelineService:
             "last_skip_reasons": dict(self._skip_reasons),
             "catchup_depth": dict(self._catchup_depth),
             "budgets": {
-                "daily_tokens": self._daily_token_budget(),
-                "run_tokens": self._run_token_budget(),
+                "daily": self._daily_budget().as_dict(),
+                "run": self._run_budget().as_dict(),
                 "hourly_calls": self._hourly_call_cap(),
                 "max_output_tokens": self._max_output_tokens(),
             },

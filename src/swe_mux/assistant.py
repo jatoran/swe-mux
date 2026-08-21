@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from . import budget
 from .config import Config
 from .event_bus import EventBus
 from .leaf_names import suggest_folder_name, validate_leaf_name
@@ -1260,8 +1261,14 @@ class AssistantService:
         return {
             "enabled": self.config.assistant_enabled,
             "model": self.config.assistant_model,
-            "daily_budget_usd": self.config.assistant_daily_budget_usd,
+            "daily_budget": self.config.assistant_daily_budget.as_dict(),
             "spend_today": spend,
+            # Whether the dollar half of that budget can see what this install
+            # is spending. A provider that reports no cost leaves it blind, and
+            # the token axis is the honest backstop (`budget.py`).
+            "budget_status": budget.spent_out(
+                self.config.assistant_daily_budget, spend, label="the assistant's daily"
+            ).as_dict(),
             "trust_reversible": self.config.assistant_trust_reversible,
             "diagnostic": self.diagnostic,
         }
@@ -3352,10 +3359,11 @@ class AssistantService:
 
     async def _budget_check(self) -> None:
         spend = await self.automation_store.spend(rule_id=ASSISTANT_RULE_ID)
-        if float(spend["cost_usd"]) >= self.config.assistant_daily_budget_usd:
-            raise AssistantError(
-                "the assistant's daily budget is exhausted; raise it in Settings → Assistant"
-            )
+        verdict = budget.spent_out(
+            self.config.assistant_daily_budget, spend, label="the assistant's daily"
+        )
+        if verdict.exhausted:
+            raise AssistantError(f"{verdict.reason}; raise it in Settings → Assistant")
 
     async def _model_call(
         self,
@@ -3412,7 +3420,9 @@ class AssistantService:
             # cache and the rest read it, so a turn-level figure would average the
             # write into the hit rate and hide whether the breakpoint is working.
             cached_tokens=turn.cached_tokens,
-            cost_usd=turn.cost_usd or 0,
+            # `None` is unmeasured, not free: a custom endpoint reports no cost
+            # and a zero here would make the daily dollar cap look enforced.
+            cost_usd=turn.cost_usd,
             call_id=call_id,
         )
         log.debug(
