@@ -52,6 +52,7 @@ import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './promptTemplates'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
 import { formatCommandLine, launchPreview, parseCommandLine } from './commandLine'
+import { Dropdown } from './Dropdown'
 import { ModelPicker } from './ModelPicker'
 import { includeSelectedModel, type ModelOption } from './modelFilter'
 import { ModelRoutingSummary } from './ModelRoutingSummary'
@@ -1227,7 +1228,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='general'&&<Fragment>
           <section><h3>Defaults</h3>
             <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
-            <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}>{allBackendNames().map(name=><option value={name}>{name==='shell'?'Shell':harnessDisplayName(name)}</option>)}</select></label>
+            <label>Default backend<Dropdown value={draft.default_backend} onChange={value=>change('default_backend',value)} options={allBackendNames().map(name=>({value:name,label:name==='shell'?'Shell':harnessDisplayName(name)}))}/></label>
             <p>What a new session starts as, and where it starts, when nothing more specific applies. A Project's own default overrides both.</p>
           </section>
 
@@ -1293,7 +1294,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         {activeTab==='terminals'&&<Fragment>
           <section><h3>Rendering</h3>
-            <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
+            <label>Renderer<Dropdown value={draft.terminal_renderer} onChange={value=>change('terminal_renderer',value as Config['terminal_renderer'])} options={[{value:'auto',label:'Auto (WebGL with DOM fallback)'},{value:'webgl',label:'Prefer WebGL'},{value:'dom',label:'DOM compatibility mode'}]}/></label>
             <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback. A harness's width limit lives with the harness, under Harnesses.</p>
           </section>
 
@@ -1316,7 +1317,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Default profile</h3>
-            <label>Global default terminal profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
+            <label>Global default terminal profile<Dropdown value={draft.default_shell_profile} onChange={value=>change('default_shell_profile',value)} options={draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))}/></label>
             <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
           </section>
 
@@ -1330,13 +1331,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <header><strong>PROFILE::{selectedProfile.label}</strong><button aria-label="Collapse launch profile" onClick={()=>setSelectedProfileId(null)}>×</button></header>
               <label>Profile ID<input value={selectedProfile.id} onInput={e=>updateProfile(selectedProfileIndex,{id:e.currentTarget.value})}/></label>
               <label>Label<input value={selectedProfile.label} onInput={e=>updateProfile(selectedProfileIndex,{label:e.currentTarget.value})}/></label>
-              <label>Backend<select value={selectedProfile.backend} onChange={e=>updateProfile(selectedProfileIndex,{backend:e.currentTarget.value as ProjectBackend})}><option value="shell">Shell</option>{harnesses().map(harness=><option value={harness.name}>{harness.display_name}</option>)}</select></label>
+              <label>Backend<Dropdown value={selectedProfile.backend} onChange={value=>updateProfile(selectedProfileIndex,{backend:value as ProjectBackend})} options={[{value:'shell',label:'Shell'},...harnesses().map(harness=>({value:harness.name,label:harness.display_name}))]}/></label>
               <label>Executable{selectedProfile.backend!=='shell'&&<em> optional</em>}<input value={selectedProfile.executable} placeholder={selectedProfile.backend==='shell'?'':draft.harness_exe[selectedProfile.backend]||''} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.currentTarget.value})}/></label>
               <label>Arguments<input value={argsText} spellcheck={false} placeholder={selectedProfile.backend==='shell'?'-NoLogo':'--model claude-opus-4-8'} onInput={e=>{const text=e.currentTarget.value;setArgsText(text);updateProfile(selectedProfileIndex,{args:parseCommandLine(text)})}}/></label>
               <p class="profile-hint">Type it as you would in a terminal. Quote anything containing a space: <code>--append-system-prompt "be terse"</code>. A backslash is literal, so Windows paths need no escaping.</p>
               {selectedProfile.backend!=='shell'&&reservedConflict(selectedProfile.backend,selectedProfile.args)&&<p class="error" role="alert">{reservedConflict(selectedProfile.backend,selectedProfile.args)} is built by swe-mux for {harnessDisplayName(selectedProfile.backend)} and cannot be set here.</p>}
               <label>Environment<textarea value={Object.entries(selectedProfile.env).map(([key,value])=>`${key}=${value}`).join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{env:Object.fromEntries(e.currentTarget.value.split('\n').filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)]}))})}/></label>
-              {selectedProfile.backend==='shell'&&<><label>Cwd strategy<select value={selectedProfile.cwd_strategy} onChange={e=>updateProfile(selectedProfileIndex,{cwd_strategy:e.currentTarget.value as LaunchProfile['cwd_strategy']})}><option value="native">native</option><option value="home">home</option><option value="wsl">wsl</option></select></label>
+              {selectedProfile.backend==='shell'&&<><label>Cwd strategy<Dropdown value={selectedProfile.cwd_strategy} onChange={value=>updateProfile(selectedProfileIndex,{cwd_strategy:value as LaunchProfile['cwd_strategy']})} options={[{value:'native',label:'native'},{value:'home',label:'home'},{value:'wsl',label:'wsl'}]}/></label>
               <label class="check"><span>Live cwd telemetry</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label></>}
               <div class="profile-preview"><span>LAUNCHES</span><code>{launchPreview(selectedProfile.executable||(selectedProfile.backend!=='shell'?draft.harness_exe[selectedProfile.backend]||selectedProfile.backend:''),selectedProfile.backend==='shell'?[]:parseCommandLine(harnessArgs[selectedProfile.backend]||''),selectedProfile.args)}</code>
                 <small>{selectedProfile.backend==='shell'?'swe-mux appends its own bootstrap to an interactive PowerShell profile.':'swe-mux adds the conversation id, the per-session settings file, and the MCP registration around these.'}</small>
@@ -1390,9 +1391,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <p>The browser's own spellchecker, on the editor's text input. Notes are prose, so it is worth more here than in a terminal — but it also underlines code, paths, and identifiers.</p>
             <label class="check"><span>Indent guides</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/></label>
             <p>Vertical rules marking each enclosing indent level, the way the standalone Continuity app draws them. A guide marks where a parent list item's content starts, so the outermost level shows none, and the level the caret sits in is drawn brighter.</p>
-            <label>Markdown<select value={draft.note_syntax} onChange={e=>change('note_syntax',e.currentTarget.value as Config['note_syntax'])}><option value="markdown">Render Markdown</option><option value="plain">Show raw text</option></select></label>
+            <label>Markdown<Dropdown value={draft.note_syntax} onChange={value=>change('note_syntax',value as Config['note_syntax'])} options={[{value:'markdown',label:'Render Markdown'},{value:'plain',label:'Show raw text'}]}/></label>
             <p>Raw text keeps every editing feature — undo, multi-cursor, list continuation, autosave — and only stops the Markdown projection, so headings, emphasis, links, and task markers stay as the characters you typed.</p>
-            <label>Tab key<select value={draft.note_tab_behavior} onChange={e=>change('note_tab_behavior',e.currentTarget.value as Config['note_tab_behavior'])}><option value="indent">Indent and outdent lines</option><option value="focus">Move focus out of the editor</option></select></label>
+            <label>Tab key<Dropdown value={draft.note_tab_behavior} onChange={value=>change('note_tab_behavior',value as Config['note_tab_behavior'])} options={[{value:'indent',label:'Indent and outdent lines'},{value:'focus',label:'Move focus out of the editor'}]}/></label>
             <p>Indenting is the default; Escape then Tab still leaves the editor either way, so the keyboard is never trapped.</p>
           </section>
 
@@ -1405,14 +1406,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section><h3>Touch command rail</h3>
             <p>The editor's bottom quick-action strip — undo, indent, bullet, task, bold, heading, and this app's <code>→ agent</code> action — which runs each one without dismissing the on-screen keyboard.</p>
-            <label>Show the rail<select value={draft.note_command_rail} onChange={e=>change('note_command_rail',e.currentTarget.value as Config['note_command_rail'])}><option value="auto">Automatic: touch devices only</option><option value="on">Always</option><option value="off">Never</option></select></label>
+            <label>Show the rail<Dropdown value={draft.note_command_rail} onChange={value=>change('note_command_rail',value as Config['note_command_rail'])} options={[{value:'auto',label:'Automatic: touch devices only'},{value:'on',label:'Always'},{value:'off',label:'Never'}]}/></label>
             <label>Button size<input type="number" min="0" max="96" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/></label>
             <p>Pixels, zero for the default 48px button in a 56px rail; the rail's height and the content inset above it follow the button size together. It is deliberately not sized in <code>rem</code>, so a dense page font cannot shrink a touch target.</p>
             <div class="keybinding-heading"><div><strong>RAIL::ARRANGEMENT</strong><p>Which buttons appear, and in what order, is chosen from the gear button on the rail itself and saved by the editor per device — not in this config, so it is not part of this draft and Cancel does not undo a reset.</p></div><button type="button" onClick={resetNoteRailArrangement}>Reset rail arrangement</button></div>
           </section>
 
           <section><h3>Editor shortcuts</h3>
-            <label>Policy<select value={draft.note_shortcut_policy} onChange={e=>change('note_shortcut_policy',e.currentTarget.value as ShortcutPolicy)}><option value="browser-safe">Browser-safe: leave browser chords alone</option><option value="editor-first">Editor first: claim every chord</option><option value="none">None: no editor shortcuts</option></select></label>
+            <label>Policy<Dropdown value={draft.note_shortcut_policy} onChange={value=>change('note_shortcut_policy',value as ShortcutPolicy)} options={[{value:'browser-safe',label:'Browser-safe: leave browser chords alone'},{value:'editor-first',label:'Editor first: claim every chord'},{value:'none',label:'None: no editor shortcuts'}]}/></label>
             <p>Browser-safe releases the chords Chromium claims for itself (reload, search, DevTools) so they keep doing what they do everywhere else. Editor-first suits the desktop app, where those chords are not wanted. Either way the browser may still swallow an accelerator before the page sees it.</p>
             <div class="keybinding-heading"><div><strong>EDITOR::CHORDS</strong><p>Per-chord overrides on top of that policy. <em>Run the command</em> reclaims a chord the policy would release; <em>leave to the browser</em> gives one back. These apply inside a note only, and are separate from this app's own shortcuts on the Input tab.</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>Restore editor shortcut defaults</button></div>
             <input class="note-chord-filter" type="search" value={noteChordQuery} placeholder="Filter chords and commands…" aria-label="Filter editor shortcuts" spellcheck={false} onInput={e=>setNoteChordQuery(e.currentTarget.value)}/>
@@ -1423,11 +1424,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               }).map(binding=><article key={binding.chord}>
                 <span class="note-chord"><kbd>{noteChordLabel(binding.chord)}</kbd>{!binding.isBrowserSafe&&<em title="A chord the browser claims first; the browser-safe policy releases it unless it is reclaimed here">browser chord</em>}</span>
                 <small title={binding.command}>{binding.command}</small>
-                <select aria-label={`Behaviour of ${noteChordLabel(binding.chord)} in the note editor`} value={noteChordState(draft.note_shortcut_overrides,binding.chord)} onChange={e=>setNoteChord(draft.note_shortcut_overrides,binding.chord,binding.command,e.currentTarget.value as NoteChordState)}>
-                  <option value="default">Policy default</option>
-                  <option value="bind">Run the command</option>
-                  <option value="release">Leave to the browser</option>
-                </select>
+                <Dropdown ariaLabel={`Behaviour of ${noteChordLabel(binding.chord)} in the note editor`} value={noteChordState(draft.note_shortcut_overrides,binding.chord)} onChange={value=>setNoteChord(draft.note_shortcut_overrides,binding.chord,binding.command,value as NoteChordState)} options={[
+                  {value:'default',label:'Policy default'},
+                  {value:'bind',label:'Run the command'},
+                  {value:'release',label:'Leave to the browser'},
+                ]}/>
               </article>)}
             </div>
           </section>
@@ -1453,7 +1454,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             </Fragment>}
             {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false)&&<p class="profile-hint">Instrumentation changes take effect on the next daemon restart (live sessions are preserved).</p>}
             {appliesWidthEnvelope(harness.name)&&<Fragment>
-              <label data-setting="claude_max_columns">Width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
+              <label data-setting="claude_max_columns">Width limit<Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/></label>
               <p class="profile-hint">{harness.display_name}'s renderer can leave stale and duplicated cells when its width changes by a lot, so a pane dragged past this many columns adds margin instead of resizing the terminal again. Raise it for wide diffs and long log lines; choose No limit to let it fill its pane like every other session. Phone and other compact panes are never limited.</p>
             </Fragment>}
             <p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminals. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
@@ -1580,10 +1581,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               that no longer applies to find out why. */}
           <section><h3>Model provider</h3>
             <p>Speech recognition and speech synthesis already run on this machine. This is where the language model is chosen: OpenRouter's hosted catalog, or any OpenAI-compatible <code>/chat/completions</code> endpoint you run yourself, which covers llama.cpp, Ollama, vLLM, and LM Studio.</p>
-            <label for="llm-provider-select" data-setting="llm_provider">Provider<select id="llm-provider-select" value={draft.llm_provider} onChange={event=>change('llm_provider',event.currentTarget.value)}>
-              <option value="openrouter">OpenRouter (hosted)</option>
-              <option value="custom">Custom OpenAI-compatible endpoint</option>
-            </select><small>Everything model-backed follows this: automation observers, the scan timeline, spoken summaries, attention narration, the titler, the Project context card, and the Mux assistant.</small></label>
+            <label for="llm-provider-select" data-setting="llm_provider">Provider<Dropdown id="llm-provider-select" value={draft.llm_provider} onChange={value=>change('llm_provider',value)} options={[
+              {value:'openrouter',label:'OpenRouter (hosted)'},
+              {value:'custom',label:'Custom OpenAI-compatible endpoint'},
+            ]}/><small>Everything model-backed follows this: automation observers, the scan timeline, spoken summaries, attention narration, the titler, the Project context card, and the Mux assistant.</small></label>
             <ProviderReadiness readiness={provider?.llm}/>
             {draft.llm_provider==='custom'&&<Fragment>
               <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code>. Ollama serves <code>http://127.0.0.1:11434/v1</code>, llama.cpp and LM Studio <code>http://127.0.0.1:8080/v1</code> and <code>:1234/v1</code>, vLLM whatever host you started it on.</small></label>
@@ -1657,10 +1658,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section class="input-settings"><h3>Mobile terminal</h3>
           <p>Touch settings apply on coarse-pointer devices. Text input goes directly to the focused terminal.</p>
-          <label>Vertical drag<select value={draft.mobile_vertical_drag} onChange={e=>change('mobile_vertical_drag',e.currentTarget.value as Config['mobile_vertical_drag'])}><option value="smart">Smart: app wheel or scrollback</option><option value="terminal">Terminal scrollback only</option><option value="application">Application wheel</option><option value="disabled">Disabled</option></select></label>
-          <label>Scroll direction<select value={draft.mobile_scroll_direction} onChange={e=>change('mobile_scroll_direction',e.currentTarget.value as Config['mobile_scroll_direction'])}><option value="natural">Natural touch</option><option value="wheel">Mouse wheel</option></select></label>
+          <label>Vertical drag<Dropdown value={draft.mobile_vertical_drag} onChange={value=>change('mobile_vertical_drag',value as Config['mobile_vertical_drag'])} options={[{value:'smart',label:'Smart: app wheel or scrollback'},{value:'terminal',label:'Terminal scrollback only'},{value:'application',label:'Application wheel'},{value:'disabled',label:'Disabled'}]}/></label>
+          <label>Scroll direction<Dropdown value={draft.mobile_scroll_direction} onChange={value=>change('mobile_scroll_direction',value as Config['mobile_scroll_direction'])} options={[{value:'natural',label:'Natural touch'},{value:'wheel',label:'Mouse wheel'}]}/></label>
           <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
-          <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Select terminal text</option><option value="disabled">Disabled</option></select></label>
+          <label>Long press<Dropdown value={draft.mobile_long_press} onChange={value=>change('mobile_long_press',value as Config['mobile_long_press'])} options={[{value:'context_menu',label:'Select terminal text'},{value:'disabled',label:'Disabled'}]}/></label>
           <label class="check"><span>Copy terminal selection automatically</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
           </section>
 
@@ -1677,7 +1678,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section class="input-settings">
           <div class="keybinding-heading"><div><h3>Touch gestures</h3><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
-          {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<select value={draft.mobile_gestures?.[slot]??''} onChange={e=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:e.currentTarget.value})}><option value="">Disabled</option>{bindingCommands.map(command=><option value={command.id}>{command.label}</option>)}</select></label>)}
+          {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',label:'Disabled'},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
           <label class="check"><span>Swipe-away closes an open panel: either horizontal direction closes the left sidebar; swiping right closes the right side panel instead of running that swipe's binding</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
           <label class="check"><span>Swipe back closes an open overlay: while a dialog is open, swiping right closes one level (the transcript inside session history returns to the results). Off restores the older behaviour where a dialog ignored every swipe; the Android back gesture keeps working either way</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
           <label class="check"><span>Back steps through recent tabs: with nothing open, the system back gesture returns to the tabs and Projects you were last looking at (up to ten on this device) before it leaves the app. Off restores the older behaviour, where back on a session closed swe-mux outright</span><input type="checkbox" checked={draft.mobile_back_view_history!==false} onChange={e=>change('mobile_back_view_history',e.currentTarget.checked)}/></label>
@@ -1814,7 +1815,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
               <span class="policy-step">2</span>
               <div class="policy-body">
-                <label data-setting="tts_default_mode">Each session: does it generate?<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
+                <label data-setting="tts_default_mode">Each session: does it generate?<Dropdown value={draft.tts_default_mode} onChange={value=>change('tts_default_mode',value as Config['tts_default_mode'])} options={[{value:'off',label:'Off until marked'},{value:'on_demand',label:'On demand (speak button)'},{value:'auto',label:'Auto on every reply'}]}/></label>
                 <small>The default for agent sessions. The voice panel's <code>tts</code> tab overrides it for the focused session, so a session that should never speak can be set off on its own.</small>
               </div>
             </div>
@@ -1833,7 +1834,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               beside the engine that needs it rather than three headings away. */}
           <section><h3>Voice and engine</h3>
           <p>Which synthesizer speaks, and how it sounds. The OS voice needs no download and no network call; Kokoro is a local neural voice that downloads once and then runs offline.</p>
-          <label data-setting="tts_engine">Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="sapi">OS voice (offline, no download)</option><option value="kokoro">Kokoro-82M (local neural, one-time download)</option></select></label>
+          <label data-setting="tts_engine">Engine<Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',label:'OS voice (offline, no download)'},{value:'kokoro',label:'Kokoro-82M (local neural, one-time download)'}]}/></label>
           {draft.tts_engine==='sapi'&&<>
             <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
@@ -1881,7 +1882,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               halves, so it leads them rather than sitting a heading above. */}
           <section><h3>Spoken summary</h3>
           <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts. Verbatim never touches a model.</p>
-          <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select><small>The default for every session. The voice panel's <code>tts</code> tab and the pane's player strip both override it for that session alone.</small></label>
+          <label>Content<Dropdown value={draft.tts_content} onChange={value=>change('tts_content',value as Config['tts_content'])} options={[{value:'summary',label:'Spoken summary (LLM, like /say)'},{value:'verbatim',label:'Verbatim reply (markdown stripped)'}]}/><small>The default for every session. The voice panel's <code>tts</code> tab and the pane's player strip both override it for that session alone.</small></label>
           <label for="summary-model-picker" data-setting="tts_summary_model">Summary model<ModelPicker id="summary-model-picker" value={draft.tts_summary_model} options={modelOptions(draft.tts_summary_model)} emptyLabel="Use the cheap model…" onChange={value=>change('tts_summary_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <BudgetControl name="tts_daily_budget" label="Read-aloud summaries, daily" value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>
@@ -1894,7 +1895,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Microphone and wake words</h3>
           <label class="check" data-setting="stt_enabled"><span>Enable microphone input and hands-free Conversation mode</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
           {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">The first Talk downloads the local Whisper speech model (several hundred MB) plus the browser voice-activity runtime. It runs once, then transcription is offline.</p>}
-          <label>Daemon transcription engine<select value={draft.stt_engine} onChange={e=>change('stt_engine',e.currentTarget.value as Config['stt_engine'])}><option value="whisper">Whisper Turbo (local, recommended)</option><option value="sapi">Windows Speech Recognition (legacy)</option></select></label>
+          <label>Daemon transcription engine<Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',label:'Whisper Turbo (local, recommended)'},{value:'sapi',label:'Windows Speech Recognition (legacy)'}]}/></label>
           <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>Whisper's <code>turbo</code> dictation model is English-first and large. Set a language and model that match how you speak; this is a first-use choice, not a fixed assumption.</small></label>
           {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
@@ -1954,7 +1955,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
           <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
           <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
-          <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
+          <label>Reversible-action trust<Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',label:'Announce with a cancel window (default)'},{value:'confirm',label:'Always confirm'},{value:'auto',label:'Run silently'}]}/><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label class="check" data-setting="assistant_stream_replies"><span>Stream the reply as it is written</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>
           <p>Streaming lets the first sentence be spoken while the rest is still generating, which is the whole of the difference: correctness does not depend on it either way. Off buffers the turn whole — the pre-streaming behaviour, and the escape hatch if a configured model's provider streams tool calls badly.</p>
           <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
@@ -2078,12 +2079,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               much the log that ends up in that bundle actually says. */}
           <section><h3>Logging</h3>
           <p>The level the daemon's rotating <code>daemon.log</code> and its console start at. Applied as soon as this is saved — nothing needs restarting — and it is what the diagnostics bundle below carries, so <code>DEBUG</code> is the setting to reach for before reproducing a problem you intend to report.</p>
-          <label data-setting="log_level">Daemon log level<select value={draft.log_level} onChange={e=>change('log_level',e.currentTarget.value as Config['log_level'])}>
-            <option value="DEBUG">DEBUG · everything, including per-request detail</option>
-            <option value="INFO">INFO · the default</option>
-            <option value="WARNING">WARNING</option>
-            <option value="ERROR">ERROR</option>
-          </select><small><code>DEBUG</code> is verbose enough to rotate the log quickly on a busy fleet, so it is worth putting back afterwards.</small></label>
+          <label data-setting="log_level">Daemon log level<Dropdown value={draft.log_level} onChange={value=>change('log_level',value as Config['log_level'])} options={[
+            {value:'DEBUG',label:'DEBUG · everything, including per-request detail'},
+            {value:'INFO',label:'INFO · the default'},
+            {value:'WARNING',label:'WARNING'},
+            {value:'ERROR',label:'ERROR'},
+          ]}/><small><code>DEBUG</code> is verbose enough to rotate the log quickly on a busy fleet, so it is worth putting back afterwards.</small></label>
           </section>
 
           <section><h3>Export diagnostics</h3>
@@ -2105,8 +2106,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
           <SessionRowSettings />
           <h3>Side panel tabs</h3>
-          <label>Drawer tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
-          <label>Right rail<select value={draft.utility_rail_display} onChange={e=>change('utility_rail_display',e.currentTarget.value as Config['utility_rail_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
+          <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
+          <label>Right rail<Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
           <p>The drawer's tab strips and the always-visible desktop rail keep independent icon or title modes.</p>
           <h3>Visible panels</h3>
           <div class="drawer-tab-visibility" role="group" aria-label="Visible side panels">{DRAWER_TABS.map(tab=>{
@@ -2120,14 +2121,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
           <p>Unchecking a panel removes it from the side panel's tab strips and from the desktop rail. It changes nothing else: the panel keeps its place in your arrangement, and opening it by name — from the command palette, a voice command, or a menu row that names it — still shows it for as long as it stays selected. The same list is on the right-click menu of any panel tab, which is where you will be when you want it. This is one setting for every Project, kept on this device alongside the arrangement itself.</p>
           <h3>Interface scale</h3>
-          <label>Desktop interface scale<select value={String(draft.ui_scale_desktop)} onChange={e=>changeUiScale('ui_scale_desktop',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
-          <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
+          <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
+          <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
           <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
           <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Text editor</strong>.</p>
           <h3>Rail density</h3>
-          <label data-setting="rail_density_desktop">Desktop rail density<select value={draft.rail_density_desktop} onChange={e=>changeRailDensity('rail_density_desktop',e.currentTarget.value)}>{RAIL_DENSITIES.map(step=><option value={step}>{railDensityLabel(step)}</option>)}</select></label>
-          <label data-setting="rail_density_mobile">Mobile rail density<select value={draft.rail_density_mobile} onChange={e=>changeRailDensity('rail_density_mobile',e.currentTarget.value)}>{RAIL_DENSITIES.map(step=><option value={step}>{railDensityLabel(step)}</option>)}</select></label>
+          <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
+          <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <p>How tightly the Action rail under each terminal packs its buttons: the gap between them, their height, and the padding inside and around them. It is the one strip that is on screen under every pane at once, so on a desktop showing four terminals a tighter rail is four rows of output back. Comfortable is the spacing that has always shipped, and both devices start there — this only ever takes space away, never adds it.</p>
           <p>Split desktop/mobile like the scale above, and for a sharper reason: below Comfortable a phone's buttons fall under the 44-pixel touch target that makes them reliable to hit with a thumb. That is the trade the setting is offering rather than an oversight, and it is why the desktop is where it pays off.</p></section>}
   </Fragment>

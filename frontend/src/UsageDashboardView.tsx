@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { GrantGate } from './GrantGate'
 import { WorkloadTelemetry } from './WorkloadTelemetry'
 import { AutomationSpendView } from './AutomationSpendView'
@@ -223,17 +224,17 @@ export function UsageTokensView({onConfigure}:{onConfigure:()=>void}) {
       {(['overview','timeline','models'] as const).map(item=><button role="tab" key={item} aria-selected={view===item} class={view===item?'active':''} onClick={()=>setView(item)}>{item==='timeline'?'time series':item==='models'?'model breakdown':item}</button>)}
     </div>
     <div class="usage-view-controls">
-      <label>range<select value={range} onChange={event=>setRange(event.currentTarget.value as typeof range)}>
-        <option value="7">7 days</option><option value="30">30 days</option>
-        <option value="90">90 days</option><option value="all">all cached</option>
-      </select></label>
+      <label>range<Dropdown value={range} onChange={value=>setRange(value as typeof range)} options={[
+        {value:'7',label:'7 days'},{value:'30',label:'30 days'},
+        {value:'90',label:'90 days'},{value:'all',label:'all cached'},
+      ]}/></label>
       {(view==='timeline'||view==='models')&&<>
-        <label>interval<select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}>
-          <option value="daily">daily</option><option value="monthly">monthly</option>
-        </select></label>
-        <label>metric<select value={metric} onChange={event=>setMetric(event.currentTarget.value as typeof metric)}>
-          <option value="tokens">tokens</option><option value="cost">estimated cost</option>
-        </select></label>
+        <label>interval<Dropdown value={resolution} onChange={value=>setResolution(value as typeof resolution)} options={[
+          {value:'daily',label:'daily'},{value:'monthly',label:'monthly'},
+        ]}/></label>
+        <label>metric<Dropdown value={metric} onChange={value=>setMetric(value as typeof metric)} options={[
+          {value:'tokens',label:'tokens'},{value:'cost',label:'estimated cost'},
+        ]}/></label>
       </>}
     </div>
     {view==='overview'&&<><p class="telemetry-caveat historical-caveat">Historical ccusage totals are source and model aggregates. Transcript history does not identify saved provider account slots.</p>
@@ -254,7 +255,7 @@ export function UsageTokensView({onConfigure}:{onConfigure:()=>void}) {
             {sourceList.map(source=><label key={source.source_id}><input type="checkbox" checked={!hiddenSources.includes(source.source_id)} onChange={()=>toggleSource(source.source_id)}/><span>{source.source_label}</span><small>{source.source_id}</small></label>)}
             {usage?.collector.error&&<p>{usage.collector.error}</p>}
           </div>
-        </details>:domain==='quota'?<label>provider<select value={quotaProvider} onChange={event=>setQuotaProvider(event.currentTarget.value)}><option value="all">all providers</option>{quotaProviders.map(provider=><option key={provider} value={provider}>{provider}</option>)}</select></label>:<span>Cross-source operational telemetry</span>}
+        </details>:domain==='quota'?<label>provider<Dropdown value={quotaProvider} onChange={setQuotaProvider} options={[{value:'all',label:'all providers'},...quotaProviders.map(provider=>({value:provider,label:provider}))]}/></label>:<span>Cross-source operational telemetry</span>}
         <div>{domain==='historical'&&<button disabled={!usage?.enabled||refreshing} onClick={()=>void refreshAll()}>{refreshing?'refreshing...':'refresh'}</button>}
           <details class="usage-overflow"><summary aria-label="Usage actions">•••</summary><div><button onClick={onConfigure}>configure</button><button class={confirmClear?'confirming':''} disabled={refreshing} onClick={()=>void clear()}>{confirmClear?'confirm clear cache':'clear cache'}</button></div></details>
         </div>

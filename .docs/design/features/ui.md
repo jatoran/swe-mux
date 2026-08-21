@@ -558,6 +558,32 @@ Its rules, and what each one is defending:
   The first release of this protocol cannot update clients still running the preceding UI because those clients do not yet perform the comparison; each such client needs one manual reload.
   "Reload UI" is a plain page reload for picking up freshly built frontend assets.
 
+## Every dropdown is the app's own
+
+- **There is no native `<select>` left in the app**, on either device class.
+  The platform control on a phone is a system sheet or a spinning wheel that borrows none of the app's palette and covers the very surface the choice is being made against, which is the reported complaint and not a thing a stylesheet can reach.
+  Keeping the desktop native and the phone custom would mean two implementations of every rule below, so both get the same control.
+- **A scroll gesture scrolls the list. It never selects the entry it started on.**
+  This is the defect that motivated the component: the account-settings model list committed on the *press*, so dragging to scroll a catalogue of hundreds changed the configured model to whatever the finger happened to land on.
+  Choosing happens on the release, and only when the pointer has barely moved.
+- **The list opens scrolled to the entry in force**, roughly centred, so a long list reads as a position in a catalogue rather than as a list that happens to start at the top.
+  A truncated list defeats that, which is why the model picker's unfiltered catalog is no longer capped: a control that cannot show you what it is set to is worse than a long list.
+- **Entries are ordered where they are built, not by the control.**
+  A list with a meaningful order (a commit's parents, severity, recency) keeps it.
+  The OpenRouter catalog had no such order - it arrived in the provider's own, which read as reverse-alphabetical and was navigable by nobody - so the daemon now serves it A-Z, case-folded, ties broken by model id.
+  That happens as the catalog leaves the cache rather than as it enters, so an install that fetched before the fix is corrected without anyone pressing Refresh.
+- **Keyboard and form semantics are the native control's, kept rather than approximated.**
+  Arrows wrap and step over disabled rows, `Home`/`End` jump, type-ahead prefers a prefix over a substring and treats a repeated letter as "the next one", `Enter` chooses, `Escape` leaves without choosing and hands focus back.
+  The trigger is a `<button>`, which is a labelable element, so `<label for=…>` and a wrapping `<label>` associate exactly as they did before; `disabled` is the real attribute; and the open list is a `role="listbox"` of `role="option"` rows.
+- **The list is drawn over everything, from the page's own root.**
+  A picker inside a scrolling panel would be clipped by it - the Settings scroller, the drawer, a modal body - where the native popup was clipped by nothing.
+  It opens downward and flips up only when there is no room, measured against what the soft keyboard leaves visible rather than against the full page.
+- **Two pickers are deliberately not this control**, and both for the same reason: their rows are not a list of labels.
+  The **theme picker** shows a swatch strip per row and *applies* a theme as you walk the list, committing nothing - a preview contract, not a selection one - and it is the design this component was modelled on.
+  The **model picker** filters hundreds of entries by typed text and shows an id and a price beside each name; a list is not how anyone finds one of those, so it stays a combobox.
+  It borrows the three rules above that it was failing, which is the point: the rules belong to the app, not to one component.
+- The **Group** row in a Project's context menu also stays a pop-out submenu rather than becoming a dropdown, because a picker nested in a context menu opens a second overlay over one, and every row around it is a menu row.
+
 ## Settings contract
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
@@ -2800,6 +2826,9 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 ## Key files
 
 - `frontend/src/App.tsx`
+- `frontend/src/Dropdown.tsx`
+- `frontend/src/dropdownOptions.ts`
+- `frontend/src/dropdownPlacement.ts`
 - `frontend/src/dismissStack.ts`
 - `frontend/src/systemBack.ts`
 - `frontend/src/viewHistory.ts`

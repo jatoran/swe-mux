@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { DROPDOWN_PRESS_SLOP_PX, dropdownScrollTop } from './dropdownOptions'
 import { filterModelOptions, type ModelOption } from './modelFilter'
 import { modelMetaLabel, modelMetaTitle } from './modelPricing'
 
@@ -42,6 +43,8 @@ type Props={
 export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Props){
   const root=useRef<HTMLDivElement>(null)
   const input=useRef<HTMLInputElement>(null)
+  const list=useRef<HTMLDivElement>(null)
+  const press=useRef<{x:number;y:number}|null>(null)
   const [open,setOpen]=useState(false)
   const [query,setQuery]=useState('')
   const [active,setActive]=useState(0)
@@ -58,6 +61,23 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
   },[open])
 
   useEffect(()=>setActive(0),[query])
+
+  // Opening lands on the model in force, roughly centred, instead of at the top of a
+  // catalogue of hundreds. Without it the one thing the control is certain to be asked —
+  // "which one is this now, and what is near it" — required scrolling to find out.
+  useEffect(()=>{
+    if(!open)return
+    const container=list.current
+    const row=container?.querySelector<HTMLElement>('[data-selected="true"]')
+    if(!container||!row)return
+    container.scrollTop=dropdownScrollTop({
+      itemTop:row.offsetTop,
+      itemHeight:row.offsetHeight,
+      viewHeight:container.clientHeight,
+      scrollHeight:container.scrollHeight,
+      scrollTop:container.scrollTop,
+    },'centre')
+  },[open])
 
   const openPicker=()=>{
     setQuery('')
@@ -100,8 +120,8 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
       />
       <button type="button" aria-label={open?'Close model list':'Open model list'} onPointerDown={event=>event.preventDefault()} onClick={()=>{if(open){setOpen(false);setQuery('')}else{openPicker();input.current?.focus()}}}>⌄</button>
     </div>
-    {open&&<div class="model-picker-options" id={listId} role="listbox" aria-label="Available models">
-      {!query&&!required&&<button type="button" role="option" aria-selected={!value} class={!value?'active':''} onPointerDown={event=>{event.preventDefault();choose('')}}>{emptyLabel}</button>}
+    {open&&<div ref={list} class="model-picker-options" id={listId} role="listbox" aria-label="Available models">
+      {!query&&!required&&<button type="button" role="option" aria-selected={!value} class={!value?'active':''} data-selected={!value?'true':undefined} onClick={()=>choose('')}>{emptyLabel}</button>}
       {matches.map((model,index)=>{
         const meta=modelMetaLabel(model)
         const detail=modelMetaTitle(model)
@@ -110,13 +130,25 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
           type="button"
           role="option"
           aria-selected={model.id===value}
+          data-selected={model.id===value?'true':undefined}
           class={index===active?'active':''}
           // The row ellipsizes both the id and the price cell on a narrow panel,
           // and the price order (input then output) is not guessable from the
           // figures. The title carries both in full.
           title={[model.name,model.id,detail].filter(Boolean).join('\n')}
           onMouseEnter={()=>setActive(index)}
-          onPointerDown={event=>{event.preventDefault();choose(model.id)}}
+          onPointerDown={event=>{press.current={x:event.clientX,y:event.clientY}}}
+          // `click`, never `pointerdown`. Committing on the press meant a finger that
+          // landed on a row and dragged to scroll the catalogue chose that row instead
+          // of scrolling — the reported defect. The browser already withholds a click
+          // when a touch pans; the slop guard covers the slow drag that ends where it
+          // started, and the mouse drag out of the list and back, which still clicks.
+          onClick={event=>{
+            const from=press.current
+            press.current=null
+            if(from&&Math.hypot(event.clientX-from.x,event.clientY-from.y)>DROPDOWN_PRESS_SLOP_PX)return
+            choose(model.id)
+          }}
         ><strong>{model.name}</strong><span class="model-picker-meta"><span>{model.id}</span>{meta&&<span class="model-picker-price">{meta}</span>}</span></button>
       })}
       {!matches.length&&<span class="model-picker-empty">No matching models</span>}

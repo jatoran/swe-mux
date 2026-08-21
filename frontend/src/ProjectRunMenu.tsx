@@ -1,6 +1,7 @@
 import { Fragment } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { fitScrollingMenuInViewport } from './menuPosition'
 import type { LaunchProfile, Project, ProjectAction, ProjectActionCatalog, ProjectActionDiff, ProjectBackend, Session } from './types'
 import { promptDeliveryHarnesses } from './harnessRegistry'
@@ -222,7 +223,7 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
       <header><div><span>RUN</span><strong>{project.name}</strong></div><button aria-label="Close Run menu" onClick={onClose}>×</button></header>
       {worktreeOpen?<form class="run-worktree-form" onSubmit={event=>void launchWorktree(event)}>
         <small>NEW WORKTREE SESSION</small>
-        <label>Session<select value={worktree.backend} disabled={!!busy} onChange={event=>setWorktree(current=>({...current,backend:event.currentTarget.value}))}>{harnesses.map(harness=><option value={harness.name}>{harness.display_name}</option>)}<option value="shell">Shell</option></select></label>
+        <label>Session<Dropdown value={worktree.backend} disabled={!!busy} onChange={value=>setWorktree(current=>({...current,backend:value}))} options={[...harnesses.map(harness=>({value:harness.name,label:harness.display_name})),{value:'shell',label:'Shell'}]}/></label>
         <label>New branch<input autofocus value={worktree.branch} disabled={!!busy} placeholder="worktree-my-change" spellcheck={false} onInput={event=>changeBranch(event.currentTarget.value)}/></label>
         <label>Start point <em>optional</em><input value={worktree.startPoint} disabled={!!busy} placeholder="HEAD" onInput={event=>setWorktree(current=>({...current,startPoint:event.currentTarget.value}))}/></label>
         <label>Absolute path<input value={worktree.path} disabled={!!busy} onInput={event=>setWorktree(current=>({...current,path:event.currentTarget.value,pathEdited:true}))}/></label>
@@ -307,7 +308,7 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
         {prompting.description&&<p>{prompting.description}</p>}
         {(prompting.inputs||[]).map(item=><label key={item.id}>{item.label}
           {item.kind==='choice'
-            ?<select value={inputValues[item.id]??item.default} onChange={event=>setInputValues(current=>({...current,[item.id]:event.currentTarget.value}))}>{item.options.map(option=><option value={option}>{option}</option>)}</select>
+            ?<Dropdown value={inputValues[item.id]??item.default} onChange={value=>setInputValues(current=>({...current,[item.id]:value}))} options={item.options.map(option=>({value:option,label:option}))}/>
             :<input value={inputValues[item.id]??item.default} spellcheck={false} onInput={event=>setInputValues(current=>({...current,[item.id]:event.currentTarget.value}))}/>}
         </label>)}
         <pre>{prompting.steps.map(step=>`${step.name}: ${step.command}`).join('\n')}</pre>

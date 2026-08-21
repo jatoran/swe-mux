@@ -72,6 +72,23 @@ const HELP_TAGS = new Set(['p', 'small'])
 // Props worth matching on even though they render no text node.
 const TEXT_PROPS = ['placeholder', 'title', 'aria-label', 'alt'] as const
 
+/**
+ * A `Dropdown`'s rows live in its `options` prop rather than as `<option>` children, so the
+ * walk below cannot see them the way it saw a `<select>`'s. Harvesting the labels keeps every
+ * choice searchable: "Tokyo Night" and "DEBUG" and "Kokoro" are exactly the words a person
+ * types when hunting for the setting that offers them, and they became unfindable the moment
+ * the panel stopped using native selects. Only `label` is taken — `value` is an id, and
+ * indexing ids would match a search for "off" against every enum in the panel.
+ */
+function collectOptionLabels(props: Record<string, unknown> | null | undefined, out: string[]): void {
+  const options = props?.options
+  if (!Array.isArray(options)) return
+  for (const option of options) {
+    const label = (option as { label?: unknown } | null)?.label
+    if (typeof label === 'string' && label.trim()) out.push(label.trim())
+  }
+}
+
 const isVNode = (node: unknown): node is { type?: unknown; props?: Record<string, unknown> | null } =>
   typeof node === 'object' && node !== null && 'props' in (node as Record<string, unknown>)
 
@@ -86,9 +103,12 @@ function collectText(node: unknown, out: string[], withProps: boolean): void {
   if (typeof node === 'number') { out.push(String(node)); return }
   if (!isVNode(node)) return
   const props = node.props
-  if (withProps && props) for (const name of TEXT_PROPS) {
-    const value = props[name]
-    if (typeof value === 'string' && value.trim()) out.push(value.trim())
+  if (withProps && props) {
+    for (const name of TEXT_PROPS) {
+      const value = props[name]
+      if (typeof value === 'string' && value.trim()) out.push(value.trim())
+    }
+    collectOptionLabels(props, out)
   }
   collectText(childrenOf(node), out, withProps)
 }
@@ -97,9 +117,10 @@ const textOf = (node: unknown): string => { const out: string[] = []; collectTex
 
 /**
  * The label a human would read for this control: the first *rendered* text run,
- * not the whole subtree. `<label>Theme<select>…</select></label>` is "Theme",
- * never "Theme Dark Light System …" — the option labels stay searchable as
- * keywords. Glyph-only runs are skipped so an icon-prefixed button indexes as
+ * not the whole subtree. `<label>Theme<Dropdown …/></label>` is "Theme", never
+ * "Theme Dark Light System …" — the option labels stay searchable as keywords,
+ * which is why they are harvested only under `withProps`. Glyph-only runs are
+ * skipped so an icon-prefixed button indexes as
  * "Claude" rather than "▶", and an `aria-label` is a fallback rather than the
  * first choice: a row labelled "Set shortcut for Open command palette" should
  * still index, and be found, as the "Open command palette" a user can see.

@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { chooseDropdown, dropdownValue } from './dropdown'
 
 /**
  * Two facts about the Change Map that only a browser can establish.
@@ -194,9 +195,12 @@ test('a worktree map names its checkout and the base it is measured against', as
   await page.waitForSelector(`${CANVAS} canvas`)
 
   await expect(page.locator('.change-map-header small')).toHaveText('worktree wt vs master')
-  const scope = page.locator('.change-map-scope select')
-  await expect(scope).toHaveValue('branch')
-  await expect(scope.locator('option')).toHaveText(['this session', 'this branch', 'all sessions'])
+  const scope = page.locator('.change-map-scope .dropdown-trigger')
+  expect(await dropdownValue(scope)).toBe('branch')
+  // The rows are portalled to the body, so reading them means opening the list.
+  await scope.click()
+  await expect(page.locator('.dropdown-list .dropdown-option'))
+    .toHaveText(['this session', 'this branch✓', 'all sessions'])
 })
 
 test('picking a scope is what the daemon is asked for', async ({ page }) => {
@@ -209,7 +213,7 @@ test('picking a scope is what the daemon is asked for', async ({ page }) => {
   const first = await page.evaluate(() => window.changeMapRequests[0])
   expect(first).not.toContain('scope=')
 
-  await page.locator('.change-map-scope select').selectOption('session')
+  await chooseDropdown(page, page.locator('.change-map-scope .dropdown-trigger'), 'session')
   await expect.poll(async () =>
     await page.evaluate(() => window.changeMapRequests.some(url => url.includes('scope=session'))),
   ).toBe(true)

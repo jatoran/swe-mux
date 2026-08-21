@@ -21,6 +21,23 @@ test('a label is indexed by its own text, with its control values as keywords', 
   assert.match(theme.keywords, /tokyo night/)
 })
 
+test('a Dropdown keeps its choices searchable now that they are a prop, not children', () => {
+  // The regression the app-wide `<select>` sweep would otherwise have shipped: with the rows
+  // moved from `<option>` children into an `options` prop, "Tokyo Night" stopped being text
+  // anywhere in the tree and the setting that offers it became unfindable by the word a
+  // person would actually search for.
+  const [, theme] = tab(
+    preactNode('h3', {}, 'Appearance'),
+    preactNode('label', {}, 'Theme', preactNode(
+      function Dropdown() { return null },
+      { value: 'dark', options: [{ value: 'dark', label: 'Dark' }, { value: 'tokyo', label: 'Tokyo Night' }] },
+    )),
+  )
+  assert.equal(theme.label, 'Theme', 'the option labels are keywords, never the label')
+  assert.match(theme.keywords, /tokyo night/)
+  assert.doesNotMatch(theme.keywords, /\btokyo\b(?! night)/, 'the value id is not indexed')
+})
+
 test('help text following a control folds into that control keywords', () => {
   const [, listen] = tab(
     h('h3', {}, 'Remote'),

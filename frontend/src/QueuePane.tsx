@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
 import { hasSoftKeyboard } from './deviceSettings'
+import { Dropdown } from './Dropdown'
 import { GrantGate } from './GrantGate'
 import { SettingLink } from './SettingLink'
 import { StateIndicator } from './StateIndicator'
@@ -542,21 +543,19 @@ export function QueuePane({
             )}
             {message.state === 'stranded' &&
               (retargetFor === message.id ? (
-                <select
+                <Dropdown
+                  value=""
                   disabled={busy}
-                  onChange={event => {
-                    const target = event.currentTarget.value
+                  ariaLabel="Retarget this message"
+                  onChange={target => {
                     setRetargetFor('')
                     if (target) void run(message.id, () => retargetQueueMessage(message.id, target))
                   }}
-                >
-                  <option value="">Retarget to…</option>
-                  {liveAgents.map(item => (
-                    <option key={item.id} value={item.id}>
-                      {agentTargetName(item)}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: 'Retarget to…' },
+                    ...liveAgents.map(item => ({ value: item.id, label: agentTargetName(item) })),
+                  ]}
+                />
               ) : (
                 <button type="button" disabled={busy || !liveAgents.length} onClick={() => setRetargetFor(message.id)}>
                   Retarget

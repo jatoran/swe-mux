@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { allBackendNames } from './harnessRegistry'
 import { notifyPromptLibraryChanged } from './promptLibraryEvents'
 import { promptTemplateVariables, type PromptTemplate } from './promptTemplates'
@@ -226,20 +227,19 @@ export function PromptDraftFields({ state, owners = [], compact }: {
     </label>
     <div class="prompt-draft-row">
       <label>Scope
-        <select value={draft.scope} disabled={Boolean(template)} onChange={event => {
-          const scope = event.currentTarget.value as PromptDraft['scope']
+        <Dropdown value={draft.scope} disabled={Boolean(template)} onChange={value => {
+          const scope = value as PromptDraft['scope']
           set({ scope, projectId: scope === 'project' ? draft.projectId || owners[0]?.id || null : null })
-        }}>
-          <option value="global">Global</option>
-          {owners.length > 0 && <option value="project">Project</option>}
-        </select>
+        }} options={[
+          { value: 'global', label: 'Global' },
+          ...(owners.length > 0 ? [{ value: 'project', label: 'Project' }] : []),
+        ]}/>
       </label>
       {draft.scope === 'project' && <label>Project
         {template
           ? <input value={owner?.name || draft.projectId || 'unknown'} readOnly />
-          : <select value={draft.projectId || ''} disabled={owners.length < 2} onChange={event => set({ projectId: event.currentTarget.value })}>
-            {owners.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>}
+          : <Dropdown value={draft.projectId || ''} disabled={owners.length < 2} onChange={value => set({ projectId: value })}
+            options={owners.map(item => ({ value: item.id, label: item.name }))}/>}
       </label>}
     </div>
     <label>Tags

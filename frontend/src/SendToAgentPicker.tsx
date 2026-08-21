@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
+import { Dropdown } from './Dropdown'
 import { useModalFocus } from './modalFocus'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
@@ -211,17 +212,12 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
           </p>
           <label>
             Target project
-            <select
+            <Dropdown
               value={projectId}
               disabled={busy}
-              onChange={event => setProjectId(event.currentTarget.value)}
-            >
-              {projects.map(item => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
+              onChange={setProjectId}
+              options={projects.map(item => ({ value: item.id, label: item.name }))}
+            />
           </label>
           <div class="send-agent-targets" role="radiogroup" aria-label="Send target">
             {promptDeliveryHarnesses().map(harness=>option(newTargetKey(harness.name), null, `New ${harness.display_name} session`, 'Starts in this project, opening beside this pane'))}

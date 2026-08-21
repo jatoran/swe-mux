@@ -5,6 +5,7 @@ import {
   type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus,
   type QueueMessage, type SpawnRequestRow,
 } from './queueApi'
+import { Dropdown } from './Dropdown'
 import { useModalFocus } from './modalFocus'
 import { GrantButton } from './GrantGate'
 import type { Project } from './types'
@@ -186,38 +187,37 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
           </div>
           <label>
             <span>Project</span>
-            <select
+            <Dropdown
               value={projectId}
-              onChange={event => {
-                const nextProject = event.currentTarget.value
+              onChange={nextProject => {
                 setProjectId(nextProject)
                 if (targetSessionId && !view.targets.some(target =>
                   target.target_session_id === targetSessionId && (!nextProject || target.project_id === nextProject)
                 )) setTargetSessionId('')
               }}
-            >
-              <option value="">All Projects</option>
-              {projectOptions.map(id => <option key={id} value={id}>{projectNames.get(id) || id}</option>)}
-            </select>
+              options={[
+                { value: '', label: 'All Projects' },
+                ...projectOptions.map(id => ({ value: id, label: projectNames.get(id) || id })),
+              ]}
+            />
           </label>
           <label>
             <span>Session</span>
-            <select
+            <Dropdown
               value={targetSessionId}
-              onChange={event => {
-                const nextTarget = event.currentTarget.value
+              onChange={nextTarget => {
                 setTargetSessionId(nextTarget)
                 const target = view.targets.find(item => item.target_session_id === nextTarget)
                 if (target?.project_id) setProjectId(target.project_id)
               }}
-            >
-              <option value="">All sessions</option>
-              {targetOptions.map(target => (
-                <option key={target.target_session_id} value={target.target_session_id}>
-                  {target.label || target.target_session_id}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: 'All sessions' },
+                ...targetOptions.map(target => ({
+                  value: target.target_session_id,
+                  label: target.label || target.target_session_id,
+                })),
+              ]}
+            />
           </label>
         </div>
 

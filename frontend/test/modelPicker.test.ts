@@ -23,8 +23,20 @@ test('model filtering searches ids and names live with strongest matches first',
   )
 })
 
-test('model filtering is bounded and preserves catalog order for an empty query',()=>{
-  assert.deepEqual(filterModelOptions(models,'',2),models.slice(0,2))
+test('an empty query returns the whole catalog, in catalog order',()=>{
+  // The limit bounds a *search*, not the catalog. It used to bound both, which — once the
+  // daemon began serving the catalog A-Z — would have ended the list around "d" and could
+  // leave the configured model out of its own picker, with nothing for the open-at-the-
+  // current-value scroll to find.
+  assert.deepEqual(filterModelOptions(models,'',2),models)
+  assert.deepEqual(filterModelOptions(models,''),models)
+})
+
+test('a search is still bounded by the limit',()=>{
+  assert.deepEqual(
+    filterModelOptions(models,'gpt',1).map(model=>model.id),
+    ['openai/gpt-5.6-luna'],
+  )
 })
 
 test('a configured model remains selectable while the catalog is stale',()=>{

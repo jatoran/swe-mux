@@ -52,6 +52,37 @@ and `railPopoverClosingCommand` folds the panel for the selections that navigate
 The glass opacity is one CSS variable at `:root`, `--rail-glass`, shared with every drop-up, and it is measured rather than chosen: `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every theme in the stylesheet and requires it both to cost no theme its 4.5:1 and to stay under 95%, so a later contrast "fix" cannot pass by going opaque.
 The *single-layer* composition sets the number - a drop-up row is transparent over its panel where a popover chip has its own background - so testing only the chip would have let the drop-ups ship at an opacity that fails.
 
+## The dropdown
+
+`Dropdown.tsx`, `dropdownOptions.ts`, `dropdownPlacement.ts`
+
+The app's one picker, and the only one any surface should reach for.
+There is no `<select>` left in `frontend/src`; `frontend/test/settingsCoverage.test.ts`'s siblings and `test/renderer/dropdown.spec.ts` are what hold that.
+
+It is custom on the phone as well as on the desktop, which is the part worth defending because the platform control is usually the right answer there.
+Here it is not: a `<select>` on a phone is a system sheet or wheel that borrows none of the app's palette and covers the surface the choice is being made against, and having one implementation is what makes "the list opens where you left it" true on both at once rather than three times over.
+
+Three behaviours are the reason the component exists rather than a stylesheet, and all three were reported against the account-settings model picker:
+
+- **A scroll gesture scrolls.** Choosing happens on `click`, never on `pointerdown`, with `DROPDOWN_PRESS_SLOP_PX` behind it for the slow drag a browser still delivers a click for. A picker that commits on the press selects whatever the finger landed on, which is how the model list changed the model whenever it was scrolled.
+- **It opens at the value in force**, centred, via `dropdownScrollTop(..., 'centre')`. On a long list that is the difference between a position in a catalogue and a list that happens to start here.
+- **Order is the data's business.** The component renders `options` as given, so a list with a meaningful order (severity, recency, first-parent) keeps it; the model catalog is sorted A-Z where it is built, not here.
+
+`dropdownOptions.ts` is the keyboard, written down because a native select shipped all of it for free and a custom listbox that loses any of it is a downgrade.
+Arrows wrap at both ends and step over disabled rows; `Home` and `End` jump.
+Type-ahead prefers a prefix over a substring across the whole list, cycles through equal matches, and reads one repeated letter as "the next one" rather than as a two-letter prefix.
+
+`dropdownPlacement.ts` makes two decisions that let one component drop into twenty surfaces.
+The list is portalled to `document.body` and positioned `fixed`, because a replacement rendered in place is clipped by every `overflow:auto` panel in the app - the Settings scroller, the drawer, a modal body, the Git map - where the native popup was clipped by nothing.
+That also disposes of the transformed-ancestor trap `railOverlayPlacement.ts` documents: nothing between the body and the list is transformable, so `fixedContainingBlock` has no work to do here and is deliberately not called.
+The other half of that module *is* reused - `railOverlayView()` for what "visible" means with a soft keyboard up, and `watchRailOverlayPlacement()` for the events that move an overlay out from under itself - because the keyboard bug is the same bug.
+The list opens below and flips above only when below cannot hold it, measured against the visual viewport, so a control near the fold flips instead of unrolling behind the keys.
+
+Three integration points are easy to break and are held by tests.
+Every rule in `style.css` that styled a `select` names `.dropdown-trigger` beside it, so each surface's own width, height, and density still apply to the control that replaced it - a class beats the `button` rules those surfaces also carry.
+`settingsSearch.ts` harvests the `options` prop, because the choices moved from `<option>` children into a prop and "Tokyo Night" would otherwise be text nowhere in the tree.
+And `test/renderer/dropdown.ts` is the Playwright stand-in for `selectOption`: the rows are never inside the trigger's container, so one helper knows about the portal instead of twelve specs.
+
 ## Rail density
 
 `railDensity.ts`
@@ -107,6 +138,7 @@ Pure config to root custom properties.
 
 - `theme.ts` owns the selectable catalog, xterm palette tokens, and preview-color projection.
 - `ThemePicker.tsx` owns the keyboard-accessible fixed-column swatch listbox.
+  It is the design `Dropdown` is modelled on and stays its own component: every row carries a swatch strip, and highlighting one *applies* the theme without committing it, which is a preview contract no generic picker has.
 - `uiScale.ts` owns `--ui-scale`, per-device-class resolution, discrete step movement, fixed keyboard classification, and high-resolution wheel accumulation.
 - `style.css` owns shared theme-derived chrome, including compact scrollbars and the one `--check-size` rule that sizes every native checkbox and radio.
   That rule is fixed px, not `--ui-scale`, because that property multiplies type and the rows holding a line of type, never glyph-sized controls.

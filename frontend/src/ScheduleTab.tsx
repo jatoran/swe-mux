@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { GrantButton, GrantGate } from './GrantGate'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import {
@@ -170,14 +171,15 @@ export function ScheduleTab({
 
   return <div class="schedule-tab">
     <div class="schedule-filters">
-      <select
-        aria-label="Filter schedules by project"
+      <Dropdown
+        ariaLabel="Filter schedules by project"
         value={scope}
-        onChange={event => onScope(event.currentTarget.value)}
-      >
-        <option value={project?.id || ''} disabled={!project}>{project ? project.name : 'No project'}</option>
-        <option value="">All projects</option>
-      </select>
+        onChange={onScope}
+        options={[
+          { value: project?.id || '', label: project ? project.name : 'No project', disabled: !project },
+          { value: '', label: 'All projects' },
+        ]}
+      />
       <button title="Re-read schedules now" onClick={() => void load()}>refresh</button>
       <button class="primary" disabled={!scope && !project} onClick={startNew}>new…</button>
     </div>
@@ -356,23 +358,22 @@ function ResumeTargetFields({ draft, onDraft }: {
       <strong>Resumes</strong>
       <span>{draft.target_backend ? `[${draft.target_backend}] ` : ''}{draft.target_label || draft.target_run_id}</span>
     </p>
-    <label>What to reopen<select
+    <label>What to reopen<Dropdown
       value={draft.target_kind}
-      onChange={event => onDraft({
+      onChange={value => onDraft({
         ...draft,
-        target_kind: event.currentTarget.value as ScheduleTargetKind,
+        target_kind: value as ScheduleTargetKind,
         // Each kind reads a different field, and carrying the other one across would
         // let a saved schedule keep a cut point it no longer forks at.
         target_cut_message_id: '',
         target_cut_mode: '',
-        context_ceiling_pct: event.currentTarget.value === 'latest_of_session'
+        context_ceiling_pct: value === 'latest_of_session'
           ? (draft.context_ceiling_pct || 0.7)
           : 0,
       })}
-    >
-      {(Object.keys(TARGET_KIND_COPY) as ScheduleTargetKind[]).map(kind =>
-        <option key={kind} value={kind}>{TARGET_KIND_COPY[kind].label}</option>)}
-    </select><small>{TARGET_KIND_COPY[draft.target_kind].detail}</small></label>
+      options={(Object.keys(TARGET_KIND_COPY) as ScheduleTargetKind[]).map(kind =>
+        ({ value: kind, label: TARGET_KIND_COPY[kind].label }))}
+    /><small>{TARGET_KIND_COPY[draft.target_kind].detail}</small></label>
     {draft.target_kind === 'latest_of_session' && <label>Stop above<input
       type="number"
       min={0}
@@ -496,11 +497,11 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
       agent is ready, which means automatically only where this conversation has
       auto-delivery granted; otherwise it waits in the Queue tab for you.
     </small>}</label>
-    <label>Trigger<select value={draft.trigger_kind} onChange={event => change('trigger_kind', event.currentTarget.value as ScheduleDraft['trigger_kind'])}>
-      <option value="cron">On a schedule (cron)</option>
-      <option value="interval">Every N minutes</option>
-      <option value="once">Once, at a time</option>
-    </select></label>
+    <label>Trigger<Dropdown value={draft.trigger_kind} onChange={value => change('trigger_kind', value as ScheduleDraft['trigger_kind'])} options={[
+      { value: 'cron', label: 'On a schedule (cron)' },
+      { value: 'interval', label: 'Every N minutes' },
+      { value: 'once', label: 'Once, at a time' },
+    ]}/></label>
     {draft.trigger_kind === 'cron' && <label>Cron
       {/* The preset beside the field rather than instead of it: choosing one fills the
           input, so the next edit is to a working expression rather than to a blank box,
@@ -512,14 +513,15 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
           placeholder="0 3 * * *"
           onInput={event => change('cron', event.currentTarget.value)}
         />
-        <select
-          aria-label="Common schedules"
+        <Dropdown
+          ariaLabel="Common schedules"
           value={preset?.cron || ''}
-          onChange={event => { if (event.currentTarget.value) change('cron', event.currentTarget.value) }}
-        >
-          <option value="">{preset ? 'Common…' : 'Custom'}</option>
-          {CRON_PRESETS.map(item => <option key={item.cron} value={item.cron}>{item.label}</option>)}
-        </select>
+          onChange={value => { if (value) change('cron', value) }}
+          options={[
+            { value: '', label: preset ? 'Common…' : 'Custom' },
+            ...CRON_PRESETS.map(item => ({ value: item.cron, label: item.label })),
+          ]}
+        />
       </div>
       <small>{preset ? preset.teaches : 'minute hour day-of-month month day-of-week'}</small>
     </label>}
@@ -548,27 +550,28 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
         its arguments, in the Project root the conversation resolves from. The daemon
         refuses a backend or a profile on one rather than ignoring it, so offering
         either here would be offering control this form does not have. */}
-    {!resuming && <label>Agent<select value={draft.backend} onChange={event => onDraft({ ...draft, backend: event.currentTarget.value, profile_id: '' })}>
-      <option value="">This Project's default</option>
-      {harnesses.map(harness => <option key={harness.name} value={harness.name}>{harness.display_name}</option>)}
-    </select></label>}
-    {!resuming && draft.backend && profilesForBackend.length > 0 && <label>Launch profile<select
+    {!resuming && <label>Agent<Dropdown value={draft.backend} onChange={value => onDraft({ ...draft, backend: value, profile_id: '' })} options={[
+      { value: '', label: "This Project's default" },
+      ...harnesses.map(harness => ({ value: harness.name, label: harness.display_name })),
+    ]}/></label>}
+    {!resuming && draft.backend && profilesForBackend.length > 0 && <label>Launch profile<Dropdown
       value={draft.profile_id}
-      onChange={event => change('profile_id', event.currentTarget.value)}
-    >
-      <option value="">Default arguments</option>
-      {profilesForBackend.map(profile => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
-    </select><small>A profile is where the model flag lives.</small></label>}
+      onChange={value => change('profile_id', value)}
+      options={[
+        { value: '', label: 'Default arguments' },
+        ...profilesForBackend.map(profile => ({ value: profile.id, label: profile.label })),
+      ]}
+    /><small>A profile is where the model flag lives.</small></label>}
     <label>Session name <em>optional</em><input
       value={draft.session_name}
       maxLength={80}
       placeholder={resuming ? "the conversation's own name" : 'same as the schedule name'}
       onInput={event => change('session_name', event.currentTarget.value)}
     /></label>
-    {!resuming && <label>If the last run is still open<select value={draft.overlap} onChange={event => change('overlap', event.currentTarget.value as ScheduleDraft['overlap'])}>
-      <option value="skip">Skip this run</option>
-      <option value="allow">Start another session</option>
-    </select></label>}
+    {!resuming && <label>If the last run is still open<Dropdown value={draft.overlap} onChange={value => change('overlap', value as ScheduleDraft['overlap'])} options={[
+      { value: 'skip', label: 'Skip this run' },
+      { value: 'allow', label: 'Start another session' },
+    ]}/></label>}
     {resuming && draft.target_kind !== 'fork_point' && <p class="schedule-note">
       A conversation can only be open once, so a run whose conversation is already
       live - in a pane, or in a background agent - is skipped and recorded rather than

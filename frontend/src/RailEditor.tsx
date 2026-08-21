@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import {
   allRailBackends, defaultRailConfig, isBuiltinRailId, railItemVisible, railPayload,
   railProjectScopeKind, railRowKey,
@@ -474,13 +475,16 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
       <button type="button" onClick={dismissIntro}>Got it</button>
     </div>}
     <div class="rail-toolbar">
-      <label class="rail-scope">Editing<select value={scope} onChange={event => { setScope(event.currentTarget.value); setExpandedItem(null); setNote(''); setReattach(null) }}>
-        <option value="">Global (all projects)</option>
-        {projects.map(project => {
+      <label class="rail-scope">Editing<Dropdown value={scope} onChange={value => { setScope(value); setExpandedItem(null); setNote(''); setReattach(null) }} options={[
+        { value: '', label: 'Global (all projects)' },
+        ...projects.map(project => {
           const projectKind = railProjectScopeKind(currentRailBlob(), project.id)
-          return <option value={project.id}>{project.name}{projectKind === 'fork' ? ' (detached)' : projectKind === 'delta' ? ' (has additions)' : ''}</option>
-        })}
-      </select></label>
+          return {
+            value: project.id,
+            label: `${project.name}${projectKind === 'fork' ? ' (detached)' : projectKind === 'delta' ? ' (has additions)' : ''}`,
+          }
+        }),
+      ]}/></label>
       <div class="rail-device-switch" role="group" aria-label="Device layout to edit">
         {RAIL_DEVICES.map(name => <button
           type="button"
@@ -489,10 +493,10 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
           onClick={() => setDevice(name)}
         >{DEVICE_LABEL[name]}</button>)}
       </div>
-      <label class="rail-preview-as">Preview as<select value={previewBackend} onChange={event => setPreviewBackend(event.currentTarget.value)} title="Dim the actions a session of this type would not show">
-        <option value="">all sessions</option>
-        {backends.map(backend => <option value={backend}>{backend === 'shell' ? 'Shell' : harnessDisplayName(backend)}</option>)}
-      </select></label>
+      <label class="rail-preview-as">Preview as<Dropdown value={previewBackend} onChange={setPreviewBackend} title="Dim the actions a session of this type would not show" options={[
+        { value: '', label: 'all sessions' },
+        ...backends.map(backend => ({ value: backend, label: backend === 'shell' ? 'Shell' : harnessDisplayName(backend) })),
+      ]}/></label>
       <span class="rail-toolbar-gap" />
       {scope && kind === 'fork' && <button
         type="button"
@@ -659,29 +663,32 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
   return <details class="rail-add">
     <summary>Add custom action<small>a skill, slash command, text macro, or prompt-template button</small></summary>
     <div class="rail-add-form">
-      <label>Type<select value={draft.type} onChange={event => setDraft({ ...draft, type: event.currentTarget.value as RailItemType })}>
-        <option value="skill">Skill</option>
-        <option value="slash">Slash command</option>
-        <option value="text">Text macro</option>
-        <option value="prompt">Prompt template</option>
-      </select></label>
+      <label>Type<Dropdown value={draft.type} onChange={value => setDraft({ ...draft, type: value as RailItemType })} options={[
+        { value: 'skill', label: 'Skill' },
+        { value: 'slash', label: 'Slash command' },
+        { value: 'text', label: 'Text macro' },
+        { value: 'prompt', label: 'Prompt template' },
+      ]}/></label>
       {draft.type === 'prompt'
-        ? <label>Template<select value={draft.name} onChange={event => setDraft({ ...draft, name: event.currentTarget.value })}>
-          <option value="">Choose a template…</option>
-          {/* Every row says which library it is in, because a Project template
-              only resolves inside that Project and the title alone cannot say so. */}
-          {prompts.map(template => <option value={template.key}>{template.favorite ? '★ ' : ''}{template.title} · {template.scope === 'project' ? (template.project_name || 'project') : 'global'}{template.variables.length ? ` · ${template.variables.length} field${template.variables.length === 1 ? '' : 's'}` : ''}</option>)}
-        </select></label>
+        ? <label>Template<Dropdown value={draft.name} onChange={value => setDraft({ ...draft, name: value })} options={[
+          { value: '', label: 'Choose a template…' },
+          // Every row says which library it is in, because a Project template
+          // only resolves inside that Project and the title alone cannot say so.
+          ...prompts.map(template => ({
+            value: template.key,
+            label: `${template.favorite ? '★ ' : ''}${template.title} · ${template.scope === 'project' ? (template.project_name || 'project') : 'global'}${template.variables.length ? ` · ${template.variables.length} field${template.variables.length === 1 ? '' : 's'}` : ''}`,
+          })),
+        ]}/></label>
         : <label>{draft.type === 'text' ? 'Text to insert' : 'Name'}<input value={draft.name} placeholder={draft.type === 'skill' ? 'commit' : draft.type === 'slash' ? 'new' : 'literal text'} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
       <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>
-      <label>Place in<select value={draft.surface} onChange={event => setDraft({ ...draft, surface: event.currentTarget.value as RailSurface })}>
-        <option value="panel">Drawer, on both devices</option>
-        <option value="strip">Rail, on both devices</option>
-      </select></label>
-      {projectName && <label>For<select value={draft.target} onChange={event => setDraft({ ...draft, target: event.currentTarget.value as RailAddTarget })}>
-        <option value="project">{projectName} only</option>
-        <option value="global">All projects</option>
-      </select></label>}
+      <label>Place in<Dropdown value={draft.surface} onChange={value => setDraft({ ...draft, surface: value as RailSurface })} options={[
+        { value: 'panel', label: 'Drawer, on both devices' },
+        { value: 'strip', label: 'Rail, on both devices' },
+      ]}/></label>
+      {projectName && <label>For<Dropdown value={draft.target} onChange={value => setDraft({ ...draft, target: value as RailAddTarget })} options={[
+        { value: 'project', label: `${projectName} only` },
+        { value: 'global', label: 'All projects' },
+      ]}/></label>}
       {draft.type !== 'prompt' && <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
       <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add action</button>
     </div>

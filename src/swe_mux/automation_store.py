@@ -253,6 +253,29 @@ CREATE INDEX IF NOT EXISTS idx_lineage_child
 """
 
 
+def sorted_model_catalog(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The model catalog in the order a person reads a catalog: by name, A to Z.
+
+    OpenRouter serves `/models` in its own order - broadly newest first, and near enough to
+    reverse-alphabetical in places to look like a sort that ran backwards. Whatever it is, it
+    is not an order anyone can navigate: the picker's whole job is "find the model I mean",
+    and that is alphabetical.
+
+    Sorted on the way *out* of the cache rather than on the way in, so a catalog fetched
+    before this existed comes back ordered too - the alternative asks every existing install
+    to press Refresh once to fix a list they did not know was unsorted. The key is the
+    case-folded name with the id breaking ties, because two providers routinely ship the same
+    display name and a tie broken by insertion order is not a stable sort to the reader.
+    """
+    return sorted(
+        models,
+        key=lambda model: (
+            str(model.get("name") or model.get("id") or "").casefold(),
+            str(model.get("id") or ""),
+        ),
+    )
+
+
 def _tune_connection(db: sqlite3.Connection) -> None:
     """Per-connection pragmas: NORMAL sync (crash-safe under WAL, no per-commit fsync)."""
     db.execute("PRAGMA synchronous=NORMAL")
@@ -1894,7 +1917,7 @@ class AutomationStore:
                 return {"models": [], "fetched_at": None, "error": None, "stale": True}
             fetched = float(row["fetched_at"])
             return {
-                "models": json.loads(row["models_json"]),
+                "models": sorted_model_catalog(json.loads(row["models_json"])),
                 "fetched_at": fetched,
                 "error": row["error"],
                 "stale": time.time() - fetched > 24 * 3600,

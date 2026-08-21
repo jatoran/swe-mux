@@ -539,10 +539,12 @@ def test_drawer_tab_display_is_live_and_searchable() -> None:
     assert "utility_rail_display?:'icon'|'title'" in app
     assert "setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')" in app
     assert "setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')" in app
-    assert "Drawer tabs<select" in settings
-    assert "Right rail<select" in settings
-    assert '<option value="icon">Icons</option>' in settings
-    assert '<option value="title">Titles</option>' in settings
+    # Both controls are the app's own `Dropdown` rather than a native `<select>`; the choices
+    # moved from `<option>` children into an `options` prop with them.
+    assert "Drawer tabs<Dropdown" in settings
+    assert "Right rail<Dropdown" in settings
+    assert "{value:'icon',label:'Icons'}" in settings
+    assert "{value:'title',label:'Titles'}" in settings
     assert "tabDisplay={drawerTabDisplay}" in app
     assert "utilityRailDisplay==='title'" in app
     assert "const utilityRailWidth=utilityRailDisplay==='title'?112:40" in app
@@ -627,7 +629,8 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     # Scope is a visible, clearable control rather than a hidden mode, on every shell that
     # draws the surface — including the drawer tab, which opens scoped to the active Project.
     assert "process-scope-select" in view
-    assert '<option value="">All projects</option>' in view
+    # A `Dropdown` now, so the clearing row is an option object rather than an `<option>`.
+    assert "{ value: '', label: 'All projects' }" in view
     assert "initialProjectId" in panel
     assert 'projectScope={scope}' in source("ProcessesTab.tsx")
     # And the drawer tab is not made redundant by the dialog's Processes segment: a modal

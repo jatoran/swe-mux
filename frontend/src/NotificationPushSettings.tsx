@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { alertPreferencesFor, setAlertPreferencesFor } from './alertPrefs.ts'
+import { Dropdown } from './Dropdown'
 import { currentProfile, type SettingsProfile } from './deviceSettings.ts'
 import {
   notificationEvents,
@@ -136,7 +137,7 @@ export function NotificationAlertSettings() {
         </article>
         <article>
           <label class="check"><span><strong>Push in the background</strong><small>System notifications when the app is closed, hidden, or locked.</small></span><input type="checkbox" disabled={alertsMuted} checked={push.enabled} onChange={event => changePush({ ...push, enabled: event.currentTarget.checked })} /></label>
-          <label>Stay quiet while<select aria-label={`When ${profileLabels[profile]} push stays quiet`} disabled={pushMuted} value={push.suppress} onChange={event => changePush({ ...push, suppress: event.currentTarget.value as NotificationSuppress })}>{notificationSuppressModes.map(mode => <option key={mode} value={mode}>{suppressLabels[mode]}</option>)}</select></label>
+          <label>Stay quiet while<Dropdown ariaLabel={`When ${profileLabels[profile]} push stays quiet`} disabled={pushMuted} value={push.suppress} onChange={value => changePush({ ...push, suppress: value as NotificationSuppress })} options={notificationSuppressModes.map(mode => ({ value: mode, label: suppressLabels[mode] }))} /></label>
           <p class="settings-hint">{suppressHints[push.suppress]}</p>
         </article>
       </div>
@@ -156,10 +157,13 @@ export function NotificationAlertSettings() {
             const soundEvent = event as SoundEvent
             return <div class="alert-event-row" key={event}>
               <strong>{eventLabels[event]}</strong>
-              <select aria-label={`Sound for ${eventLabels[event]}`} disabled={soundMuted} value={sounds.events[soundEvent] ? sounds.eventSounds[soundEvent] : 'off'} onChange={changeEvent => chooseSound(soundEvent, changeEvent.currentTarget.value)}>
-                <option value="off">Off</option>
-                {soundOptions.map(sound => <option key={sound.id} value={sound.id}>{sound.label}</option>)}
-              </select>
+              <Dropdown
+                ariaLabel={`Sound for ${eventLabels[event]}`}
+                disabled={soundMuted}
+                value={sounds.events[soundEvent] ? sounds.eventSounds[soundEvent] : 'off'}
+                onChange={value => chooseSound(soundEvent, value)}
+                options={[{ value: 'off', label: 'Off' }, ...soundOptions.map(sound => ({ value: sound.id, label: sound.label }))]}
+              />
               <input aria-label={`Push for ${eventLabels[event]}`} type="checkbox" disabled={pushMuted} checked={push.events[event]} onChange={changeEvent => changePush({ ...push, events: { ...push.events, [event]: changeEvent.currentTarget.checked } })} />
               <button type="button" disabled={soundMuted || !sounds.events[soundEvent]} aria-label={`Preview sound for ${eventLabels[event]}`} onClick={() => preview(sounds, sounds.eventSounds[soundEvent])}>Preview</button>
             </div>

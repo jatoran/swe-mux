@@ -1,6 +1,7 @@
 import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
+import { Dropdown } from './Dropdown'
 import { GitSessionLinks, sessionLinkDestination, type SessionLinkItem, type SessionLinkMenu } from './GitSessionLinks'
 import { GrantGate } from './GrantGate'
 import {
@@ -633,11 +634,9 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         <input type="search" value={logQuery} placeholder={logField==='author'?'search author':'search commit messages'}
           onInput={event=>setLogQuery(event.currentTarget.value)}/>
       </label>}
-      {view==='log'&&<select aria-label="Search field" value={logField}
-        onChange={event=>setLogField(event.currentTarget.value==='author'?'author':'message')}>
-        <option value="message">message</option>
-        <option value="author">author</option>
-      </select>}
+      {view==='log'&&<Dropdown ariaLabel="Search field" value={logField}
+        onChange={value=>setLogField(value==='author'?'author':'message')}
+        options={[{value:'message',label:'message'},{value:'author',label:'author'}]}/>}
       {view==='log'&&<label class="git-search-regex" title="Treat the search as a regular expression rather than literal text">
         <input type="checkbox" checked={logRegex} onChange={event=>setLogRegex(event.currentTarget.checked)}/>
         {' '}regex
@@ -659,7 +658,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
       </div>
     </div>
-    {overview&&<div class="git-compare"><label>COMPARE <select disabled={busy} value={compareOverride} onChange={event=>void saveComparison(event.currentTarget.value)}><option value="">Auto{overview.comparison.available?` (${overview.comparison.display})`:''}</option>{compareOverride&&!overview.comparison.candidates.includes(compareOverride)&&<option value={compareOverride}>{compareOverride} (unavailable)</option>}{overview.comparison.candidates.map(ref=><option value={ref}>{ref}</option>)}</select></label><small>{comparisonSourceLabel(overview.comparison)}</small></div>}
+    {overview&&<div class="git-compare"><label>COMPARE <Dropdown disabled={busy} value={compareOverride} onChange={value=>void saveComparison(value)} options={[
+      {value:'',label:`Auto${overview.comparison.available?` (${overview.comparison.display})`:''}`},
+      ...(compareOverride&&!overview.comparison.candidates.includes(compareOverride)?[{value:compareOverride,label:`${compareOverride} (unavailable)`}]:[]),
+      ...overview.comparison.candidates.map(ref=>({value:ref,label:ref})),
+    ]}/></label><small>{comparisonSourceLabel(overview.comparison)}</small></div>}
     {error&&<p class="git-state error" role="alert">{error}</p>}
     {adding&&<div class="git-add-form"><label>Absolute path<input value={addForm.path} onInput={event=>setAddForm(value=>({...value,path:event.currentTarget.value}))}/></label><label>New branch<input value={addForm.branch} onInput={event=>setAddForm(value=>({...value,branch:event.currentTarget.value}))}/></label><label>Start point<input value={addForm.start} onInput={event=>setAddForm(value=>({...value,start:event.currentTarget.value}))}/></label><div><button disabled={busy} onClick={()=>void create()}>Create</button><button onClick={()=>setAdding(false)}>Cancel</button></div></div>}
     {view==='map'&&<>
@@ -805,7 +808,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
               message - subject, blank line, body - is reproduced here. `pre-wrap` because a
               commit message is pre-formatted prose: its own hard wraps and paragraph breaks
               are part of what was written, and only the over-long line needs the browser. */}
-          {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
+          {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<Dropdown ariaLabel="Comparison parent" value={changes.parent||''} onChange={value=>changeParent(line.oid,value)} options={changes.parents.map((oid,index)=>({value:oid,label:index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}))}/>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
     })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next,{query:logQuery,field:logField,regex:logRegex})}}>Load more commits</button>}</section></>}</>}
     {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">

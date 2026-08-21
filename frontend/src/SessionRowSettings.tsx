@@ -12,6 +12,7 @@
 // are chosen so each mode has something to demonstrate.
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { Dropdown } from './Dropdown'
 import { SessionRowBody } from './SessionRowBody'
 import { StateIndicator } from './StateIndicator'
 import { currentProfile, type SettingsProfile } from './deviceSettings'
@@ -195,15 +196,13 @@ export function SessionRowSettings() {
     const other: RowAlign = align === 'left' ? 'right' : 'left'
     return <li key={id} class="row-slot">
       <span class="row-slot-name">{descriptor.label}</span>
-      <select
-        aria-label={`${descriptor.label} visibility`}
+      <Dropdown
+        ariaLabel={`${descriptor.label} visibility`}
         title={`Notable: ${descriptor.notable}`}
         value={mode}
-        onChange={event => change(setFieldMode(config, id, event.currentTarget.value === 'always' ? 'always' : 'notable'))}
-      >
-        <option value="notable">when notable</option>
-        <option value="always">always</option>
-      </select>
+        onChange={value => change(setFieldMode(config, id, value === 'always' ? 'always' : 'notable'))}
+        options={[{ value: 'notable', label: 'when notable' }, { value: 'always', label: 'always' }]}
+      />
       <span class="row-slot-actions">
         <button type="button" title="Move earlier" disabled={index === 0} onClick={() => move(line, align, id, -1)}>↑</button>
         <button type="button" title="Move later" disabled={index === total - 1} onClick={() => move(line, align, id, 1)}>↓</button>
@@ -230,12 +229,10 @@ export function SessionRowSettings() {
       <h4>{heading}</h4>
       <p>{note}</p>
       <label>Separator
-        <select value={source.separator} onChange={event => change({
+        <Dropdown value={source.separator} onChange={value => change({
           ...config,
-          [line]: { ...source, separator: event.currentTarget.value as SeparatorId },
-        })}>
-          {SEPARATOR_IDS.map(id => <option key={id} value={id}>{SEPARATORS[id].label}</option>)}
-        </select>
+          [line]: { ...source, separator: value as SeparatorId },
+        })} options={SEPARATOR_IDS.map(id => ({ value: id, label: SEPARATORS[id].label }))}/>
       </label>
       <div class="row-section-grid">{section(line, 'left')}{section(line, 'right')}</div>
       {available.length > 0 && <div class="row-field-pool">
@@ -313,9 +310,8 @@ export function SessionRowSettings() {
 
     <h4>State indicator</h4>
     <label>Shape
-      <select value={config.dotShape} onChange={event => change({ ...config, dotShape: event.currentTarget.value as DotShape })}>
-        {SHAPES.map(shape => <option key={shape.id} value={shape.id}>{shape.label}</option>)}
-      </select>
+      <Dropdown value={config.dotShape} onChange={value => change({ ...config, dotShape: value as DotShape })}
+        options={SHAPES.map(shape => ({ value: shape.id, label: shape.label }))}/>
     </label>
     {SIZE_PROFILES.map(profile => <label key={profile.id} class="row-size-control">
       <span>
@@ -342,15 +338,13 @@ export function SessionRowSettings() {
     </label>)}
     <p>The indicator sizes the sidebar row around it: the gutter column, the context ring, the stack thread, and the row's own height are all derived from this number, so a larger indicator gives a taller row rather than a clipped one. Desktop and mobile are separate because the same size is not read the same way at desk distance and at arm's length.</p>
     <label>Context pressure
-      <select value={config.context} onChange={event => change({ ...config, context: event.currentTarget.value as ContextRender })}>
-        {CONTEXT_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
-      </select>
+      <Dropdown value={config.context} onChange={value => change({ ...config, context: value as ContextRender })}
+        options={CONTEXT_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/>
     </label>
     <p>{CONTEXT_MODES.find(mode => mode.id === config.context)?.hint} The indicator's colour, pulse, and hollow "engaged" variant are not configurable: they are the one thing every surface reads the same way.</p>
     <label>Standing activity
-      <select value={config.standing} onChange={event => change({ ...config, standing: event.currentTarget.value as StandingRender })}>
-        {STANDING_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
-      </select>
+      <Dropdown value={config.standing} onChange={value => change({ ...config, standing: value as StandingRender })}
+        options={STANDING_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/>
     </label>
     <p>{STANDING_MODES.find(mode => mode.id === config.standing)?.hint} Whichever you pick applies to tab strips and menus too, so the same session never reports it twice on one screen.</p>
 
@@ -363,16 +357,16 @@ export function SessionRowSettings() {
 
     <h4>Token style</h4>
     <label>Lines changed
-      <select value={config.diffStyle} onChange={event => change({ ...config, diffStyle: event.currentTarget.value as DiffStyle })}>
-        <option value="numbers">Numbers (+312 -48)</option>
-        <option value="bar">Split bar</option>
-      </select>
+      <Dropdown value={config.diffStyle} onChange={value => change({ ...config, diffStyle: value as DiffStyle })} options={[
+        { value: 'numbers', label: 'Numbers (+312 -48)' },
+        { value: 'bar', label: 'Split bar' },
+      ]}/>
     </label>
     <label>Small counts
-      <select value={config.countStyle} onChange={event => change({ ...config, countStyle: event.currentTarget.value as CountStyle })}>
-        <option value="numbers">Numbers</option>
-        <option value="pips">Pips up to four, then numbers</option>
-      </select>
+      <Dropdown value={config.countStyle} onChange={value => change({ ...config, countStyle: value as CountStyle })} options={[
+        { value: 'numbers', label: 'Numbers' },
+        { value: 'pips', label: 'Pips up to four, then numbers' },
+      ]}/>
     </label>
     <label class="check"><span>Prefix git tokens with a glyph (⎇ branch, ⌂ worktree)</span>
       <input type="checkbox" checked={config.gitGlyphs} onChange={event => change({ ...config, gitGlyphs: event.currentTarget.checked })} />

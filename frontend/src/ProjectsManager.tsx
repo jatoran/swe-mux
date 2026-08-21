@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { ProjectContextEditor } from './ProjectContextEditor'
 import { revealSetting } from './settingReveal'
 import { SettingLink } from './SettingLink'
@@ -304,12 +305,10 @@ function AgentAuthority({ project, busy, onError }: {
       {rows.map(row => <li key={row.field} data-setting={row.setting}>
         <label class="check">
           <span class="project-setting-name">{row.label}</span>
-          <select disabled={busy || saving || config.status !== 'ready'}
+          <Dropdown disabled={busy || saving || config.status !== 'ready'}
             value={value(row.field)}
-            onChange={event => void write(row.field, event.currentTarget.value)}>
-            <option value={inertFor(row.field)}>{row.draft}</option>
-            <option value="granted">{row.granted}</option>
-          </select>
+            onChange={next => void write(row.field, next)}
+            options={[{ value: inertFor(row.field), label: row.draft }, { value: 'granted', label: row.granted }]}/>
         </label>
         <p class="project-automation-deps">{row.note}</p>
       </li>)}
@@ -534,7 +533,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     <section class="projects-manager" role="dialog" aria-modal="true" aria-label="Manage projects" ref={panel}>
       <header><div><span>PROJECTS::REGISTRY</span><h2>Projects</h2><small>Configured Projects keep their notes, files, settings, and history even when hidden from the sidebar.</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>New group</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button><button class="icon" aria-label="Close Projects" onClick={onClose}>×</button></div></header>
       <div class="projects-manager-body">
-        <aside><div class="projects-manager-filter"><input aria-label="Search projects" placeholder="Search projects…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><select aria-label="Filter projects" value={filter} onChange={event=>setFilter(event.currentTarget.value as typeof filter)}><option value="all">All</option><option value="visible">In sidebar</option><option value="hidden">Hidden</option></select></div>
+        <aside><div class="projects-manager-filter"><input aria-label="Search projects" placeholder="Search projects…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel="Filter projects" value={filter} onChange={value=>setFilter(value as typeof filter)} options={[{value:'all',label:'All'},{value:'visible',label:'In sidebar'},{value:'hidden',label:'Hidden'}]}/></div>
           <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>selectProject(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project)?'sidebar':'hidden'}</em></button>)}{!shown.length&&<p>No Projects match this view.</p>}</div>
         </aside>
         <main>{selected?<>
@@ -546,30 +545,30 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               <h4 class="projects-manager-section">Identity</h4>
               <label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label>
               <label>Folder<input class={selected.root_available===false?'missing':''} value={selected.root} readOnly/>{selected.root_available===false&&<span class="project-folder-missing">Folder missing. swe-mux will not recreate it.</span>}</label>
-              <label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label>
+              <label>Group<div><Dropdown value={groupId} onChange={setGroupId} options={[{value:'',label:'Ungrouped'},...groups.map(group=>({value:group.id,label:group.name}))]}/><button onClick={onAddGroup}>+</button></div></label>
               <h4 class="projects-manager-section">Defaults</h4>
               <p>Blank inherits the global default. Each value is stored either on this device or in the Project's <code>.swe-mux/config.toml</code>; device wins where both are set.{config?` · .swe-mux/config.toml: ${config.status}${config.error?` · ${config.error}`:''}`:' · reading .swe-mux/config.toml…'}</p>
               <div class="project-setting">
                 <label><span class="project-setting-name">Default backend{backendValue&&<em class="project-setting-chip">{backendLayer==='repo'?'repo':'device'}</em>}</span>
-                  <select value={backendValue} disabled={busy} onChange={event=>setBackend(event.currentTarget.value,backendLayer)}><option value="">Inherit ({effective?.backend||'shell'})</option>{allBackendNames().map(backend=><option value={backend}>{backend}</option>)}</select>
+                  <Dropdown value={backendValue} disabled={busy} onChange={value=>setBackend(value,backendLayer)} options={[{value:'',label:`Inherit (${effective?.backend||'shell'})`},...allBackendNames().map(backend=>({value:backend,label:backend}))]}/>
                 </label>
                 {layerRow(backendLayer,layer=>setBackend(backendValue,layer),!!backendValue)}
               </div>
               <div class="project-setting">
                 <label><span class="project-setting-name">Shell profile{profileValue&&<em class="project-setting-chip">{profileLayer==='repo'?'repo':'device'}</em>}</span>
-                  <select value={profileValue} disabled={busy} onChange={event=>setProfile(event.currentTarget.value,profileLayer)}><option value="">Inherit ({effective?.profile_id||'default'})</option>{profiles.filter(profile=>profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select>
+                  <Dropdown value={profileValue} disabled={busy} onChange={value=>setProfile(value,profileLayer)} options={[{value:'',label:`Inherit (${effective?.profile_id||'default'})`},...profiles.filter(profile=>profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))]}/>
                 </label>
                 {layerRow(profileLayer,layer=>setProfile(profileValue,layer),!!profileValue)}
               </div>
               {harnessesWithProfiles.map(([backend,harnessProfiles])=><div class="project-setting" key={backend}>
                 <label><span class="project-setting-name">{harnessDisplayName(backend)} launch profile{agentProfileValue(backend)&&<em class="project-setting-chip">{agentProfileLayer(backend)==='repo'?'repo':'device'}</em>}</span>
-                  <select value={agentProfileValue(backend)} disabled={busy} onChange={event=>setAgentProfile(backend,event.currentTarget.value,agentProfileLayer(backend))}><option value="">None (plain launch)</option>{harnessProfiles.map(profile=><option value={profile.id}>{profile.label}</option>)}</select>
+                  <Dropdown value={agentProfileValue(backend)} disabled={busy} onChange={value=>setAgentProfile(backend,value,agentProfileLayer(backend))} options={[{value:'',label:'None (plain launch)'},...harnessProfiles.map(profile=>({value:profile.id,label:profile.label}))]}/>
                 </label>
                 {layerRow(agentProfileLayer(backend),layer=>setAgentProfile(backend,agentProfileValue(backend),layer),!!agentProfileValue(backend))}
               </div>)}
               <h4 class="projects-manager-section">Repository options</h4>
               <label><span class="project-setting-name">Prompt library scope<em class="project-setting-chip">repo</em></span>
-                <select value={values.prompt_library_scope||''} disabled={busy||!config} onChange={event=>setValues(current=>({...current,prompt_library_scope:(event.currentTarget.value||undefined) as PromptLibraryScope|undefined}))}><option value="">Inherit ({SCOPE_LABELS[effective?.prompt_library_scope||'both']})</option>{(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=><option value={scope}>{SCOPE_LABELS[scope]}</option>)}</select>
+                <Dropdown value={values.prompt_library_scope||''} disabled={busy||!config} onChange={value=>setValues(current=>({...current,prompt_library_scope:(value||undefined) as PromptLibraryScope|undefined}))} options={[{value:'',label:`Inherit (${SCOPE_LABELS[effective?.prompt_library_scope||'both']})`},...(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=>({value:scope,label:SCOPE_LABELS[scope]}))]}/>
               </label>
               <label class="check"><span class="project-setting-name">Allow device notification sounds<em class="project-setting-chip">repo</em></span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>setValues(current=>({...current,notification_sounds_enabled:event.currentTarget.checked}))}/></label>
               <label><span class="project-setting-name">Additional ignore patterns<em class="project-setting-chip">repo</em></span>

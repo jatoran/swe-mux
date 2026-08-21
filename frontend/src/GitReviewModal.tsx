@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
+import { Dropdown } from './Dropdown'
 import { LazyGitDiff } from './LazyGitDiff'
 import { useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
@@ -139,7 +140,7 @@ export function GitReviewModal(props:Props) {
         <main ref={content} class={`git-review-content ${view} ${wrap?'wrap':'nowrap'}`}>
           <div class="git-review-filebar">
             <button disabled={index<=0} aria-label="Previous changed file" onClick={()=>move(-1)}>‹</button>
-            <select aria-label="Selected changed file" value={selected?.path} onChange={event=>choose(event.currentTarget.value)}>{props.files.map(file=><option value={file.path}>{file.path}</option>)}</select>
+            <Dropdown ariaLabel="Selected changed file" value={selected?.path||''} onChange={choose} options={props.files.map(file=>({value:file.path,label:file.path}))}/>
             <button disabled={index<0||index>=props.files.length-1} aria-label="Next changed file" onClick={()=>move(1)}>›</button>
             <button class={view==='unified'?'active':''} onClick={()=>setManualView('unified')}>Unified</button>
             <button class={view==='split'?'active':''} onClick={()=>setManualView('split')}>Split</button>

@@ -119,6 +119,13 @@ Nothing fetches: `OpenRouterClient.models()` already caches `prompt_price`/`comp
 Its `required` flag suppresses the clear-the-setting row for a **pinned** model the daemon rejects when blank.
 `ProjectPicker.tsx` borrows the `model-picker` CSS block, so a rule added for the meta line must be scoped to `.model-picker-meta`.
 
+It stays a filtering combobox rather than becoming a `Dropdown`, because the catalog is hundreds of entries and a list is not how anyone finds one of those.
+It borrows three rules from that component all the same, and they are the three defects reported against it.
+Choosing happens on `click` with `DROPDOWN_PRESS_SLOP_PX` behind it, so a scroll gesture that starts on a row scrolls instead of selecting.
+`dropdownScrollTop(..., 'centre')` runs on open, so the list arrives at the model in force.
+And `limit` no longer bounds the unfiltered list, so the configured model is present for that scroll to find.
+The catalog's *order* is the daemon's, not this control's - `sorted_model_catalog` in `automation_store.py` sorts it A-Z as it leaves the cache, so an install fixed by that change never has to press Refresh.
+
 `modelRouting.ts` is the browser-free table of which feature calls which model, the routed/override/pinned distinction that decides what a blank value means, one-level fallback resolution, and `customProviderOverride` - because a custom endpoint serves one model and invalidates every row at once, so the index reports what will actually be requested rather than ids nothing will ask for.
 The summary is an index, never a second editor: two controls writing one config key is how a panel starts disagreeing with itself.
 

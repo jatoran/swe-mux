@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { chooseDropdown, dropdownValue } from './dropdown'
 
 /**
  * The Configure Actions modal, end to end against the stubbed daemon: the
@@ -58,16 +59,16 @@ test('the catalog expands into labelled placement checkboxes that edit the layou
 test('preview-as dims what that session type would not show', async ({ page }) => {
   await page.goto('/action-editor-harness.html?seen=1')
   await expect(page.locator('.rail-chip.filtered')).toHaveCount(0)
-  await page.locator('.rail-preview-as select').selectOption('shell')
+  await chooseDropdown(page, page.locator('.rail-preview-as .dropdown-trigger'), 'shell')
   // Attach is agent-only, so a shell preview dims it without removing it.
   await expect(page.locator('.rail-chip.filtered', { hasText: 'Attach' })).toHaveCount(1)
-  await page.locator('.rail-preview-as select').selectOption('')
+  await chooseDropdown(page, page.locator('.rail-preview-as .dropdown-trigger'), '')
   await expect(page.locator('.rail-chip.filtered')).toHaveCount(0)
 })
 
 test('a project scope overlays additions on the shared layout and reverts cleanly', async ({ page }) => {
   await page.goto('/action-editor-harness.html?seen=1')
-  await page.locator('.rail-scope select').selectOption('p1')
+  await chooseDropdown(page, page.locator('.rail-scope .dropdown-trigger'), 'p1')
   await expect(page.locator('.rail-scope-note').first()).toContainText('Showing the shared layout')
 
   // Shared rows are tagged; a project row can be added beside them.
@@ -78,17 +79,17 @@ test('a project scope overlays additions on the shared layout and reverts cleanl
   // A custom action added in project scope defaults to "this project only".
   await page.locator('details.rail-add > summary').click()
   const addForm = page.locator('.rail-add-form')
-  await expect(addForm.locator('label', { hasText: 'For' }).locator('select')).toHaveValue('project')
+  expect(await dropdownValue(addForm.locator('label', { hasText: 'For' }).locator('.dropdown-trigger'))).toBe('project')
   await addForm.locator('label', { hasText: 'Name' }).locator('input').fill('commit')
   await addForm.getByRole('button', { name: 'Add action' }).click()
   const commitChip = page.locator('.rail-chip-label', { hasText: /^commit$/ })
   await expect(commitChip).toHaveCount(1)
-  await expect(page.locator('.rail-scope select')).toContainText('Project One (has additions)')
+  await expect(page.locator('.rail-scope .dropdown-trigger')).toContainText('Project One (has additions)')
 
   // The global scope never sees the addition.
-  await page.locator('.rail-scope select').selectOption('')
+  await chooseDropdown(page, page.locator('.rail-scope .dropdown-trigger'), '')
   await expect(commitChip).toHaveCount(0)
-  await page.locator('.rail-scope select').selectOption('p1')
+  await chooseDropdown(page, page.locator('.rail-scope .dropdown-trigger'), 'p1')
   await expect(commitChip).toHaveCount(1)
 
   // Removing project additions returns the project to plain inheritance.

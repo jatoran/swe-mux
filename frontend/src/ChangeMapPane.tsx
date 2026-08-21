@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { GrantGate } from './GrantGate'
 import { MOBILE_QUERY } from './deviceSettings'
 import {
@@ -374,17 +375,15 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
   const controls = <div class="change-map-controls">
     <label class="change-map-scope" title={SCOPE_DESCRIPTIONS[activeScope]}>
       <span>show</span>
-      <select value={activeScope} disabled={!sid}
-        onChange={event => setScope(event.currentTarget.value as ChangeMapScope)}>
-        {offered.map(choice => <option key={choice} value={choice}>{SCOPE_LABELS[choice]}</option>)}
-      </select>
+      <Dropdown value={activeScope} disabled={!sid}
+        onChange={value => setScope(value as ChangeMapScope)}
+        options={offered.map(choice => ({ value: choice, label: SCOPE_LABELS[choice] }))}/>
     </label>
     <label class="change-map-hops" title="How many dependency steps of blast radius to include">
       <span>hops</span>
-      <select value={String(hops)} disabled={!sid}
-        onChange={event => setHops(clampHops(Number(event.currentTarget.value)))}>
-        {HOP_CHOICES.map(choice => <option key={choice} value={String(choice)}>{choice}</option>)}
-      </select>
+      <Dropdown value={String(hops)} disabled={!sid}
+        onChange={value => setHops(clampHops(Number(value)))}
+        options={HOP_CHOICES.map(choice => ({ value: String(choice), label: String(choice) }))}/>
     </label>
   </div>
 

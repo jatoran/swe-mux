@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { formatBytes } from './networkUsage'
 
 type StorageBucket={name:string;bytes:number;files:number}
@@ -71,7 +72,7 @@ export function StorageUsageView() {
       <div class="network-usage-actions">
         <div><strong>{snapshot?`swe-mux footprint ${formatBytes(footprint)}`:'Measuring on-disk footprint…'}</strong><span>{snapshot?`${snapshot.data_dir}${snapshot.cached?` · cached ${Math.round(snapshot.age_seconds)}s ago`:` · measured in ${Math.round(snapshot.duration_ms)}ms`}`:'Walking the data directory and project files'}</span></div>
         <div class="resource-view-actions">
-          <label class="storage-usage-filter">project<select value={projectFilter} disabled={!snapshot} onChange={event=>setProjectFilter(event.currentTarget.value)}><option value="">All projects</option>{projects.map(project=><option key={project.project_id} value={project.project_id}>{project.label}</option>)}</select></label>
+          <label class="storage-usage-filter">project<Dropdown value={projectFilter} disabled={!snapshot} onChange={setProjectFilter} options={[{value:'',label:'All projects'},...projects.map(project=>({value:project.project_id,label:project.label}))]}/></label>
           <button disabled={refreshing} onClick={()=>void load(true)}>{refreshing?'measuring…':'refresh'}</button>
         </div>
       </div>

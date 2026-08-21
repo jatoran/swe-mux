@@ -1,4 +1,6 @@
-import { railOverlayBox, type RailOverlayBox, type RailOverlayView, type RailPopoverRect } from './railOverflow'
+// Explicit extension: `dropdownPlacement.ts` reuses this module and is imported directly by
+// the node test runner, which resolves no extensionless specifiers.
+import { railOverlayBox, type RailOverlayBox, type RailOverlayView, type RailPopoverRect } from './railOverflow.ts'
 
 // The DOM half of placing a command-rail overlay: what "visible" means right now, and what
 // `position:fixed` actually means at the place this overlay is mounted.

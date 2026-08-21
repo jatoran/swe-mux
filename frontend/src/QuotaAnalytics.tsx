@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { serverNow } from './serverClock.ts'
 import type { ProviderAccount, ProviderAccountsStatus } from './ProviderAccounts'
 import {
@@ -181,17 +182,17 @@ export function QuotaAnalytics({
       Correlation remains observational.
     </p>
     <div class="usage-view-controls quota-controls">
-      <label>account<select value={account} onChange={event=>setAccount(event.currentTarget.value)}>
-        <option value="all">all saved accounts</option>
-        {accounts.map(item=><option value={item.id} key={item.id}>{accountDisplayLabel(item)}</option>)}
-      </select></label>
-      <label>range<select value={range} onChange={event=>setRange(event.currentTarget.value as typeof range)}>
-        <option value="7">7 days</option><option value="30">30 days</option>
-        <option value="90">90 days</option><option value="all">all retained</option>
-      </select></label>
-      <label>detail<select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}>
-        <option value="daily">daily summaries</option><option value="raw">raw samples</option>
-      </select></label>
+      <label>account<Dropdown value={account} onChange={setAccount} options={[
+        {value:'all',label:'all saved accounts'},
+        ...accounts.map(item=>({value:item.id,label:accountDisplayLabel(item)})),
+      ]}/></label>
+      <label>range<Dropdown value={range} onChange={value=>setRange(value as typeof range)} options={[
+        {value:'7',label:'7 days'},{value:'30',label:'30 days'},
+        {value:'90',label:'90 days'},{value:'all',label:'all retained'},
+      ]}/></label>
+      <label>detail<Dropdown value={resolution} onChange={value=>setResolution(value as typeof resolution)} options={[
+        {value:'daily',label:'daily summaries'},{value:'raw',label:'raw samples'},
+      ]}/></label>
     </div>
     {error&&<div class="usage-error" role="alert">{error}</div>}
     {status?<>

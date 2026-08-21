@@ -569,6 +569,48 @@ async def test_model_refresh_error_preserves_last_success_timestamp(tmp_path: Pa
     assert after["error"] == "temporary failure"
 
 
+async def test_model_cache_serves_the_catalog_alphabetically(tmp_path: Path) -> None:
+    # OpenRouter serves `/models` in its own order, which the picker showed verbatim - and a
+    # catalogue nobody can navigate is the reported defect. Sorting happens on the way *out*
+    # of the cache, so an install that fetched its catalog before this existed is fixed too,
+    # without anyone pressing Refresh.
+    store = AutomationStore(tmp_path / "mux.db")
+    await store.cache_models(
+        [
+            {"id": "z/zeta", "name": "Zeta"},
+            {"id": "b/beta", "name": "beta"},
+            {"id": "a/alpha", "name": "Alpha"},
+        ]
+    )
+    cached = await store.model_cache()
+    store.close()
+
+    # Case-folded: "beta" must not sort after "Zeta" because of its lowercase b.
+    assert [model["id"] for model in cached["models"]] == ["a/alpha", "b/beta", "z/zeta"]
+
+
+async def test_model_cache_breaks_a_duplicate_name_tie_by_id(tmp_path: Path) -> None:
+    # Two providers shipping one display name is routine, and a tie broken by insertion order
+    # is not a stable order to a reader scanning the list twice.
+    store = AutomationStore(tmp_path / "mux.db")
+    await store.cache_models(
+        [
+            {"id": "vendor-b/sonnet", "name": "Sonnet"},
+            {"id": "vendor-a/sonnet", "name": "Sonnet"},
+            {"id": "vendor-c/nameless"},
+        ]
+    )
+    cached = await store.model_cache()
+    store.close()
+
+    assert [model["id"] for model in cached["models"]] == [
+        "vendor-a/sonnet",
+        "vendor-b/sonnet",
+        # An entry with no name sorts under its id, which is also what the picker shows for it.
+        "vendor-c/nameless",
+    ]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows DPAPI proving-platform contract")
 def test_dpapi_persistence_round_trip_is_encrypted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { chooseDropdown, dropdownValue } from './dropdown'
 
 /**
  * The Schedule tab lives in the narrowest column in the app and puts a label, a cron
@@ -115,8 +116,8 @@ test('the cron field and its presets share one row, and a preset fills the field
 
   const row = page.locator('.schedule-cron-row')
   const input = row.locator('input')
-  const select = row.locator('select')
-  // One row means one row: a select that pushed itself onto a second line would take the
+  const select = row.locator('.dropdown-trigger')
+  // One row means one row: a picker that pushed itself onto a second line would take the
   // width the expression needs, which is the whole reason both columns shrink.
   const [inputBox, selectBox] = await Promise.all([input.boundingBox(), select.boundingBox()])
   expect(inputBox!.y).toBeCloseTo(selectBox!.y, 0)
@@ -129,7 +130,7 @@ test('the cron field and its presets share one row, and a preset fills the field
 
   // Choosing one writes the expression into the field, and the hint under the row becomes
   // the piece of syntax that expression demonstrates.
-  await select.selectOption('0 13 1,15 * *')
+  await chooseDropdown(page, select, '0 13 1,15 * *')
   await expect(input).toHaveValue('0 13 1,15 * *')
   await expect(page.locator('.schedule-editor label', { has: row }).locator('small'))
     .toContainText('A comma is a list')
@@ -139,8 +140,8 @@ test('the cron field and its presets share one row, and a preset fills the field
   // A hand-edited expression is no longer any preset, and says so rather than keeping a
   // stale label.
   await input.fill('0 10 * * *')
-  await expect(select).toHaveValue('')
-  await expect(select.locator('option').first()).toHaveText('Custom')
+  expect(await dropdownValue(select)).toBe('')
+  await expect(select).toContainText('Custom')
 })
 
 test('a resume row says what it reopens and where that conversation has got to', async ({ page }) => {
@@ -179,12 +180,17 @@ test('editing a resume offers the three target kinds and never a backend', async
   // A resume runs the harness the conversation belongs to. Offering an Agent select
   // would offer control the daemon refuses.
   await expect(page.getByLabel('Agent', { exact: true })).toHaveCount(0)
-  const kind = page.getByLabel('What to reopen')
-  await expect(kind).toHaveValue('latest_of_session')
-  await expect(kind.locator('option')).toHaveCount(3)
+  const kind = page.locator('label', { hasText: 'What to reopen' }).locator('.dropdown-trigger')
+  expect(await dropdownValue(kind)).toBe('latest_of_session')
+  // The rows are portalled to the body, so counting them means opening the list — and
+  // Escape closing it again is the same key a native select answered to.
+  await kind.click()
+  await expect(page.locator('.dropdown-list .dropdown-option')).toHaveCount(3)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.dropdown-list')).toHaveCount(0)
   // The ceiling belongs to the accumulating kind and to nothing else.
   await expect(page.getByLabel('Stop above')).toHaveValue('70')
-  await kind.selectOption('run')
+  await chooseDropdown(page, kind, 'run')
   await expect(page.getByLabel('Stop above')).toHaveCount(0)
 })
 
@@ -194,7 +200,7 @@ test('a fork schedule cannot be saved until a legal cut point is chosen', async 
   await page.waitForSelector(ROW)
   await page.locator(ROW).filter({ hasText: 'Pick the migration back up' })
     .getByRole('button', { name: 'edit' }).click()
-  await page.getByLabel('What to reopen').selectOption('fork_point')
+  await chooseDropdown(page, page.locator('label', { hasText: 'What to reopen' }).locator('.dropdown-trigger'), 'fork_point')
 
   const points = page.locator('.schedule-branch-point')
   await expect(points).toHaveCount(3)

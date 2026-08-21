@@ -1,4 +1,5 @@
 import { expect, test, type Page } from 'playwright/test'
+import { chooseDropdown } from './dropdown'
 
 // The shape of Settings → Voice, which is the largest tab in the panel and the one that
 // most easily reverts to a single scroll of everything.
@@ -88,7 +89,7 @@ test('the pronunciation lexicon is its own section, not a heading inside the eng
   await expect(engine).toHaveClass(/setting-flash/)
 
   // Selecting Kokoro puts the editor in the Pronunciation section — and nowhere else.
-  await engine.locator('select').selectOption('kokoro')
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'kokoro')
   await expect(pronunciation.locator('.tts-lexicon')).toHaveCount(1)
   await expect(page.locator('.settings-content .tts-lexicon')).toHaveCount(1)
   await expect(page.locator('.settings-content > section > h3')).toHaveText(SECTIONS)
@@ -128,7 +129,7 @@ test('Kokoro\'s long bodies fold, and folding one never hides a deep link', asyn
   // only drawn under Kokoro, and both buried the controls beneath them - the speed
   // field, the cache limit, the whole rest of the tab - behind a wall of chips.
   const engine = page.locator('[data-setting="tts_engine"]')
-  await engine.locator('select').selectOption('kokoro')
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'kokoro')
 
   const voices = page.locator('details.kokoro-voice-disclosure')
   await expect(voices).toHaveCount(1)

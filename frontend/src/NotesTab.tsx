@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { dismissStack } from './dismissStack.ts'
@@ -435,10 +436,10 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
           spellcheck={false}
           onInput={event=>setQuery(event.currentTarget.value)}
         />
-        <select aria-label="Filter notes by project" value={allProjects?'':scopeId} onChange={event=>onAllProjects(!event.currentTarget.value)}>
-          <option value={project?.id||''} disabled={!project}>{project?project.name:'No project'}</option>
-          <option value="">All projects</option>
-        </select>
+        <Dropdown ariaLabel="Filter notes by project" value={allProjects?'':scopeId} onChange={value=>onAllProjects(!value)} options={[
+          {value:project?.id||'',label:project?project.name:'No project',disabled:!project},
+          {value:'',label:'All projects'},
+        ]}/>
       </div>
       <div class="notes-body notes-tab-body">
         {scopedError&&<p class="notes-state error" role="alert">{scopedError}</p>}

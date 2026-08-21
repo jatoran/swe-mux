@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
+import { Dropdown } from './Dropdown'
 import type { Project, Session } from './types'
 import { buildProcessTree, type ProcessTreeNode } from './processTree'
 import { buildProjectGroups } from './projectGroups'
@@ -273,12 +274,13 @@ export function ProcessFleetView({
   // Opening at a Project prefilters the fleet, but the scope stays a visible, clearable
   // control rather than a hidden mode — on both surfaces, so a drawer scoped to the active
   // Project can still answer a question about the whole machine.
-  const scopeSelect = <select
+  const scopeSelect = <Dropdown
     class="process-scope-select"
-    aria-label="Filter processes by project"
+    ariaLabel="Filter processes by project"
     value={projectScope}
-    onChange={event => { onProjectScope(event.currentTarget.value); onSelectedSessionId(null) }}
-  ><option value="">All projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+    onChange={value => { onProjectScope(value); onSelectedSessionId(null) }}
+    options={[{ value: '', label: 'All projects' }, ...projects.map(project => ({ value: project.id, label: project.name }))]}
+  />
 
   const refresh = <button class="process-refresh" title="Re-read the latest sample" onClick={() => refreshFleet(request)}>Refresh</button>
 

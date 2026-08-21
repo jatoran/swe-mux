@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { dropdownValue } from './dropdown'
 
 /**
  * The drawer's Processes tab is the modal inspector's surface at column width.
@@ -84,7 +85,7 @@ test('the tab opens scoped to its Project, and the runtime is not filed under on
   // The other Project's session and the swe-mux runtime are both out of scope.
   await expect(page.locator('.processes-tab', { hasText: 'pwsh.exe' })).toHaveCount(0)
   await expect(page.locator('.process-daemon-group')).toHaveCount(0)
-  await expect(page.locator('.process-scope-select')).toHaveValue('p1')
+  expect(await dropdownValue(page.locator('.process-scope-select'))).toBe('p1')
 })
 
 test('the focused session is pinned first in its Project and says why', async ({ page }) => {
