@@ -4176,6 +4176,28 @@ async def _annotation_session_run_ids(app: web.Application, session_id: str) -> 
     return sorted(run_ids)
 
 
+def _mark_unsupported(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Retract, at read time, findings whose own evidence no longer supports them.
+
+    A stored finding is a record of what a detector concluded and is never edited
+    or deleted to change that record. What *can* change is whether a reader is
+    told it stands: the loop detector now refuses to seed on a fact carrying no
+    target and no content hash, and the same rule applied here withdraws the 390
+    of 397 historical findings that rest on exactly those facts
+    (`deterministic_consumers.loop_finding_unsupported`). The row keeps saying
+    what it said; the read says why it does not hold.
+    """
+    from .deterministic_consumers import LOOP_UNSUPPORTED_REASON, loop_finding_unsupported
+
+    for item in items:
+        if item.get("tag") != "loop-detected":
+            continue
+        if loop_finding_unsupported(item.get("evidence_json")):
+            item["unsupported"] = True
+            item["unsupported_reason"] = LOOP_UNSUPPORTED_REASON
+    return items
+
+
 async def list_annotations(request: web.Request) -> web.Response:
     """Findings read: annotations filtered by tag, project, session, run, and time.
 
@@ -4200,14 +4222,14 @@ async def list_annotations(request: web.Request) -> web.Response:
     )
     return json_response(
         {
-            "items": await store.annotations(
+            "items": _mark_unsupported(await store.annotations(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,
                 project_id=project_id,
                 tag=tag,
                 since=since,
                 limit=int(query.get("limit", 200)),
-            ),
+            )),
             "tag_counts": await store.annotation_tag_counts(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,

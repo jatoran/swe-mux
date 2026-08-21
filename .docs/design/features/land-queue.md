@@ -314,6 +314,11 @@ A handback additionally records whether its message was **armed**, and when it w
 `classify` is written on both of its outcomes and `verify` is written even when it was skipped, so "which gate ran" is answerable from the trail alone for every request that reached the gate.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
 
+**A gate that ran is recorded as a `test_result` fact**, not only as a land event.
+The gate is the only test run most branches ever get and it runs out-of-band - the daemon executes it, so no tool call and no transcript records it - which left the substrate holding one `test_result` fact against 4,485 `command_result` facts in a measured 24-hour window and made declared-vs-verified a statement about capture rather than about an agent (`tier0-facts.md`, `deterministic-consumers.md`).
+Only `passed` and `failed` become facts: `not_configured`, `unapproved` and `timed_out` are statements about the setup or about a run that never finished, and recording them as a failed test run would put a verdict on the branch that nothing ever tested.
+A failed gate states a failure count and **omits** `failing_tests` unless the output named tests, because an empty list reads everywhere as "nothing is failing".
+
 ## Surface
 
 **Landing is part of the Git tab's worktree map, and has no surface of its own.**

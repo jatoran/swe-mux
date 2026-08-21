@@ -59,11 +59,11 @@ from .code_graph import (
     co_change_net,
 )
 from .deterministic_consumers import (
-    CLAIM_PATTERN,
     PROJECT_FACT_WINDOW_SECONDS,
     build_doc_debt_map,
     build_doc_ownership,
     build_provenance_edges,
+    claim_match,
     detect_declared_vs_verified,
     normalize_target,
 )
@@ -3400,17 +3400,26 @@ class McpService:
                 "status": finding.content,
                 "evidence": finding.evidence[:MEMORY_MAX_RESULTS],
             }
-        elif CLAIM_PATTERN.search(claim):
-            # `detect_declared_vs_verified` returns None both for a non-claim and
-            # for a claim whose tests ran and passed. The pattern still matching
-            # here means the second case: an accurate claim, not flagged.
+        elif claim_match(claim) is not None:
+            # `detect_declared_vs_verified` returns None for three different
+            # things, and only one of them is a green run. Which one it was is
+            # decided here, from the run's own test facts — reporting "verified"
+            # for a run that captured no test facts would be the exact collapse
+            # the three-way split exists to prevent.
+            ran = [fact for fact in facts if str(fact.get("kind") or "") == "test_result"]
             result = {
                 "declared": True,
-                "tests_ran": True,
-                "tests_passed": True,
-                "verified": True,
+                "tests_ran": bool(ran),
+                "tests_passed": bool(ran),
+                "verified": bool(ran),
                 "claim": claim[:240],
-                "status": "claims done · tests ran · tests passed",
+                "status": (
+                    "claims done · tests ran · tests passed"
+                    if ran
+                    else "claims done · no test facts recorded for this run · "
+                    "unverifiable from here, which is a statement about capture "
+                    "rather than about the claim"
+                ),
             }
         else:
             result = {

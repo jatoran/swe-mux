@@ -21,11 +21,30 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
   resolved at capture time. `session_id` alone cannot answer per-run questions — a session
   is resumed, promoted and branched across many runs.
 - **Fingerprint**: canonical action signature (`event_type`, `kind`, tool, casefolded
-  `target`, exit class, `content_hash`, progress state) for loop detection. Identical
+  `target`, exit class, `content_hash`, progress state, full-target digest) for loop
+  detection. Identical
   repeated edits share a fingerprint (loop signal); changed content differs (progress).
   Strips volatile detail. The progress-state component is the failing-test set for test
   results and the working-tree hash for git facts, so "the same action against the same
   unchanged state" is one fingerprint rather than one per exit class.
+  The last component exists because `target` is **bounded to 512 characters** and a long
+  shell command is exactly the case where the prefix is the shared part: three iterations of
+  one heredoc-written probe script agree for 512 characters and differ only after it, so the
+  truncated target alone reports three distinct actions as one repeat (227 command facts in
+  one measured day sat at exactly the bound).
+  The adapter digests the untruncated text when it had to cut it, because that is the last
+  place the whole string exists; the digest is empty whenever nothing was lost.
+- **One call is one fact.** A tool call is observed twice on a Claude session - the CLI's
+  `PreToolUse` hook fires, and the transcript record of the same call arrives later (or,
+  mid-turn, earlier: `_transcript_authoritative` loses that race both ways).
+  Recorded as two facts, one action reads as two, which is how 4,540 junk command facts
+  stood beside 2,948 real ones in a single measured day and how the loop detector counted a
+  repeat that never happened.
+  Facts are therefore folded on `(session_id, call_id, call_side)`: the **richer** record
+  wins whichever arrived first, a record with nothing new to say is dropped, and nothing is
+  ever merged across sides because a call and its result share an id and are two facts.
+  The fold is counted (`merged` in the capture stats) rather than silent - a count stuck at
+  zero on a Claude session means the call ids stopped joining.
 - **Content hash**: computed at the adapter boundary, never by reading a file back off
   disk — race-free. On the write side it is the exact bytes the agent wrote
   (`tool_call_evidence`); on the read/result side it is the exact bytes the agent saw
@@ -54,10 +73,15 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
 
 - Table `tier0_facts` on the shared WAL `mux.db`:
   `id, session_id, agent_run_id, project_id, kind, target, content_hash, fingerprint,
-  detail_json, source_seq, source_ref, created_at`. Indexed by session/time, kind/time,
-  content_hash, (session, fingerprint), and the two shapes the consumers query —
+  detail_json, source_seq, source_ref, created_at, call_id, call_side`. Indexed by
+  session/time, kind/time,
+  content_hash, (session, fingerprint), (session, call_id, call_side), and the two shapes
+  the consumers query —
   (agent_run_id, time) and (project_id, time). Command text is never stored beyond bounded
   detail.
+  The indexes are created **after** the additive column migrations, never in the same
+  script: an index over a column an older database has not grown yet fails the whole
+  script, and `executescript` leaves everything before the failure applied.
 - `kind` derives from the event: tool classification (`file_write | file_read | command |
   test | tool`), the matching `_result` variant for the outcome of each
   (`command_result`, `file_write_result`, …), `test_result` for any result carrying a parsed
@@ -88,6 +112,18 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
   exposed).
 - `git_changed` carries the commit `head` and a `dirty_hash` of the working-tree change set
   (`git_monitor.GitEvidence`), so a fact records which tree it was produced against.
+- The **land queue's verification gate** is recorded as a `test_result` fact against the
+  session that asked for the land (`land_queue._verify_fact`).
+  It is the only test run most branches ever get and it runs out-of-band - the daemon
+  executes it, so no tool call and no transcript record it - and without this the substrate
+  held one `test_result` fact against 4,485 `command_result` facts in a measured 24-hour
+  window, which made declared-vs-verified a statement about capture rather than about an
+  agent.
+  Two rules keep the fact honest: only a gate that actually ran (`passed`/`failed`) is a
+  test fact, because `not_configured`, `unapproved` and `timed_out` are statements about the
+  setup rather than verdicts on the branch; and a **failed gate never records an empty
+  failing set**, because `failing_tests: []` reads as "nothing is failing", so a gate that
+  fell over on ruff or tsc omits the key and states a failure count instead.
 - Gated per session: capture only for sessions whose owning Project opted `tier0` in,
   resolved off the loop with a short TTL cache. The gate resolver returns the session's
   `Tier0Context` (run + project) rather than a bare bool.

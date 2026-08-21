@@ -2045,6 +2045,9 @@ plus the registry, `recommended_project_automations`, and `llm`, and is the cont
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).
 `session_id` is resolved to the session's run-id set — its live run plus its superseded runs from history — and matched against `agent_run_id`, because the annotation's own `session_id` column is populated by one detector alone; a Project-anchored finding with a null run (doc-debt, provenance) is therefore absent from a session scope by construction.
 The response carries `items` and `tag_counts`, the per-tag totals in the current scope (project/session/since honoured, the tag chip ignored) so a quiet scope reads apart from one buried under provenance edges.
+An item may carry `unsupported: true` with an `unsupported_reason`, which means the stored finding's own evidence no longer supports it under the detector's current rule.
+The row is never rewritten or deleted - it is a record of what a detector concluded - so the retraction happens at the read, and `tag_counts` still counts the stored row.
+Today this marks `loop-detected` findings whose every evidence fact carries neither a target nor a content hash (`features/deterministic-consumers.md`).
 The dashboard payload's `recent_annotations` key is unchanged; this endpoint is the filtered surface the Findings pane points at.
 
 ## Attention ranking

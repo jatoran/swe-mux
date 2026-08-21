@@ -218,16 +218,91 @@ def test_content_hash_changes_the_fingerprint() -> None:
     assert same["fingerprint"] == repeat["fingerprint"]  # identical edit repeated = loop signal
 
 
+def test_a_truncated_target_digest_separates_two_long_commands() -> None:
+    # The digest is carried on the event and folded into the fingerprint, so two
+    # commands sharing a 512-character prefix are two actions, not one repeat.
+    base = {"tool": "Bash", "target": "x" * 512}
+    first = _fact_from_event(MuxEvent(1.0, "s", "t", "tool_use", {**base, "target_digest": "aa"}))
+    second = _fact_from_event(MuxEvent(2.0, "s", "t", "tool_use", {**base, "target_digest": "bb"}))
+    assert first is not None and second is not None
+    assert first["fingerprint"] != second["fingerprint"]
+
+
+@pytest.mark.asyncio
+async def test_one_tool_call_is_one_fact_however_many_observers_report_it(
+    tmp_path: Path,
+) -> None:
+    """The hook's shadow of a call and the transcript's record of it are one fact.
+
+    Both observers see the same call and both emit `tool_use`; recorded as two
+    facts, one action reads as two — 4,540 junk command facts stood beside 2,948
+    real ones in a single measured day (2026-08-21). The richer record wins
+    whichever arrives first, so the race between them stops mattering.
+    """
+    from swe_mux.tier0_store import Tier0Store
+
+    store = Tier0Store(tmp_path / "mux.db")
+    try:
+        shadow = MuxEvent(
+            1.0, "s1", "hook", "tool_use", {"tool": "Bash", "call_id": "toolu_1"}
+        )
+        record = MuxEvent(
+            2.0,
+            "s1",
+            "transcript",
+            "tool_use",
+            {"tool": "Bash", "call_id": "toolu_1", "target": "pytest -q"},
+        )
+        assert await store.record_from_event(shadow, agent_run_id="r1") is not None
+        assert await store.record_from_event(record, agent_run_id="r1") is not None
+        facts = await store.facts_for_run("r1")
+        assert len(facts) == 1
+        assert facts[0]["target"] == "pytest -q"  # the richer record won
+        # The result side of the same call is a separate fact by construction.
+        result = MuxEvent(
+            3.0, "s1", "hook", "tool_result", {"tool": "Bash", "call_id": "toolu_1"}
+        )
+        await store.record_from_event(result, agent_run_id="r1")
+        assert len(await store.facts_for_run("r1")) == 2
+        # A poorer second report is dropped rather than replacing what is stored.
+        await store.record_from_event(shadow, agent_run_id="r1")
+        facts = await store.facts_for_run("r1")
+        assert len(facts) == 2
+        assert facts[0]["target"] == "pytest -q"
+        assert store.capture_stats()["merged"] == 2
+    finally:
+        store.close()
+
+
 def test_tool_call_evidence_hashes_write_payload_race_free() -> None:
     from swe_mux.observation import tool_call_evidence
 
-    target, content_hash = tool_call_evidence({"file_path": "a/b.py", "new_string": "hello"})
+    target, content_hash, digest = tool_call_evidence(
+        {"file_path": "a/b.py", "new_string": "hello"}
+    )
     assert target == "a/b.py"
     assert content_hash is not None
+    assert digest is None  # nothing was truncated, so the target speaks for itself
     # A JSON-string argument (Codex function_call shape) parses too.
-    codex_target, codex_hash = tool_call_evidence('{"command": "pytest -q"}')
+    codex_target, codex_hash, _ = tool_call_evidence('{"command": "pytest -q"}')
     assert codex_target == "pytest -q"
     assert codex_hash is None  # a command has no written content to hash
+
+
+def test_a_truncated_target_carries_a_digest_of_the_whole_command() -> None:
+    # Live case (2026-08-21): three iterations of one heredoc-written probe script
+    # agreed for 512 characters and differed only after it, so the truncated prefix
+    # collapsed them onto one fingerprint and the loop detector reported a repeat
+    # that never happened. 227 command facts in that day sat at exactly the bound.
+    from swe_mux.observation import TOOL_TARGET_LIMIT, tool_call_evidence
+
+    shared = "python probe.py " + ("x" * TOOL_TARGET_LIMIT)
+    first, _, first_digest = tool_call_evidence({"command": shared + "one"})
+    second, _, second_digest = tool_call_evidence({"command": shared + "two"})
+    assert first == second  # the stored targets are identical...
+    assert len(first or "") == TOOL_TARGET_LIMIT
+    # ...and only the digest of the whole command tells the two calls apart.
+    assert first_digest and second_digest and first_digest != second_digest
 
 
 def test_tool_call_evidence_extracts_the_apply_patch_target() -> None:
@@ -243,7 +318,7 @@ def test_tool_call_evidence_extracts_the_apply_patch_target() -> None:
         "+    return a + b\n"
         "*** End Patch\n"
     )
-    target, content_hash = tool_call_evidence(patch)
+    target, content_hash, _ = tool_call_evidence(patch)
     assert target == "src/calc.py"
     assert content_hash is not None  # the patch bytes are the written content
 

@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .background_tasks import background
-from .deterministic_consumers import ConsumerContext
+from .deterministic_consumers import ConsumerContext, loop_finding_unsupported
 
 log = logging.getLogger(__name__)
 
@@ -590,6 +590,14 @@ class AttentionRankingService:
                 return None
             annotation = await self.store.annotation(str(event.payload.get("annotation_id")))
             if annotation is None:
+                return None
+            if tag == "loop-detected" and loop_finding_unsupported(
+                annotation.get("evidence_json")
+            ):
+                # The same retraction the Findings read applies. `loop-detected`
+                # feeds the `stuck` class, which is expensive-blocking, so a
+                # finding whose evidence carries no discriminator would spend a
+                # slot of the interrupt budget on nothing.
                 return None
             return Finding(
                 kind=tag,
