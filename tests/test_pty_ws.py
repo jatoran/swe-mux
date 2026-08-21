@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -17,6 +16,7 @@ from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
 from swe_mux.server import PtyOutputFlow, deliver_broadcast, pty_ws
 from swe_mux.session import Session
+from tests.support.settle import until
 
 
 async def test_pty_output_flow_waits_for_xterm_parse_credit() -> None:
@@ -92,34 +92,6 @@ async def next_bytes(ws: Any) -> bytes:
             continue
         assert message.type == WSMsgType.BINARY
         return cast(bytes, message.data)
-
-
-async def until(predicate: Callable[[], bool], *, seconds: float = 5.0, what: str = "") -> None:
-    """Wait for a frame the daemon handles on its own side of the socket.
-
-    A frame sent over the websocket is acted on by a handler this test never
-    awaits, so the assertion that follows needs the loop to have got there. A
-    fixed `asyncio.sleep(0.01)` is a bet on how long that takes, and under
-    `-n auto` the bet loses: a worker sharing the host with fifteen others is
-    not scheduled inside ten milliseconds, and the test reddens the gate over
-    machine load rather than over the code. Polling is both faster (it returns
-    on the turn the condition holds) and honest under load.
-
-    Only for *positive* waits. An assertion that something has NOT happened
-    still needs a real quiet window, and those sleeps are deliberately left
-    alone - a loaded machine only makes them safer.
-
-    It polls rather than waiting on an `asyncio.Event` because the state it
-    watches is a plain list or attribute the handler mutates without signalling
-    anyone; there is nothing to subscribe to short of instrumenting the daemon
-    for the tests, which would be a worse trade than a 5ms tick.
-    """
-    try:
-        async with asyncio.timeout(seconds):
-            while not predicate():  # noqa: ASYNC110 - no event to wait on; see docstring
-                await asyncio.sleep(0.005)
-    except TimeoutError:
-        raise AssertionError(f"condition never held: {what or predicate}") from None
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")

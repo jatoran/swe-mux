@@ -195,11 +195,13 @@ test modules together is 1.45s.
 exposes**, and the one thing to write differently now. A worker sharing the host with
 fifteen others is not scheduled inside the 10ms that such a sleep bets on, and the test
 reddens the gate over machine load rather than over the code
-(`test_pty_ws.py::test_pty_ws_orders_replay_then_live_updates_and_exit` did exactly this,
-intermittently, before the fix). Wait for the condition instead - `until(...)` in
-`tests/test_pty_ws.py` is the shape - which also returns sooner on an idle machine.
-Sleeps guarding a *negative* assertion ("no pulse fired") are a real quiet window and stay:
-load only makes those safer.
+(`test_pty_ws.py::test_pty_ws_orders_replay_then_live_updates_and_exit` and
+`test_observation.py::test_stable_approval_becomes_visible_once_after_the_window` both did
+exactly this, intermittently, before the fix). Wait for the condition instead:
+`tests/support/settle.py` has `until(predicate)` and `drained_until(queue, kind)` for the
+event-bus case, and both return sooner than a sleep on an idle machine.
+Sleeps guarding a *negative* assertion ("no pulse fired", "the candidate was not committed")
+are a real quiet window and stay: load only makes those safer.
 
 The pytest run above includes the real-ConPTY integration tests (`-m conpty`,
 Windows-only, `tests/test_conpty_integration.py`) and the harness-adapter coverage

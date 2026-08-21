@@ -126,8 +126,8 @@ honours the `xdist_group` mark keeping each real-console file
 (`test_conpty_integration.py`, `test_pty_supervisor.py`) on a single worker.
 While iterating, plain `uv run pytest tests/test_x.py` is still the right thing.
 A fixed `asyncio.sleep` before a *positive* assertion is what breaks under this - wait for
-the condition instead (`until(...)` in `tests/test_pty_ws.py`); a sleep guarding a negative
-assertion is a real quiet window and stays.
+the condition instead (`until` and `drained_until` in `tests/support/settle.py`); a sleep
+guarding a negative assertion is a real quiet window and stays.
 
 The Playwright renderer suite (`npm run test:renderer`, in `frontend/`) is CI-only and
 binds a port: it drives a Vite dev server on 4174 with `reuseExistingServer`, so a second
