@@ -895,13 +895,35 @@ class LandQueueService:
 
     # -- reads ----------------------------------------------------------------
 
-    async def status(self, *, project_id: str | None = None) -> dict[str, Any]:
+    async def status(
+        self, *, project_id: str | None = None, project_root: str | None = None
+    ) -> dict[str, Any]:
         requests = await self._store.list_requests(project_id=project_id, limit=100)
+        # The two authority facts the Land panel cannot otherwise tell apart from a
+        # quiet queue. An operator request bypasses the Project opt-in on purpose - the
+        # operator is the authority the grant defers to - but the *sweep* stops dead on
+        # the install switch, so a queue with that off accepts requests and then never
+        # advances one. Reporting it is what lets the panel say so instead of spinning.
+        installed = self._installed_enabled()
+        project_enabled = False
+        grant = "draft"
+        if project_root:
+            if self._automation_gate is None:
+                project_enabled = True
+            else:
+                try:
+                    project_enabled = "land_queue" in await self._automation_gate(project_root)
+                except Exception:  # noqa: BLE001 - a gate that cannot answer reads as off
+                    project_enabled = False
+            grant = self._grant(project_root)
         return {
             "requests": requests,
             "hourly_budget": self._hourly_budget(),
             "hold_timeout_seconds": self._hold_timeout(),
             "retry_verification": bool(self._verify_retries()),
+            "installed_enabled": installed,
+            "project_enabled": project_enabled,
+            "agent_grant": grant,
         }
 
     def verify_command(

@@ -73,9 +73,39 @@ test('project targets name a marked control or a real automation id', () => {
       )
       continue
     }
+    // The authority fields render from one table rather than as four hand-written rows,
+    // so their mark is `data-setting={row.setting}` — the same shape the automation rows
+    // already use. Both halves are asserted: the attribute exists, and this field is one
+    // of the values it is fed.
+    if (manager.includes(`data-setting="${target.setting}"`)) continue
     assert.ok(
-      manager.includes(`data-setting="${target.setting}"`),
+      manager.includes('data-setting={row.setting}')
+        && manager.includes(`setting: '${target.setting}'`),
       `${id} points at a Project control that is not marked: ${target.setting}`,
+    )
+  }
+})
+
+// Every authority field the daemon parses is a decision someone has to be able to make.
+// All four of these shipped enforced and unreachable: a line in a committed TOML file
+// with no control in any overlay, which made the inert default impossible to discover
+// and impossible to change from the app. A fifth arriving the same way fails here.
+test('every grantable Project authority field has an owner in the Projects registry', () => {
+  const manager = source('ProjectsManager.tsx')
+  const grantsModule = readFileSync(join(root, '..', 'src', 'swe_mux', 'grants.py'), 'utf8')
+  // Split on the declaration, not the bare name: the module's own docstring names it too.
+  const table = grantsModule.split('GRANTABLE_PROJECT_VALUES: Mapping')[1].split('\n}')[0]
+  const fields = [...table.matchAll(/"([a-z_]+)":/g)].map(match => match[1])
+  assert.ok(fields.length >= 5, 'expected the daemon to name its grantable Project fields')
+  for (const field of fields) {
+    const owned = ids.some(id => {
+      const target = settingTarget(id)
+      return target.surface === 'project' && target.setting === field
+    })
+    assert.ok(owned, `${field} can be granted but has no setting target that owns it`)
+    assert.ok(
+      manager.includes(`setting: '${field}'`) || manager.includes(`data-setting="${field}"`),
+      `${field} can be granted but the Projects registry has no control for it`,
     )
   }
 })

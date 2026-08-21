@@ -27,9 +27,21 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { AttentionInbox } from './AttentionInbox'
-import { SettingLink } from './SettingLink'
-import { alertPreferences } from './alertPrefs'
+import { GrantGate } from './GrantGate'
+import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
+import { currentProfile } from './deviceSettings'
 import type { Project } from './types'
+
+/**
+ * The one device-scoped grant. It never reaches the daemon: an alert profile belongs to
+ * this device class and nowhere else, so `GrantGate` hands the write back here rather
+ * than inventing a server round trip for a local preference.
+ */
+function unmuteAlerts(): void {
+  const profile = currentProfile()
+  setAlertPreferencesFor(profile, { ...alertPreferences(), enabled: true })
+  window.dispatchEvent(new CustomEvent('mux:settings-changed'))
+}
 
 export type UiNotification = {
   ts:number;channel:string;delivery_id:string;session_id?:string
@@ -113,10 +125,15 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
         delivery channel — so the mute is stated here rather than silently explaining why
         nothing made a sound. The bell in the sidebar footer is the same switch; this link
         is for the device-class settings behind it. */}
-    {alertsMuted&&<div class="setting-gate">
-      <p><strong>Alerts are muted on this device.</strong> Everything below is still recorded; sounds and push notifications are not delivered.</p>
-      <SettingLink target="alerts.master">Open alert settings</SettingLink>
-    </div>}
+    {alertsMuted&&<GrantGate ids={['alerts.master']}
+      heading="Alerts are muted on this device."
+      confirmLabel="Unmute alerts on this device"
+      applyDevice={unmuteAlerts}
+      onGranted={()=>setAlertsMuted(!alertPreferences().enabled)}>
+      <p>Everything below is still recorded; sounds and push notifications are not
+      delivered. Unmuting restores the per-channel and per-event choices already saved
+      for this device class — none of them were cleared by the mute.</p>
+    </GrantGate>}
     <AttentionInbox onOpenSession={onOpenSession} project={project} />
     <AwayReport />
     <h4 class="attention-raw-heading">Every record</h4>

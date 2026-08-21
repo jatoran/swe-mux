@@ -45,11 +45,20 @@
   read-only index of them all instead of a second set of controls, and `modelRouting.ts` is that
   index. Whether a blank value is legal is the whole distinction: an **override** falls through to
   the cheap model, a **pin** is a validation error, and the two must never render the same.
-- Adding a surface that goes inert behind a switch, or changing how one reaches that switch
-  (the deep link, the scroll-and-flash arrival, the `data-setting` marks):
-  `design/features/setting-links.md`, `design/features/ui.md`,
+- Adding a surface that goes inert behind a switch, changing how one reaches that switch
+  (the deep link, the scroll-and-flash arrival, the `data-setting` marks), or adding a
+  switch a gate may turn on: `design/features/setting-links.md`, `design/features/ui.md`,
   `technical/frontend/packages.md`; per-Project opt-ins themselves:
-  `design/features/automation-enablement.md`
+  `design/features/automation-enablement.md`.
+  The rule the design turns on: a gate **grants** in place and can only ever turn something
+  **on**, so many surfaces may switch a thing on while exactly one editor may switch it off -
+  that asymmetry is what makes a write reachable from a drawer pane safe. Two things follow
+  and are enforced rather than trusted: the grantable keys are closed sets checked against
+  `Config` and `PROJECT_CONFIG_FIELDS` at import (`src/swe_mux/grants.py`), and every
+  grantable Project field must have a control in the Projects registry
+  (`frontend/test/settingTargets.test.ts`) - four authority fields once shipped enforced and
+  reachable only by hand-editing a committed TOML file, which is the failure that test
+  exists to prevent recurring.
 - Changing what shows or hides the mobile soft keyboard: `design/features/ui.md`,
   `technical/frontend/packages.md`; open ask against the vendored note editor:
   `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`

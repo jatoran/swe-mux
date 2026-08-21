@@ -25,7 +25,12 @@ export type ProjectAutomationState = {
   /** The effective set: requested, with every dependency it needs also satisfied. */
   enabled: string[]
   blocked: Record<string, string[]>
-  automations: { id: string; kind: string; label: string; requires: string[]; implemented: boolean }[]
+  automations: {
+    id: string; kind: string; label: string; requires: string[]; implemented: boolean
+    /** Whether switching it on can cost money. Read from the registry, never asserted
+     *  by a surface: "free" is the fact a one-click grant most needs to get right. */
+    spends: boolean
+  }[]
   scan_timeline_auto_enable: boolean
 }
 

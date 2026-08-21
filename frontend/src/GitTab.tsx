@@ -2,6 +2,12 @@ import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { GitSessionLinks, sessionLinkDestination, type SessionLinkItem, type SessionLinkMenu } from './GitSessionLinks'
+import { GrantGate } from './GrantGate'
+import {
+  PROJECT_AUTOMATIONS_CHANGED,
+  fetchProjectAutomations,
+  forgetProjectAutomations,
+} from './projectAutomations'
 import { sessionDisplayName } from './sessionNames'
 import {
   isAbsolutePath,
@@ -149,6 +155,9 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const generation=useRef(0)
   const graphGeneration=useRef(0)
   const provenanceGeneration=useRef(0)
+  // Three-valued: `null` while unread, so an unreadable opt-in table never renders as
+  // "this Project said no".
+  const [provenancePermitted,setProvenancePermitted]=useState<boolean|null>(null)
 
   const refresh=useCallback(async()=>{
     if(!project){setOverview(null);return}
@@ -197,6 +206,17 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   },[refresh,refreshProvenance])
   useEffect(()=>setCompareOverride(project?.git_compare_ref||''),[project?.git_compare_ref])
   useEffect(()=>{
+    const id=project?.id
+    if(!id){setProvenancePermitted(null);return}
+    let stale=false
+    const read=()=>{fetchProjectAutomations(id)
+      .then(state=>{if(!stale)setProvenancePermitted(state.enabled.includes('provenance_graph'))})
+      .catch(()=>{if(!stale)setProvenancePermitted(null)})}
+    read()
+    window.addEventListener(PROJECT_AUTOMATIONS_CHANGED,read)
+    return()=>{stale=true;window.removeEventListener(PROJECT_AUTOMATIONS_CHANGED,read)}
+  },[project?.id])
+  useEffect(()=>{
     if(view!=='log')return
     if(!graph)void refreshGraph(graphLimit)
     const changed=()=>void refreshGraph(graphLimit)
@@ -210,6 +230,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
 
   if(!project)return <><p class="drawer-status">no Project selected</p><p class="drawer-empty">Select a Project to inspect its repository.</p></>
 
+  const provenanceOff=provenancePermitted===false
   const mainTree=overview?.worktrees.find(tree=>tree.main)
   const linkedWorktrees=overview?.worktrees.filter(tree=>!tree.main)||[]
   const comparisonLabel=overview?.comparison.available?(overview.comparison.display||overview.comparison.ref):null
@@ -413,7 +434,19 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section></>}</>}
     {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">
       {provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}
-      {!provenanceError&&provenance.length===0&&<p class="git-state">No session-to-commit associations recorded yet.</p>}
+      {/* This read is written by the `provenance_graph` consumer, which is a per-Project
+          opt-in that is off until someone turns it on. Without this the segment drew
+          "No session-to-commit associations recorded yet" on a Project that will never
+          record one — an inert surface rendering as merely empty, which is the single
+          thing the setting-link rule forbids. */}
+      {provenanceOff&&<GrantGate ids={['project.provenanceGraph']} projectId={project.id}
+        heading="This Project has not permitted the provenance graph."
+        onGranted={()=>{forgetProjectAutomations(project.id);void refreshProvenance()}}>
+        <p>It records which session and which run produced each commit, from evidence
+        swe-mux already captures. Commits made before it is on are not attributed
+        retroactively.</p>
+      </GrantGate>}
+      {!provenanceError&&!provenanceOff&&provenance.length===0&&<p class="git-state">No session-to-commit associations recorded yet.</p>}
       {/* One card per commit, not one per row. The ledger stores a row per
           session because that is what each piece of evidence is about; read back
           flatly, ten occupancy rows bury the one naming who made the commit. */}

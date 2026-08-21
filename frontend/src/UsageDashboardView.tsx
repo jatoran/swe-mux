@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { GrantGate } from './GrantGate'
 import { WorkloadTelemetry } from './WorkloadTelemetry'
 import { AutomationSpendView } from './AutomationSpendView'
 import { harnesses } from './harnessRegistry'
@@ -204,10 +205,15 @@ export function UsageTokensView({onConfigure}:{onConfigure:()=>void}) {
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
-  const historical=!usage?.enabled?<div class="usage-empty"><strong>Usage analytics is disabled.</strong>
-    <p>Enable ccusage in Settings, save, then refresh this dashboard.</p>
-    <button onClick={onConfigure}>Configure usage analytics</button>
-  </div>:sourceList.length===0?<div class="usage-empty"><strong>No usage sources have been detected.</strong>
+  // "Enable ccusage in Settings, save, then refresh this dashboard" was three steps in
+  // two overlays for one boolean, and it is the whole reason gates exist.
+  const historical=!usage?.enabled?<GrantGate ids={['usage.ccusage']}
+    heading="Usage analytics is switched off."
+    onGranted={async()=>{setUsage(await api<UsageStatus>('GET','/api/usage'))}}>
+    <p>swe-mux reads historical token totals by running the installed <code>ccusage</code>
+    against each harness's own records. Turning it on reads nothing until you refresh
+    below, and it never sends a transcript anywhere.</p>
+  </GrantGate>:sourceList.length===0?<div class="usage-empty"><strong>No usage sources have been detected.</strong>
     <p>Refresh to scan every source supported by the installed ccusage version.</p>
     <button disabled={!!refreshing} onClick={()=>void refreshAll()}>Refresh agent usage</button>
   </div>:visibleSources.length===0?<div class="usage-empty"><strong>Every historical source is hidden.</strong>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
+import { GrantButton, GrantGate } from './GrantGate'
 import {
   isActiveLand,
   landStateLabel,
@@ -131,6 +132,18 @@ export function GitLandPanel({ project, worktrees }: Props) {
   return <section class="git-land" aria-label="Land queue">
     {error && <p class="git-state error" role="alert">{error}</p>}
 
+    {/* Before the verification gate, because it is further out: the sweep that runs the
+        pipeline checks this one switch and stops dead, so with it off a request enqueues
+        and then sits at `queued` forever. That looked identical to a busy queue, and the
+        switch had no control in any overlay to reach either. */}
+    {queue && !queue.installedEnabled && <GrantGate ids={['automation.landQueue']}
+      heading="The land queue is switched off for this install."
+      onGranted={refresh}>
+      <p>Branches can still be queued here, and nothing will move them: the daemon's
+      sweep is the only thing that reconciles, verifies, and fast-forwards, and it stops
+      on this switch before reading anything else.</p>
+    </GrantGate>}
+
     {/* The gate first. Nothing below it can run until these bytes are approved, so a
         queue drawn above an unapproved gate would read as ready when it is not. */}
     <div class={`git-land-gate ${gate?.approved ? 'ok' : 'warn'}`}>
@@ -184,6 +197,43 @@ export function GitLandPanel({ project, worktrees }: Props) {
     {history.length > 0 && <details class="git-land-history">
       <summary>{history.length} finished</summary>
       {history.map(request => <LandRow key={request.id} request={request} busy={busy} />)}
+    </details>}
+
+    {/* Who besides you may start one. This is the second half of the land queue's
+        authority and it had no control anywhere until now — only `land_grant` in a
+        committed TOML file, which made "a human approves each one" both unreachable to
+        change and impossible to discover. It belongs beside the verification gate
+        because it is the same question asked of a different actor. */}
+    {queue && project && <details class="git-land-authority">
+      <summary>
+        <span>Agent-initiated landing</span>
+        <em class={queue.projectEnabled && queue.agentGrant === 'granted' ? 'ok' : 'warn'}>{
+          !queue.projectEnabled ? 'not permitted'
+            : queue.agentGrant === 'granted' ? 'starts without asking' : 'you approve each one'
+        }</em>
+      </summary>
+      <p>Your own Land button never consults this — you are the authority it defers to.
+      It decides what happens when an agent in a worktree here calls
+      <code>mux.request_land</code> instead.</p>
+      {!queue.projectEnabled
+        ? <GrantGate ids={['project.landQueue']} projectId={project.id}
+            heading="This Project has not permitted the land queue for agents."
+            onGranted={refresh}>
+            <p>With it off, an agent's <code>request_land</code> is refused outright.
+            With it on, the request is still drafted for you to approve until you raise
+            the authority below.</p>
+          </GrantGate>
+        : queue.agentGrant === 'draft'
+          ? <p class="git-land-authority-row">Each agent request writes a row you decide,
+            here.{' '}
+            <GrantButton id="project.landGrant" projectId={project.id} onGranted={refresh}
+              title="Lets an agent start a land without waiting for you · writes to this Project’s .swe-mux/config.toml"
+            >Let agents start one directly</GrantButton>{' '}
+            (still fast-forward-only, still gated on the approved verification command,
+            and still inside {queue.hourlyBudget} requests per session per hour).</p>
+          : <p class="git-land-authority-row">Agents start lands directly, inside
+            {' '}{queue.hourlyBudget} requests per session per hour. Lower it back to
+            approve-each-one in this Project's settings.</p>}
     </details>}
   </section>
 }

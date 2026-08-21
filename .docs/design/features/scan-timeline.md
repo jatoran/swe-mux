@@ -239,7 +239,6 @@ The real semantic producer is exercised by hand with an OpenRouter key, because 
 ```text
 GET  /api/sessions/{session_id}/scan-timeline
 PUT  /api/sessions/{session_id}/scan-timeline          {enabled: boolean}
-PUT  /api/sessions/{session_id}/scan-timeline/project  {enabled: boolean}
 POST /api/sessions/{session_id}/scan-timeline/scan
 POST /api/sessions/{session_id}/scan-timeline/backfill
 GET  /api/sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1

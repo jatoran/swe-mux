@@ -65,8 +65,8 @@ from .automation import (
     serialize_rules,
     validate_observer_result,
 )
+from .automation_registry import RECOMMENDED_PROJECT_AUTOMATIONS
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
-from .automation_registry import dependency_closure
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
@@ -86,6 +86,13 @@ from .git_monitor import GitMonitor, _git
 from .git_operations import run_git_mutation
 from .git_projects import ProjectIdentity, resolve_project
 from .git_provenance import GitProvenanceService, summarize_git_provenance
+from .grants import (
+    GRANTABLE_INSTALL_KEYS,
+    GRANTABLE_PROJECT_VALUES,
+    GrantRefusal,
+    plan_grant,
+    project_values_after,
+)
 from .harness import (
     AGENT_BACKENDS,
     HARNESSES,
@@ -817,6 +824,10 @@ def create_app(
             ),
             web.get("/api/projects/{project_id}/automations", get_project_automations),
             web.put("/api/projects/{project_id}/automations", put_project_automations),
+            # The one write behind every gate notice. Additive by construction, so it
+            # is safe to reach from a drawer pane; see `grants.py`.
+            web.post("/api/grants", apply_grants),
+            web.get("/api/grants", describe_grants),
             # Scheduled runs. Definitions are Project-owned (a spawn belongs to
             # exactly one Project) while the listing is also reachable unscoped,
             # because "what fires tonight" spans them.
@@ -894,10 +905,6 @@ def create_app(
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
             web.put("/api/sessions/{sid}/scan-timeline", put_session_scan_timeline),
-            web.put(
-                "/api/sessions/{sid}/scan-timeline/project",
-                put_session_scan_timeline_project,
-            ),
             web.post("/api/sessions/{sid}/scan-timeline/scan", scan_session_now),
             web.post(
                 "/api/sessions/{sid}/scan-timeline/backfill",
@@ -5161,6 +5168,10 @@ def _automation_registry_payload() -> list[dict[str, Any]]:
             "label": automation.label,
             "requires": list(automation.requires),
             "implemented": automation.implemented,
+            # Whether switching this on can cost money. Read by the toggle surface and
+            # by every gate that offers it, so "free" and "spends" are one fact from
+            # one source rather than a claim each surface makes for itself.
+            "spends": automation.spends,
         }
         for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
     ]
@@ -5290,6 +5301,185 @@ async def put_project_automations(request: web.Request) -> web.Response:
         )
     await request.app["events"].emit("project_configuration_changed", project_id=project.id)
     return await get_project_automations(request)
+
+
+async def describe_grants(request: web.Request) -> web.Response:
+    """What a gate is allowed to switch on. Read-only, and the contract both ends check.
+
+    The browser holds its own catalogue of gates (`frontend/src/grants.ts`) because a
+    gate has to render its disclosure before any request is made. This read is what
+    stops the two copies drifting: a test asserts every grant the browser can offer is
+    one the daemon will accept, so a renamed switch fails a test instead of failing at
+    the click - the same rule `settingTargets.test.ts` already applies to deep links.
+    """
+    return json_response(
+        {
+            "install": sorted(GRANTABLE_INSTALL_KEYS),
+            "values": {
+                key: list(allowed) for key, allowed in sorted(GRANTABLE_PROJECT_VALUES.items())
+            },
+            "automations": _automation_registry_payload(),
+            "recommended_project_automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
+        }
+    )
+
+
+async def apply_grants(request: web.Request) -> web.Response:
+    """Turn things on from the surface that cannot work without them.
+
+    The one write behind every gate notice in the app. A gate states what is off, what
+    turning it on would do, and offers this - which is the Land queue's verification
+    approval generalised: a deliberate act, made where the block is, recorded once.
+
+    Three properties are what make a write reachable from a drawer pane safe:
+
+    - **Additive only.** `grants.plan_grant` refuses anything but "on", so no surface
+      but the owning editor can take a permission away. Many granters, one owner.
+    - **Allowlisted.** Only `GRANTABLE_INSTALL_KEYS` and `GRANTABLE_PROJECT_VALUES`,
+      both checked against `Config`/`project_files` at import.
+    - **Project first, then install.** The Project write is the one that can fail (a
+      stale revision, a read-only checkout, a malformed file), so it goes first and a
+      failure leaves nothing applied. The install write is validated `Config` and
+      effectively cannot; if it somehow does, the response still names what landed.
+      Rolling a Project file back would be a second write that can fail in turn.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("grant request body must be an object")
+    config: Config = request.app["config"]
+    install_request = body.get("install") or {}
+    if not isinstance(install_request, dict):
+        raise ValueError("install must be a table of switches")
+    automations_request = body.get("automations") or []
+    if not isinstance(automations_request, list) or not all(
+        isinstance(item, str) for item in automations_request
+    ):
+        raise ValueError("automations must be a list of automation ids")
+    values_request = body.get("values") or {}
+    if not isinstance(values_request, dict):
+        raise ValueError("values must be a table of Project fields")
+
+    project = None
+    project_config: dict[str, Any] | None = None
+    current_automations: dict[str, bool] = {}
+    current_values: dict[str, Any] = {}
+    if automations_request or values_request:
+        project_id = str(body.get("project_id") or "")
+        project = request.app["projects"].projects.get(project_id)
+        if project is None:
+            raise ValueError("a Project grant needs a known project_id")
+        project_config = await read_project_config(
+            project.root, project=_registered_identity(project)
+        )
+        if project_config["status"] == "malformed":
+            return json_response(
+                {
+                    "error": "this Project's .swe-mux/config.toml could not be parsed",
+                    "code": "project_config_malformed",
+                },
+                409,
+            )
+        if project_config["status"] == "read-only":
+            return json_response(
+                {
+                    "error": "this Project's .swe-mux/config.toml is read-only",
+                    "code": "project_config_read_only",
+                },
+                409,
+            )
+        current_values = dict(project_config["values"])
+        current_automations = {
+            key: bool(value)
+            for key, value in (current_values.get("automations") or {}).items()
+            if key in AUTOMATION_REGISTRY
+        }
+
+    try:
+        plan = plan_grant(
+            install=install_request,
+            automations=automations_request,
+            values=values_request,
+            current_install={
+                key: getattr(config, key, None) for key in GRANTABLE_INSTALL_KEYS
+            },
+            current_automations=current_automations,
+            current_values=current_values,
+        )
+    except GrantRefusal as refusal:
+        return json_response({"error": refusal.message, "code": refusal.code}, 409)
+
+    applied_automations = sorted(plan.automations)
+    applied_values = sorted(plan.values)
+    if project is not None and project_config is not None and (plan.automations or plan.values):
+        merged = project_values_after(current_values, plan, current_automations)
+        try:
+            await write_project_config(
+                project.root,
+                merged,
+                str(body.get("revision") or project_config["revision"]),
+                project=_registered_identity(project),
+            )
+        except ValueError as exc:
+            if "changed externally" in str(exc):
+                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            raise
+        if gate_cache := request.app.get("automation_gate_cache"):
+            gate_cache.clear()
+        if "scan_timeline" in plan.automations and request.app.get("project_contexts") is not None:
+            # Parity with the registry's own write: permitting the timeline creates the
+            # blank Project context file the scans read, so the first scan is not the
+            # thing that discovers it is missing.
+            await asyncio.to_thread(
+                request.app["project_contexts"].ensure,
+                ProjectContext(project_id=project.id, project_root=project.root),
+            )
+        await request.app["events"].emit(
+            "project_configuration_changed", project_id=project.id
+        )
+
+    applied_install: list[str] = []
+    if plan.install:
+        hot, restart = update_config(config, dict(plan.install))
+        applied_install = sorted(plan.install)
+        _apply_runtime_config(request.app, hot)
+        await request.app["events"].emit(
+            "configuration_changed", source="grant", changed=sorted(hot | restart)
+        )
+
+    if not plan.empty:
+        # One audit record for the whole act, the way an approved verification command
+        # leaves exactly one `land_verify_approved`. Without it a permission raised from
+        # a drawer pane would be indistinguishable, afterwards, from one that was
+        # always on.
+        await request.app["events"].emit(
+            "grant_applied",
+            source="user",
+            project_id=project.id if project is not None else None,
+            keys=plan.audit_keys(),
+            spends=plan.spends,
+        )
+        log.info(
+            "grant applied project_id=%s keys=%s spends=%s",
+            project.id if project is not None else "-",
+            ",".join(plan.audit_keys()),
+            plan.spends,
+        )
+
+    result: dict[str, Any] = {
+        "applied": {
+            "install": applied_install,
+            "automations": applied_automations,
+            "values": applied_values,
+        },
+        "spends": plan.spends,
+        "config": config.public_dict(),
+    }
+    if project is not None:
+        result["project"] = {
+            **await _project_automation_state(project),
+            "automations": _automation_registry_payload(),
+        }
+    return json_response(result)
 
 
 def _schedule_service(request: web.Request) -> ScheduleService:
@@ -10785,60 +10975,13 @@ async def put_session_scan_timeline(request: web.Request) -> web.Response:
     return json_response(await service.snapshot(request.match_info["sid"]))
 
 
-async def put_session_scan_timeline_project(request: web.Request) -> web.Response:
-    body = await request.json()
-    if not isinstance(body.get("enabled"), bool):
-        raise ValueError("enabled must be a boolean")
-    sid = request.match_info["sid"]
-    session = request.app["sessions"].resolve(sid)
-    project = request.app["projects"].projects.get(session.record.project_id or "")
-    if project is None:
-        raise ValueError("the session has no registered Project")
-    identity = _registered_identity(project)
-    current = await read_project_config(project.root, project=identity)
-    if current["status"] == "malformed":
-        raise ValueError("the Project config is malformed")
-    values = dict(current["values"])
-    requested = {
-        key
-        for key, value in (values.get("automations") or {}).items()
-        if value and key in AUTOMATION_REGISTRY
-    }
-    enabled = bool(body["enabled"])
-    if enabled:
-        requested.add("scan_timeline")
-        requested.update(dependency_closure("scan_timeline"))
-    else:
-        requested = {
-            key
-            for key in requested
-            if key != "scan_timeline"
-            and "scan_timeline" not in dependency_closure(key)
-        }
-        run = await request.app["automation_store"].scan_run(
-            str(session.record.agent_run_id or "")
-        )
-        if run and run.get("enabled"):
-            await request.app["scan_timeline"].set_enabled(sid, False)
-    values["automations"] = {key: True for key in sorted(requested)}
-    await write_project_config(
-        project.root,
-        values,
-        current["revision"],
-        project=identity,
-    )
-    request.app["automation_gate_cache"].clear()
-    if enabled:
-        await asyncio.to_thread(
-            request.app["project_contexts"].ensure,
-            ProjectContext(project_id=project.id, project_root=project.root),
-        )
-    await request.app["events"].emit(
-        "project_configuration_changed",
-        source="user",
-        project_id=project.id,
-    )
-    return json_response(await request.app["scan_timeline"].snapshot(sid))
+# `PUT /api/sessions/{sid}/scan-timeline/project` used to live here: a session-scoped way
+# to flip its Project's scan-timeline opt-in, written for a Timeline-tab shortcut that was
+# taken out again. It had no caller in the browser and no test, and it was a third writer
+# of one file - a read-then-write with no caller-supplied revision, so it could silently
+# overwrite an open Project editor. `POST /api/grants` does the enable half properly
+# (allowlisted, revision-checked, one audit record) and the Projects registry owns the
+# disable half, which is where taking a permission away belongs.
 
 
 async def scan_session_now(request: web.Request) -> web.Response:
@@ -13388,7 +13531,12 @@ async def list_land_requests(request: web.Request) -> web.Response:
     """The queue, for the Git tab's Land panel. Read-only."""
     service = request.app["land_queue"]
     project_id = request.query.get("project_id") or None
-    return json_response(await service.status(project_id=project_id))
+    project = request.app["projects"].projects.get(project_id or "")
+    return json_response(
+        await service.status(
+            project_id=project_id, project_root=project.root if project else None
+        )
+    )
 
 
 async def request_land(request: web.Request) -> web.Response:

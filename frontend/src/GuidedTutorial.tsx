@@ -4,7 +4,7 @@ import { matchesTutorialAction, placeTutorialCard, TUTORIAL_ACTION_EVENT, type T
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 
-export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'features'|'feature-menu'|'ready'
+export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'gates'|'features'|'feature-menu'|'ready'
 
 type Props={
   hasProject:boolean
@@ -71,6 +71,11 @@ export function GuidedTutorial({hasProject,onNavigate,onExit,onComplete}:Props){
     // anchor strands the tour with only Exit and an ambiguous one spotlights the wrong
     // control. (Mobile with the drawer shut still has none; that predates this anchoring.)
     {id:'resources',eyebrow:'PROJECT RESOURCES',title:'Open Project notes.',selectors:['[data-tutorial="project-notes"]'],action:{kind:'click',selectors:['[data-tutorial="project-notes"]'],hint:'Open Notes'},targetLabel:'OPEN NOTES',body:<><p>Open <strong>Notes</strong> to create Project-owned working documents. Notes can stay in this panel or open as ordinary workspace tabs beside any terminal.</p><p>The file browser lives in the same panel.</p></>},
+    // The tour used to end having never mentioned that most of the drawer's analysis
+    // surfaces start switched off, so a new user met them one empty pane at a time and
+    // read "off" as "broken". Explanatory rather than click-gated: the gates themselves
+    // are the interaction, and they are where the operator will be when it matters.
+    {id:'gates',eyebrow:'SWITCHED OFF ON PURPOSE',title:'Anything that costs something starts off.',body:<><p>swe-mux keeps the expensive and interruptive things off until you ask for them: reading transcripts, ranking what needs you, letting an agent act on its own. So a panel that has never been switched on says so, instead of looking empty.</p><p>Every one of those notices turns the thing on where you are standing — it names the scope, says where the change is written, and tells you whether it can cost money before you press it. You never have to go and find a settings page.</p></>},
     {id:'features',eyebrow:'FIND ANYTHING',title:'Open the main menu.',selectors:['[data-tutorial="menu"]'],action:{kind:'click',selectors:['[data-tutorial="menu"]'],hint:'Click menu'},targetLabel:'CLICK MENU',body:<><p>The main menu is the map to History, notes, processes, prompt templates, usage, notifications, automation, and Settings.</p><p>Open it now to see those real destinations.</p></>},
     {id:'feature-menu',eyebrow:'MAIN FEATURES',title:'Everything else stays one click away.',selectors:['[data-tutorial="main-menu"]'],body:<><p><strong>Utilities</strong> holds the viewers — History, notes, every running process, prompt templates, the fleet queue, usage and notifications. Below it sit the things you configure: Actions, automation, and Settings.</p><p>Press <kbd>Ctrl Alt P</kbd> for the command palette. <kbd>Ctrl Alt T</kbd> opens a terminal; <kbd>Ctrl Alt ←/→</kbd> moves focus between panes.</p></>},
     {id:'ready',eyebrow:'TOUR COMPLETE',title:'You are ready to build.',body:<><p>Your Projects and layouts persist, and long-running sessions survive browser reloads or a hidden desktop window.</p><p>Restart this walkthrough any time from <strong>Settings → General → Reset &amp; run tutorial</strong>.</p></>},

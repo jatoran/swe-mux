@@ -73,7 +73,13 @@ test('Project-wide scan settings live in Project settings, not the drawer tab', 
   // The drawer tab is session-scoped. Hosting the Project permission and the
   // Project context editor there meant every session in a Project showed the
   // same two controls, competing with the tab's actual job.
-  assert.ok(!timeline.includes('/scan-timeline/project'))
+  //
+  // A *gate* is not that, and the distinction is what the rewritten assertion below
+  // pins: a gate is drawn only while the timeline cannot work and disappears the
+  // moment it can, so a working Project never sees a Project-wide control in a
+  // session-scoped pane. What the old rule really forbade was a standing control,
+  // and stating it as "no Project write from here at all" also forbade the one
+  // arrangement that fixes the two-overlay walk it created.
   assert.ok(!timeline.includes('/project-context'))
   assert.ok(!timeline.includes('Copy setup prompt'))
   assert.ok(timeline.includes('Scan full session'))
@@ -84,6 +90,23 @@ test('Project-wide scan settings live in Project settings, not the drawer tab', 
   assert.ok(projects.includes('ProjectContextEditor'))
   assert.ok(editor.includes('/project-context'))
   assert.ok(editor.includes('Copy setup prompt'))
+})
+
+test('the timeline grants both switches at once, and only while it is off', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  // Both rungs in one act. Offering only the outer one meant turning it on, walking
+  // back, and meeting a second gate with a second link to a second overlay.
+  assert.ok(timeline.includes("'automation.scanTimeline' as const"))
+  assert.ok(timeline.includes("'project.scanTimeline' as const"))
+  assert.ok(timeline.includes('<GrantGate'))
+  // Inside the `!allowed` branch and nowhere else, which is what keeps the Project
+  // permission from becoming a standing control in a session-scoped tab.
+  const [beforeGate, afterGate] = timeline.split('if(!allowed)')
+  assert.ok(!beforeGate.includes('<GrantGate'), 'the gate must not render above the off check')
+  assert.ok(afterGate.includes('<GrantGate'))
+  // The unarmed notice named a Project switch and offered nothing to press, which is
+  // the defect the setting-link rule exists to remove.
+  assert.ok(timeline.includes('id="project.scanTimelineAutoArm"'))
 })
 
 test('a Project can arm every new conversation instead of being re-armed by hand', () => {

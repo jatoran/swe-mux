@@ -47,6 +47,8 @@ import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
 import { SettingLink } from './SettingLink'
+import { INSTALL_CONFIG_CHANGED } from './installSwitches'
+import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
 import {
@@ -2072,6 +2074,11 @@ export function App() {
             // has to reach this tab's copy of *every* config-derived setting, not
             // the subset this handler happened to list.
             void loadConfig(false)
+            // The drawer's gate notices read the install switches from their own cached
+            // copy (`installSwitches.ts`), which has to be dropped here too — otherwise
+            // a switch turned on elsewhere leaves this tab's gate standing over a
+            // surface that now works.
+            window.dispatchEvent(new CustomEvent(INSTALL_CONFIG_CHANGED))
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
           if(event.type==='project_used')applyProjectUse(String(event.payload?.project_id||''),Number(event.payload?.last_used_at||0))
@@ -3353,7 +3360,7 @@ export function App() {
     if(step==='accounts'){
       setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(false);openSettings('Accounts');return
     }
-    if(['run','run-choice','workspace','new-tab','tabs','splits','resources','features','feature-menu','ready'].includes(step)){
+    if(['run','run-choice','workspace','new-tab','tabs','splits','resources','gates','features','feature-menu','ready'].includes(step)){
       setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
       const first=projectsRef.current[0]
       if(first&&!projectsRef.current.some(project=>project.id===projectId))setProjectId(first.id)
@@ -3370,6 +3377,27 @@ export function App() {
     })
     setProjects(items=>[...items,next]);setProjectId(next.id);setProjectCreateOpen(false);setFolderPickerOpen(false)
     emitTutorialAction({action:'project-created'})
+    // The starting set, through the ordinary grant path so it leaves the same audit
+    // record as one pressed from a gate. After the registration and never before it: a
+    // Project that exists with nothing opted in is a normal state, and one that failed
+    // to register has nothing to opt in. `restored` is skipped because that Project
+    // already has whatever table it was registered with.
+    if(projectCreate.automations&&!(next as Project&{restored?:boolean}).restored){
+      try{
+        const catalogue=await api<{recommended_project_automations:string[]}>('GET','/api/grants')
+        if(catalogue.recommended_project_automations.length){
+          await api('POST','/api/grants',{
+            project_id:next.id,
+            automations:catalogue.recommended_project_automations,
+          })
+          forgetProjectAutomations(next.id)
+        }
+      }catch(cause){
+        // Reported, never unwound: the Project is registered and usable, and every one
+        // of these switches is reachable from the surface that needs it.
+        setError(`The Project was created; its analysis automations were not turned on (${cause instanceof Error?cause.message:String(cause)}). Turn them on from any Activity tab.`)
+      }
+    }
     // The registration is already durable, so a setup command that fails to launch is
     // reported without unwinding the Project the user just made.
     const scripts=projectCreate.scripts.filter(id=>initScripts.some(script=>script.id===id))
@@ -7037,6 +7065,17 @@ export function App() {
             <label>New folder name<input value={projectCreateFolder(projectCreate)} onInput={event=>setProjectCreate(value=>({...value,folder:event.currentTarget.value,folderTouched:true}))} placeholder={suggestFolderName(projectCreate.name)||'horizon'} /></label>
           </>}
         <label>Group<select value={projectCreate.group_id} onChange={event=>setProjectCreate(value=>({...value,group_id:event.currentTarget.value}))}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>
+        {/* One choice instead of twenty checkboxes found later. Everything in this set
+            reads transcripts swe-mux already stores and never calls a model, which is
+            what makes it safe to default on; the scan timeline is the one that spends
+            and is deliberately not in it. */}
+        <label class="check project-create-automations">
+          <input type="checkbox" checked={projectCreate.automations} onChange={event=>setProjectCreate(value=>({...value,automations:event.currentTarget.checked}))} />
+          <span><strong>Turn on the free analysis automations</strong>
+          <small>Change map, findings detectors, and commit provenance, for this Project.
+          Free — they read what swe-mux already captures and never call a model. Recorded
+          in the Project’s <code>.swe-mux/config.toml</code>, and changeable any time.</small></span>
+        </label>
         {!!initScripts.length&&<details class="project-init-scripts">
           <summary>Setup commands · {projectCreate.scripts.length} selected</summary>
           {initScripts.map(script=><label class="check" key={script.id}>

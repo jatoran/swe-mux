@@ -278,6 +278,8 @@ PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
+GET     /grants
+POST    /grants   {install?, project_id?, automations?, values?, revision?}
 GET     /schedules?project_id=                every schedule, or one Project's
 POST    /schedules/preview                    {definition}          next fire times, unsaved
 GET     /projects/{project_id}/schedules
@@ -290,7 +292,6 @@ GET     /projects/{project_id}/project-context
 PUT     /projects/{project_id}/project-context {markdown, revision}
 GET     /sessions/{session_id}/scan-timeline
 PUT     /sessions/{session_id}/scan-timeline  {enabled}
-PUT     /sessions/{session_id}/scan-timeline/project {enabled}
 POST    /sessions/{session_id}/scan-timeline/scan
 POST    /sessions/{session_id}/scan-timeline/backfill
 DELETE  /sessions/{session_id}/scan-timeline/backfill
@@ -1862,6 +1863,22 @@ registered Project in sidebar order — `project_id`, `project_name`, config `st
 `scan_timeline_auto_enable`. Projects that opted into nothing are listed rather than omitted.
 Drawn by the Automation dashboard's `projects` view; it has no write half — the
 revision-checked `PUT /api/projects/{project_id}/automations` stays the only editor.
+
+`POST /api/grants` is the one write behind every gate notice in the app: the way a surface
+that cannot work turns on the thing it needs without sending the reader to an overlay
+(`features/setting-links.md`). It takes `install` (a table of install switches), `project_id`
+plus `automations` (ids, whose dependency closure the daemon computes) and/or `values` (typed
+Project fields), and an optional `revision`. It is **additive only** — a `false`, a `draft`,
+or an `off` is refused with `grant_is_additive`, so no surface but the owning editor can take
+a permission away, which is what lets many surfaces grant while one owns each switch. Keys
+outside `GRANTABLE_INSTALL_KEYS` / `GRANTABLE_PROJECT_VALUES` are refused with `not_grantable`;
+both sets are validated against `Config` and `PROJECT_CONFIG_FIELDS` at import. The whole
+request is validated before the first write and a refusal writes nothing; the Project write
+goes first because it is the one that can fail. Success returns `applied` (per scope),
+`spends`, the public config, and the Project's resolved automation state, and emits one
+`grant_applied` audit event listing every scope-qualified key. `GET /api/grants` returns the
+same allowlists plus the registry and `recommended_project_automations`, and is the contract
+`frontend/test/grants.test.ts` holds the browser's catalogue against.
 
 `GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).

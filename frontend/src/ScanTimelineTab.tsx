@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { SettingLink } from './SettingLink'
+import { GrantButton, GrantGate } from './GrantGate'
+import type { GrantId } from './grants'
 import type { Session } from './types'
 
 type Coverage = {messages_seen:number;facts_seen:number;truncated:boolean;remaining?:number}
@@ -146,26 +147,38 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
   const running=state.backfill.state==='running'
   const projectButton=<button class="scan-project-link" disabled={!projectId}
     onClick={()=>projectId&&onOpenProjectSettings(projectId)}>Project settings</button>
-  // Two switches gate this, in order, and the off state names the one that is actually
-  // stopping it — plus the control that flips it. The install switch lives in
-  // Settings → Automation with the scan budgets; the link's target carries the route.
-  if(!allowed)return <section class="scan-timeline-panel">
-    <header>
-      <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
-      {projectButton}
-    </header>
-    <div class="scan-timeline-off setting-gate">
-      <p><strong>{state.global_enabled
-        ? 'This Project has not permitted Scan timeline.'
-        : 'Scan timeline is switched off for this install.'}</strong></p>
-      <p>{state.global_enabled
-        ? 'Permission, the Project context sent with each scan, and the option to arm every new conversation automatically all live in the Project’s settings.'
-        : 'Nothing is scanned anywhere while the install switch is off. Turn it on first, then permit this Project.'}</p>
-      {state.global_enabled
-        ? <SettingLink target="project.scanTimeline" projectId={projectId||undefined}>Permit Scan timeline for this Project</SettingLink>
-        : <SettingLink target="automation.scanTimeline">Turn on Scan timeline for this install</SettingLink>}
-    </div>
-  </section>
+  // Two switches gate this, and both are granted here in one act. Naming only the outer
+  // one meant turning it on, walking back, and finding a second gate with a second link
+  // to a second overlay - two full round trips to see one pane. The gate is drawn only
+  // while the timeline is off and vanishes once it is on, so the Project-wide permission
+  // never becomes a standing control in a session-scoped tab.
+  if(!allowed){
+    const missing:GrantId[]=[
+      ...(state.global_enabled?[]:['automation.scanTimeline' as const]),
+      ...(state.project_enabled?[]:['project.scanTimeline' as const]),
+    ]
+    return <section class="scan-timeline-panel">
+      <header>
+        <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
+        {projectButton}
+      </header>
+      <div class="scan-timeline-off">
+        <GrantGate
+          ids={missing}
+          projectId={projectId||undefined}
+          heading={state.global_enabled
+            ? 'This Project has not permitted Scan timeline.'
+            : 'Scan timeline is switched off for this install.'}
+          confirmLabel="Turn on Scan timeline"
+          onGranted={load}
+        >
+          <p>A readable behavioural history of each conversation here: what was asked,
+          what the agent was doing, what it claimed, and what stopped it. Turning it on
+          scans nothing yet — this conversation is armed separately, from this tab.</p>
+        </GrantGate>
+      </div>
+    </section>
+  }
   const events=[
     ...state.records.map(record=>({kind:'record' as const,at:record.t1,record})),
     ...state.boundaries.map(boundary=>({kind:'boundary' as const,at:boundary.created_at,boundary})),
@@ -194,7 +207,14 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
       ? 'Not armed yet. This Project arms new conversations automatically, so it starts on the next turn.'
       : state.auto_enable
         ? 'Switched off for this conversation. This Project arms new ones automatically, but a conversation you turned off stays off.'
-        : 'Off for this conversation. It resets on /clear, /new, or session end — turn on “arm every new conversation” in Project settings to stop repeating this.'}</p>}
+        : <>Off for this conversation. It resets on /clear, /new, or session end.{' '}
+          {/* Named the switch and offered nothing, which is the defect the setting-link
+              rule exists to remove. It is a Project-wide field, so it is granted here
+              and still edited (and withdrawn) in the Project's own settings. */}
+          <GrantButton id="project.scanTimelineAutoArm" projectId={projectId||undefined}
+            onGranted={load}
+            title="Arms every new conversation in this Project · writes to the Project’s .swe-mux/config.toml"
+          >Arm every new conversation here</GrantButton>{' '}to stop repeating this.</>}</p>}
     {state.run_enabled&&state.skip_reason&&<p class="scan-gate scan-stopped">Not scanning: {state.skip_reason}.</p>}
     {error&&<p class="usage-error">{error}</p>}
     {state.backfill.state!=='idle'&&<p class={`scan-backfill-status ${state.backfill.state}`}>

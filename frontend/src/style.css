@@ -1560,6 +1560,39 @@ body {
 .setting-gate{display:grid;justify-items:start;gap:7px;margin:8px 0;padding:10px;border:1px solid var(--line);background:color-mix(in srgb,var(--green) 5%,transparent)}
 .setting-gate p{margin:0;color:var(--muted);line-height:1.5}
 .setting-gate strong{color:var(--text)}
+/* A gate that grants in place rather than linking out. Everything between the statement
+   and the button is disclosure: which scopes change, where each change is written, what
+   the dependency closure drags in, and whether any of it spends. The Land queue's
+   verification gate reads the same way and is the shape this generalises. */
+.grant-gate{justify-items:stretch;gap:9px}
+.grant-gate-steps{display:grid;gap:5px;margin:0;padding:0;list-style:none}
+.grant-gate-steps li{display:grid;grid-template-columns:auto 1fr;align-items:baseline;column-gap:8px}
+/* The scope chip is the first thing read and the thing most often got wrong, so it is
+   fixed-width and monospaced: "all projects" and "this Project" line up under each
+   other and cannot be mistaken for one another at a glance. */
+.grant-gate-scope{min-width:84px;padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:.85em;text-align:center;white-space:nowrap}
+.grant-gate-what{color:var(--text)}
+.grant-gate-steps small{grid-column:2;color:var(--muted);opacity:.85}
+.grant-gate-closure{color:var(--muted)}
+.grant-gate-cost{margin:0;color:var(--muted)}
+.grant-gate-cost.spends{color:var(--warn,var(--text))}
+.grant-gate-error{margin:0;color:var(--danger,#c33)}
+.grant-gate-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.grant-gate-confirm{min-height:30px;padding:0 12px;border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}
+.grant-gate-confirm:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 30%,transparent)}
+.grant-gate-confirm:disabled{opacity:.55}
+.findings-gate-alt{margin:0;color:var(--muted)}
+/* The `spends` chip on a Project opt-in row. Marked rather than unmarked, because most
+   of that list is free and a chip on every row would say nothing. */
+.project-setting-chip.spends{border-color:var(--warn,var(--line));color:var(--warn,var(--muted))}
+/* Who besides the operator may start a land. A details block rather than a standing
+   panel: it is the second question, and the queue above it is the first. */
+.git-land-authority{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+.git-land-authority summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;color:var(--muted)}
+.git-land-authority summary em{font-style:normal;color:var(--muted)}
+.git-land-authority summary em.ok{color:var(--green,var(--text))}
+.git-land-authority summary em.warn{color:var(--warn,var(--text))}
+.git-land-authority p{margin:6px 0;color:var(--muted);line-height:1.5}
 .settings-body{min-height:0;overflow:hidden!important;display:grid!important;grid-template-columns:185px minmax(0,1fr)!important;align-content:stretch!important;gap:0!important;background:var(--panel)!important}
 .settings-tabs{min-height:0;overflow:auto;display:flex;flex-direction:column;padding:6px;border-right:1px solid var(--line);background:var(--bg)}
 /* The extra left padding is the group indent: entries sit visibly inside the heading

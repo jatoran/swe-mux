@@ -109,6 +109,7 @@ type Config = {
   // Config-file only. The Project context card has no Settings control of its own,
   // so this is read to report the model it resolves to, never written here.
   project_card_model:string
+  land_queue_enabled:boolean;land_hourly_budget:number
   scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
   scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
@@ -612,7 +613,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // does not have yet.
     setWslMessage(enabled?'Enabling…':'Disabling…')
     try{
-      await api('PUT','/api/config',{values:{wsl_bridge_enabled:enabled}})
+      // `PATCH /api/config` with a flat field map. It was `PUT` with a `{values:{…}}`
+      // wrapper, which is neither the method the daemon routes nor the body it parses,
+      // so this switch answered 405 every time it was pressed.
+      await api('PATCH','/api/config',{wsl_bridge_enabled:enabled})
       await refreshWsl(false)
       setWslMessage(enabled?'Enabled. Restart the daemon so it binds the WSL adapter.':'Disabled.')
     }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
@@ -1490,6 +1494,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Concurrent scheduled sessions<input type="number" min="0" max="50" value={draft.scheduled_runs_max_concurrent} onInput={event=>change('scheduled_runs_max_concurrent',Number(event.currentTarget.value))}/><small>Nothing ends an agent session automatically, so this is what stops nightly runs accumulating into a fleet of forgotten panes.</small></label>
           <label>Sweep seconds<input type="number" min="1" max="300" step="1" value={draft.scheduled_runs_poll_seconds} onInput={event=>change('scheduled_runs_poll_seconds',Number(event.currentTarget.value))}/><small>Schedules resolve to the minute; this only decides how promptly a due minute is noticed.</small></label>
           <label>Run history days<input type="number" min="1" max="3650" value={draft.scheduled_run_retention_days} onInput={event=>change('scheduled_run_retention_days',Number(event.currentTarget.value))}/><small>Long enough to answer "has this been failing all week".</small></label>
+          </section>
+
+          {/* The land queue's install-wide stop. It has always been enforced - the sweep
+              checks it before reading anything else - and has never had a control, so the
+              only way to reach it was to hand-edit the daemon's config file, and a queue
+              stopped by it looked exactly like a busy one. */}
+          <section><h3>Land queue</h3>
+          <p>Landing a branch is reconcile, verify, then a fast-forward onto the trunk - the same two commands a person would run, serialized so two branches never race. Which branches are queued lives in a Project's <strong>Git → Land</strong> segment, and each Project opts in separately before an <em>agent</em> may ask for one.</p>
+          <label class="settings-toggle" data-setting="land_queue_enabled"><input type="checkbox" checked={draft.land_queue_enabled} onChange={event=>change('land_queue_enabled',event.currentTarget.checked)}/>Let the land queue move trunks<small>The emergency stop. Off, requests still queue and the sweep never runs one, so nothing moves anywhere.</small></label>
+          <label>Agent requests per session per hour<input type="number" min="0" max="1000" value={draft.land_hourly_budget} onInput={event=>change('land_hourly_budget',Number(event.currentTarget.value))}/><small>Bounds a session that has been granted direct landing. Your own Land button is not counted against it.</small></label>
           </section>
 
           <section><h3>Scan timeline</h3>
