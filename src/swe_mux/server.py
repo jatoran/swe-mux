@@ -51,7 +51,7 @@ from .assistant import (
     AssistantService,
     AssistantStore,
     action_snapshot,
-    apply_note_edit,
+    apply_note_write,
 )
 from .attention_narration import NARRATION_RULE_ID, AttentionNarrator
 from .attention_ranking import AttentionRankingService
@@ -177,6 +177,7 @@ from .project_actions import (
     ActionStep,
     ProjectActionService,
     action_spawn_body,
+    preview_action_run,
     read_actions_source,
     substituted_action,
     write_actions_source,
@@ -254,6 +255,7 @@ from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
     STATE_WATCHDOG_LOOP,
+    TERMINAL_SESSION_STATES,
     PtySubscriber,
     Session,
     SessionManager,
@@ -383,10 +385,6 @@ SLOW_STARTUP_SECONDS = 20.0
 # a rewritten `tasks.json` and bounded so a generated `package.json` cannot make the
 # approval dialog unrenderable.
 MAX_ACTION_DIFF = 64 * 1024
-# The `SessionState` members that mean the process is gone. An ended session is
-# retained in the live table (its scrollback and exit code are what a task result
-# is read from), so "is it still running" is this test rather than a lookup miss.
-TERMINAL_SESSION_STATES = frozenset({"exited", "crashed"})
 # Browser reconnects use a small recovery window. Wider gaps fall back to one
 # authoritative REST refresh instead of replaying a large, stale event history.
 EVENTS_CATCHUP_LIMIT = 64
@@ -995,6 +993,7 @@ def create_app(
             web.delete("/api/voice/stt-latency", voice_latency),
             web.post("/api/voice/barge-in-diagnostic", voice_barge_in_diagnostic),
             web.post("/api/voice/capture-diagnostic", voice_capture_diagnostic),
+            web.post("/api/voice/deferral-diagnostic", voice_deferral_diagnostic),
             web.post("/api/sessions/{sid}/voice/prepare-submit", voice_prepare_submit),
             web.post("/api/sessions/{sid}/voice/submit", voice_submit),
             web.post("/api/sessions/{sid}/voice/approval", voice_approval),
@@ -1645,12 +1644,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             project=_registered_identity(project),
         )
 
-    async def _assistant_note_edit(
+    async def _assistant_note_write(
         project_id: str, note_reference: str | None, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """One granular note edit through the ordinary revisioned write path.
+        """One note write through the ordinary revisioned write path.
 
-        The transform itself is `assistant.apply_note_edit` (pure, tested); this
+        The transform itself is `assistant.apply_note_write` (pure, tested); this
         closure supplies what only the daemon has — the note inventory, the
         current revision, and the change event other devices refresh on.
         """
@@ -1668,7 +1667,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             default_title=f"{project.name} notes",
             project=identity,
         )
-        edited = apply_note_edit(str(current.get("markdown") or ""), payload)
+        edited = apply_note_write(str(current.get("markdown") or ""), payload)
         result = await write_note(
             project.root,
             storage_id,
@@ -1683,38 +1682,6 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             scope="project",
             project_id=project.id,
             note_id=str(resolved["note_id"]),
-            revision=result.get("revision"),
-        )
-        return result
-
-    async def _assistant_note_append(project_id: str, text: str) -> dict[str, Any]:
-        project = projects.projects.get(project_id)
-        if project is None:
-            raise ValueError("unknown project")
-        identity = _registered_identity(project)
-        storage_id = _storage_note_id(project, project.id)
-        current = await read_note(
-            project.root,
-            storage_id,
-            default_title=f"{project.name} notes",
-            project=identity,
-        )
-        base = str(current.get("markdown") or "")
-        stamped = f"{base.rstrip()}\n\n{text.strip()}\n" if base.strip() else f"{text.strip()}\n"
-        result = await write_note(
-            project.root,
-            storage_id,
-            stamped,
-            str(current.get("revision") or "missing"),
-            default_title=f"{project.name} notes",
-            project=identity,
-        )
-        await events.emit(
-            "note_changed",
-            source="assistant",
-            scope="project",
-            project_id=project.id,
-            note_id=project.id,
             revision=result.get("revision"),
         )
         return result
@@ -1794,6 +1761,48 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 result["git"] = "the folder is already inside a git repository"
         return result
 
+    def _assistant_action_project(project_id: str) -> ProjectRecord:
+        project = projects.projects.get(project_id)
+        if project is None:
+            raise ValueError("unknown project")
+        return project
+
+    async def _assistant_action_catalog(project_id: str) -> dict[str, Any]:
+        """One Project's declared actions and their per-file approval state."""
+        project = _assistant_action_project(project_id)
+        catalog = await asyncio.to_thread(project_actions.catalog, project.root)
+        return catalog.snapshot()
+
+    async def _assistant_action_preview(
+        project_id: str, reference: str, inputs: dict[str, str]
+    ) -> dict[str, Any]:
+        """Resolve an action named in conversation to exactly what would run.
+
+        The assistant's preflight calls this so a card never pends for something
+        the executor will refuse, and so an unapproved action is answered with
+        the file a human has to review rather than with a failure after the
+        operator confirmed it.
+        """
+        project = _assistant_action_project(project_id)
+        catalog = await asyncio.to_thread(project_actions.catalog, project.root)
+        return await asyncio.to_thread(
+            preview_action_run,
+            catalog,
+            reference,
+            dict(inputs),
+            project_label=project.name,
+        )
+
+    async def _assistant_run_action(
+        project_id: str, action_id: str, inputs: dict[str, str]
+    ) -> dict[str, Any]:
+        """Start one approved action through the Run menu's own execution path."""
+        project = _assistant_action_project(project_id)
+        payload, _status = await _start_project_action(
+            app, project, action_id, dict(inputs), origin="assistant"
+        )
+        return payload
+
     assistant = AssistantService(
         config,
         events,
@@ -1808,10 +1817,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         end_op=lambda session, reason: _end_session_gracefully(app, session, reason),
         history_search=_assistant_history_search,
         note_read=_assistant_note_read,
-        note_append=_assistant_note_append,
         note_list=_assistant_note_list,
-        note_edit=_assistant_note_edit,
+        note_write=_assistant_note_write,
         create_project_op=_assistant_create_project,
+        action_catalog=_assistant_action_catalog,
+        action_preview=_assistant_action_preview,
+        action_run=_assistant_run_action,
     )
     app["assistant"] = assistant
     app["assistant_store"] = assistant_store
@@ -10555,6 +10566,16 @@ async def voice_capture_diagnostic(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     try:
         sample = voice.record_capture_diagnostic(await request.json())
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(sample)
+
+
+async def voice_deferral_diagnostic(request: web.Request) -> web.Response:
+    """Record one unfinished-utterance deferral and the outcome that judges it."""
+    voice: VoiceService = request.app["voice"]
+    try:
+        sample = voice.record_deferral_diagnostic(await request.json())
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 400)
     return json_response(sample)

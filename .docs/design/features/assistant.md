@@ -21,8 +21,8 @@ Asked for something that is coding, it routes: queue a message to an existing se
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
-  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
-  - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
+  - *reversible* (queue an inert draft, write to a project note — `write_project_note`, below — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
+  - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send — and `run_project_action`, because a build or a deploy is not taken back): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
   A pending or scheduled action is typed state (`assistant_actions` row) rendered as a card, and a daemon restart expires anything still pending — a confirmation minted by a dead daemon can never execute.
 - **Dialog state is daemon-owned** (`assistant_dialogs`/`assistant_messages`/`assistant_actions` in SQLite, one worker thread like `voice_clips`).
   Any device resumes the same conversation; a dropped tab cannot orphan a half-confirmed action.
@@ -30,7 +30,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
   The per-turn workspace snapshot (`fleet_snapshot`) carries ages derived from session records; `state_since == 0` reads as unknown, never as "just now".
   A session whose harness handed off to background agents carries `running_work_for` beside `state_age`, because `idle` with no `turn_running_for` is also the shape of a session an hour into a request, and answering "how long has that been going" from `state_age` alone reports the hand-off instead of the work (`features/status-detection.md`).
 - **Budgeted like every model feature.**
-  Calls run on the configured OpenRouter model (`assistant_model`, default `openai/gpt-5.6-terra`; tool calling verified against the live catalog), spend lands in the shared automation ledger under `builtin:assistant`, and the daily budget is checked before each call — an exhausted budget fails the turn closed.
+  Calls run on the configured OpenRouter model (`assistant_model`, default `openai/gpt-5.6-terra`; tool calling verified against the live catalog), spend lands in the shared automation ledger under `builtin:assistant` (tokens, cost, and cached prompt tokens per call), and the daily budget is checked before each call — an exhausted budget fails the turn closed.
 - Failures are typed `AssistantError` and never touch PTY, session, transcript, history, or project state.
 
 ## The turn
@@ -60,6 +60,15 @@ Interrupt cancels the running task; nothing already executed is undone.
   A trailing system line states the rounds remaining and asks the model to batch independent calls into one response rather than one per round, and not to re-read what a tool already returned; it is replaced each round rather than appended, so exactly one budget is ever in the prompt.
   Below `MODEL_CALL_WARNING_ROUNDS` that line changes to "start no new work and say what is done", so a turn lands on a sentence instead of on the ceiling.
   And exhausting the rounds appends a plain notice to the reply, marks `exhausted` on `assistant_turn_done`, and logs a warning — the notice is spoken even when speech is otherwise suppressed, because a half-finished turn is the one thing the operator must hear.
+- **The prompt is built around a cache-stable prefix, and the hit rate is measured.**
+  Every round of a turn re-sends the primer, the tool definitions, the workspace snapshot, and the dialog window, so up to fourteen rounds pay for the same prefix fourteen times.
+  Anthropic-routed models cache none of that without an explicit `cache_control` breakpoint, and the assistant sent none, so the saving was unavailable rather than merely unmeasured.
+  The breakpoint goes on the primer (`cache_stable_message`, applied only for providers in `EXPLICIT_CACHE_CONTROL_PROVIDERS`), because the primer is the one message identical on every call this assistant ever makes and the provider orders tool definitions ahead of the system prompt - so one breakpoint covers both.
+  Implicit cachers get their plain string back untouched: the marked shape is only ever sent where it is understood.
+  Two placement rules follow and are load-bearing rather than stylistic: nothing may be inserted ahead of the primer and its text may not be interpolated per turn (the workspace snapshot is the *second* message for exactly this reason), and the round-budget line stays trailing.
+  Either change moves the prefix and turns every subsequent call into a cache write billed at a premium and never read back.
+  `cached_tokens` from each call's usage payload lands in the spend ledger beside its input and output counts - per call, not per turn, because the first round writes the cache and the rest read it, and a turn-level figure would average the write into the rate.
+  It is a subset of the input tokens, never added to them, and zero is deliberately ambiguous: it means "no hit" and "this provider reports no caching" alike, which is why it is recorded rather than asserted from.
 - **Speech suppression is for a card that *is* the whole turn, not for any turn with a card.**
   Suppressing whenever a card opened also swallowed "I opened two of the three and one needs your confirmation" — information the card cannot carry.
   The rule counts: exactly one card opened and no mutation executed.
@@ -121,6 +130,35 @@ synthetic `dispatched` `assistant_action` event carries the work (with
 field the bus lifts out of the payload) and the device reports back through the same
 `ui-result` endpoint UI commands use.
 
+## Writing notes
+
+`write_project_note` is the only note-write tool - it replaced `append_project_note` and `edit_project_note`, whose split taught the model a distinction operators do not make.
+The transform is `apply_note_write` (pure, tested); the daemon closure supplies the note inventory, the current revision, and the `note_changed` event other devices refresh on.
+
+**`top` is the default and it means under the note's leading heading run**, not byte 0.
+The scanner consumes a contiguous run of ATX headings from the start of the body - blank lines between them are fine, anything else ends the run - so `# swe-mux Notes` followed by `## Unsorted` is one preamble and a dictated note lands beneath both.
+A heading with a paragraph under it is a section boundary, not preamble.
+Fenced code is tracked while scanning, so a `#` line inside a pasted shell transcript is a comment rather than the note's structure - a mis-detected fence would make some pasted `# comment` the note's title and write into the middle of a code sample.
+
+A body that opens with prose usually has a lead paragraph to respect, and the write goes above it rather than inventing a structure.
+The exception is a **buried title** (`_stranded_title`): the swe-mux note this feature exists for opens with three dictated items sitting above `# swe-mux Notes`, because the old `prepend` wrote to byte 0.
+Respecting that as a lead paragraph would stack every new write on the damage forever, so a level-1 heading within `NOTE_TITLE_SEARCH_LINES` of the start, with nothing but non-heading text above it, counts as a title that got buried and `top` goes under it.
+The level and distance bounds are the whole guard: a `## Later` near the bottom of an all-prose note is a section following an introduction, not a title, and does not fire.
+Existing strays are skipped, never moved - the tool writes, it does not reorganize.
+
+The other positions: `section` writes under a named heading (resolving case-folded, exact matches winning over substrings, and refusing ambiguity the way `replace` refuses a non-unique find); `after`/`before` sit beside a unique `anchor` span; `at_line` makes the text *become* a 1-indexed line; `replace` swaps a unique `find` span.
+Every position except `at_line` normalizes the seam to exactly one blank line on each side so a dictated paragraph never glues onto the next; `at_line` is deliberately exact, because the model picks that number off the numbered view and the number has to mean what it says.
+
+**`end` exists but is never inferred.** "Add", "jot", "note this down" and "append" all mean `top` - a note is a stack of things you thought of, and nothing is ever pinned to the bottom of one.
+Nothing at the tool layer can verify what the operator said, so the guard is legibility rather than validation: the schema and system prompt both say `end` requires an explicit request, and `restate_action` writes "at the very END of" into the card **and** into the spoken announcement.
+The spoken form drops the text preview for latency but keeps the position, because that is the detail the operator would otherwise have to undo by hand and the cancel window is only useful if the announcement names it.
+
+Every turn carries the focused project's primary note as **numbered lines plus its heading outline** (`_note_context` → `note_page`/`note_outline`, first `NOTE_CONTEXT_LINES`).
+That is what makes "jot this down" one tool call: without it the model either burns a round trip reading the note or writes blind, and writing blind is how text ended up above the note's own title.
+The tail is addressable rather than truncated into silence - the context names the `read_project_note from_line=…` that pages further down, and that tool returns numbered lines and the outline too.
+Scoped to the focused session's project, or to the only project when there is exactly one; guessing among several would hand the model an outline for a note the operator did not mean.
+A missing or unreadable note is swallowed to a debug log: context assembly never fails a turn.
+
 ## Creating projects
 
 `create_project` mints a project that does not exist yet — the one assistant mutation that touches the filesystem — and its whole safety story is one constraint: **the model supplies a name, never a path.**
@@ -131,6 +169,20 @@ Execution is the ordinary registration path (`ProjectManager.register` with `cre
 An optional `git: true` chains the one-time repository initialization with its contract intact: nothing staged, no commit made, and an init failure reports without unwinding the registration.
 Reversal is the same as spawn's class implies: removal is a registration tombstone that deletes nothing on disk, and the minted folder is empty.
 
+## Running project actions
+
+The assistant reaches the Project Run menu through two tools, and the hard part was already built (`project-actions.md`): `run_action` executes only the exact bytes a human approved, so the assistant inherits that boundary whole and adds no authority of its own.
+
+- `list_project_actions` names a Project's actions with what each is for, how many terminals it opens, the inputs it declares, and **its own approval state** - trust is per source file, so one unapproved file leaves the rest runnable and a single "approved" flag for the Project would be a lie.
+- `run_project_action` starts one. It is **consequential**, not reversible: a build, a deploy, or a migration is not undone the way removing a project registration or clearing a composer is, so it sits on the always-confirm floor rather than under `assistant_trust_reversible`, where `auto` would run repository commands with no card at all.
+- An unapproved action is refused **at preflight, naming the file a human must review**, exactly as the MCP surface does. Nothing pends for something the executor would refuse, and the refusal is the only useful next step: neither the assistant nor the agent that wrote the action can approve it. A file edited between the card opening and the operator confirming it is refused again at execution, because the executor is the authority and preflight only refuses early.
+- The card restates the action's **title**, its terminal count, and any **input values**, which are the one part of a run no approval covers (`${input:…}` is substituted at run time, so the approved template never contained them).
+- Resolution is one implementation, `preview_action_run`: a spoken title, an id, or a fragment resolves to exactly one action, and a miss or an ambiguity answers with candidates rather than a guess. Input values are validated through `substituted_action` rather than a second copy of that rule.
+
+**The outcome is a terse notification, never a read-back.** A step is an ordinary one-shot terminal, so its exit code arrives long after the turn ended and after the operator confirmed the card - there is no reply for it to ride. A bounded watch (`ACTION_OUTCOME_WATCH_SECONDS`) polls the step sessions and then says one sentence through `assistant_notice`: finished cleanly, or an issue flag when a step exited nonzero, when its output tail carries a failure marker, or when a step is still running at the bound. Reading output back was rejected at scoping as spam, and the flag never quotes the line that produced it - the tail is classified and discarded. `UNHEALTHY_OUTPUT_MARKERS` is deliberately narrow and strong ("traceback", "npm err!", "command not found"), because bare "error" and "failed" appear in healthy builds and a flag that fires on green runs is a flag the operator learns to ignore. A step whose session is gone reports as unknown rather than clean.
+
+A re-run is deliberately **not** duplicate-guarded past execution: "run the tests again" is an ordinary ask, and every run already needs its own explicit confirmation. Two *open* cards for one run are still refused, like every other kind.
+
 ## Voice attachment
 
 The assistant is text-first and voice-attached, not voice-only:
@@ -138,12 +190,24 @@ The assistant is text-first and voice-attached, not voice-only:
 - In the voice overlay, a `talk`/`chat` mode toggle switches the same floating panel between the dictation draft and the conversation view (`AssistantPanel`); the chat is also reachable with the microphone off (`assistant.toggle`).
   **Chat is the default mode** (device-local, persisted; a deliberate switch sticks): the assistant lane is the primary one, and talk — free, deterministic, model-less — stays one tab away as the degradation path for budget exhaustion, provider outages, and verbatim dictation. Talk mode is deliberately not removed: the tier-1 grammar it carries is load-bearing inside chat mode too ("Mux, stop", confirm/cancel, navigation), and the assistant's composer tools execute through the same acknowledged terminal path.
   Chat mode is bounded to roughly half the viewport — a dialog consulted beside the terminals, never a takeover — and collapses to its header (device-local, persisted); the collapsed body stays mounted so streaming, card speech, and earcons keep working while folded.
-- **Thinking out loud is not answered at every pause.** Two deterministic client mechanisms
-  (both in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
-  assistant is the addressee (commands keep short-circuiting it), and the `hold`/`proceed`
+- **Thinking out loud is not answered at every pause.** Three deterministic client mechanisms
+  (all in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
+  assistant is the addressee (commands keep short-circuiting it); a **completeness heuristic
+  runs before the turn is dispatched**, so an utterance ending mid-clause earns exactly one
+  adaptive patience extension instead of becoming a turn; and the `hold`/`proceed`
   brainstorm pair buffers plain speech until a "go ahead" cue releases it as one consolidated
   turn. Deliberately not an assistant tool: a wait tool runs *inside* a turn, so every pause
   would still cost a model call — the same reason confirm/cancel keeps the model out of the loop.
+- **The model is never instructed to return nothing.** Incomplete fragments are handled *before*
+  the model by the heuristic above, because a model told to sometimes withhold a reply will
+  withhold one when it should have answered, and a model asked "are you finished?" is the
+  round-trip spam the whole design avoids. The primer teaches exactly one thing here: when a turn
+  reads as an unfinished thought, **offer the brainstorm hold once**, in one short sentence,
+  while still answering the turn - suggest it, never emulate it, and never repeat the offer
+  later in the same conversation.
+- **Queue-merge is the safety net under both.** A fragment the heuristic does not recognize
+  becomes a turn, and the next breath merges into the waiting turn rather than opening a second
+  one; barge-in already silences a reply to fragment one.
 - **The mode toggle is the microphone's addressee switch.**
   While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
   A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.
@@ -153,6 +217,14 @@ The assistant is text-first and voice-attached, not voice-only:
   Everything one turn says shares one stream, including any card it opens, so nothing a turn says can cut off something else the same turn said: starting a second stream hard-stops the first, which is what used to truncate the card's line mid-word and follow it with several seconds of silence while the next clip synthesized.
   And the appends are serialized, because segment order on the daemon is the order its `speak` calls arrive.
 - A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant in dictation mode too — one addressee removes the ambiguity the wake word exists to resolve.
+- **Starting a fresh conversation is a deterministic registry alias, not a model turn.**
+  `assistant.newConversation` puts "new conversation", "clear context", and their variants (`NEW_CONVERSATION_PHRASES` in `assistant.ts`) on the ordinary command registry, so clearing context costs no model call and cannot be paraphrased into something adjacent.
+  Nothing collides: the spawn aliases are `new <harness>`, never `new conversation`.
+  It is the one assistant act that runs on the word with **no confirmation card**, and that is only safe because nothing is destroyed.
+  `startNewDialog` merely *unremembers* the device's dialog id, so the daemon keeps the prior dialog in `GET /api/assistant/dialogs` and the panel keeps it readable under a collapsed `previous conversation` disclosure.
+  The spoken reply therefore has to carry both halves, context cleared and previous conversation still there: "context cleared" on its own describes the same act as a deletion the operator can neither see nor undo, which is what would make the missing confirmation unsafe rather than merely absent.
+  Both surfaces go through `startNewDialog`, which announces `mux:assistant-dialog-reset`, and the panel never clears itself directly - so a conversation started by voice and one started by the `new` button leave the panel in exactly the same state.
+  The alias is unavailable while the assistant is off, and says so in the voice catalog rather than disappearing from it.
 - **Spoken confirmation is deterministic.**
   A pending or scheduled card is spoken with the daemon-built `announcement`, which omits the text preview the visible card keeps; a bare `confirm`/`cancel` (a closed word set, `spokenConfirmation` in `assistant.ts`) resolves the newest open card directly against the confirm/cancel endpoints — the model is never in that loop, so it cannot "confirm" by talking about it.
   Anything conversational ("yes but change the wording") falls through to the model as an ordinary turn.
@@ -199,8 +271,10 @@ correctness does not depend on it either way, only time-to-first-word).
 ## Key files
 
 - `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution, the duplicate guard and action ledger), `AssistantStore`, `_SentenceStreamer`, `restate_action`/`action_announcement`, the tool definitions, the primer.
-- `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path.
-- `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control).
+- `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path;
+  `needs_explicit_cache_control` / `cache_stable_message` (which message a caller marks is the caller's decision, since only it knows what is stable across calls) and `cached_prompt_tokens`, which reads either shape a provider reports the hit in.
+- `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/write closures, history search, spawn/interrupt/end operations shared with session control, and the Project Action catalog/preview/run closures over `_start_project_action`).
+- `src/swe_mux/project_actions.py` — `preview_action_run`, the shared resolve-and-refuse used by the assistant preflight.
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
 - `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.
 - `frontend/src/AssistantPanel.tsx` — the conversation view and action cards.

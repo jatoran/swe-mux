@@ -345,7 +345,15 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   releases it as one consolidated turn (bare exact phrases "hold on"/"go ahead" also work);
   `voice_chat_patience_ms` separately lengthens the chat-addressee endpoint tail while
   wake-worded commands keep short-circuiting it, and an open assistant confirmation card
-  suspends it entirely (a closed question is being answered, not composed). Hold `Ctrl+Alt+Space` for push-to-talk with
+  suspends it entirely (a closed question is being answered, not composed).
+  A completeness heuristic (`utteranceCompleteness.ts`, pure) runs BEFORE a chat turn is
+  dispatched: an utterance ending mid-clause on a dangling conjunction, preposition, or article
+  earns exactly one adaptive patience extension instead of submitting, and the held fragment
+  merges into the next utterance, submits alone when the extension expires, or folds into a
+  brainstorm hold. One deferral per utterance, so the wait is bounded structurally; the model is
+  never instructed to return nothing; queue-merge stays the safety net; and every deferral is
+  reported to `POST /api/voice/deferral-diagnostic` with its trigger token so the
+  false-positive rate is measurable before anyone tunes the word lists. Hold `Ctrl+Alt+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.

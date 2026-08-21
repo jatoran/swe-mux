@@ -28,6 +28,7 @@ from swe_mux.project_actions import (
     ProjectActionService,
     current_platform,
     parse_native_actions,
+    preview_action_run,
     project_actions_schema,
     read_actions_source,
     substituted_action,
@@ -470,6 +471,83 @@ def test_editing_one_task_file_leaves_the_other_two_approved(tmp_path: Path) -> 
     with pytest.raises(PermissionError, match=".swe-mux/actions.toml"):
         service.action(str(root), "native:verify")
     service.action(str(root), "package:dev")
+
+
+def test_preview_resolves_a_spoken_action_name_against_the_real_catalog(
+    tmp_path: Path,
+) -> None:
+    """The conversational surfaces name an action the way a person does.
+
+    A title, not an id, and possibly a fragment of one. The resolver answers a
+    miss and an ambiguity with candidates rather than a guess, because running
+    the wrong approved command is worse than asking which one.
+    """
+    root, service = three_file_project(tmp_path)
+    service.trust(str(root), service.catalog(str(root)).fingerprint)
+    catalog = service.catalog(str(root))
+
+    exact = preview_action_run(catalog, "Verify", {}, project_label="Work")
+    assert exact["action_id"] == "native:verify"
+    assert exact["steps"] == 1
+    # By id, by case-insensitive title, and by fragment.
+    assert preview_action_run(catalog, "native:verify", {}, project_label="Work")[
+        "action_id"
+    ] == "native:verify"
+    assert preview_action_run(catalog, "veri", {}, project_label="Work")[
+        "action_id"
+    ] == "native:verify"
+
+    missing = preview_action_run(catalog, "publish", {}, project_label="Work")
+    assert "no action" in missing["error"]
+    assert "Verify" in missing["candidates"]
+
+
+def test_preview_refuses_an_unapproved_action_by_naming_its_file(tmp_path: Path) -> None:
+    """The one answer that is useful: neither an agent nor the assistant can
+    approve an action, so the refusal names the file a human has to review."""
+    root, service = three_file_project(tmp_path)
+    native = next(
+        item for item in service.catalog(str(root)).files
+        if item.path == ".swe-mux/actions.toml"
+    )
+    service.trust(str(root), native.fingerprint, source=native.path)
+    catalog = service.catalog(str(root))
+
+    refused = preview_action_run(catalog, "dev", {}, project_label="Work")
+
+    assert refused["trust_required"] is True
+    assert refused["file"] == "package.json"
+    assert "not approved" in refused["error"]
+    # The approved file's action is unaffected: trust is per source file.
+    assert preview_action_run(catalog, "Verify", {}, project_label="Work")["action_id"]
+
+
+def test_preview_rejects_an_input_the_action_would_refuse(tmp_path: Path) -> None:
+    """Validated through `substituted_action`, not a second copy of that rule."""
+    root = tmp_path / "project"
+    write(
+        root,
+        ".swe-mux/actions.toml",
+        'version = 1\n[[actions]]\nid = "deploy"\nlabel = "Deploy"\n'
+        'command = "deploy"\nargs = ["${input:target}"]\n'
+        '[[actions.inputs]]\nid = "target"\nkind = "choice"\n'
+        'options = ["staging", "prod"]\n',
+    )
+    service = ProjectActionService(tmp_path / "data")
+    service.trust(str(root), service.catalog(str(root)).fingerprint)
+    catalog = service.catalog(str(root))
+
+    assert preview_action_run(
+        catalog, "Deploy", {"target": "staging"}, project_label="Work"
+    )["action_id"] == "native:deploy"
+    bad_value = preview_action_run(
+        catalog, "Deploy", {"target": "moon"}, project_label="Work"
+    )
+    assert "must be one of" in bad_value["error"]
+    unknown_key = preview_action_run(
+        catalog, "Deploy", {"targett": "staging"}, project_label="Work"
+    )
+    assert "unknown inputs" in unknown_key["error"]
 
 
 def test_one_file_can_be_approved_on_its_own(tmp_path: Path) -> None:
