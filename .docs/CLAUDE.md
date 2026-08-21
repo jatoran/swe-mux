@@ -166,7 +166,19 @@
 - Changing Git status, comparison, diff review, first-time repository initialization, or worktree tooling:
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
-  `technical/frontend/workspace-state.md`
+  `technical/frontend/workspace-state.md`.
+  Two rules worktree *removal* turns on. The deletion is moved off the request - the checkout
+  is renamed into `<git-common-dir>/swe-mux-graveyard` and purged in the background - and that
+  location is load-bearing rather than tidy: outside every working tree (a buried checkout in
+  `git status` would raise dirty counts and make the land queue refuse that checkout), inside
+  `.git` so no watcher walks the purge, and never in `git worktree list`. What drops the
+  registration is `git worktree remove` on the original path, never `git worktree prune`,
+  which is global and would take every other checkout whose directory is merely missing. The
+  rename is *declined* wherever it would change what the removal means (locked, submodules,
+  unclean without force), so Git's own refusals stay Git's. And the "removing" indication is a
+  property of the **list**, never of a row: a row's own state stops when the row is collapsed,
+  and the removal's response ends it too early on both paths, so only the refreshed inventory
+  no longer listing the checkout ends it.
 - Changing the land queue (its pipeline steps, preconditions, the verification gate, its
   approval or its editor, what a running gate reports, the grant, the Land control on a Map
   row, or the landing strip at the head of that map): `design/features/land-queue.md`,
@@ -216,7 +228,7 @@
   exists only where a byte-identical run has already passed and is withdrawn the moment a
   run overruns it, a line count is stated as evidence of output rather than as progress,
   and no percentage is derived at either end - the steps of this repository's own gate take
-  175s and 3s in one run, so a denominator drawn as a proportion would be fiction, and a
+  45s and 3s in one run, so a denominator drawn as a proportion would be fiction, and a
   wrong number is acted on where an absent one is not.
   The reading is in memory and dies with the process; only the *plan* is durable, because
   it is a measurement of bytes rather than of a run.

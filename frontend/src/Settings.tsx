@@ -60,7 +60,10 @@ import { customProviderOverride } from './modelRouting'
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
   startup_cwd:string; default_backend:string; shell_exe:string
-  harness_exe:Record<string,string>; scrollback_bytes:number; history_limit:number
+  harness_exe:Record<string,string>; scrollback_bytes:number; attach_replay_bytes:number; history_limit:number
+  session_recovery_checkpoint_bytes:number;session_recovery_retention_days:number
+  session_recovery_max_sessions:number
+  log_level:'DEBUG'|'INFO'|'WARNING'|'ERROR'
   terminal_renderer:'auto'|'dom'|'webgl'
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
@@ -70,6 +73,8 @@ type Config = {
   drawer_tab_display:'icon'|'title'
   utility_rail_display:'icon'|'title'
   process_poll_seconds:number;process_orphan_grace_seconds:number;process_evidence_retention_days:number
+  ghost_window_sweep_enabled:boolean;ghost_window_poll_seconds:number
+  status_timeline_retention_days:number
   operational_telemetry_retention_days:number;provider_quota_poll_minutes:number
   provider_quota_turn_refresh_enabled:boolean;provider_quota_turn_refresh_min_minutes:number
   middle_click_paste:boolean; broadcast_default:boolean
@@ -105,7 +110,14 @@ type Config = {
   auto_delivery_reply_window_minutes:number
   agent_messaging_enabled:boolean;agent_message_max_chain_depth:number
   agent_message_max_thread_turns:number;agent_message_hourly_budget:number
-  agent_message_pending_per_target:number
+  agent_message_pending_per_target:number;agent_message_max_chars:number
+  agent_interject_enabled:boolean;agent_interject_hourly_budget:number
+  agent_interject_min_interval_seconds:number
+  request_spawn_enabled:boolean;agent_spawn_hourly_budget:number
+  session_control_enabled:boolean;session_control_hourly_budget:number
+  session_control_graceful_timeout_s:number
+  session_watch_enabled:boolean;session_watch_max_per_session:number;session_watch_max_minutes:number
+  prompt_queue_retention_days:number
   auto_delivery_refusal_backoff_seconds:number
   auto_delivery_quiet_start:string;auto_delivery_quiet_end:string
   approval_auto_enabled:boolean;approval_allow_all_permitted:boolean
@@ -114,17 +126,20 @@ type Config = {
   approval_keystroke_delivery:boolean;approval_keystroke_window_seconds:number
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
+  attention_narration_max_output_tokens:number
   automation_daily_budget:Budget;automation_rule_daily_budget:Budget
   automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
   llm_provider:string;custom_llm_base_url:string;custom_llm_model:string
-  // Config-file only: the Project context card's model is picked under Accounts
-  // like every other feature model, so this is read to report what it resolves
-  // to. Its *budget* is a control here, because Settings -> Automation owns every
-  // install-wide automation bound and a cap with no control cannot be given the
-  // tokens-or-dollars choice at all.
+  // The Project context card is an automation like any other, so its model, its
+  // budget, and its per-build token ceilings are all edited in Settings ->
+  // Automation -> Budgets and execution. The model was config-file only until the
+  // 2026-08-21 settings audit, which is why two places in this app used to tell
+  // the reader to look for a control that did not exist.
   project_card_model:string;project_card_daily_budget:Budget
+  project_card_max_input_tokens:number;project_card_max_output_tokens:number
   land_queue_enabled:boolean;land_hourly_budget:number
+  land_hold_timeout_seconds:number;land_retry_verification:boolean;land_verify_memo_seconds:number
   scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
   scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_budget:Budget
@@ -149,6 +164,7 @@ type Config = {
   assistant_enabled:boolean;assistant_model:string;assistant_daily_budget:Budget
   assistant_max_output_tokens:number;assistant_context_messages:number
   assistant_trust_reversible:'auto'|'cancel_window'|'confirm'
+  assistant_stream_replies:boolean
 }
 type KokoroModelInfo = {
   status:'not_downloaded'|'downloading'|'ready'|'error'
@@ -1281,9 +1297,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback. A harness's width limit lives with the harness, under Harnesses.</p>
           </section>
 
+          {/* Retention, first replay, and crash checkpoint are three different byte
+              figures over the same stream, and reading one without the other two is
+              how "why did my pane come back short" stayed unanswerable. They are one
+              section for that reason, ordered as the bytes travel: what is kept, what
+              a fresh attach is handed, what survives losing the daemon and its PTY
+              owner together. */}
           <section><h3>Scrollback</h3>
-            <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
+            <label>Scrollback bytes<input type="number" min="1024" max="1073741824" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
             <p>How much output a session keeps for replay when a client attaches. Larger keeps more history reachable after a reconnect and costs memory per live session.</p>
+            <label data-setting="attach_replay_bytes">Replay bytes on a fresh attach<input type="number" min="1024" max="1073741824" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} /><small>What a client is handed when it attaches with no position of its own, as opposed to what the daemon retains above. Every replayed byte is parsed before anything renders, so this is reconnect latency; scrolling further back is a later request.</small></label>
+            <h4>Crash recovery</h4>
+            <p>The PTY supervisor already carries live sessions across a daemon restart. These bound the layer beneath it, for when the daemon <em>and</em> its PTY owner die together: sessions come back as readable dead panes rather than vanishing.</p>
+            <label data-setting="session_recovery_checkpoint_bytes">Recovery checkpoint bytes<input type="number" min="0" max="67108864" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} /><small>Terminal bytes kept per session so a recovered pane shows what it printed. 0 keeps the registry that brings sessions back and stores no output at all. Deliberately far below the retention above: a cold pane is a post-mortem, not a session.</small></label>
+            <label data-setting="session_recovery_retention_days">Recovery retention days<input type="number" min="0" max="365" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} /><small>How long recovery data for an <em>ended</em> session is kept. Cold sessions themselves are bounded by the count below instead.</small></label>
+            <label data-setting="session_recovery_max_sessions">Recoverable sessions kept<input type="number" min="0" max="1000" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} /><small>Newest first. Without a ceiling a machine that crashes repeatedly accumulates cold rows forever.</small></label>
+            <p>Whether recovery runs at all is <code>session_recovery_enabled</code> in the configuration file: the store is built once at daemon start, so switching it off while sessions are tracked would leave their rows open and every one of them would come back cold.</p>
           </section>
 
           <section><h3>Default profile</h3>
@@ -1330,7 +1359,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         {activeTab==='git'&&<section><h3>Git and worktrees</h3><label>Worktree root<input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/></label><p>New Run worktrees are grouped below this absolute directory by Project and branch. Clear the field to restore <code>{draft.data_dir}{draft.data_dir.includes('\\')?'\\':'/'}worktrees</code>. Existing worktrees and manually edited Run paths are not moved.</p><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label><p>A Project's own worktree setup command lives in <strong>Manage projects → Git and worktrees</strong>. Which Git fields a session row shows is under <strong>Appearance → Session rows</strong>.</p></section>}
 
-        {activeTab==='processes'&&<section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><p>What is running right now, and what it is serving, is the drawer's <strong>Processes</strong> tab rather than a setting.</p></section>}
+        {activeTab==='processes'&&<Fragment>
+          <section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><p>What is running right now, and what it is serving, is the drawer's <strong>Processes</strong> tab rather than a setting.</p></section>
+
+          {/* Its own section rather than another row under process evidence: the sweep
+              moves something on screen, which is the one thing here that changes what
+              the machine looks like rather than what swe-mux records about it. */}
+          <section><h3>Ghost windows</h3>
+          <p>Chrome launched with the new headless mode owns a real top-level window, and the Windows compositor keeps drawing it over your desktop even though Win32 reports it hidden. The sweep parks those off screen rather than closing them, so the browser and its screenshots keep working. Its predicate is narrow on purpose — the exact headless window class, hidden, titled, and a <code>--headless</code> in the owning process's command line — so an application deliberately showing a window is never touched.</p>
+          <label class="check" data-setting="ghost_window_sweep_enabled"><span>Park ghost headless-browser windows off screen</span><input type="checkbox" checked={draft.ghost_window_sweep_enabled} onChange={e=>change('ghost_window_sweep_enabled',e.currentTarget.checked)}/><small>Off leaves such a window where it is, which is the setting to reach for only when you want to watch one.</small></label>
+          <label data-setting="ghost_window_poll_seconds">Sweep seconds<input type="number" min=".5" max="60" step=".5" value={draft.ghost_window_poll_seconds} onInput={e=>change('ghost_window_poll_seconds',Number(e.currentTarget.value))}/><small>How often the sweep looks. Windows-only, idempotent, and it reads a command line only for windows that already look like ghosts.</small></label>
+          </section>
+
+          {/* Detection telemetry rather than process telemetry, but it belongs beside the
+              other evidence windows rather than under Usage: it is the per-session record
+              an incident is reconstructed from, not a spend or quota figure. */}
+          <section><h3>Detection timeline</h3>
+          <p>Every status-detection reading is written to a durable per-session timeline, which is what makes “why did this session read as working for an hour” answerable after the fact. It is chattier than the other telemetry — a busy turn writes every ledger entry — so it ages out on its own window rather than sharing one.</p>
+          <label data-setting="status_timeline_retention_days">Status timeline retention days<input type="number" min="1" max="3650" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/><small>Long enough to investigate an incident from last week; short enough that a busy fleet does not carry a year of per-transition detail.</small></label>
+          </section>
+        </Fragment>}
 
         {/* One editor renders every Markdown surface (notes,
             Markdown files from Files), so everything here applies to all of them.
@@ -1455,6 +1503,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
           <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them. Lengthen the idle window if peers keep finding each other unreachable; every lapse is recorded with how long the conversation had been idle and how many messages it left waiting, and the queue pane shows that beside the reason.</p>
           <p>The reply window is the one thing that holds a lapse off, and it holds off nothing else. A session whose own message has just been <em>delivered</em> to a peer is mid-exchange and owed an answer, so it keeps its grant for the minutes above instead of going quiet while it waits — which is what stranded the answer before. It is capped by the exchange itself: once that thread has spent its message budget no window opens, and the master switch, the pause, quiet hours, the stability window, and the send cap all still decide every delivery. Set it to 0 to switch it off entirely.</p>
+
+          {/* Mid-turn delivery belongs under auto-delivery rather than beside the
+              messaging bounds: it is a *delivery* mode with its own strictly narrower
+              readiness predicate, not a kind of message. */}
+          <h4>Mid-turn delivery</h4>
+          <p>Ordinarily a message waits for a turn boundary. An interject hands the text to a CLI that is already mid-turn, which buys latency rather than preemption: the CLI buffers it and takes it at the boundary anyway. It is authorized by its own narrower predicate — the lifecycle evidence and the CLI's own screen must agree that a turn is running and nothing else is true — and each Project stays off until its <code>interject_grant</code> is raised. Off here refuses it everywhere.</p>
+          <label class="check" data-setting="agent_interject_enabled"><span>Allow mid-turn delivery</span><input type="checkbox" checked={draft.agent_interject_enabled} onChange={e=>change('agent_interject_enabled',e.currentTarget.checked)} /></label>
+          <label data-setting="agent_interject_hourly_budget">Mid-turn deliveries one session may ask for per hour<input type="number" min="0" max="1000" value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} /><small>Far tighter than the ordinary message budget: a message that waits costs the receiver nothing until it is read, and one that lands mid-turn costs attention immediately.</small></label>
+          <label data-setting="agent_interject_min_interval_seconds">Seconds between mid-turn deliveries into one session<input type="number" min="0" max="3600" step="1" value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} /><small>The floor that stops a peer machine-gunning a session that is trying to work.</small></label>
           </section>
 
           {/* Approvals sit beside auto-delivery deliberately: both answer "what
@@ -1482,7 +1539,32 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Messages in one thread<input type="number" min="1" max="100" value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /></label>
           <label>Messages one session may originate per hour<input type="number" min="1" max="1000" value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
           <label>Pending messages allowed per target<input type="number" min="1" max="100" value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
+          <label data-setting="agent_message_max_chars">Characters one message may carry<input type="number" min="1" max="100000" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} /><small>A message over this is refused rather than truncated, so a hand-off is never silently cut in half.</small></label>
           <p>Hops bound how far a hand-off propagates: each new session a thread reaches counts one, and reaching back to a session already upstream is refused outright as a ring. A relay that needs to go further is a fresh thread a human starts, not a limit to raise until it disappears.</p>
+          </section>
+
+          {/* Its own section rather than more rows under messaging, and a deliberate
+              distinction: everything above delivers *text a human still reads*, while
+              these tools act on a session directly. They share the tab because both are
+              bounds on what one agent may do to another through swe-mux, and they used
+              to share nothing at all - every field here was enforced with no control
+              anywhere, reachable only by hand-editing the daemon's config file. */}
+          <section><h3>Agent actuation</h3>
+          <p>Beyond messages, an agent can ask swe-mux to start a session, interrupt or end one, or watch one until it settles. Each is layered: the switch here is the install-wide emergency stop, the Project's own opt-in decides whether the capability exists there, and the Project's grant decides whether a human still approves each act. Off here refuses the tool everywhere, whatever any Project granted.</p>
+          <label class="check" data-setting="request_spawn_enabled"><span>Let agents draft spawn requests</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>A request creates an inert Fleet Queue draft and starts nothing; approving it is a human act unless that Project's <code>spawn_grant</code> says otherwise.</small></label>
+          <label data-setting="agent_spawn_hourly_budget">Spawns one session may make per hour<input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} /><small>Applies on the granted path. A spawn's blast radius is one injection into fan-out, so this is what bounds that fan-out and is smaller than the interrupt budget below.</small></label>
+          <label class="check" data-setting="session_control_enabled"><span>Let agents interrupt and end sessions</span><input type="checkbox" checked={draft.session_control_enabled} onChange={e=>change('session_control_enabled',e.currentTarget.checked)} /></label>
+          <label data-setting="session_control_hourly_budget">Control actions one session may take per hour<input type="number" min="0" max="1000" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /><small>The actuation analogue of the message budget above, counted on the granted path.</small></label>
+          <label data-setting="session_control_graceful_timeout_s">Seconds a graceful end waits before a hard stop<input type="number" min="1" max="120" step="1" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /><small>How long the CLI is given to tear itself down after the exit sequence.</small></label>
+          <label class="check" data-setting="session_watch_enabled"><span>Let agents watch a session until it settles</span><input type="checkbox" checked={draft.session_watch_enabled} onChange={e=>change('session_watch_enabled',e.currentTarget.checked)} /><small>A watch is a read that matures into one queue message addressed to the watcher itself, so it needs no Project opt-in and no grant — only the two bounds below.</small></label>
+          <label data-setting="session_watch_max_per_session">Watches one session may hold at once<input type="number" min="1" max="100" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} /><small>Sized for an orchestrator watching a handful of workers. A session that wants to watch everything should be listing sessions instead, which costs one call rather than N notices.</small></label>
+          <label data-setting="session_watch_max_minutes">Longest a single watch may run<input type="number" min="1" max="1440" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} /><small>Minutes. Watches live in daemon memory, so a window longer than a working session is a promise this service cannot keep across the restarts that happen inside it.</small></label>
+          <p>Which Projects may be acted on at all, and whether each act is drafted for you or granted outright, is in <strong>Manage projects</strong> beside the other authority fields.</p>
+          </section>
+
+          <section><h3>Queue history</h3>
+          <p>Sent, cancelled, failed, and stranded items age out on this window along with their delivery audit. A <em>pending</em> item never does — nothing expires a message that has not been delivered.</p>
+          <label data-setting="prompt_queue_retention_days">Prompt queue retention days<input type="number" min="1" max="3650" value={draft.prompt_queue_retention_days} onInput={e=>change('prompt_queue_retention_days',Number(e.currentTarget.value))} /></label>
           </section>
         </Fragment>}
 
@@ -1546,6 +1628,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
             <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
             <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
+            {/* The one bound on the transport rather than on a feature, so it belongs
+                with the endpoint rather than duplicated into each feature's section. */}
+            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))} /><small>How long any model-backed call waits for an answer, on this provider and on a custom endpoint alike. A local server generating on CPU is the case that needs it raised. <strong>Takes effect on the next daemon restart</strong> — the HTTP client is built once at start.</small></label>
           </section>
 
           <section><h3>Models</h3>
@@ -1624,13 +1709,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>Every cap below takes tokens, dollars, or first hit - the same three choices everywhere, because which unit describes a cost is a property of the provider, not of the feature. A limit the mode does not enforce is kept rather than cleared, so trying the other axis is reversible.</p>
           <BudgetControl name="automation_daily_budget" label="All automation, daily" value={draft.automation_daily_budget} onChange={value=>change('automation_daily_budget',value)} maxTokens={100000000} maxUsd={10000} reportsCost={provider?.llm?.reports_cost} hint="The shared ceiling over every automation, reset daily (UTC)."/>
           <BudgetControl name="automation_rule_daily_budget" label="Per automation rule, daily" value={draft.automation_rule_daily_budget} onChange={value=>change('automation_rule_daily_budget',value)} maxTokens={100000000} maxUsd={10000} reportsCost={provider?.llm?.reports_cost} hint="What any one rule may spend, so a single misbehaving observer cannot consume the shared ceiling."/>
-          <BudgetControl name="project_card_daily_budget" label="Project context card, daily" value={draft.project_card_daily_budget} onChange={value=>change('project_card_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} hint="Bounds rebuilding a Project's context card. Each Project opts in separately; the model follows the card model under Accounts."/>
+          <BudgetControl name="project_card_daily_budget" label="Project context card, daily" value={draft.project_card_daily_budget} onChange={value=>change('project_card_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} hint="Bounds rebuilding a Project's context card. Each Project opts in separately; its model and per-build token ceilings are below."/>
           <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Per-rule hourly calls<input type="number" value={draft.automation_rule_hourly_call_cap} onInput={event=>change('automation_rule_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
+          <label data-setting="automation_queue_size">Queued observations<input type="number" min="16" max="4096" value={draft.automation_queue_size} onInput={event=>change('automation_queue_size',Number(event.currentTarget.value))}/><small>How many pending observations the engine holds before it drops the oldest; the drop count is on the status line above. <strong>Takes effect on the next daemon restart</strong> — the queue is allocated once at start.</small></label>
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          {/* The card build's own three bounds, beside the budget that already lived
+              here. Its model is an override rather than a routed default, so it belongs
+              with its feature like every other feature model, and Accounts indexes it
+              rather than editing it (`modelRouting.ts`). Before this the model had no
+              control anywhere, and two places in the app sent the reader looking for
+              one: the budget hint above pointed at Accounts, and the routing index told
+              them to edit the config file. */}
+          <h4>Project context card</h4>
+          <p>What building a Project's context card may cost, beside the daily budget above. Each Project opts in separately, and a Project's own card content is edited in its <strong>Scan timeline</strong> tab rather than here.</p>
+          <label for="project-card-model-picker" data-setting="project_card_model">Project card model<ModelPicker id="project-card-model-picker" value={draft.project_card_model} options={modelOptions(draft.project_card_model)} emptyLabel="Use the cheap model…" onChange={value=>change('project_card_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>, and with neither set there is simply no card.</small></label>
+          <label data-setting="project_card_max_input_tokens">Card maximum input tokens<input type="number" min="512" max="128000" value={draft.project_card_max_input_tokens} onInput={event=>change('project_card_max_input_tokens',Number(event.currentTarget.value))}/></label>
+          <label data-setting="project_card_max_output_tokens">Card maximum output tokens<input type="number" min="128" max="4096" value={draft.project_card_max_output_tokens} onInput={event=>change('project_card_max_output_tokens',Number(event.currentTarget.value))}/><small>The card is a brief rather than a document; too low truncates it mid-sentence.</small></label>
           </section>
 
           <section><h3>Scheduled runs</h3>
@@ -1649,6 +1747,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>Landing a branch is reconcile, verify, then a fast-forward onto the trunk - the same two commands a person would run, serialized so two branches never race. Which branches are queued lives in a Project's <strong>Git → Land</strong> segment, and each Project opts in separately before an <em>agent</em> may ask for one.</p>
           <label class="settings-toggle" data-setting="land_queue_enabled"><input type="checkbox" checked={draft.land_queue_enabled} onChange={event=>change('land_queue_enabled',event.currentTarget.checked)}/>Let the land queue move trunks<small>The emergency stop. Off, requests still queue and the sweep never runs one, so nothing moves anywhere.</small></label>
           <label>Agent requests per session per hour<input type="number" min="0" max="1000" value={draft.land_hourly_budget} onInput={event=>change('land_hourly_budget',Number(event.currentTarget.value))}/><small>Bounds a session that has been granted direct landing. Your own Land button is not counted against it.</small></label>
+          <label data-setting="land_hold_timeout_seconds">Hold seconds for a busy worktree<input type="number" min="60" max="86400" step="1" value={draft.land_hold_timeout_seconds} onInput={event=>change('land_hold_timeout_seconds',Number(event.currentTarget.value))}/><small>How long a request waits for a worktree whose session is still working before it gives up and hands back. Long enough that an ordinary agent turn finishes inside it; short enough that a request against an abandoned worktree does not sit in the queue forever.</small></label>
+          <label class="check" data-setting="land_retry_verification"><span>Retry a failed verification once</span><input type="checkbox" checked={draft.land_retry_verification} onChange={event=>change('land_retry_verification',event.currentTarget.checked)}/><small>Off by default and never silent: a flaky gate that loops is worse than one that stops, and a retry that fails differently from the first attempt stops rather than retrying again.</small></label>
+          <label data-setting="land_verify_memo_seconds">Seconds a green gate result stands<input type="number" min="0" max="604800" step="1" value={draft.land_verify_memo_seconds} onInput={event=>change('land_verify_memo_seconds',Number(event.currentTarget.value))}/><small>A verify-only run and the land that follows it should not spend the same minutes twice, so a pass is kept against the exact git tree and command it ran over. Bounded rather than forever because a tree hash says nothing about the machine underneath it drifting. 0 disables reuse; a moved trunk re-verifies either way.</small></label>
           </section>
 
           <section><h3>Scan timeline</h3>
@@ -1670,6 +1771,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
           <label for="narration-model-picker" data-setting="attention_narration_model">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <BudgetControl name="attention_narration_daily_budget" label="Attention narration, daily" value={draft.attention_narration_daily_budget} onChange={value=>change('attention_narration_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost}/>
+          <label data-setting="attention_narration_max_output_tokens">Narration maximum output tokens<input type="number" min="32" max="2048" value={draft.attention_narration_max_output_tokens} onInput={event=>change('attention_narration_max_output_tokens',Number(event.currentTarget.value))}/><small>A narration is a sentence or two explaining why an item is worth your attention, so this is a ceiling on one line rather than on a document.</small></label>
           </section>
 
         </Fragment>}
@@ -1853,6 +1955,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
           <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
           <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
+          <label class="check" data-setting="assistant_stream_replies"><span>Stream the reply as it is written</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>
+          <p>Streaming lets the first sentence be spoken while the rest is still generating, which is the whole of the difference: correctness does not depend on it either way. Off buffers the turn whole — the pre-streaming behaviour, and the escape hatch if a configured model's provider streams tool calls badly.</p>
           <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
           <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
           <label>Chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>Extra pause allowed before plain chat-mode speech becomes an assistant turn, so thinking out loud is not answered at every breath. Wake-word commands stay fast regardless. For long brainstorms say <code>hold on</code> (or a wake-worded <code>listen</code>): speech buffers until you say <code>go ahead</code>.</small></label>
@@ -1968,6 +2072,18 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <button disabled={!appCommand('app.redeploy')} onClick={()=>runAppCommand('app.redeploy')}>Rebuild + redeploy app</button>
             </div>
           </div>
+          </section>
+
+          {/* Beside the bundle rather than under Processes: this is what decides how
+              much the log that ends up in that bundle actually says. */}
+          <section><h3>Logging</h3>
+          <p>The level the daemon's rotating <code>daemon.log</code> and its console start at. Applied as soon as this is saved — nothing needs restarting — and it is what the diagnostics bundle below carries, so <code>DEBUG</code> is the setting to reach for before reproducing a problem you intend to report.</p>
+          <label data-setting="log_level">Daemon log level<select value={draft.log_level} onChange={e=>change('log_level',e.currentTarget.value as Config['log_level'])}>
+            <option value="DEBUG">DEBUG · everything, including per-request detail</option>
+            <option value="INFO">INFO · the default</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select><small><code>DEBUG</code> is verbose enough to rotate the log quickly on a busy fleet, so it is worth putting back afterwards.</small></label>
           </section>
 
           <section><h3>Export diagnostics</h3>

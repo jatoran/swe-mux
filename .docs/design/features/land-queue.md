@@ -266,7 +266,7 @@ Three signals answer that, and **each is reported only when it was really observ
 - **Output lines.** The fallback for a gate that announces nothing. Reported as what it is: evidence the process is still producing output, never progress toward an end.
 
 **No percentage is derived from any of it, at either end.**
-A percent implies a denominator, and the steps of this repository's own gate take 175s and 3s in one run, so there is no honest one; line-of-script would be worse still, because the lines are not the work.
+A percent implies a denominator, and the steps of this repository's own gate take 45s and 3s in one run, so there is no honest one; line-of-script would be worse still, because the lines are not the work.
 `frontend/test/gitLand.test.ts` and `frontend/test/renderer/git-land.spec.ts` both assert the absence rather than trusting it.
 
 The reading is **in memory and lives exactly as long as the process does**.
@@ -418,6 +418,11 @@ So the map holds both halves, split by **what each part is a property of**:
   A **verify-only** row is labelled on exactly the same grounds and in exactly the same place: it moves through `Merging trunk` and `Verifying` in a landing's own words and stops one step early, which is when nobody is still watching, so `verify only` is drawn beside the branch - before the states it qualifies - and its green reads `Verified` rather than `Landed`.
   The main tree is the trunk these land *onto* and is never offered; a detached worktree states why rather than offering a button that would be refused.
   There is deliberately **no operator button for a verify-only run**: an operator with a worktree open has a terminal in it, and the value the queue adds here is the reusable verdict, which their next Land consumes without being asked. Verify-only rows still appear in the strip's queue and history like any other, so nothing is hidden - only unstartable from the map.
+- **Map's selection mode can start many lands at once, and that is all it does** (`git.md`).
+  Selecting worktrees and pressing Land sends one ordinary request per branch, in map order, through the same route and the same preconditions as the row's own button - the queue then runs them one at a time, which is the serialization it already guarantees rather than anything the bulk control arranges.
+  It waits for nothing, reorders nothing, and cannot skip a precondition: a request the queue refuses is reported beside the branch it refused, and the rest are enqueued regardless.
+  The main tree and a detached HEAD are named as unable to land rather than enqueued and refused, for the same reason the row states them.
+  A bulk press starts ordinary lands only, for the same reason a single row does: there is no operator button for a verify-only run.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
 
 Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.
@@ -501,6 +506,11 @@ Two tools make the safe call the short one and let the grant say different thing
 | `land_queue` | `<project>/.swe-mux/config.toml` `automations` | Per-Project opt-in. |
 | `land_grant` | `<project>/.swe-mux/config.toml` | `off` / `draft` / `granted`, default `draft`. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
+
+Every `global` row above is edited in Settings → Automation → **Land queue**.
+The install stop had a control from the start and the other four did not, which is the shape
+this feature's own prose already names for the verification command: a bound that only a
+config-file edit can reach is a bound nobody adjusts and nobody can see.
 
 ## Key files
 

@@ -30,6 +30,14 @@ import pytest
 pytestmark = [
     pytest.mark.conpty,
     pytest.mark.skipif(os.name != "nt", reason="ConPTY is Windows-only"),
+    # Every test here spawns a real pseudoconsole and asserts on timing: a
+    # coalescing window, a prompt that must survive a Ctrl+C, a 30s read
+    # deadline. Under `-n auto` they would otherwise be scattered across
+    # workers and run concurrently with each other, which is exactly the load
+    # those deadlines are least tolerant of. `xdist_group` pins the file to one
+    # worker, so its real consoles stay sequential; it is honoured only by
+    # `--dist loadgroup`, which is why the gate uses that mode.
+    pytest.mark.xdist_group("real_console_conpty"),
 ]
 
 if os.name == "nt":

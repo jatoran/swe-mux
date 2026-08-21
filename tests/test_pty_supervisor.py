@@ -27,7 +27,15 @@ from typing import Any
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.name != "nt", reason="ConPTY supervisor is Windows-only")
+pytestmark = [
+    pytest.mark.skipif(os.name != "nt", reason="ConPTY supervisor is Windows-only"),
+    # Same reason as `test_conpty_integration.py`: real supervisor processes,
+    # real shells, and survival/reconnect assertions with wall-clock deadlines.
+    # A separate group from the ConPTY file, so the two files run on two workers
+    # rather than chained on one - the point is that a file's own real consoles
+    # never overlap, not that the whole real-process surface is single-threaded.
+    pytest.mark.xdist_group("real_console_supervisor"),
+]
 
 if os.name == "nt":
     from swe_mux.pty_host import PtyHost

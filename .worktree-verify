@@ -11,7 +11,20 @@ set -euo pipefail
 step() { printf '\n=== %s ===\n' "$*" >&2; }
 
 step "pytest"
-uv run pytest tests -q -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"
+# Distributed across the host's physical cores (`-n auto`). The suite is
+# function-scoped throughout, keeps its state in per-test tmp dirs, and binds no
+# ports, so workers do not interfere; CLAUDE.md § Verification records what was
+# measured and why it holds.
+#
+# `--dist loadgroup` rather than `load` or `worksteal`: it is the only mode that
+# honours `xdist_group`, and the real-console files (`test_conpty_integration.py`,
+# `test_pty_supervisor.py`) carry that mark so each stays on a single worker
+# instead of running its wall-clock-sensitive pseudoconsole tests concurrently
+# with itself. Tests without the mark are distributed exactly as in `load`.
+#
+# `--durations=25` stays on so a test that grows slow is visible in the gate's
+# own output rather than only in a run someone thought to ask for.
+uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"
 
 step "ruff"
 uv run ruff check src/swe_mux tests packaging

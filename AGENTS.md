@@ -65,12 +65,13 @@ Worktree agents commit only their own branch.
 Reconcile a finished branch with current `master`, verify it, and integrate branches one at a time.
 
 **Landing is meant to be cheap; do not re-verify what did not change.** `.worktree-verify` is
-~175s of pytest plus ~17s for ruff, mypy, tsc, and `npm test` together, so after `git merge
+~45s of pytest (it runs across the host's cores; it was ~175s before 2026-08-21) plus ~17s for
+ruff, mypy, tsc, and `npm test` together, so after `git merge
 master` scope the re-run to what actually arrived (`git diff --stat ORIG_HEAD..`): docs-only
 means land immediately, anything not touching `src/swe_mux` means the ~17s half is enough, and
 only an incoming backend change earns another full pytest. Run the gate once and read all of
 it — piping it through `tail` or `grep` hides the part you needed and costs a second full run.
-Land the moment it is green, because a 3-minute window is wide enough for master to move and
+Land the moment it is green, because the window is wide enough for master to move and
 refuse the fast-forward; when that happens, merge again and apply the same triage instead of
 re-running everything.
 
@@ -96,7 +97,13 @@ tempted to re-add the lock on a hunch:
 - The SQLite files tests create live under `tests/`, which is per-worktree.
 - No test binds a port. Every `8765` in the suite is a string assertion.
 
-If any of those three stops being true, a verification lock is a stopgap.
+Re-audited 2026-08-21 for *intra*-run parallelism, where xdist workers share one `tests/`:
+the only test that writes into `tests/` already uses a `uuid4` filename; there are no
+`module`/`class`/`session`/`package` scoped fixtures and no `conftest.py` anywhere, so no
+worker inherits another's state; and both `os.environ` mutations restore in a `finally`
+inside a process of their own.
+
+If any of those stops being true, a verification lock is a stopgap.
 Fix the isolation instead, because serialised verification is the largest cost in parallel work.
 
 Worktree bootstrap (`.worktree-setup`) is `uv sync` plus `npm ci`, sharing the uv and npm
@@ -105,11 +112,22 @@ tasks are short, prefer reusing a few long-lived worktrees over creating one per
 
 ## Verification
 
-Backend: `uv run pytest tests -q -m "not live_agent and not live_subagent and not
-live_telemetry and not live_quota"`, `uv run ruff check src/swe_mux tests packaging`,
-`uv run mypy`. Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
+Backend: `uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent
+and not live_subagent and not live_telemetry and not live_quota"`, `uv run ruff check
+src/swe_mux tests packaging`, `uv run mypy`.
+Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
+
+The gate runs pytest across the host's cores (pytest-xdist, a `dev` dependency): measured
+2026-08-21 on 16 physical cores, 241.9s serial against 39.5-47.3s over seven `-n auto` runs.
+`--dist loadgroup` is not interchangeable with `--dist worksteal`: it is the only mode that
+honours the `xdist_group` mark keeping each real-console file
+(`test_conpty_integration.py`, `test_pty_supervisor.py`) on a single worker.
+While iterating, plain `uv run pytest tests/test_x.py` is still the right thing.
+A fixed `asyncio.sleep` before a *positive* assertion is what breaks under this - wait for
+the condition instead (`until(...)` in `tests/test_pty_ws.py`); a sleep guarding a negative
+assertion is a real quiet window and stays.
 
 The Playwright renderer suite (`npm run test:renderer`, in `frontend/`) is CI-only and
 binds a port: it drives a Vite dev server on 4174 with `reuseExistingServer`, so a second

@@ -114,6 +114,25 @@ Everything here is that pattern generalised.
   target against the daemon's registry, and every *grantable* Project field against a control
   in the Projects registry - so a field the daemon enforces can never again ship with no way
   to set it.
+- **And every `Config` field has a control or a stated reason it has none.**
+  The test above walks from a *link* to its control, which catches a control renamed or moved
+  and says nothing about a field that never had one.
+  That is the gap thirty settings accumulated in by 2026-08-21: each shipped enforced by the
+  daemon and reachable only by hand-editing `~/.mux/config.toml`, several of them load-bearing
+  (what an agent may do to another session, how long the land queue holds a busy worktree, what
+  a fresh attach replays), and two places in the app told the reader to go and find a control
+  that did not exist.
+  `frontend/test/settingsCoverage.test.ts` walks the other way, from every field the `Config`
+  dataclass declares to a control in the Settings panel.
+  A field with no control must appear on the `CONFIG_ONLY` list *with the reason*, which is the
+  whole escape hatch: an entry there is a claim someone made on purpose, and "nobody got to it"
+  is not one.
+  Detection is deliberately narrow - the panel's own `change(key, value)` setter, a
+  `BudgetControl`, a `data-setting` mark, or one of six named bespoke editors - because reading
+  a field to render a label is not editing it, and a looser rule would pass the allowlist too.
+  The same file holds the renderer fixture (`test/renderer/settingsConfigFixture.ts`) against
+  `public_dict`, since a field missing from it renders as `undefined` in a control with no way
+  to say so, and it had already drifted four fields behind `config.py`.
 - **The reveal waits rather than firing once.** Settings fetches its bundle before rendering any
   tab, and a Project's opt-in list is a second fetch inside the panel, so the control is
   routinely absent at request time.
@@ -249,3 +268,7 @@ POST /api/grants     {install?: {key: true}, project_id?, automations?: [id],
   twice. `ProjectsManager`'s `AgentAuthority` owns the four authority fields.
 - `frontend/test/grants.test.ts`, `frontend/test/renderer/grant-gate.spec.ts`,
   `tests/test_grants.py` — the contract, the browser behaviour, and the refusals.
+- `frontend/test/settingsCoverage.test.ts` — field → control, the `CONFIG_ONLY` reasons, and
+  the renderer fixture's key set.
+- `tests/test_settings_hot_apply.py` — the daemon half of the same honesty: a control whose
+  help text says nothing about restarting must actually take effect on a running daemon.

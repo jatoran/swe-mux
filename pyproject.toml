@@ -63,6 +63,10 @@ dev = [
   "mypy>=1.15",
   "pytest>=8.3",
   "pytest-asyncio>=0.25",
+  # The gate runs the suite across the host's cores. `--dist loadgroup` is the
+  # only distribution mode that honours `xdist_group`, which is what pins the
+  # real-console tests to a single worker (see `[tool.pytest.ini_options]`).
+  "pytest-xdist>=3.6",
   "ruff>=0.11",
 ]
 package = [
