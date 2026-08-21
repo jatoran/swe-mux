@@ -1014,12 +1014,24 @@ class CodeGraphStore:
     async def orphans(self, project_id: str) -> list[dict[str, Any]]:
         """Files with no inbound import or call edge — dead-code candidates.
 
-        Guarded against entry points is the *caller's* job: this returns raw
-        candidates, and unresolved dynamic callers mean every result is only a
-        candidate. Files that other files never reference statically."""
+        Admission first, orphan-hood second. A path the graph could never have
+        drawn an inbound edge *to* is not evidence of dead code, and reporting it
+        as such is a false positive by construction: an agent's scratchpad script
+        outside the Project root, a hashed bundle asset, a worktree copy, or a
+        test module a runner discovers rather than imports. Every one of the 76
+        `dead-code` findings in a measured 24-hour window was one of those four
+        (2026-08-21), and their volume also starved the two structural rules that
+        were accurate, because the per-pass budget is spent in path order.
+
+        The remaining candidates are still only candidates: a dynamic caller the
+        graph cannot see is exactly what `is_dead_code_candidate` cannot rule out,
+        which is why the annotation states it.
+
+        Guarded against entry points is still the *caller's* job.
+        """
 
         def op() -> list[dict[str, Any]]:
-            rows = self._db.execute(
+            cursor = self._db.execute(
                 """
                 SELECT f.path, f.lang, f.symbol_count FROM code_graph_files f
                 WHERE f.project_id=:pid AND f.symbol_count > 0
@@ -1027,11 +1039,21 @@ class CodeGraphStore:
                     SELECT 1 FROM code_graph_edges e
                     WHERE e.project_id=:pid AND e.dst_path=f.path
                       AND e.kind IN ('imports','calls') AND e.src_path <> f.path)
-                ORDER BY f.path LIMIT :lim
+                ORDER BY f.path
                 """,
-                {"pid": project_id, "lim": MAX_RESULT_LIMIT},
-            ).fetchall()
-            return [dict(r) for r in rows]
+                {"pid": project_id},
+            )
+            # Admitted rows are counted against the limit, never raw ones: a LIMIT
+            # applied before the predicate would spend the whole budget on
+            # scratchpad paths and report "no other orphans" as if it had looked.
+            out: list[dict[str, Any]] = []
+            for row in cursor:
+                if not is_dead_code_candidate(row["path"]):
+                    continue
+                out.append(dict(row))
+                if len(out) >= MAX_RESULT_LIMIT:
+                    break
+            return out
 
         return await self._run(op)
 
@@ -1317,6 +1339,59 @@ def is_project_relative(path: str) -> bool:
     if text.startswith("/") or _DRIVE_PREFIX.match(text):
         return False
     return not any(segment == ".." for segment in text.split("/"))
+
+
+#: Directories holding files that are *served or generated* rather than imported:
+#: bundler output, the static payload a browser fetches by URL. Every
+#: `npm run build` mints new hashed files under `assets/`, so each one becomes a
+#: permanent new "dead-code candidate" that no edit will ever resolve, and a
+#: service worker under `static/` is fetched by URL and imported by nothing on
+#: purpose. `_SKIP_DIRS` already covers `dist`/`build`/`node_modules` through
+#: `is_indexable_path`; these are the ones it does not.
+_GENERATED_DIR_SEGMENTS = ("assets", "static", "public", "generated", "__generated__")
+
+#: A test module or renderer harness. Discovered by a runner (pytest collection,
+#: Playwright's spec glob) rather than imported, so "nothing references it" is how
+#: it is *supposed* to look, and the graph is structurally unable to say otherwise.
+_TEST_DIR_SEGMENTS = ("tests", "test", "__tests__", "spec", "e2e")
+_TEST_NAME_MARKERS = (".spec.", ".test.", "_test.", "test_")
+_TEST_NAME_SUFFIXES = ("harness.tsx", "harness.ts", "conftest.py")
+
+
+def is_test_path(path: str) -> bool:
+    """Whether a normalized path is a test or a test harness."""
+    text = path.replace("\\", "/").casefold()
+    segments = text.split("/")
+    name = segments[-1]
+    if any(segment in _TEST_DIR_SEGMENTS for segment in segments[:-1]):
+        return True
+    if name.endswith(_TEST_NAME_SUFFIXES):
+        return True
+    return any(marker in name for marker in _TEST_NAME_MARKERS)
+
+
+def is_generated_output(path: str) -> bool:
+    """Whether a normalized path is served or generated rather than imported."""
+    segments = path.replace("\\", "/").casefold().split("/")
+    return any(segment in _GENERATED_DIR_SEGMENTS for segment in segments[:-1])
+
+
+def is_dead_code_candidate(path: str) -> bool:
+    """Whether "nothing imports this file" is evidence about *this file*.
+
+    The four exclusions are not taste. A path outside the Project root or under a
+    skipped directory can never acquire an inbound edge, so its isolation is a
+    property of the graph's boundary; generated output is rewritten by a build
+    rather than referenced; and a test file is reached by a runner the graph does
+    not model. In each case the absence of an edge says nothing about whether the
+    code is dead.
+    """
+    return (
+        is_project_relative(path)
+        and is_indexable_path(path)
+        and not is_generated_output(path)
+        and not is_test_path(path)
+    )
 
 
 def resolve_display_paths(project_root: str, identities: Iterable[str]) -> dict[str, str]:

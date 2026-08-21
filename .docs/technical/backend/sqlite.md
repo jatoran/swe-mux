@@ -116,6 +116,13 @@ Every pre-migration land did run the full gate, but that is a fact about history
 Version 4 added `land_requests.armed_replies` through the same check, defaulted to 0, which is the truth for every pre-migration row: nothing could arm a handback then.
 It is spent by a conditional `UPDATE … WHERE armed_replies<?` rather than a read-then-write, so the per-request cap on unattended handbacks is a claim two sweeps cannot both win (`../../design/features/land-queue.md`).
 
+Version 5 added `land_requests.kind` through the same check and the `land_verify_memos` table under `CREATE TABLE IF NOT EXISTS`.
+`kind` is backfilled to `'land'`, and here that is a fact about the *column* rather than only about history: nothing could ask for anything else, so the backfill states what each of those rows actually asked for.
+`land_verify_memos(project_root, tree_oid, digest)` is a gate verdict that already stands - the git tree the gate ran over and the digest of the command that ran, which are the whole of what decides one.
+The **tree** rather than the commit, because a reconcile that merged an unchanged trunk produces a new commit over identical content, which is exactly the case a commit-keyed row would miss; and the row is upserted rather than accumulated, like a plan.
+Only a run the queue executed writes one, and the store offers no other writer - an agent's own shell run is self-reported and never accepted (`../../design/features/land-queue.md`).
+Reads take a `not_before` floor rather than the table carrying a sweep: a verdict's freshness is a question the caller's configuration answers, and expiring rows out of the table would destroy the audit of what was reused when.
+
 `PromptQueueStore` reached schema version 6 with `queue_messages.solicited_by`, added through its own `PRAGMA table_info` migration list and nullable, because every pre-existing row was unsolicited by construction.
 It is the per-message half of the arming floor: a non-human sender other than `agent` may be staged `armed` only when it names the target's own request here (`../../design/features/agent-messaging.md`).
 Stored rather than derived for the reason the floor exists - arming must never be the sender's claim, so a row that arrived armed has to be able to name what asked for it.

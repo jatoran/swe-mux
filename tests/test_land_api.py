@@ -199,6 +199,47 @@ async def test_the_status_reports_the_two_switches_that_stop_the_pipeline(
         store.close()
 
 
+async def test_a_verify_only_request_is_enqueued_as_its_own_kind(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """`kind` defaults to `land`, so a caller written before this existed is unchanged.
+
+    The row carries it, because every state before the last one is identical and a
+    reader that cannot tell the two apart would narrate a verify-only run as a landing
+    right up until it stops one step early.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        created = await client.post(
+            "/api/land",
+            json={
+                "project_id": "proj-1",
+                "worktree_root": str(worktree),
+                "kind": "verify",
+            },
+        )
+        assert created.status == 201, await created.text()
+        assert (await created.json())["kind"] == "verify"
+
+        listed = await (await client.get("/api/land?project_id=proj-1")).json()
+        assert listed["requests"][0]["kind"] == "verify"
+
+        nonsense = await client.post(
+            "/api/land",
+            json={
+                "project_id": "proj-1",
+                "worktree_root": str(worktree),
+                "kind": "ship-it",
+            },
+        )
+        assert nonsense.status == 400
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_a_second_request_for_one_branch_is_refused(
     tmp_path: Path, trunk: Path
 ) -> None:

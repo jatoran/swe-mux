@@ -6,6 +6,7 @@ import {
   landAttentionRow,
   landGateNote,
   landHistoryOrder,
+  landKindNote,
   landQueueOrder,
   landStateLabel,
   landStateTone,
@@ -578,4 +579,94 @@ test('a land going round the gate says so on the summary line while it runs', ()
   assert.equal(summary.tone, 'busy')
   // Skipping the gate is not a *block*: nothing needs a human, and the strip stays shut.
   assert.equal(summary.blocked, false)
+})
+
+// -- verify-only rows ---------------------------------------------------------
+//
+// A verify-only request runs every state a land does except the last, in the same words,
+// so the strip narrates it as a landing right up until it stops one step early - which
+// is exactly when nobody is still watching. The kind has to be drawn, and its green has
+// to be its own state rather than a `landed` that moved nothing.
+
+test('a verify-only row is named as one, before the states it shares with a land', () => {
+  const summary = landingSummary(queueOf({
+    requests: [{
+      id: 'a', state: 'verifying', kind: 'verify', branch: 'worktree-alpha', created_at: 10,
+      verify_progress: { step_index: 2, step_name: 'ruff', elapsed_ms: 9000 },
+    }],
+  }), gateOf({}))
+  assert.equal(summary.queue, 'worktree-alpha · verify only · verifying · step 2 · ruff · 9s')
+  assert.equal(summary.tone, 'busy')
+  assert.equal(summary.blocked, false)
+})
+
+test('an ordinary land is not labelled, for the same reason a full gate is not', () => {
+  const row = parseLandQueue({
+    requests: [{ id: 'a', state: 'landing', branch: 'worktree-alpha', created_at: 10 }],
+  }).requests[0]
+  assert.equal(row.kind, 'land')
+  assert.equal(landKindNote(row), '')
+  // And a kind this build does not know reads as a land, which is what every row
+  // written before verify-only existed actually was.
+  for (const kind of [undefined, null, '', 'VERIFY', 'ship', 7]) {
+    const unknown = parseLandQueue({
+      requests: [{ id: 'a', state: 'landing', branch: 'b', created_at: 10, kind }],
+    }).requests[0]
+    assert.equal(unknown.kind, 'land')
+  }
+})
+
+test('a green verify-only row is terminal, is not a landing, and does not inflate the count', () => {
+  const now = 1_800_000_000
+  const queue = parseLandQueue({
+    requests: [{
+      id: 'a', state: 'verified', kind: 'verify', branch: 'worktree-alpha',
+      created_at: now - 600, updated_at: now - 500, finished_at: now - 500,
+    }],
+  })
+  const [row] = queue.requests
+  assert.equal(isActiveLand(row), false)
+  assert.equal(landStateLabel('verified'), 'Verified')
+  assert.equal(landStateTone('verified'), 'ok')
+  // Nothing moved, so "landed recently" must not count it.
+  assert.equal(recentLandings(queue.requests, now), 0)
+  // And the strip reads idle rather than making a headline out of a finished verify.
+  const summary = landingSummary(queue, gateOf({}), now)
+  assert.equal(summary.queue, 'nothing queued')
+  assert.equal(summary.tone, 'idle')
+})
+
+test('a verify-only green closes the handback its branch is answering', () => {
+  // The redo loop a handback asks for often runs through a verify first, so without
+  // this the strip reports a branch as returned-to-agent forever - which is the exact
+  // defect the supersession rule was written for, one request kind over.
+  const queue = parseLandQueue({
+    requests: [
+      { id: 'a', state: 'handed_back', branch: 'worktree-alpha', created_at: 100, finished_at: 120 },
+      { id: 'b', state: 'verified', kind: 'verify', branch: 'worktree-alpha', created_at: 200, finished_at: 220 },
+    ],
+  })
+  assert.equal(landAttentionRow(queue.requests), null)
+})
+
+test('a bounced verify-only request still speaks, and says which act bounced', () => {
+  const summary = landingSummary(queueOf({
+    requests: [{
+      id: 'a', state: 'handed_back', kind: 'verify', branch: 'worktree-alpha',
+      created_at: 10, updated_at: 30, finished_at: 30,
+    }],
+  }), gateOf({}))
+  assert.equal(summary.queue, 'worktree-alpha · verify only · returned to agent')
+  assert.equal(summary.tone, 'warn')
+})
+
+test('a reused verdict is drawn as the skip it is, and never as a documentation one', () => {
+  const rowOf = (verify_gate: unknown) => parseLandQueue({
+    requests: [{ id: 'a', state: 'landed', branch: 'worktree-alpha', created_at: 10, verify_gate }],
+  }).requests[0]
+  assert.equal(rowOf('reused').verifyGate, 'reused')
+  assert.equal(landGateNote(rowOf('reused')), 'verified earlier · gate reused')
+  // The two skips are not interchangeable to a reader deciding whether to trust the
+  // row: one means nobody ever ran this content, the other means this queue ran it.
+  assert.notEqual(landGateNote(rowOf('reused')), landGateNote(rowOf('docs_only')))
 })

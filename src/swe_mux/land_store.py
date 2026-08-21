@@ -40,11 +40,22 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-LAND_SCHEMA_VERSION = 4
+LAND_SCHEMA_VERSION = 5
+
+#: What a request asked the pipeline for. `land` is the whole pipeline through the
+#: fast-forward; `verify` stops after the gate and moves no trunk. One column rather
+#: than a second table because every step before the last is identical, and a request
+#: that shared the queue's serialisation but not its schema would be two designs.
+REQUEST_KINDS = ("land", "verify")
 
 #: States a request can occupy. `queued` is accepted-not-started; `waiting` is a
 #: precondition hold that a human can read; the three step states are in-flight; the
-#: last four are terminal.
+#: last five are terminal.
+#:
+#: `verified` is a verify-only request's green: the gate passed and nothing moved. Its
+#: own state rather than `landed` for the same reason `already_landed` is not `landed` -
+#: reporting a land would claim a trunk movement that did not happen, in a ledger whose
+#: whole purpose is recording which OID moved what.
 LAND_STATES = (
     "queued",
     "waiting",
@@ -52,6 +63,7 @@ LAND_STATES = (
     "verifying",
     "landing",
     "landed",
+    "verified",
     "already_landed",
     "handed_back",
     "refused",
@@ -65,7 +77,14 @@ ACTIVE_STATES = ("queued", "waiting", "reconciling", "verifying", "landing")
 #: A request with a mutation in flight. One per trunk, enforced by the schema.
 INFLIGHT_STATES = ("reconciling", "verifying", "landing")
 
-TERMINAL_STATES = ("landed", "already_landed", "handed_back", "refused", "cancelled")
+TERMINAL_STATES = (
+    "landed",
+    "verified",
+    "already_landed",
+    "handed_back",
+    "refused",
+    "cancelled",
+)
 
 LAND_SCHEMA = """
 CREATE TABLE IF NOT EXISTS land_requests(
@@ -74,6 +93,10 @@ CREATE TABLE IF NOT EXISTS land_requests(
   project_root TEXT NOT NULL,
   worktree_root TEXT NOT NULL,
   branch TEXT NOT NULL,
+  -- What the request asked for: 'land' runs the whole pipeline, 'verify' stops after
+  -- the gate. Both share the queue, the preconditions, and the reconcile, so this
+  -- decides exactly one thing - whether the last step happens.
+  kind TEXT NOT NULL DEFAULT 'land',
   requested_oid TEXT NOT NULL DEFAULT '',
   trunk_ref TEXT NOT NULL DEFAULT '',
   origin TEXT NOT NULL DEFAULT 'operator',
@@ -90,10 +113,12 @@ CREATE TABLE IF NOT EXISTS land_requests(
   verify_attempts INTEGER NOT NULL DEFAULT 0,
   -- Which gate this request ran: '' before it was classified, 'full' for the
   -- repository's own verification command, 'docs_only' for the change set that was
-  -- entirely documentation and therefore skipped it. Persisted rather than left in the
-  -- event trail alone because a *skipped* gate must be visible wherever the row is
-  -- drawn: a land nobody verified that reads identically to one that passed is exactly
-  -- the silent cap this column exists to prevent.
+  -- entirely documentation and therefore skipped it, 'reused' for the full gate that
+  -- a queue-executed run had already passed on this exact tree with these exact bytes.
+  -- Persisted rather than left in the event trail alone because a *skipped* gate must
+  -- be visible wherever the row is drawn: a land nobody verified that reads identically
+  -- to one that passed is exactly the silent cap this column exists to prevent, and a
+  -- reused verdict is a skip like any other.
   verify_gate TEXT NOT NULL DEFAULT '',
   trunk_before TEXT NOT NULL DEFAULT '',
   landed_oid TEXT NOT NULL DEFAULT '',
@@ -154,6 +179,34 @@ CREATE TABLE IF NOT EXISTS land_verify_plans(
   observed_at REAL NOT NULL,
   PRIMARY KEY(project_root, digest)
 );
+
+-- A gate verdict that already stands, so the same bytes are not run twice over the
+-- same content. Keyed by the **git tree** the gate ran against and the **digest of the
+-- command that ran**, because those two are the whole of what decides the verdict: a
+-- different tree is different content, and a different digest is a different authority.
+--
+-- The commit OID is deliberately NOT part of the key. A reconcile that merges an
+-- unchanged trunk produces a new commit over an identical tree, and a memo keyed by
+-- commit would miss on exactly the case it exists for.
+--
+-- Only a run this queue executed writes here. An agent's own shell run is self-reported
+-- and has a file-swap loophole - run modified bytes, restore the approved file - so
+-- there is deliberately no route that accepts one (`land-queue.md`).
+CREATE TABLE IF NOT EXISTS land_verify_memos(
+  project_root TEXT NOT NULL,
+  tree_oid TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  request_id TEXT NOT NULL DEFAULT '',
+  request_kind TEXT NOT NULL DEFAULT 'land',
+  branch TEXT NOT NULL DEFAULT '',
+  worktree_root TEXT NOT NULL DEFAULT '',
+  commit_oid TEXT NOT NULL DEFAULT '',
+  duration_ms REAL NOT NULL DEFAULT 0,
+  observed_at REAL NOT NULL,
+  PRIMARY KEY(project_root, tree_oid, digest)
+);
+CREATE INDEX IF NOT EXISTS land_verify_memos_observed
+  ON land_verify_memos(observed_at);
 """
 
 
@@ -182,6 +235,7 @@ def _row_to_request(row: sqlite3.Row) -> dict[str, Any]:
         "project_root": str(row["project_root"]),
         "worktree_root": str(row["worktree_root"]),
         "branch": str(row["branch"]),
+        "kind": str(row["kind"] or "land"),
         "requested_oid": str(row["requested_oid"] or ""),
         "trunk_ref": str(row["trunk_ref"] or ""),
         "origin": str(row["origin"] or "operator"),
@@ -272,6 +326,13 @@ class LandStore:
             self._db.execute(
                 "ALTER TABLE land_requests ADD COLUMN armed_replies INTEGER NOT NULL DEFAULT 0"
             )
+        if columns and "kind" not in columns:
+            # `'land'` for every pre-migration row, and here that IS a fact about the
+            # column rather than only about history: nothing could ask for anything else,
+            # so the backfill states what each of those rows asked for exactly.
+            self._db.execute(
+                "ALTER TABLE land_requests ADD COLUMN kind TEXT NOT NULL DEFAULT 'land'"
+            )
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, check_same_thread=False)
@@ -304,6 +365,7 @@ class LandStore:
         branch: str,
         requested_oid: str,
         trunk_ref: str,
+        kind: str = "land",
         origin: str = "operator",
         origin_session_id: str = "",
         origin_run_id: str = "",
@@ -315,7 +377,13 @@ class LandStore:
         The insert is the claim. `LandConflict` here means an active request for this
         branch already exists, which is the answer a repeat call should get rather than
         a second pipeline over one worktree.
+
+        The claim spans both kinds on purpose: a verify-only request and a land of the
+        same branch would reconcile the same worktree and run the same gate twice over,
+        so one branch has one request in flight whatever it asked for.
         """
+        if kind not in REQUEST_KINDS:
+            raise ValueError(f"unknown land request kind: {kind}")
         moment = time.time() if now is None else now
         request_id = f"lnd_{uuid.uuid4().hex[:16]}"
 
@@ -323,15 +391,16 @@ class LandStore:
             try:
                 self._db.execute(
                     "INSERT INTO land_requests(id,project_id,project_root,worktree_root,branch,"
-                    "requested_oid,trunk_ref,origin,origin_session_id,origin_run_id,"
+                    "kind,requested_oid,trunk_ref,origin,origin_session_id,origin_run_id,"
                     "correlation_id,state,created_at,updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",
                     (
                         request_id,
                         project_id,
                         project_root,
                         worktree_root,
                         branch,
+                        kind,
                         requested_oid,
                         trunk_ref,
                         origin,
@@ -343,7 +412,9 @@ class LandStore:
                     ),
                 )
             except sqlite3.IntegrityError as exc:
-                raise LandConflict(f"{branch} already has an active land request") from exc
+                raise LandConflict(
+                    f"{branch} already has an active request in the land queue"
+                ) from exc
             self._db.commit()
             row = self._db.execute(
                 "SELECT * FROM land_requests WHERE id=?", (request_id,)
@@ -664,6 +735,102 @@ class LandStore:
             # total. It must never degrade to a wrong total.
             return None
 
+    # -- verification memos ---------------------------------------------------
+
+    async def record_verify_memo(
+        self,
+        *,
+        project_root: str,
+        tree_oid: str,
+        digest: str,
+        request_id: str,
+        request_kind: str,
+        branch: str,
+        worktree_root: str,
+        commit_oid: str,
+        duration_ms: float,
+        now: float | None = None,
+    ) -> None:
+        """Record that this queue ran these exact bytes over this exact tree, and they passed.
+
+        Written only from a run the pipeline executed and observed pass. There is no
+        parameter here for "somebody says it passed", and that absence is the trust
+        boundary rather than an omission.
+
+        Replaces rather than accumulates, like a plan: the newest passing run over one
+        (tree, digest) pair is the whole statement about that pair, and a second row
+        would only raise the question of which one to believe.
+        """
+        if not tree_oid or not digest:
+            # Either missing means the key cannot identify what was proven. A memo with
+            # half a key would be reused by anything sharing the other half.
+            return
+        moment = time.time() if now is None else now
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO land_verify_memos(project_root,tree_oid,digest,request_id,"
+                "request_kind,branch,worktree_root,commit_oid,duration_ms,observed_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(project_root,tree_oid,digest) DO UPDATE SET"
+                " request_id=excluded.request_id, request_kind=excluded.request_kind,"
+                " branch=excluded.branch, worktree_root=excluded.worktree_root,"
+                " commit_oid=excluded.commit_oid, duration_ms=excluded.duration_ms,"
+                " observed_at=excluded.observed_at",
+                (
+                    project_root,
+                    tree_oid,
+                    digest,
+                    request_id,
+                    request_kind,
+                    branch,
+                    worktree_root,
+                    commit_oid,
+                    float(duration_ms),
+                    moment,
+                ),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def verify_memo(
+        self, project_root: str, tree_oid: str, digest: str, *, not_before: float = 0.0
+    ) -> dict[str, Any] | None:
+        """A standing green verdict for this (tree, digest), or `None`.
+
+        ``not_before`` is the caller's freshness bound, and it is the honest one: a tree
+        hash is a claim about *content*, not about the machine the gate runs on, and the
+        machine drifts. Outside the bound the answer is `None`, which runs the gate -
+        the fail-closed direction, where a needless run costs minutes and a wrongly
+        reused verdict costs a trunk.
+        """
+        if not tree_oid or not digest:
+            return None
+
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM land_verify_memos"
+                " WHERE project_root=? AND tree_oid=? AND digest=? AND observed_at>=?",
+                (project_root, tree_oid, digest, float(not_before)),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "project_root": str(row["project_root"]),
+                "tree_oid": str(row["tree_oid"]),
+                "digest": str(row["digest"]),
+                "request_id": str(row["request_id"] or ""),
+                "request_kind": str(row["request_kind"] or "land"),
+                "branch": str(row["branch"] or ""),
+                "worktree_root": str(row["worktree_root"] or ""),
+                "commit_oid": str(row["commit_oid"] or ""),
+                "duration_ms": float(row["duration_ms"] or 0.0),
+                "observed_at": float(row["observed_at"]),
+            }
+
+        return await self._run(op)
+
     async def origin_count_since(self, origin_session_id: str, since: float) -> int:
         """How many requests one session has made in a window, for the budget."""
 
@@ -724,8 +891,8 @@ class LandStore:
             placeholders = ",".join("?" * len(ids))
             states = ",".join("?" * len(ACTIVE_STATES))
             rows = self._db.execute(
-                "SELECT origin_session_id, id, branch, state, project_root, origin_run_id,"
-                " MAX(updated_at) updated_at FROM land_requests"
+                "SELECT origin_session_id, id, branch, kind, state, project_root,"
+                " origin_run_id, MAX(updated_at) updated_at FROM land_requests"
                 f" WHERE origin_session_id IN ({placeholders})"
                 f" AND state IN ({states}) AND updated_at>=?"
                 " GROUP BY origin_session_id",
@@ -735,6 +902,7 @@ class LandStore:
                 str(row["origin_session_id"]): {
                     "request_id": str(row["id"]),
                     "branch": str(row["branch"] or ""),
+                    "request_kind": str(row["kind"] or "land"),
                     "state": str(row["state"]),
                     "project_root": str(row["project_root"] or ""),
                     "origin_run_id": str(row["origin_run_id"] or ""),

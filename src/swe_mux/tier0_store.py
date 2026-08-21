@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-TIER0_SCHEMA_VERSION = 1
+TIER0_SCHEMA_VERSION = 2
 
 # Deterministic, no-model facts. Every derived control-plane feature reads from
 # this. `source_seq` is the pointer back into the immutable event log / raw store
@@ -46,8 +46,16 @@ CREATE TABLE IF NOT EXISTS tier0_facts (
   detail_json TEXT NOT NULL DEFAULT '{}',
   source_seq INTEGER,
   source_ref TEXT,
-  created_at REAL NOT NULL
+  created_at REAL NOT NULL,
+  call_id TEXT,
+  call_side TEXT
 );
+"""
+
+# Applied after the additive column migrations, never with the table: an index over
+# a column an older database has not grown yet fails the whole script, and
+# `executescript` leaves everything before the failure applied.
+SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_tier0_session ON tier0_facts(session_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tier0_kind ON tier0_facts(kind,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tier0_hash ON tier0_facts(content_hash);
@@ -57,7 +65,17 @@ CREATE INDEX IF NOT EXISTS idx_tier0_retention ON tier0_facts(created_at);
 -- declared-vs-verified) and one project's facts across sessions (provenance).
 CREATE INDEX IF NOT EXISTS idx_tier0_run ON tier0_facts(agent_run_id,created_at);
 CREATE INDEX IF NOT EXISTS idx_tier0_project ON tier0_facts(project_id,created_at);
+-- One tool call is one fact per side: the lookup that folds a hook's shadow of a
+-- call into the transcript's record of the same call.
+CREATE INDEX IF NOT EXISTS idx_tier0_call ON tier0_facts(session_id,call_id,call_side);
 """
+
+#: Additive migrations for databases written by an earlier release. Same shape as
+#: `history._migrate_schema`: keyed by the column whose absence means it is owed.
+_COLUMN_MIGRATIONS = {
+    "call_id": "ALTER TABLE tier0_facts ADD COLUMN call_id TEXT",
+    "call_side": "ALTER TABLE tier0_facts ADD COLUMN call_side TEXT",
+}
 
 # Event types that carry a deterministic fact worth recording. Everything else is
 # ignored so the capture path stays cheap.
@@ -69,7 +87,10 @@ _TARGET_KEYS = ("path", "file", "file_path", "command", "cmd", "url", "target")
 # yields a string that cannot be parsed back, which silently destroys the fact.
 _MAX_DETAIL_BYTES = 4096
 _MAX_DETAIL_VALUE_CHARS = 1024
-_MAX_TARGET_CHARS = 512
+#: Bound on the stored `target`. Public because a consumer reasoning about a
+#: target has to know whether it is looking at the whole thing: a value at exactly
+#: this length was cut, and what was cut off is unknown to it.
+MAX_TARGET_CHARS = 512
 # Payload keys that are structure, not free-form detail, and must survive bounding.
 _PROTECTED_DETAIL_KEYS = ("tool", "success", "exit_code", "test_outcome", "scope", "call_id")
 
@@ -185,12 +206,12 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
     target: str | None = None
     explicit_target = payload.get("target")
     if isinstance(explicit_target, str) and explicit_target.strip():
-        target = explicit_target.strip()[:_MAX_TARGET_CHARS]
+        target = explicit_target.strip()[:MAX_TARGET_CHARS]
     else:
         for key in _TARGET_KEYS:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                target = value.strip()[:_MAX_TARGET_CHARS]
+                target = value.strip()[:MAX_TARGET_CHARS]
                 break
     content_hash = payload.get("content_hash")
     if not isinstance(content_hash, str) or not content_hash:
@@ -204,6 +225,12 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
         state = str(payload.get("dirty_hash") or "")
     else:
         state = ""
+    # What the bounded `target` cannot hold: the adapter digests the untruncated
+    # text when it had to cut it (`observation._target_digest`), and that digest is
+    # the only thing keeping two long commands sharing a 512-character prefix from
+    # fingerprinting as one repeated action.
+    raw_digest = payload.get("target_digest")
+    target_digest = raw_digest if isinstance(raw_digest, str) and raw_digest else ""
     fingerprint = _fingerprint(
         event.type,
         kind,
@@ -212,7 +239,10 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
         content_hash,
         tool=tool,
         state=state,
+        target_digest=target_digest,
     )
+    raw_call_id = payload.get("call_id")
+    call_id = str(raw_call_id) if isinstance(raw_call_id, str) and raw_call_id else None
     return {
         "session_id": event.session_id or "",
         "kind": kind,
@@ -221,7 +251,22 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
         "fingerprint": fingerprint,
         "detail": bound_detail_payload(payload),
         "source_seq": event.seq or None,
+        "call_id": call_id,
+        "call_side": call_side_for(event.type),
     }
+
+
+def call_side_for(event_type: str) -> str | None:
+    """Which half of a tool call an event records: the call, or its result.
+
+    A call and its result share one id, so the identity that makes "one fact per
+    call" true is the pair — not the id alone.
+    """
+    if event_type == "tool_use":
+        return "call"
+    if event_type == "tool_result":
+        return "result"
+    return None
 
 
 def _classify_tool(tool: str) -> str:
@@ -277,6 +322,7 @@ def _fingerprint(
     *,
     tool: str | None = None,
     state: str = "",
+    target_digest: str = "",
 ) -> str:
     """A canonical action fingerprint for loop detection.
 
@@ -286,6 +332,11 @@ def _fingerprint(
     Identical repeated edits share a fingerprint (a loop signal); changed content
     differs (progress). `state` carries the progress signal for facts whose
     repetition is only meaningful against it (failing-test set, dirty tree).
+
+    `target_digest` is the discriminator for a target the column could not hold
+    whole: a 512-character prefix is *shared* by successive edits of one long
+    command, so the truncated target alone reports three distinct actions as one
+    repeat. Empty whenever nothing was truncated, which is the ordinary case.
     """
     basis = "\x1f".join(
         (
@@ -296,6 +347,7 @@ def _fingerprint(
             _exit_class(payload),
             content_hash or "",
             state,
+            target_digest,
         )
     )
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
@@ -319,6 +371,7 @@ class Tier0Store:
         # Capture is a durable-evidence path: a silent drop is indistinguishable
         # from "nothing happened", so failures are counted and surfaced.
         self._captured = 0
+        self._merged = 0
         self._dropped = 0
         self._last_error: str | None = None
         self._last_error_ts: float | None = None
@@ -330,10 +383,21 @@ class Tier0Store:
         db.execute("PRAGMA busy_timeout=5000")
         return db
 
+    def _migrate_schema(self) -> None:
+        """Apply additive migrations to databases created by earlier releases."""
+        columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(tier0_facts)").fetchall()
+        }
+        for column, statement in _COLUMN_MIGRATIONS.items():
+            if column not in columns:
+                self._db.execute(statement)
+
     def _connect(self) -> None:
         with self._operation_lock:
             self._db = connect_or_quarantine(self.path, self._open)
             self._db.executescript(SCHEMA)
+            self._migrate_schema()
+            self._db.executescript(SCHEMA_INDEXES)
             # Per-store row, not PRAGMA user_version: that pragma is per *file*
             # and several stores share mux.db, so each one stamping it overwrote
             # the others' version on every startup.
@@ -360,16 +424,34 @@ class Tier0Store:
         agent_run_id: str | None = None,
         project_id: str | None = None,
         created_at: float | None = None,
+        call_id: str | None = None,
+        call_side: str | None = None,
     ) -> str:
         fact_id = uuid.uuid4().hex
-        detail_json = json.dumps(bound_detail_payload(detail or {}), default=str)
+        bounded = bound_detail_payload(detail or {})
+        detail_json = json.dumps(bounded, default=str)
         ts = created_at if created_at is not None else time.time()
 
         def op() -> str:
+            if call_id and call_side:
+                merged = self._merge_call_fact(
+                    session_id=session_id,
+                    call_id=call_id,
+                    call_side=call_side,
+                    target=target,
+                    content_hash=content_hash,
+                    fingerprint=fingerprint,
+                    detail=bounded,
+                    source_seq=source_seq,
+                )
+                if merged is not None:
+                    self._db.commit()
+                    return merged
             self._db.execute(
                 "INSERT INTO tier0_facts(id,session_id,agent_run_id,project_id,kind,target,"
-                "content_hash,fingerprint,detail_json,source_seq,source_ref,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "content_hash,fingerprint,detail_json,source_seq,source_ref,created_at,"
+                "call_id,call_side) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     fact_id,
                     session_id,
@@ -383,12 +465,73 @@ class Tier0Store:
                     source_seq,
                     source_ref,
                     ts,
+                    call_id,
+                    call_side,
                 ),
             )
             self._db.commit()
             return fact_id
 
         return await self._run(op)
+
+    def _merge_call_fact(
+        self,
+        *,
+        session_id: str,
+        call_id: str,
+        call_side: str,
+        target: str | None,
+        content_hash: str | None,
+        fingerprint: str | None,
+        detail: dict[str, Any],
+        source_seq: int | None,
+    ) -> str | None:
+        """Fold a second record of one tool call into the fact already stored.
+
+        One tool call is one action, and two observers report it: the CLI's hook
+        fires at `PreToolUse`, and the transcript record of the same call arrives
+        later (or, mid-turn, earlier — `_transcript_authoritative` loses that race
+        both ways). Recorded as two facts, one action reads as two, which is how
+        4,540 junk command facts stood beside 2,948 real ones in a single day
+        (measured 2026-08-21) and how the loop detector counted a repeat that
+        never happened.
+
+        The **richer** record wins, whichever arrived first: a record carrying a
+        target or a content hash replaces one carrying neither, and a record with
+        nothing new to say is dropped. Nothing is merged across sides — a call and
+        its result share an id and are two facts by construction.
+
+        Returns the id of the surviving fact, or None when there was nothing to
+        merge and the caller should insert.
+        """
+        row = self._db.execute(
+            "SELECT id,target,content_hash,detail_json,source_seq FROM tier0_facts "
+            "WHERE session_id=? AND call_id=? AND call_side=? ORDER BY created_at LIMIT 1",
+            (session_id, call_id, call_side),
+        ).fetchone()
+        if row is None:
+            return None
+        stored_evidence = bool(row["target"]) or bool(row["content_hash"])
+        arriving_evidence = bool(target) or bool(content_hash)
+        self._merged += 1
+        if stored_evidence or not arriving_evidence:
+            # The stored fact is at least as good; this is a duplicate report.
+            return str(row["id"])
+        try:
+            stored_detail = json.loads(row["detail_json"] or "{}")
+        except (TypeError, ValueError):
+            stored_detail = {}
+        if not isinstance(stored_detail, dict):
+            stored_detail = {}
+        upgraded = json.dumps(
+            bound_detail_payload({**stored_detail, **detail}), default=str
+        )
+        self._db.execute(
+            "UPDATE tier0_facts SET target=?,content_hash=?,fingerprint=?,detail_json=?,"
+            "source_seq=COALESCE(?,source_seq) WHERE id=?",
+            (target, content_hash, fingerprint, upgraded, source_seq, row["id"]),
+        )
+        return str(row["id"])
 
     async def record_from_event(
         self, event: MuxEvent, *, agent_run_id: str | None = None, project_id: str | None = None
@@ -407,6 +550,8 @@ class Tier0Store:
             agent_run_id=agent_run_id,
             project_id=project_id,
             created_at=event.ts,
+            call_id=fact["call_id"],
+            call_side=fact["call_side"],
         )
 
     async def recent_facts(self, session_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
@@ -532,6 +677,11 @@ class Tier0Store:
         """Capture health for diagnostics: silent fact loss must be observable."""
         return {
             "captured": self._captured,
+            # Second reports of a call already recorded, folded into it rather than
+            # stored twice. A rising count is the hook/transcript overlap working,
+            # not a fault; a count stuck at zero on a Claude session means the
+            # call ids stopped joining.
+            "merged": self._merged,
             "dropped": self._dropped,
             "last_error": self._last_error,
             "last_error_ts": self._last_error_ts,

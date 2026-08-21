@@ -84,7 +84,27 @@ test('the queue reads in the order the pipeline will reach it', async ({ page })
   await expect(branches).toHaveText(['worktree-land-ui-rework', 'worktree-beta'])
   await expect(page.locator('.git-land-list .git-land-position')).toHaveText(['1', '2'])
   // A finished land is history and is folded away rather than sitting in the queue.
-  await expect(page.locator('.git-land-history summary')).toHaveText('1 finished')
+  await expect(page.locator('.git-land-history summary')).toHaveText('2 finished')
+})
+
+test('a verify-only row is named as one and never reads as a landing', async ({ page }) => {
+  // It runs every state a land does except the last, in the same words, so without a
+  // label it narrates as a landing right up until it stops one step early.
+  await page.setViewportSize({ width: 420, height: 900 })
+  await page.goto('/git-land-harness.html')
+  await page.locator('.git-landing-summary').click()
+  await page.locator('.git-land-history summary').click()
+
+  const row = page.locator('.git-land-row').filter({ hasText: 'worktree-delta' })
+  await expect(row.locator('.git-land-kind-note')).toHaveText('verify only')
+  await expect(row.locator('.git-land-state')).toHaveText('Verified')
+  // Nothing moved, so there is no before/after pair to draw.
+  await expect(row.locator('.git-land-oid')).toHaveCount(0)
+
+  // And an ordinary land carries no such label, for the same reason a full gate carries
+  // no gate note: it is what a row here is unless something says otherwise.
+  const landed = page.locator('.git-land-row').filter({ hasText: 'worktree-gamma' })
+  await expect(landed.locator('.git-land-kind-note')).toHaveCount(0)
 })
 
 test('the verification command shows what resolved, and edits without approving', async ({ page }) => {

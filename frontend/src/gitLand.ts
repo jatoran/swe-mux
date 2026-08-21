@@ -11,6 +11,7 @@ export type LandState =
   | 'verifying'
   | 'landing'
   | 'landed'
+  | 'verified'
   | 'already_landed'
   | 'handed_back'
   | 'refused'
@@ -18,8 +19,18 @@ export type LandState =
 
 const LAND_STATES: readonly LandState[] = [
   'queued', 'waiting', 'reconciling', 'verifying', 'landing',
-  'landed', 'already_landed', 'handed_back', 'refused', 'cancelled',
+  'landed', 'verified', 'already_landed', 'handed_back', 'refused', 'cancelled',
 ]
+
+/**
+ * What a request asked the pipeline for.
+ *
+ * `verify` runs everything a `land` runs except the fast-forward, so its rows move
+ * through the same states and must be told apart by this rather than by inference from
+ * where they stopped. Anything unrecognised reads as `land`, which is what every row
+ * written before verify-only existed actually was.
+ */
+export type LandKind = 'land' | 'verify'
 
 /**
  * A running gate's own reading of itself.
@@ -56,8 +67,11 @@ export type LandVerifyProgress = {
  * row written by a build that predates the classifier. It is deliberately *not*
  * collapsed into `'full'`: a row that claims a classification nobody recorded is the
  * wrong direction for a field whose entire job is making a skipped gate visible.
+ *
+ * `'reused'` is that same job for the other skip: the full gate, run earlier by this
+ * queue over this exact tree with these exact bytes, and therefore not run again here.
  */
-export type LandGate = '' | 'full' | 'docs_only'
+export type LandGate = '' | 'full' | 'docs_only' | 'reused'
 
 export type LandRequest = {
   id: string
@@ -65,6 +79,8 @@ export type LandRequest = {
   projectRoot: string
   worktreeRoot: string
   branch: string
+  /** What the request asked for. A `verify` row never moves a trunk. */
+  kind: LandKind
   trunkRef: string
   origin: string
   originSessionId: string
@@ -210,6 +226,10 @@ function parseRequest(raw: unknown): LandRequest | null {
     projectRoot: text(row.project_root),
     worktreeRoot: text(row.worktree_root),
     branch: text(row.branch),
+    // Unrecognised reads as `land`, which is the truth for every row written before
+    // verify-only existed and the safe direction for one written after: a row drawn as
+    // a land that only verified is a smaller lie than a land drawn as a verify.
+    kind: row.kind === 'verify' ? 'verify' : 'land',
     trunkRef: text(row.trunk_ref),
     origin: text(row.origin) || 'operator',
     originSessionId: text(row.origin_session_id),
@@ -229,7 +249,8 @@ function parseRequest(raw: unknown): LandRequest | null {
     // Anything the parser does not recognise reads as "not classified", never as a
     // gate that ran. An unknown value must not be able to render as `docs_only`.
     verifyGate: row.verify_gate === 'docs_only' ? 'docs_only'
-      : row.verify_gate === 'full' ? 'full' : '',
+      : row.verify_gate === 'reused' ? 'reused'
+        : row.verify_gate === 'full' ? 'full' : '',
   }
 }
 
@@ -306,7 +327,22 @@ export function verifyCommandEditable(gate: LandVerifyCommand): boolean {
 
 /** Terminal states are history; the rest are the queue as it stands. */
 export function isActiveLand(request: LandRequest): boolean {
-  return !['landed', 'already_landed', 'handed_back', 'refused', 'cancelled'].includes(request.state)
+  return !['landed', 'verified', 'already_landed', 'handed_back', 'refused', 'cancelled']
+    .includes(request.state)
+}
+
+/**
+ * `verify only`, or `''` for an ordinary land.
+ *
+ * Only the verify-only case is named, for the same reason only a *skipped* gate is: a
+ * land is what a row in this queue is unless something says otherwise, so labelling it
+ * would put a redundant chip on every row and bury the one that matters. A verify-only
+ * row, meanwhile, passes through the same states with the same words - `Merging trunk`,
+ * `Verifying` - and without this reads as a landing right up until it stops one step
+ * early, which is exactly when nobody is still watching.
+ */
+export function landKindNote(request: LandRequest): string {
+  return request.kind === 'verify' ? 'verify only' : ''
 }
 
 /**
@@ -324,6 +360,9 @@ export function landStateLabel(state: LandState): string {
     case 'verifying': return 'Verifying'
     case 'landing': return 'Fast-forwarding'
     case 'landed': return 'Landed'
+    // Not 'Landed', because nothing moved. A verify-only request's green is its own
+    // answer, and reporting a land would claim a trunk movement that did not happen.
+    case 'verified': return 'Verified'
     case 'already_landed': return 'Already on trunk'
     case 'handed_back': return 'Returned to agent'
     case 'refused': return 'Refused'
@@ -354,8 +393,15 @@ export function landHistoryOrder(requests: LandRequest[]): LandRequest[] {
  * `cancelled` is deliberately absent even though it is terminal. Withdrawing a re-request
  * is not an answer about the branch, so an earlier handback it followed is still the
  * standing fact about that branch and must keep speaking for it.
+ *
+ * `verified` *is* present, and has to be. A verify-only run is how an agent answers a
+ * bounced gate before asking to land again, so without it the redo loop the handback
+ * asks for is exactly the loop that cannot close the handback - which is the defect this
+ * rule was written for, reappearing one request kind over.
  */
-const ANSWERING_STATES: readonly LandState[] = ['landed', 'already_landed', 'handed_back', 'refused']
+const ANSWERING_STATES: readonly LandState[] = [
+  'landed', 'verified', 'already_landed', 'handed_back', 'refused',
+]
 
 /** The durable uniqueness key a request is claimed under (`land_requests_active`). */
 function branchKey(request: LandRequest): string {
@@ -478,15 +524,20 @@ export function verifyPlanNote(plan: LandVerifyPlan | null): string {
  * show it: the row goes from merging the trunk straight to fast-forwarding, and finishes
  * reading exactly like one that passed three minutes of pytest. That is the one thing
  * here that must never be silent, so it is the one thing that gets a line.
+ *
+ * A **reused** verdict is the same defect wearing a different cause — a gate that did not
+ * run on this row — so it gets the same treatment and says which cause it was. The two are
+ * not interchangeable to a reader deciding whether to trust the row: one means nobody has
+ * ever run this content through the suite, the other means this queue ran exactly it.
  */
 export function landGateNote(request: LandRequest): string {
-  return request.verifyGate === 'docs_only'
-    ? 'documentation only · verification skipped'
-    : ''
+  if (request.verifyGate === 'docs_only') return 'documentation only · verification skipped'
+  if (request.verifyGate === 'reused') return 'verified earlier · gate reused'
+  return ''
 }
 
 export function landStateTone(state: LandState): 'ok' | 'warn' | 'busy' | 'idle' {
-  if (state === 'landed') return 'ok'
+  if (state === 'landed' || state === 'verified') return 'ok'
   // Not 'ok': nothing moved. Not 'warn' either - nothing went wrong, the answer is
   // simply that the request was already true.
   if (state === 'already_landed') return 'idle'
@@ -559,7 +610,13 @@ export function landingSummary(
     // itself: it has no `verifying` state to report a step from, and without this the
     // strip narrates a land that quietly went round the gate as an ordinary one.
     const gateNote = landGateNote(running)
-    queueText = `${running.branch} · ${landStateLabel(running.state).toLowerCase()}`
+    // Before the state, not after it: a verify-only row runs through `Merging trunk`
+    // and `Verifying` word for word like a landing, so the qualification has to reach
+    // the reader before the words it qualifies.
+    const kindNote = landKindNote(running)
+    queueText = `${running.branch}`
+      + (kindNote ? ` · ${kindNote}` : '')
+      + ` · ${landStateLabel(running.state).toLowerCase()}`
       + (progress ? ` · ${progress}` : '')
       + (gateNote ? ` · ${gateNote}` : '')
       + (behind > 0 ? ` · ${behind} behind` : '')
@@ -568,7 +625,10 @@ export function landingSummary(
     queueText = `${active.length} queued · next ${active[0].branch}`
     tone = 'idle'
   } else if (attention) {
-    queueText = `${attention.branch} · ${landStateLabel(attention.state).toLowerCase()}`
+    const kindNote = landKindNote(attention)
+    queueText = `${attention.branch}`
+      + (kindNote ? ` · ${kindNote}` : '')
+      + ` · ${landStateLabel(attention.state).toLowerCase()}`
     tone = 'warn'
   } else {
     // Idle, and idle is what it says. The count is here because the alternative reading -

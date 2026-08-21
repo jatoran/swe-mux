@@ -639,6 +639,47 @@ async def _seed_findings(store: AutomationStore) -> None:
     )
 
 
+async def test_the_findings_read_retracts_a_loop_finding_its_evidence_cannot_support(
+    tmp_path: Path,
+) -> None:
+    """Withheld at the read, never rewritten in the store.
+
+    390 of 397 stored loop findings rest on facts carrying neither a target nor a
+    content hash, which is no discriminator at all (2026-08-21). The row keeps
+    saying what it said; the read says why it does not hold.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    await store.create_annotation(
+        agent_run_id="run-a",
+        project_id="proj",
+        tag="loop-detected",
+        content="the same command action ran 4 times",
+        evidence=[{"fact_id": "f1", "kind": "command", "target": None}] * 4,
+        provenance="deterministic_consumer",
+    )
+    await store.create_annotation(
+        agent_run_id="run-a",
+        project_id="proj",
+        tag="loop-detected",
+        content="the same command action ran 3 times on pytest -q",
+        evidence=[{"fact_id": "f9", "kind": "command", "target": "pytest -q"}] * 3,
+        provenance="deterministic_consumer",
+    )
+
+    app = web.Application(middlewares=[error_middleware])
+    app["automation_store"] = store
+    app.router.add_get("/api/annotations", list_annotations)
+    async with TestClient(TestServer(app)) as client:
+        payload = await (await client.get("/api/annotations?project_id=proj")).json()
+        withheld = [item for item in payload["items"] if item.get("unsupported")]
+        standing = [item for item in payload["items"] if not item.get("unsupported")]
+        assert len(withheld) == 1 and len(standing) == 1
+        assert withheld[0]["unsupported_reason"]
+        # The stored row is untouched, so the scope's count still includes it.
+        assert payload["tag_counts"]["loop-detected"] == 2
+    store.close()
+
+
 async def test_annotation_store_filters_resolve_runs_since_and_counts(
     tmp_path: Path,
 ) -> None:

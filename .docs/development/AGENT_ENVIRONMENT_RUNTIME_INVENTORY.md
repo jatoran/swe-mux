@@ -4,7 +4,8 @@
 
 - Active design note and implementation plan.
 - Research reviewed 2026-08-08 against current Codex, Claude Code, and oh-my-pi documentation and source.
-- No implementation is committed by this document.
+- **Phases 1-3 shipped 2026-08-21** as the per-server tool catalog in the Agents tab (`src/swe_mux/mcp_tools.py`, `.docs/design/features/agent-environment.md` § MCP tool catalogs). Phase 4 (provider API improvements) remains open.
+- Two things the implementation settled differently from the plan below, both because measurement contradicted it, are recorded in § Corrections from implementation.
 
 ## Problem
 
@@ -237,6 +238,28 @@ Rejected because replacing their PTY-owned TUI sessions with App Server or Agent
 - Add explicit runtime refresh and probe diagnostics.
 - Test timeout, cancellation, partial results, secret redaction, and cache invalidation.
 
+## Corrections from implementation
+
+Two decisions above did not survive contact with the running providers.
+
+**Claude is dialled directly rather than through an Agent SDK sidecar.**
+The plan called for initializing an Agent SDK client and calling `get_mcp_status()`; "Connecting swe-mux directly to configured MCP servers" is listed under Rejected approaches.
+The rejection's reasoning still holds and is why the result is labelled `parallel_probe` and never presented as the TUI's state: raw dialling misses account connectors, plugin contributions, and provider-side gating.
+What changed is the cost comparison.
+An SDK sidecar is a second full agent runtime for a drawer feature, while the official `mcp` v2 client answers `initialize` + `tools/list` over both the legacy and the 2026 stateless protocol revisions in one dependency, and its `ListToolsResult` carries the `ttlMs`/`cacheScope` hints the cache honours.
+An HTTP server whose configuration carries credentials is skipped rather than dialled, which is where most of the connector gap actually lands, and it is reported as "auth required / not probed" rather than as an empty catalog.
+
+**A `private` cache scope cannot be part of the cache key.**
+The plan's fingerprint list is everything known *before* the question is asked, but `cacheScope` is something the answer tells you.
+Keying on it and re-keying afterwards leaves the first reading unreachable under the key the next lookup computes - the reading is stored, and every subsequent request misses it.
+The entry therefore records which session collected it, and the sharing check runs on the read: a `private` reading is served only back to its own session, and any other session probes again.
+The one case that *is* known in advance stays in the key - an OMP snapshot is one process's live reading by construction, so it is session-scoped from the start.
+
+Two measurements worth keeping:
+
+- `codex app-server` answered `mcpServerStatus/list` with `toolsAndAuthOnly` in 1.7-2.2s against four servers and 89 tools, and `codex_apps` was among them, confirming the gap this feature exists to close.
+- That response arrives as a **single** JSON-RPC line, and `toolsAndAuthOnly` still carries every tool's full input and output schema, so it overran asyncio's 64 KiB `StreamReader` default - which raises rather than truncating. The reader is given an explicit 8 MiB limit and treats an overrun as a bounded failure.
+
 ### Phase 4: Provider API improvements
 
 - Propose an OMP status snapshot API that retains typed authentication and failure states.
@@ -246,7 +269,10 @@ Rejected because replacing their PTY-owned TUI sessions with App Server or Agent
 
 | File | Responsibility |
 |---|---|
-| `src/swe_mux/agent_environment.py` | Passive inventory, normalization, completeness, and cache. |
+| `src/swe_mux/agent_environment.py` | Passive inventory, normalization, completeness, cache, and `resolve_mcp_servers`. |
+| `src/swe_mux/mcp_tools.py` | Evidence tiers, collectors, the fingerprint cache, and the live-snapshot store. |
+| `src/swe_mux/mcp_contract.py` | The closed mux tool contract the `swe_mux_owned` catalog is checked against. |
+| `tests/test_mcp_tools.py` | Tier, sanitization, cache-identity, and probe-failure coverage. |
 | `src/swe_mux/agent_launcher.py` | Provider launch arguments and injected session integrations. |
 | `src/swe_mux/adapters/omp.py` | OMP-specific integration and generated extension behavior. |
 | `src/swe_mux/harness.py` | Provider descriptors and documented capability catalogs. |

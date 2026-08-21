@@ -607,10 +607,22 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     project_menu = app[
         app.index("aria-label={`Project actions for") : app.index('aria-label="Sidebar actions"')
     ]
-    assert "BROWSE THIS PROJECT" in project_menu
-    for scoped in ("history.openProject", "processes.project", "prompts.openProject"):
+    # What survives here is the prefiltered surface with nowhere else to be reached from.
+    for scoped in ("history.openProject", "prompts.openProject"):
         assert f"runNamedCommand('{scoped}')" in project_menu
-    assert "openNotesBrowser(target)" in project_menu
+    # Notes, Processes, the fleet queue, and Browse files each left the Project menu: every
+    # one is a drawer tab or a dialog that already opens on the *selected* Project, and
+    # selecting a Project is one click on the row this menu was opened from - so the row
+    # was a second route to a place one click away. They keep their palette commands.
+    for elsewhere in ("openNotesBrowser(target)", "processes.project", "queue.fleetProject"):
+        assert elsewhere not in project_menu
+    assert "openProjectFiles(" not in project_menu
+    for command in ("notes.browseProject", "processes.project", "project.files"):
+        assert f"id: '{command}'" in app or f"id:'{command}'" in app
+    # The category headings went with them: two headings over three rows apiece in a menu
+    # of nine spent a fifth of its height saying what each row's own icon now says.
+    assert "BROWSE THIS PROJECT" not in project_menu
+    assert 'context-subtitle">PROJECT<' not in project_menu
 
     # Scope is a visible, clearable control rather than a hidden mode, on every shell that
     # draws the surface — including the drawer tab, which opens scoped to the active Project.

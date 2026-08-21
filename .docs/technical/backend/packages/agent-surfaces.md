@@ -22,7 +22,9 @@ Reads:
 - `watch_session`, the one read that matures into a message: it reads a sibling's state and stages a single deterministic notice into the *caller's own* queue when that sibling settles, ends, or the caller's timeout elapses.
   Declared a read because it addresses nobody and actuates nothing; the bounds and the fire rules live in `session_watch.py`.
 
-Writes, all thin callers into services that hold the authority: `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, and `request_land` - whose worktree is read from the caller's own live cwd rather than accepted as an argument.
+Writes, all thin callers into services that hold the authority: `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, and the two land-queue callers.
+`request_land` and `request_verify` read their worktree from the caller's own live cwd rather than accepting it as an argument, through one shared enqueue helper so that scoping is written once.
+Two tools rather than one flagged tool, so the call that moves a trunk is never the default spelling of the call that moves nothing.
 `notify(dry_run=true)` is the one call on that list that writes nothing, and it is not counted as a write: checking before you send must not read as authority spent.
 
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
@@ -65,10 +67,14 @@ Every refusal is a typed `QueueError`.
 - The two suppressions that keep "settled" honest: `starting` is not working, and an `idle` target holding `RUNNING_ACTIVITY_KINDS` or `idle_reason: waiting_on_background` has not finished.
 - Lifetime: in-memory, dropped when the watcher session ends or its conversation rolls over, and flushed as notices on `stop()` so a daemon restart is never a silent un-arming.
 - The fixed notice template, and the counters `GET /api/diagnostics/background` reports.
+- `_notice_arming`: whether the notice is staged armed (`solicited_by=<watch id>`) or as a draft.
+  Two checks, made when the notice is written rather than at arming time: the run that armed the watch must still be live, and `session_watch_enabled` must still be on.
+  The other bounds that authority requires hold by construction here (`design/features/land-queue.md`), so there is nothing else to check.
+  The outcome is recorded as `armed` plus an `arming_reason`, and counted as `armed_notices` beside `resolved`.
 
 Every refusal is a typed `WatchRefusal` (a `QueueError`).
 
-**Not:** delivery or arming of the notice (`prompt_queue.py` owns both, and a `rule` sender is never self-arming), status detection itself (`session.py` and `observation.py` own the state the watch reads), MCP transport (`mcp.py`), or any storage - a watch has no table on purpose (`design/data-model.md`).
+**Not:** the arming floor itself or delivery (`prompt_queue.py` owns both; this module decides only what to *ask* for and reads the answer back off the row), status detection itself (`session.py` and `observation.py` own the state the watch reads), MCP transport (`mcp.py`), or any storage - a watch has no table on purpose (`design/data-model.md`).
 
 ## Prompt delivery
 

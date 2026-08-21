@@ -19,8 +19,16 @@ from typing import Any
 import pytest
 
 from swe_mux import push, session
-from swe_mux.prompt_queue import QueueError
+from swe_mux.prompt_queue import (
+    HUMAN_SENDER_KINDS,
+    SELF_ARMING_SENDER_KINDS,
+    QueueError,
+)
 from swe_mux.session_watch import (
+    ARMING_REASON_DISABLED,
+    ARMING_REASON_OK,
+    ARMING_REASON_ROLLED,
+    ARMING_REASON_UNKNOWN_RUN,
     RUNNING_ACTIVITY_KINDS,
     SETTLE_HOLD_SECONDS,
     SessionWatchService,
@@ -55,17 +63,36 @@ class FakeClock:
 
 
 class FakeQueue:
-    """Stands in for the Phase 5 prompt queue, recording what it was handed."""
+    """Stands in for the Phase 5 prompt queue, recording what it was handed.
+
+    It applies the queue's own arming floor rather than echoing the request,
+    because the service reads the arming back off the returned row: a stub that
+    always said `armed` would pin the ask instead of the outcome, and the whole
+    point of the read-back is that the queue gets the last word.
+    """
 
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
         self.fail_with: Exception | None = None
+        #: Set to model a watcher that vanished between the sweep and the enqueue,
+        #: which `server._session_watch_notice` answers with an empty row.
+        self.target_gone = False
 
     async def __call__(self, **kwargs: Any) -> dict[str, Any]:
         if self.fail_with is not None:
             raise self.fail_with
         self.messages.append(kwargs)
-        return {"id": f"msg_{len(self.messages)}"}
+        if self.target_gone:
+            return {}
+        armed = bool(kwargs.get("armed")) and (
+            str(kwargs.get("sender_kind") or "") in HUMAN_SENDER_KINDS
+            or str(kwargs.get("sender_kind") or "") in SELF_ARMING_SENDER_KINDS
+            or bool(kwargs.get("solicited_by"))
+        )
+        return {
+            "id": f"msg_{len(self.messages)}",
+            "state": "armed" if armed else "draft",
+        }
 
 
 class FakeEvents:
@@ -368,10 +395,13 @@ async def test_the_notice_is_a_rule_sender_addressed_to_the_watcher() -> None:
     assert message["sender_kind"] == "rule"
     assert message["sender_id"] == "session_watch"
     assert message["correlation_id"] == armed["watch_id"]
-    # No third session is ever addressed and no delivery is claimed.
+    # No third session is ever addressed and nothing beyond the arming pair is
+    # passed: the notice carries no constraints, no thread, and no payload.
     assert set(message) == {
         "target_session_id",
         "body",
+        "armed",
+        "solicited_by",
         "sender_kind",
         "sender_id",
         "sender_label",
@@ -379,18 +409,187 @@ async def test_the_notice_is_a_rule_sender_addressed_to_the_watcher() -> None:
     }
 
 
-async def test_the_result_says_nothing_will_auto_deliver_the_notice() -> None:
-    """`queued` alone is unactionable, so the sender-kind consequence is stated.
+async def test_the_result_says_the_notice_will_be_staged_armed() -> None:
+    """`queued` alone is unactionable, so the delivery consequence is stated.
 
-    A `rule` item is never self-arming, so a caller told only "watching" would
-    wait for a message no machine was going to hand it.
+    The notice is the bounded answer to a request this session made, so it is
+    staged armed - and the result says that, along with the fact that armed is
+    not delivered, rather than letting a caller infer either half.
     """
     watcher = make_session("w")
     target = make_session("t", state="working")
     service, _queue, _clock, _events = build(watcher, target)
     result = await service.watch(watcher, target="t")
-    assert result["notice_delivery"]["auto_delivery"] is False
-    assert "never self-arming" in result["notice_delivery"]["waits_for"]
+    assert result["notice_delivery"]["auto_delivery"] is True
+    waits_for = result["notice_delivery"]["waits_for"]
+    assert "staged armed" in waits_for
+    assert "Armed is not delivered" in waits_for
+
+
+# -- arming ------------------------------------------------------------------
+
+
+async def test_a_matured_notice_arrives_armed_and_names_the_watch() -> None:
+    """The watch is the consent, and `solicited_by` is what records it.
+
+    A `rule` sender is not self-arming in general; this one arms by naming the
+    request the *target itself* made, which is the narrowing the land handback
+    established (`land-queue.md`). Without it the notice reached the session
+    that asked for it as an inert draft nobody delivered.
+    """
+    watcher = make_session("w")
+    target = make_session("t", state="working")
+    service, queue, _clock, events = build(watcher, target)
+    armed = await service.watch(watcher, target="t")
+
+    target.record.state = "exited"
+    [outcome] = await service.tick()
+    message = queue.messages[0]
+    assert message["armed"] is True
+    assert message["solicited_by"] == armed["watch_id"]
+    assert outcome["armed"] is True
+    assert outcome["arming_reason"] == ARMING_REASON_OK
+    assert service.status()["armed_notices"] == 1
+    resolved = next(
+        payload for kind, payload in events.emitted if kind == "session_watch_resolved"
+    )
+    assert resolved["armed"] is True
+    assert resolved["arming_reason"] == ARMING_REASON_OK
+
+
+async def test_the_settle_notice_arms_the_same_way_the_ended_one_does() -> None:
+    """Arming is a property of the watch, not of which rule matured it."""
+    watcher = make_session("w")
+    target = make_session("t", state="working")
+    service, queue, clock, _events = build(watcher, target)
+    await service.watch(watcher, target="t")
+
+    await service.tick()
+    target.record.state = "idle"
+    await service.tick()
+    clock.advance(SETTLE_HOLD_SECONDS + 1)
+    [outcome] = await service.tick()
+    assert outcome["case"] == "settled"
+    assert outcome["armed"] is True
+    assert queue.messages[0]["armed"] is True
+
+
+async def test_a_rolled_over_run_gets_a_draft_rather_than_an_armed_notice() -> None:
+    """The consent belongs to the conversation that gave it, and to no successor.
+
+    The sweep drops a rolled watch outright, so the case that reaches a notice at
+    all is the `stop()` flush - which does not go through the sweep. The run
+    binding is therefore re-checked at write time, and the notice is staged as
+    the draft it always used to be rather than withheld.
+    """
+    watcher = make_session("w", run_id="run-a")
+    target = make_session("t", state="working")
+    service, queue, _clock, events = build(watcher, target)
+    await service.watch(watcher, target="t")
+
+    watcher.record.agent_run_id = "run-b"
+    await service.stop()
+    assert len(queue.messages) == 1
+    assert queue.messages[0]["armed"] is False
+    assert queue.messages[0]["solicited_by"] is None
+    assert service.status()["armed_notices"] == 0
+    resolved = next(
+        payload for kind, payload in events.emitted if kind == "session_watch_resolved"
+    )
+    # Named apart from "could not be identified": one is a successor that never
+    # asked, the other is a run nothing could read, and they are different bugs.
+    assert resolved["arming_reason"] == ARMING_REASON_ROLLED
+
+
+async def test_a_watcher_with_no_identifiable_run_gets_a_draft() -> None:
+    """A check that could not be made is not a check that passed.
+
+    The sweep's drop guard needs a run on both sides, so a watch armed before its
+    watcher had one is never dropped for rolling - and would otherwise arm on a
+    consent nothing can attribute.
+    """
+    watcher = make_session("w", run_id="")
+    target = make_session("t", state="working")
+    service, queue, _clock, _events = build(watcher, target)
+    await service.watch(watcher, target="t")
+
+    target.record.state = "exited"
+    [outcome] = await service.tick()
+    assert outcome["armed"] is False
+    assert outcome["arming_reason"] == ARMING_REASON_UNKNOWN_RUN
+    assert queue.messages[0]["armed"] is False
+
+
+async def test_turning_watches_off_mid_flight_stops_the_unattended_half() -> None:
+    """The switch is read when the notice is written, not when the watch was armed.
+
+    An operator who turns watches off is turning off the thing they can see; a
+    watch already open must not keep the authority it was granted under. The
+    notice is still enqueued - refusing arming never refuses the message.
+    """
+
+    class Switch(FakeConfig):
+        session_watch_enabled = True
+
+    config = Switch()
+    watcher = make_session("w")
+    target = make_session("t", state="working")
+    service, queue, _clock, _events = build(watcher, target, config=config)
+    await service.watch(watcher, target="t")
+
+    config.session_watch_enabled = False
+    target.record.state = "exited"
+    [outcome] = await service.tick()
+    assert outcome["armed"] is False
+    assert outcome["arming_reason"] == ARMING_REASON_DISABLED
+    assert len(queue.messages) == 1
+    assert queue.messages[0]["armed"] is False
+
+
+async def test_the_arming_reported_is_the_one_the_queue_applied() -> None:
+    """Read back off the row, never echoed from the ask.
+
+    A retry dedupes into a message staged under different conditions, and the
+    queue applies its own floor on top of this one; reporting the request would
+    record an arming that never happened.
+    """
+    watcher = make_session("w")
+    target = make_session("t", state="working")
+    service, queue, _clock, _events = build(watcher, target)
+    await service.watch(watcher, target="t")
+    queue.target_gone = True
+
+    target.record.state = "exited"
+    [outcome] = await service.tick()
+    assert queue.messages[0]["armed"] is True
+    assert outcome["armed"] is False
+    assert "gone before the notice was staged" in outcome["arming_reason"]
+    assert service.status()["armed_notices"] == 0
+
+
+async def test_a_failed_notice_records_that_nothing_was_armed() -> None:
+    watcher = make_session("w")
+    target = make_session("t", state="working")
+    service, queue, _clock, _events = build(watcher, target)
+    await service.watch(watcher, target="t")
+    queue.fail_with = QueueError("boom", "the queue said no")
+
+    target.record.state = "exited"
+    [outcome] = await service.tick()
+    assert outcome["armed"] is False
+    assert outcome["arming_reason"] == "the notice could not be enqueued"
+
+
+async def test_the_daemon_stop_flush_arms_on_the_run_that_asked() -> None:
+    """The flush is the case a restart produces, and it is still a solicited reply."""
+    watcher = make_session("w", run_id="run-a")
+    target = make_session("t", state="working")
+    service, queue, _clock, _events = build(watcher, target)
+    watch = await service.watch(watcher, target="t")
+
+    await service.stop()
+    assert queue.messages[0]["armed"] is True
+    assert queue.messages[0]["solicited_by"] == watch["watch_id"]
 
 
 async def test_a_failed_notice_does_not_wedge_the_sweep() -> None:

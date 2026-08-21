@@ -277,6 +277,8 @@ PUT     /projects/{project_id}/notes/{note_id}            {markdown, revision}
 PATCH   /projects/{project_id}/notes/{note_id}            {title, revision}
 DELETE  /projects/{project_id}/notes/{note_id}            {revision}
 GET     /projects/{project_id}/files?path=RELATIVE
+GET     /projects/{project_id}/files/tree?path=RELATIVE&path=…   the root plus each expanded folder
+GET     /projects/{project_id}/files/recent   {items[{name,path,kind,origin,status,committed_at}], available, reason?}
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
 GET     /projects/{project_id}/search?q=&mode=names|contents|both
 GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]
@@ -659,6 +661,8 @@ GET    /sessions/{id}/last-reply
 GET    /sessions/{id}/transcript[?limit=]
 GET    /sessions/{id}/skills[?refresh=1]
 GET    /sessions/{id}/agent-environment[?refresh=1]
+POST   /sessions/{id}/agent-environment/mcp-tools   {server, refresh?}
+POST   /sessions/{id}/runtime-inventory             X-Mux-Hook-Secret; loopback-only
 ```
 
 `GET /sessions/{id}/branch-points` lists where this conversation can be forked. Every "nothing to
@@ -1216,6 +1220,39 @@ Hook items set `group` to the lifecycle event and name the handler target: the p
 The response never includes hook command lines, their arguments or inline shell bodies, environment values, credentials, or unredacted MCP URLs.
 Configured MCP entries intentionally have no connection-health claim because the route never starts a server.
 
+`POST /sessions/{id}/agent-environment/mcp-tools` fetches one configured server's published tools.
+It is a POST rather than a GET because it is the one Agent Environment call that reaches a server: it may start a short-lived probe process and open a network connection, which is exactly what a GET promises not to do.
+The body is `{server, refresh?}`; an unknown server is `404`, a blank one `400`, and a shell or non-local terminal boundary is `409` on the same shapes the inventory route uses.
+Rate limited to 20 fetches per session per minute on top of the cache, because the cost is entirely in what a burst of clicks would spawn.
+
+```ts
+interface McpToolCatalog {
+  server: string
+  backend: string
+  evidence: 'swe_mux_owned' | 'live_process' | 'parallel_probe' | 'not_supported'
+  status: 'ok' | 'auth_required' | 'unsupported' | 'unavailable' | 'error'
+  tools: Array<{name: string; description: string; read_only?: boolean}>
+  total: number
+  truncated: boolean
+  note: string          // what this evidence tier does and does not prove
+  diagnostic: string    // why an empty catalog is empty, or why a probe failed
+  observed_at: number
+  ttl_ms: number
+  cache_scope: 'public' | 'private'
+  server_version: string
+  fingerprint: string   // one-way config-content digest this reading is keyed by
+  cached: boolean
+}
+```
+
+`evidence` is never collapsed into an unqualified "connected": a `parallel_probe` describes a separate runtime and says nothing about the CLI in the terminal.
+A failure is a `200` with `status: "error"` and a sanitized `diagnostic`, not an HTTP error, because one unreachable server must not read as a broken drawer.
+The response carries only server name, tool name, description, and safe metadata; input schemas, headers, environment, and endpoints with credentials are all dropped before anything is retained.
+
+`POST /sessions/{id}/runtime-inventory` is where an injected extension publishes its live MCP tool list (`{tools: [{name, description}], reason}`).
+Loopback-only and authenticated with the session's own `X-Mux-Hook-Secret`, like hook ingress, but on its own route: it is not a lifecycle event and must never touch status detection, history, or the prompt queue.
+The body is whitelisted to `mcp__*` names and descriptions, bounded, and held only in memory for the session's current process generation.
+
 ## Voice and Conversation mode
 
 ```text
@@ -1610,7 +1647,7 @@ POST   /git/worktrees
 POST   /git/worktrees/session
 DELETE /git/worktrees
 GET    /land[?project_id=]
-POST   /land                         {project_id, worktree_root}
+POST   /land                         {project_id, worktree_root, kind?}
 DELETE /land/{request_id}
 GET    /land/{request_id}/events
 GET    /land/verify-command          ?project_id=&worktree_root=
@@ -1637,7 +1674,8 @@ anything**: `POST /land` enqueues a request and the daemon's own sweep is the on
 moves a trunk, so a client that gets `201` has been told the request was accepted, not that the
 branch is on the trunk. `GET /land` returns the queue plus its bounds (`hourly_budget`,
 `hold_timeout_seconds`, `retry_verification`); `409 already_queued` names an active request for
-that branch, and `DELETE` refuses with `409 not_cancellable` once a step is in flight.
+that branch - one branch holds one request whatever kind it asked for - and `DELETE` refuses with
+`409 not_cancellable` once a step is in flight.
 
 A row that is `verifying` **under this daemon** additionally carries `verify_progress`; every other
 row carries `null`. The payload is `{step_index, step_name, expected_step_count, expected_steps,
@@ -1650,15 +1688,25 @@ percentage in it by design: `step_index` counts the `=== name ===` markers the g
 rendered. The reading is in memory and dies with the process; a restart that returns a row to
 `queued` reports none rather than a stale snapshot. See `features/land-queue.md`.
 
-Every row carries `verify_gate`: `""` until the pipeline classified its change set, then `"full"`
-or `"docs_only"`. It answers **which gate that land ran**, decided from the incoming paths against
-a closed documentation allowlist, and it exists because a documentation-only land never enters
-`verifying` and would otherwise be indistinguishable from one that passed the full gate. `""` is
-not collapsed into `"full"` at either end, and a client reads any value it does not recognise as
-`""` rather than as a skip. `GET /land/{id}/events` carries the same decision as a `classify` step
-recorded on **both** outcomes, with the reason, the matched paths, and whatever disqualified them;
-on the fast path the `verify` step is still present, with outcome `skipped`. See
-`features/land-queue.md`.
+Every row carries `verify_gate`: `""` until the pipeline classified its change set, then `"full"`,
+`"docs_only"`, or `"reused"`. It answers **which gate that land ran** - `"docs_only"` decided from
+the incoming paths against a closed documentation allowlist, `"reused"` meaning a queue-executed
+verdict already stood over this exact tree with these exact bytes - and it exists because neither
+of those two ever enters `verifying` and both would otherwise be indistinguishable from a land
+that passed the full gate. `""` is not collapsed into `"full"` at either end, and a client reads
+any value it does not recognise as `""` rather than as a skip. `GET /land/{id}/events` carries the
+same decision as a `classify` step recorded on **both** outcomes, with the reason, the matched
+paths, and whatever disqualified them; on either skipping path the `verify` step is still present,
+with outcome `skipped` or `reused` - and a `reused` row carries the key it reused (tree, digest,
+and the request whose run produced the verdict), so the reuse is checkable rather than asserted.
+See `features/land-queue.md`.
+
+Every row also carries `kind`: `"land"` or `"verify"`. `POST /land` accepts it and defaults it to
+`"land"`, so a caller written before verify-only existed asks for what it always asked for; an
+unrecognised value is `400`. A `"verify"` request runs every step except the fast-forward and
+settles as `verified` - its own terminal state, because nothing moved. A client reads an
+unrecognised `kind` as `"land"`: a verify-only run drawn as a land under-claims, while a land
+drawn as a verify-only run would tell a reader a trunk did not move when it did.
 
 `GET /land/verify-command` reports the command a land would run, its digest, whether those exact
 bytes are approved, and both the approved and current text so the prompt can show a diff. It also
@@ -2060,6 +2108,9 @@ plus the registry, `recommended_project_automations`, and `llm`, and is the cont
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).
 `session_id` is resolved to the session's run-id set — its live run plus its superseded runs from history — and matched against `agent_run_id`, because the annotation's own `session_id` column is populated by one detector alone; a Project-anchored finding with a null run (doc-debt, provenance) is therefore absent from a session scope by construction.
 The response carries `items` and `tag_counts`, the per-tag totals in the current scope (project/session/since honoured, the tag chip ignored) so a quiet scope reads apart from one buried under provenance edges.
+An item may carry `unsupported: true` with an `unsupported_reason`, which means the stored finding's own evidence no longer supports it under the detector's current rule.
+The row is never rewritten or deleted - it is a record of what a detector concluded - so the retraction happens at the read, and `tag_counts` still counts the stored row.
+Today this marks `loop-detected` findings whose every evidence fact carries neither a target nor a content hash (`features/deterministic-consumers.md`).
 The dashboard payload's `recent_annotations` key is unchanged; this endpoint is the filtered surface the Findings pane points at.
 
 ## Attention ranking

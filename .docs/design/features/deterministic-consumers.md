@@ -57,6 +57,43 @@ agent searching the same directory three times would be flagged (observed live,
 collapses onto one value when the payload has no content hash, so distinct successful
 edits can share a single `file_write_result` fingerprint.
 
+Two further exclusions, both calibrated against a 24-hour corpus in which the rule scored
+**0 true positives out of 13** (2026-08-21).
+
+**A fact must name its action, and this fails closed.**
+A fingerprint over an empty target, an empty content hash and an empty state is one constant
+for every call of that tool, so a window of it counts distinct actions as repeats of one:
+25,362 Bash facts in one day shared the fingerprint of `{"scope":"root","tool":"Bash"}`, and
+390 of 397 lifetime findings rested on six such fingerprints.
+A fact with no target, no content hash, and no structured test outcome carries no
+discriminator and does not seed a loop.
+This is deliberately done **as well as** the capture repair that gives the fact a target
+(`tier0-facts.md`), not instead of it: the guard holds whatever a future adapter forgets to
+send.
+
+**A read-only shell command is repeated looking.**
+Every Bash call classifies as `command`, a change-attempting kind, so the exclusion that
+already protects `tool`/`file_read` did not reach the shell and an agent polling a
+background task's output five times was flagged.
+A command whose every pipeline stage begins with a known reading verb (`grep`, `ls`, `git
+status|log|diff|show`, `curl` without a write flag, …) cannot seed a loop.
+The predicate is conservative in the direction that preserves the detector: an unrecognised
+verb, a redirection, a substitution, an unparseable line, or a command the stored target had
+to truncate is **not** read-only.
+It tokenises with `shlex` rather than splitting on characters, because the live case it
+exists for carries a `|` *inside a quoted regex* and a character split reads the second half
+as a pipeline stage running a command named `verification`.
+
+**Historical findings are retracted at read time, never rewritten.**
+The two rules above invalidate 390 of the 397 findings already stored.
+A stored finding is a record of what a detector concluded, so the row is never edited or
+deleted to change that record; what changes is what a reader is told about it.
+`loop_finding_unsupported` applies the same rule to an annotation's own evidence at the
+Findings read and at attention ranking, marking it `unsupported` with the reason.
+Evidence recorded before this change carries no `content_hash` key at all, and an absent key
+reads as absent evidence — the honest reading, because nothing in the row asserts a
+discriminator was ever seen.
+
 The gate is the entire difference between a useful signal and a detector that cries wolf:
 running the same test command four times while fixing things is work, not a loop. The
 threshold and the gate follow the production precedent cited in CP §2 — which measures
@@ -71,6 +108,36 @@ Even a green run reads "verified", never "correct".
 
 The claim side is a narrow literal pattern over the last assistant turn; a loose pattern
 would turn every ordinary summary into a claim.
+Three reductions keep it from matching ordinary English, each answering a measured failure
+in a corpus where the rule scored 5 false out of 6 (2026-08-21):
+
+- **The copula is required.** `(?:it|this|that|everything)(?:'s| is| are)?` made every "this
+  working tree", "is it working, awaiting input" and "leave it fixed and unexposed" a claim;
+  that one alternative produced 27 of 42 lifetime findings and every sampled one was false.
+- **Quotation is not assertion.** Fenced blocks and code spans are blanked before matching,
+  because both anti-overclaim findings in the corpus fired on a message *quoting the
+  requirement*.
+- **A claim is made in the closing summary**, so the search is bounded to a whole number of
+  trailing paragraphs within `CLAIM_SCOPE_CHARS`, and a failure word in the few characters
+  immediately before the match inverts it ("once shipped a failing test green").
+  The window is short on purpose: "I fixed the failing tests and all tests pass" is a real
+  claim whose sentence also contains "failing".
+
+**A run with no test facts produces nothing at all.**
+With zero `test_result` facts the detector cannot tell "this agent verified nothing" from
+"this install captured nothing", and the second was almost always the true reading — one
+test fact stood against 4,485 command results in the measured window — so every finding was
+a statement about the substrate wearing the shape of a statement about an agent.
+What remains is the checkable case: tests ran, they did not all pass, and the agent said it
+was done anyway.
+The recall this trades away is bought back by capturing the land queue's gate as a
+`test_result` fact (`tier0-facts.md`), which is the durable half of the same repair.
+
+**The finding carries the claim's own pointer**, not only the test facts: the session, run,
+transcript and message timestamp it was read from.
+Every one of the 42 lifetime findings carried an empty evidence set, which breaks the
+"evidence is a set" contract outright — the reader had nothing to check, not even the
+message the claim came from.
 
 ### Doc-debt ledger
 
@@ -86,6 +153,27 @@ single doc owns, and carries no ownership signal: one `App.tsx` edit otherwise m
 eight unrelated feature docs dirty (observed live, 2026-07-28). The limit is calibrated
 against this repo's `.docs` tree, where 1–4-owner files all have a genuine subject doc
 among their claimants and the ≥5 tail is exactly the composition roots.
+
+The hub rule applies to **dependency reach** exactly as it applies to direct ownership.
+The Phase 7.9 reach refinement unioned the owning docs of every dependent of a changed file
+with no limit, re-admitting through the back door the explosion `DOC_HUB_OWNER_LIMIT` was
+calibrated to prevent: one window's finding read "21 doc(s) owe an update for 3 changed
+source file(s)" — very nearly the whole `.docs` tree — from edits to three composition roots
+(`server.py` reaches 19-20 files at ≤2 hops).
+So a changed file whose reverse reach exceeds `DOC_REACH_DEPENDENT_LIMIT` is a hub by reach
+and contributes no owners, and a reach set resolving to more than `DOC_HUB_OWNER_LIMIT` docs
+is dropped whole.
+Both are the same statement — a signal that points at everything points at nothing — and
+truncating to the first N instead would report an arbitrary subset as *the* owners.
+
+**One row per dirty doc**, dedupe-keyed on `(project, doc)`, exactly as provenance is keyed
+per edge and for the same reason.
+The original key was a set hash over the dirty-doc set, so one more dirty doc minted a whole
+new row restating all the others: 137 rows carried 137 distinct keys, and one window's
+8-doc set was a strict subset of the 9-doc set beside it (2026-08-21).
+Keyed per doc, one dirty doc is one row forever and its changed-file list lives in the
+content; a per-pass cap (`DOC_DEBT_MAX_NEW_PER_PASS`) bounds a first pass without truncating,
+because a doc past the cap lands on the next turn boundary.
 
 Debt accumulates with a visible count rather than nagging per turn, and a doc edited in the
 same window is not dirty — the debt was paid as it was incurred.
@@ -132,6 +220,9 @@ cross-session graph") belongs to the reader, grouping rows by target.
   `project_id`, `session_id`, `agent_run_id`, and `since`, and carrying `tag_counts` for the
   current scope so a quiet scope reads apart from one buried under provenance edges
   (`interfaces.md`).
+  An item whose own evidence no longer supports it carries `unsupported` and
+  `unsupported_reason`; the pane withholds it from the list and states the count and the
+  reason rather than dropping it silently, and `tag_counts` still counts the stored row.
 - The `doc_debt` mux MCP tool exposes the doc-debt finding to an agent as re-derived
   `{doc, changed_files}` pairs, gated on the same `doc_debt` automation (`mux-mcp.md`).
 - Health under `deterministic_consumers` in `GET /api/diagnostics/background`.

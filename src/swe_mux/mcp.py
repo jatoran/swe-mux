@@ -59,11 +59,11 @@ from .code_graph import (
     co_change_net,
 )
 from .deterministic_consumers import (
-    CLAIM_PATTERN,
     PROJECT_FACT_WINDOW_SECONDS,
     build_doc_debt_map,
     build_doc_ownership,
     build_provenance_edges,
+    claim_match,
     detect_declared_vs_verified,
     normalize_target,
 )
@@ -1552,6 +1552,35 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "request_verify",
+        "description": (
+            "Ask for your worktree branch to be verified WITHOUT being landed. "
+            "The daemon merges the trunk into your branch and runs the "
+            "repository's own verification command, in that order, and stops "
+            "there: no trunk moves. The verdict comes back to you as a message - "
+            "a failure names what broke and carries the output tail, a pass says "
+            "so. A pass is recorded against the exact content it ran over, so a "
+            "later request_land of that same content skips the gate instead of "
+            "spending it twice; if the trunk moves in between, the merge produces "
+            "different content and the gate runs again, which is correct rather "
+            "than a miss. Use this instead of running the full suite yourself: "
+            "your own run cannot be reused, because only a run this queue "
+            "executed counts. Iterate with targeted tests and let this be the "
+            "full gate. Call it from a session whose cwd is the worktree you "
+            "want verified."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why you are asking (recorded, shown to a human)",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "watch_session",
         "description": (
             "Be told when another session stops working, instead of polling for "
@@ -1568,7 +1597,11 @@ TOOLS: list[dict[str, Any]] = [
             "session idling with its own subagents still running is not counted "
             "as settled. The notice arrives as a queue item under the ordinary "
             "delivery contract, so it reaches you between turns rather than "
-            "mid-turn. Bounded: a few watches per session, one per target, and "
+            "mid-turn. It is the bounded answer to the watch you armed, so it is "
+            "staged armed rather than as an inert draft - but armed is not "
+            "delivered, and your own auto-delivery grant and the ordinary queue "
+            "gates still decide whether it reaches you without a person. "
+            "Bounded: a few watches per session, one per target, and "
             "they die with your session or a daemon restart. "
             'Your own Project is the default; pass project:"fleet" or a Project '
             "name to watch a session in another."
@@ -1703,8 +1736,8 @@ class McpService:
         # Phase 7.9 code-structure graph store. Absent it, the structural reads
         # answer `unsupported` (the substrate is not running), never a fake empty.
         self.code_graph = code_graph
-        # Phase 14 land queue. Absent it, `request_land` answers unavailable rather
-        # than half-enqueueing - the same rule the other write tools follow.
+        # Phase 14 land queue. Absent it, `request_land` and `request_verify` answer
+        # unavailable rather than half-enqueueing - the rule the write tools follow.
         self.land_queue = land_queue
         # Phase 7.11 scan timeline. Only its `liveness` block is read from here -
         # the records come from the store - so absent it a scan read still
@@ -3400,17 +3433,26 @@ class McpService:
                 "status": finding.content,
                 "evidence": finding.evidence[:MEMORY_MAX_RESULTS],
             }
-        elif CLAIM_PATTERN.search(claim):
-            # `detect_declared_vs_verified` returns None both for a non-claim and
-            # for a claim whose tests ran and passed. The pattern still matching
-            # here means the second case: an accurate claim, not flagged.
+        elif claim_match(claim) is not None:
+            # `detect_declared_vs_verified` returns None for three different
+            # things, and only one of them is a green run. Which one it was is
+            # decided here, from the run's own test facts — reporting "verified"
+            # for a run that captured no test facts would be the exact collapse
+            # the three-way split exists to prevent.
+            ran = [fact for fact in facts if str(fact.get("kind") or "") == "test_result"]
             result = {
                 "declared": True,
-                "tests_ran": True,
-                "tests_passed": True,
-                "verified": True,
+                "tests_ran": bool(ran),
+                "tests_passed": bool(ran),
+                "verified": bool(ran),
                 "claim": claim[:240],
-                "status": "claims done · tests ran · tests passed",
+                "status": (
+                    "claims done · tests ran · tests passed"
+                    if ran
+                    else "claims done · no test facts recorded for this run · "
+                    "unverifiable from here, which is a statement about capture "
+                    "rather than about the claim"
+                ),
             }
         else:
             result = {
@@ -4347,6 +4389,20 @@ class McpService:
         )
         return dict(result)
 
+    async def request_verify(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.request_verify`: run the approved gate on the caller's branch, and stop.
+
+        A separate tool rather than a flag on `request_land`, because the two ask
+        for different acts with different blast radii: one ends by moving a
+        repository's trunk and one cannot move anything. A flag would make the
+        dangerous call the default spelling of the safe one, and would put both
+        under the grant that exists for the trunk.
+
+        It inherits `request_land`'s scoping unchanged, and for the same reason:
+        no target argument, so the worktree comes from the caller's own live cwd.
+        """
+        return await self._enqueue_land(caller, args, kind="verify")
+
     async def request_land(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         """`mux.request_land`: enqueue a land of the caller's own worktree branch.
 
@@ -4355,6 +4411,17 @@ class McpService:
         cwd rather than accepted from the call - there is nothing here to forge.
         Every bound (install switch, Project opt-in, grant, budget, preconditions,
         the git vocabulary itself) lives in the daemon service; this is a caller.
+        """
+        return await self._enqueue_land(caller, args, kind="land")
+
+    async def _enqueue_land(
+        self, caller: Any, args: dict[str, Any], *, kind: str
+    ) -> dict[str, Any]:
+        """The caller both land-queue tools are, with the kind they asked for.
+
+        Shared so the by-construction scoping is written once: a second copy of "read
+        the worktree off the caller's own record" is a second chance to accept one from
+        the arguments instead.
         """
         self.writes += 1
         if self.land_queue is None:
@@ -4384,6 +4451,7 @@ class McpService:
             project_id=str(project.id),
             project_root=str(project.root),
             worktree_root=worktree_root,
+            kind=kind,
             origin="agent",
             origin_session_id=str(record.id),
             origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
@@ -4396,9 +4464,10 @@ class McpService:
 
         A read that matures into one bounded message. The target is only read;
         the notice is a fixed daemon template addressed to the caller's own
-        prompt queue. Every bound (install switch, scope, per-watcher ceiling,
-        timeout ceiling, the settle rule itself) lives in the daemon service,
-        and this is a caller (CP §7.1).
+        prompt queue, staged armed because the watch is the consent for it
+        (`land-queue.md`, `agent-messaging.md`). Every bound (install switch,
+        scope, per-watcher ceiling, timeout ceiling, the settle rule, and the
+        arming rule) lives in the daemon service, and this is a caller (CP §7.1).
         """
         if self.session_watch is None:
             raise QueueError(
@@ -4462,6 +4531,7 @@ class McpService:
             "interrupt": self.interrupt,
             "end_session": self.end_session,
             "request_land": self.request_land,
+            "request_verify": self.request_verify,
         }
         handler = handlers.get(name)
         if handler is None:

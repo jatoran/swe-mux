@@ -16,6 +16,7 @@ Declared harness identity, capability axes, derived display level, delivery etiq
 ## `adapters/`, `agent_launcher.py`, `hook_client.py`, `assets/omp_mux_hook.ts`
 
 Provider command, resume, and transcript normalization; additive Claude and Codex lifecycle-hook launch wiring; adapter-owned worktree trust preflight and primary-root access argv; the packaged OMP in-process lifecycle extension; authenticated hook delivery and spooling; and relaying a daemon-composed permission decision to the CLI's stdout.
+That extension also publishes the running process's live MCP tool inventory to `MUX_RUNTIME_URL`, on its own route rather than through hook ingress, because it is not a lifecycle event.
 
 **Not:** public HTTP shapes, mandatory success of best-effort provider trust preparation, composing the decision shape itself (the shim imports nothing from the package and must stay a relay), or retrying a decision POST.
 
@@ -37,6 +38,20 @@ A bounded passive inventory of one live CLI generation.
 **Not:** starting or health-checking MCP, importing plugins, or executing hooks.
 It never exposes hook command lines, arguments, inline shell bodies, environment, or credentials.
 It never writes provider state, and never claims configured items are loaded or connected.
+
+`resolve_mcp_servers` is the one seam that hands out an MCP entry's *raw* configuration, for the tool-catalog fetch alone.
+It comes from the same walk that decides which row reads `shadowed`, so the configuration a fetch dials is always the one the CLI would use, and it never travels inside an API response.
+
+## `mcp_tools.py`
+
+Per-server MCP tool catalogs, collected only on explicit request, in four evidence tiers: swe-mux's own server read from `mcp.TOOLS`, OMP's live process snapshot, a `codex app-server` sidecar, and a direct dial of a Claude-configured server with the official `mcp` client.
+
+- One cache keyed by a one-way config-content fingerprint, with per-key in-flight coalescing, `ttlMs`/`cacheScope` honoured, and a bounded entry count.
+- The live-snapshot store for extension-published inventories, in memory and swept against live sessions.
+- Sanitization and bounds on everything a probe returns.
+
+**Not:** probing on tab open, dialling an HTTP server that carries credentials, persisting any reading, or describing a sidecar's health as the running CLI's.
+The `mcp` client is imported inside the probe, so the daemon never pays for it at startup and its absence is a typed diagnostic rather than an import error; `packaging/swe_mux.spec` collects it explicitly for the frozen app.
 
 ## `provider_accounts.py`
 

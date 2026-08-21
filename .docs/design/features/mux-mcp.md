@@ -155,7 +155,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `message_status` | current outcome of one `notify`, visible only to its attributed sending session, wherever it was sent; an `armed` result also carries `target_delivery`, because "armed" alone cannot distinguish a peer that is busy from one nothing can reach without a human |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
 | `provenance` | cross-session lineage for one file: who wrote which content hash, who later read it, and the tests those runs ran, from Tier 0 facts plus `build_provenance_edges`. Ambiguous edges (another write landed between the reported write and read) are withheld and only counted. Lineage, never blame |
-| `verified_status` | whether a claim is tested or only declared done, via `detect_declared_vs_verified` over a run's Tier 0 test facts; reports "claims done · tests ran · tests passed", "tests failed", or "nothing verified". Defaults to the caller's own current run; `session_id` targets another |
+| `verified_status` | whether a claim is tested or only declared done, via `detect_declared_vs_verified` over a run's Tier 0 test facts; reports "claims done · tests ran · tests passed", "tests failed", or - for a run holding no test facts at all - that the claim is unverifiable from here, which is a statement about capture rather than about the claim. Defaults to the caller's own current run; `session_id` targets another |
 | `prior_resolutions` | a previously verified fix for an exact normalized error signature, from the experience corpus (`automation_store.experiences`), matched on equality of the error fingerprint and never a substring. Low-confidence (<0.5) matches are withheld and only counted |
 | `dead_ends` | approaches abandoned or failed within a run with a recorded dead-end note, from scan records; `subsystem` matches as a substring of the record's target paths, intent, or summary. Low-confidence (<0.4) records are withheld. A conversation rollover writes a boundary not a record, so `/clear` never counts as an abandonment |
 | `doc_debt` | which docs owe an update for the Project's recently changed source files, as `{doc, changed_files}` pairs re-derived from each doc's "Key files" section (`build_doc_debt_map` over `build_doc_ownership`, inverted to `doc -> changed files` over a 24h Project fact window, a doc edited in that window excluded). Not scraped from the doc-debt annotation, whose content is a human sentence. Blind spot named in the description: a source file no doc lists produces no debt, so empty is not proof the docs are current (Phase 7.10) |
@@ -167,7 +167,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `find_references` | every call or reference to a symbol in a file — the precise structural neighborhood, not a grep. Gated on `code_graph` |
 | `code_context` | a compact structural neighborhood for context packing: each file's key symbols, imports, and direct callers, instead of reading whole files. Gated on `code_graph` |
 | `test_gap` | recently-changed files whose static blast radius contains no covering test. A lower bound: a test reaching the code through dynamic dispatch is invisible, so a listed file is a candidate not a proof. Gated on `code_graph` |
-| `watch_session` | arms a one-shot watch on another session and returns having delivered nothing. Exactly one deterministic notice then enters the **caller's own** prompt queue: when the target leaves working for a settled state and holds it, when it ends, or when the caller's timeout elapses - whichever is first. The notice names which case fired and the target's state, including the `awaiting` sub-reason and any background work still running. Bounded per watcher, one per target, ephemeral (see "Session-settle watches" below) |
+| `watch_session` | arms a one-shot watch on another session and returns having delivered nothing. Exactly one deterministic notice then enters the **caller's own** prompt queue: when the target leaves working for a settled state and holds it, when it ends, or when the caller's timeout elapses - whichever is first. The notice names which case fired and the target's state, including the `awaiting` sub-reason and any background work still running. It is staged **armed** (`solicited_by` naming the watch), because the watch is the receiver's own request for it - armed is still not delivered. Bounded per watcher, one per target, ephemeral (see "Session-settle watches" below) |
 | `notify` | stages a message with a visible sender/message/correlation envelope, a `from_project` header when it crossed a Project, and a `delivery` header when it landed mid-turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not. `dry_run:true` runs every one of those bounds and answers with the same verdict having staged nothing and spent nothing, so an unreachable peer is chosen rather than discovered after the item is armed |
 | `revoke_message` | withdraws one message the caller sent that nothing has delivered, cancelling it as `revoked`. Attribution is the whole check and a miss answers `unknown_message`; a delivered message answers `not_revocable`, because the text is already in another terminal |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
@@ -175,10 +175,27 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Under the default `draft` grant it writes an inert approval instead of acting |
 | `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
+| `request_verify` | the same pipeline stopped before its last step: reconcile, run the repository's verification command, report the verdict back, move no trunk. A pass is kept against the exact (git tree, command digest) it ran over, so a later `request_land` of that content skips the gate; a trunk that moved in between produces different content and the gate runs again. Gated on the same automation, and the `draft` grant **enqueues** it rather than drafting it - it moves nothing there is anything to approve in advance (`land-queue.md`) |
 
-`request_land` deliberately takes no target. The checkout comes from the caller's own live
-cwd, so "an agent lands the checkout it is working in, and no other" holds by construction
-rather than by a check that could be routed around. There is nothing in the call to forge.
+`request_land` and `request_verify` deliberately take no target. The checkout comes from the
+caller's own live cwd, so "an agent acts on the checkout it is working in, and no other"
+holds by construction rather than by a check that could be routed around. There is nothing
+in either call to forge.
+
+They are **two tools rather than one tool with a flag**, and the reason is which call ends up
+being the default spelling. A flag would make the request that moves a repository's trunk the
+plain form of the request that moves nothing, so a caller that omitted it would land; and it
+would put both under one grant, when the grant exists for the trunk. Two tools make the safe
+call the short one, and let `land_grant` say different things about each: `off` refuses both,
+`draft` drafts a land for a human and enqueues a verify, `granted` enqueues both
+(`land-queue.md`).
+
+`request_verify` is also the only way an agent's gate run counts for anything later. A green
+result is kept against the (git tree, command digest) it ran over, and a later `request_land`
+over that same content skips the gate; a run the agent did in its own shell is never accepted,
+because it is self-reported and a self-report can be produced by running modified bytes and
+restoring the approved file. So the pattern the tool is for is: iterate with targeted tests,
+and let the queue own the full gate.
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is
@@ -316,11 +333,19 @@ It polled `list_sessions` (or `/api/sessions` from an ad-hoc script), spending a
 - **Bounded and one-shot.**
   A few watches per watcher (`session_watch_max_per_session`, default 8), one per target - re-arming returns the existing watch rather than a second copy of one notice - a ceiling on the timeout (`session_watch_max_minutes`, default 240), and an install-wide kill switch (`session_watch_enabled`).
   A `0` timeout is refused rather than read as "omitted": it means "no timeout", which is the one shape this service will not promise.
+- **The notice arrives armed, because the watch is the consent.**
+  A `rule` sender is not self-arming in general (`prompt-queue.md`), and a watch notice that waits in a queue nobody is looking at is the whole polling problem back again with an extra step - the watcher asked to be told, and being told requires a human press only if the message is unsolicited, which this one is not.
+  So it is staged armed by naming the watch in `solicited_by`, on the authority the land-queue handback established and under the same five bounds (`land-queue.md`, `agent-messaging.md`).
+  Four hold by construction: the target is the watcher because the tool has no recipient argument, the body is a fixed daemon template, an operator cannot arm a watch so there is no non-agent case, and one watch matures into exactly one notice, so the per-request cap is 1 without anything to count.
+  Two are re-checked when the notice is written rather than trusted from arming - the run that armed the watch must still be the live one, and `session_watch_enabled` must still be on, so an operator switching watches off mid-flight switches off the unattended half too.
+  Refusing to arm never refuses the notice: it is staged as the draft it used to always be, and a person can still send it.
 - **The result says what will deliver the notice, because "queued" alone is unactionable.**
-  A `rule` sender is never self-arming (`prompt-queue.md`), so the notice waits in the watcher's queue for the operator exactly like a land-queue handback, and the arming result says so rather than letting a caller wait for a message no machine was going to hand it.
+  It states that the notice is staged armed *and* that armed is not delivered: head-of-line order, delivery readiness, quiet hours, the caps, the emergency pause, and the watcher's own auto-delivery grant each still decide the send.
   This is the same lesson `notify`'s `target_delivery` records.
+  The resolution records `armed` and, when it is false, the `arming_reason`, on the log line and the `session_watch_resolved` event, and the service counts `armed_notices` beside `resolved`; without that, a notice nobody delivered reads from the trail exactly like one that arrived.
 
-What is deliberately absent: no per-Project opt-in and no grant, because a watch reads what the caller can already read and writes only to itself; and no self-arming exception for a self-requested `rule` item, which would be a change to the queue's arming rule and belongs to that contract rather than to this feature.
+What is deliberately absent: no per-Project opt-in and no grant, because a watch reads what the caller can already read and writes only to itself; and no standing self-arming exception for `rule` senders, because the arming is per message and per request - it is `solicited_by` naming this watch, not a change to what a `rule` sender may claim.
+Not yet present: a watching session opens no `reply_windows` entry, so a watch whose timeout runs past the auto-delivery idle TTL can still lapse its own grant while it waits - the same second half `land-queue.md` needed, tracked there.
 
 ## Session control (Phase 7.6)
 
