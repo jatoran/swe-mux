@@ -140,12 +140,15 @@
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
   `technical/frontend/workspace-state.md`
-- Changing the land queue (its pipeline steps, preconditions, the verification gate and its
-  approval, the grant, or the Land segment): `design/features/land-queue.md`,
+- Changing the land queue (its pipeline steps, preconditions, the verification gate, its
+  approval or its editor, what a running gate reports, the grant, the Land control on a Map
+  row, or the Land segment): `design/features/land-queue.md`,
   `design/features/git.md`, `design/features/project-actions.md`,
+  `design/features/setting-links.md`,
   `design/features/prompt-queue.md`, `design/features/automation-enablement.md`,
   `design/features/mux-mcp.md`, `design/interfaces.md`, `design/data-model.md`,
-  `technical/backend/packages.md`, `technical/backend/sqlite.md`.
+  `technical/backend/packages.md`, `technical/backend/sqlite.md`,
+  `technical/frontend/packages.md`.
   The rule the design turns on: the pipeline executes a *fixed* git vocabulary and never
   decides anything - fast-forward-only is what makes the trunk step safe for a machine,
   because Git refuses it on divergence and refuses to overwrite local changes, so the
@@ -154,7 +157,18 @@
   deterministic message rather than being resolved here. And the verification command is
   *not* a Project Action: an action's cwd is bounded by the Project root and deliberately
   denied the sibling-worktree widening, so it borrows only the exact-content approval,
-  which is what stops an agent approving the command its own land runs.
+  which is what stops an agent approving the command its own land runs - editing the
+  command and approving it stay two acts against two routes, and a write can never produce
+  an approved command because the approval is a digest over the bytes it just moved.
+  A second rule governs what a *running* gate may say: every signal is observed or absent,
+  never estimated. A step number counts markers the gate itself printed, a step *total*
+  exists only where a byte-identical run has already passed and is withdrawn the moment a
+  run overruns it, a line count is stated as evidence of output rather than as progress,
+  and no percentage is derived at either end - the steps of this repository's own gate take
+  175s and 3s in one run, so a denominator drawn as a proportion would be fiction, and a
+  wrong number is acted on where an absent one is not.
+  The reading is in memory and dies with the process; only the *plan* is durable, because
+  it is a measurement of bytes rather than of a run.
 - Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint
   detection, the absence digest, mined demotion rules, or model narration:
   `design/features/attention-ranking.md`, `design/features/deterministic-consumers.md`,

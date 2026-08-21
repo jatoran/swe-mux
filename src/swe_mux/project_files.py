@@ -1407,6 +1407,27 @@ async def read_project_config(
         }
 
 
+async def read_project_config_values(
+    cwd: str | Path, *, project: ProjectIdentity | None = None
+) -> dict[str, Any]:
+    """Just the configured values, or ``{}`` when the file cannot be trusted.
+
+    A named accessor because the envelope `read_project_config` returns is easy to hand
+    on whole by mistake, and the mistake is silent: every consumer reads its keys with
+    `.get`, finds nothing at the top level, and behaves exactly as it would for a Project
+    that configured nothing. That is precisely how `[worktree] verify_command` came to be
+    declared, documented, and inert for the land queue's gate.
+
+    A malformed or missing config resolves to no values rather than to a partial read,
+    which is the same rule worktree bootstrap already applies.
+    """
+    config = await read_project_config(cwd, project=project)
+    if config.get("status") not in {"ready", "read-only"}:
+        return {}
+    values = config.get("values")
+    return dict(values) if isinstance(values, dict) else {}
+
+
 async def write_project_config(
     cwd: str | Path,
     values: dict[str, Any],

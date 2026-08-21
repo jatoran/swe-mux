@@ -64,6 +64,10 @@ Everything here is that pattern generalised.
   This is what keeps a Project-wide control from becoming a standing fixture in a
   session-scoped pane, which is the real content of the earlier rule that took the scan
   timeline's Project permission out of the Timeline tab (`test/scanTimeline.test.ts`).
+  It also decides *which* gate a per-item surface carries: a Map row draws the land queue's
+  install stop, because that switch is what makes the row's own Land button pointless, and
+  does **not** draw the Project opt-in or `land_grant`, which only govern an agent's
+  `request_land` and leave that button working (`land-queue.md`).
 - **Allowlisted at both ends.** `GRANTABLE_INSTALL_KEYS` and `GRANTABLE_PROJECT_VALUES`
   (`src/swe_mux/grants.py`) are closed sets, validated against `Config` and
   `PROJECT_CONFIG_FIELDS` at import; `frontend/test/grants.test.ts` holds the browser's
@@ -133,6 +137,7 @@ only route to the owning overlay.
 | Findings pane (no detectors) | the four detectors | Project | grant, all four in one act |
 | Findings pane (no observer notes) | `automation_enabled` | install | grant (inline) |
 | Git → Provenance | `provenance_graph` | Project | grant |
+| Git → Map row (install stop) | `land_queue_enabled` | install | grant |
 | Git → Land (install stop) | `land_queue_enabled` | install | grant |
 | Git → Land (agent authority) | `land_queue`, `land_grant` | Project | grant |
 | Alerts tab (ranked inbox empty) | `attention_ranking` | Project | grant |

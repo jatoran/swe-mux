@@ -34,6 +34,8 @@ import {
 import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
 import { GitLandPanel } from './GitLandPanel'
+import { GitLandRow } from './GitLandRow'
+import { useLandQueue } from './landState'
 import { GitReviewModal } from './GitReviewModal'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import {
@@ -158,6 +160,12 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // Three-valued: `null` while unread, so an unreadable opt-in table never renders as
   // "this Project said no".
   const [provenancePermitted,setProvenancePermitted]=useState<boolean|null>(null)
+  // One read, two consumers: the Land control inside each expanded Map row and the Land
+  // segment's queue. Owned here rather than by either of them so they cannot show two
+  // different answers about the same request, and so Log and Provenance pay nothing for
+  // a five-second poll neither of them draws.
+  const landActive=view==='map'||view==='land'
+  const {queue:landQueue,error:landError,refresh:refreshLand}=useLandQueue(project?.id,landActive)
 
   const refresh=useCallback(async()=>{
     if(!project){setOverview(null);return}
@@ -231,11 +239,12 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   if(!project)return <><p class="drawer-status">no Project selected</p><p class="drawer-empty">Select a Project to inspect its repository.</p></>
 
   const provenanceOff=provenancePermitted===false
-  // Sorted once, here, and used by both surfaces that list checkouts: the Map's rows
-  // and the Land segment's launch buttons answer the same "which of these next"
-  // question, so they must not offer two different orders. Parsing stays faithful to
-  // the payload; presentation is what reorders (`sortWorktreesByActivity` says why the
-  // key is the branch tip's date rather than the directory's mtime).
+  // Most recently committed branch first. This is now the *only* list of checkouts in
+  // the tab - the Land segment used to draw a second one in the same order, which was a
+  // standing invitation for the two to drift - so the order matters for the same reason
+  // it always did and has one owner again. Parsing stays faithful to the payload;
+  // presentation is what reorders (`sortWorktreesByActivity` says why the key is the
+  // branch tip's date rather than the directory's mtime).
   const orderedWorktrees=sortWorktreesByActivity(overview?.worktrees||[])
   const mainTree=orderedWorktrees.find(tree=>tree.main)
   const linkedWorktrees=orderedWorktrees.filter(tree=>!tree.main)
@@ -407,6 +416,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
             {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {branchRef&&tree.branchDelta&&tree.branchDelta.total>0&&<ReviewGroup id={`${tree.path}:branch`} title={`BRANCH - VS ${branchRef.toUpperCase()}`} summary={tree.branchDelta} projectId={project.id} locator={{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref}} openRoot={tree.path} preview={preview[`${tree.path}:branch`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:branch`]:value}))} onReview={file=>startReview(tree.branchDelta!,{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {/* Landing is an act on the checkout in front of you, so it is drawn on the
+                row rather than on a segment with a second list of the same worktrees.
+                The main tree is the trunk these land *onto* and is never a candidate. */}
+            {!tree.main&&!tree.bare&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand}/>}
             {!tree.main&&!tree.bare&&<div class="git-map-actions">{removalBlocked?<p class="git-change-empty">{tree.locked!==null?'Git reports this worktree as locked.':`${attached.length} live session${attached.length===1?' uses':'s use'} this worktree.`}</p>:remove?.path===tree.path?<><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force?'Force remove ✓':'Confirm remove ✓'}</button><label><input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> discard uncommitted files</label><button onClick={()=>setRemove(null)}>Cancel</button></>:<button onClick={()=>setRemove({path:tree.path,force:false})}>Remove worktree…</button>}</div>}
           </div>}
         </article>
@@ -471,9 +484,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           of them, so it belongs here rather than on each of their ledgers. */}
       {refMoves.length>0&&<div class="git-ref-moves"><h4>Reference movements</h4>{refMoves.map(move=><article key={move.id}><div><strong>{shortSha(move.commitOid)}</strong><span>{move.subject||'Moved to a commit without readable metadata'}</span></div><p><span class={`git-ref-move-kind ${move.kind}`}>{refMoveLabel(move)}</span></p><small>{move.worktreeRoot} · from {shortSha(move.previousHead)} · observed {new Date(move.observedAt*1000).toLocaleString()}</small></article>)}</div>}
     </section>}
-    {/* Land reads the Map's own worktree list rather than re-listing them: one answer
-        about "which checkouts exist", so the two segments cannot disagree about it. */}
-    {view==='land'&&<GitLandPanel project={project} worktrees={orderedWorktrees.map(tree=>({path:tree.path,branch:tree.branch,main:tree.main}))}/>}
+    {/* Land no longer lists checkouts at all: the act belongs to the Map row, and this
+        segment keeps what has no row to live in — the Project's verification command,
+        who besides the operator may start a land, and the queue's own order. */}
+    {view==='land'&&<GitLandPanel project={project} queue={landQueue} error={landError} onChanged={refreshLand}/>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
     {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>

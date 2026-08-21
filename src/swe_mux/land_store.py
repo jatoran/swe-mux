@@ -28,7 +28,7 @@ import json
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -40,7 +40,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-LAND_SCHEMA_VERSION = 1
+LAND_SCHEMA_VERSION = 2
 
 #: States a request can occupy. `queued` is accepted-not-started; `waiting` is a
 #: precondition hold that a human can read; the three step states are in-flight; the
@@ -124,6 +124,23 @@ CREATE INDEX IF NOT EXISTS land_events_request
   ON land_events(request_id, created_at);
 CREATE INDEX IF NOT EXISTS land_events_project
   ON land_events(project_id, created_at DESC);
+
+-- What a byte-identical gate did last time it passed, so a running one can honestly
+-- say "step 3 of 7" rather than an opaque "verifying". Keyed by the *digest* rather
+-- than by Project: a plan is a claim about a specific set of bytes, and a gate that
+-- was edited must stop predicting rather than predict against the old script.
+--
+-- Written only after a run that PASSED. A failing gate stops at its first bad step
+-- under `set -e`, so its step list is a prefix - recording that would shorten the
+-- prediction permanently and make every later run look nearly finished.
+CREATE TABLE IF NOT EXISTS land_verify_plans(
+  project_root TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  steps_json TEXT NOT NULL DEFAULT '[]',
+  duration_ms REAL NOT NULL DEFAULT 0,
+  observed_at REAL NOT NULL,
+  PRIMARY KEY(project_root, digest)
+);
 """
 
 
@@ -536,6 +553,71 @@ class LandStore:
             return [_row_to_event(row) for row in rows]
 
         return await self._run(op)
+
+    # -- verification plans ---------------------------------------------------
+
+    async def record_verify_plan(
+        self,
+        *,
+        project_root: str,
+        digest: str,
+        steps: Sequence[str],
+        duration_ms: float,
+        now: float | None = None,
+    ) -> None:
+        """Record what a *passing* gate's steps were, for the next run to be measured against.
+
+        Replaces rather than accumulates: the newest passing run of these exact bytes is
+        the best available statement about them, and keeping a history would only raise
+        the question of which entry to predict from.
+        """
+        if not digest or not steps:
+            return
+        moment = time.time() if now is None else now
+        payload = json.dumps([str(step) for step in steps])
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO land_verify_plans(project_root,digest,steps_json,duration_ms,"
+                "observed_at) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(project_root,digest) DO UPDATE SET"
+                " steps_json=excluded.steps_json, duration_ms=excluded.duration_ms,"
+                " observed_at=excluded.observed_at",
+                (project_root, digest, payload, float(duration_ms), moment),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def verify_plan(self, project_root: str, digest: str) -> dict[str, Any] | None:
+        """The recorded plan for these exact bytes, or `None`.
+
+        `None` is the honest answer for a gate nobody has watched pass yet, and the
+        caller renders it as a step number with no total rather than as a guess.
+        """
+        if not digest:
+            return None
+
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM land_verify_plans WHERE project_root=? AND digest=?",
+                (project_root, digest),
+            ).fetchone()
+            if row is None:
+                return None
+            raw = json.loads(str(row["steps_json"]) or "[]")
+            return {
+                "steps": raw if isinstance(raw, list) else [],
+                "duration_ms": float(row["duration_ms"] or 0.0),
+                "observed_at": float(row["observed_at"]),
+            }
+
+        try:
+            return await self._run(op)
+        except json.JSONDecodeError:
+            # A malformed plan degrades to "no plan", which renders as `step 3` with no
+            # total. It must never degrade to a wrong total.
+            return None
 
     async def origin_count_since(self, origin_session_id: str, since: float) -> int:
         """How many requests one session has made in a window, for the budget."""

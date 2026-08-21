@@ -27,6 +27,7 @@ from swe_mux.server import (
     list_land_requests,
     read_land_verify_command,
     request_land,
+    write_land_verify_command,
 )
 from swe_mux.worktree_verify import VerifyApprovalStore
 
@@ -97,6 +98,7 @@ def build(tmp_path: Path, trunk_root: Path) -> tuple[web.Application, LandStore]
     app.router.add_delete("/api/land/{request_id}", cancel_land_request)
     app.router.add_get("/api/land/{request_id}/events", land_request_events)
     app.router.add_get("/api/land/verify-command", read_land_verify_command)
+    app.router.add_put("/api/land/verify-command", write_land_verify_command)
     app.router.add_post("/api/land/verify-command/approve", approve_land_verify_command)
     return app, store
 
@@ -360,6 +362,260 @@ async def test_a_project_with_no_gate_says_so_rather_than_approving_nothing(
         )
         assert refused.status == 409
         assert (await refused.json())["code"] == "not_configured"
+    finally:
+        await client.close()
+        store.close()
+
+
+# -- editing the verification command ----------------------------------------
+
+
+async def test_the_read_states_which_mechanism_is_in_force_and_what_is_editable(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Two mechanisms were documented and neither was ever stated on screen."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        info = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        assert info["source"] == "convention"
+        assert info["script_name"] == ".worktree-verify"
+        assert info["script_present"] is True
+        # No override is set, and "" is how the editor renders "falls back to the script".
+        assert info["config_command"] == ""
+        assert info["config_revision"]
+        # Nothing has watched these bytes pass, so there is no plan to predict from.
+        assert info["plan"] is None
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_setting_an_override_takes_effect_and_leaves_it_unapproved(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The invariant the two routes exist to keep apart.
+
+    Editing is a proposal and approving is an authority, so a write can never produce an
+    approved command however it is reached. It cannot even do so by accident: approval
+    is a digest over the bytes, and the write moved them.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        shown = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        await client.post(
+            "/api/land/verify-command/approve",
+            json={
+                "project_id": "proj-1",
+                "worktree_root": str(worktree),
+                "digest": shown["digest"],
+            },
+        )
+
+        written = await client.put(
+            "/api/land/verify-command",
+            json={
+                "project_id": "proj-1",
+                "worktree_root": str(worktree),
+                "command": "pytest -q",
+                "revision": shown["config_revision"],
+            },
+        )
+        assert written.status == 200, await written.text()
+        body = await written.json()
+        assert body["source"] == "project_config"
+        assert body["display"] == "pytest -q"
+        assert body["config_command"] == "pytest -q"
+        # The whole point: a write never approves, and the approval it invalidated is
+        # still on record so the prompt can show what changed.
+        assert body["approved"] is False
+        assert body["previously_approved"] is True
+
+        # The override wins over the script that is still sitting in the checkout.
+        again = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        assert again["source"] == "project_config"
+        assert again["script_present"] is True
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_clearing_the_override_falls_back_to_the_script_convention(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """An empty command is a decision - "run the script in the tree" - not a no-op."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        first = await (
+            await client.put(
+                "/api/land/verify-command",
+                json={"project_id": "proj-1", "worktree_root": str(worktree),
+                      "command": "pytest -q", "revision": "missing"},
+            )
+        ).json()
+        assert first["source"] == "project_config"
+
+        cleared = await (
+            await client.put(
+                "/api/land/verify-command",
+                json={"project_id": "proj-1", "worktree_root": str(worktree),
+                      "command": "", "revision": first["config_revision"]},
+            )
+        ).json()
+        assert cleared["source"] == "convention"
+        assert cleared["config_command"] == ""
+        assert cleared["configured"] is True
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_stale_revision_is_refused_rather_than_clobbering_another_edit(
+    tmp_path: Path, trunk: Path
+) -> None:
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        first = await (
+            await client.put(
+                "/api/land/verify-command",
+                json={"project_id": "proj-1", "worktree_root": str(worktree),
+                      "command": "pytest -q", "revision": "missing"},
+            )
+        ).json()
+        stale = await client.put(
+            "/api/land/verify-command",
+            json={"project_id": "proj-1", "worktree_root": str(worktree),
+                  "command": "rm -rf /", "revision": "missing"},
+        )
+        assert stale.status == 409
+        assert (await stale.json())["code"] == "revision_conflict"
+        # Nothing was written, so the earlier command still stands.
+        current = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        assert current["display"] == "pytest -q"
+        assert current["config_revision"] == first["config_revision"]
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_the_editor_leaves_every_other_project_field_alone(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """It writes one key. A surface that round-tripped the whole config would silently
+    rewrite the fields it does not draw."""
+    from swe_mux.project_files import read_project_config, serialize_project_config
+
+    worktree = add_worktree(trunk, "alpha")
+    mux_dir = trunk / ".swe-mux"
+    mux_dir.mkdir(parents=True, exist_ok=True)
+    (mux_dir / "config.toml").write_bytes(
+        serialize_project_config(
+            {
+                "preferred_backend": "shell",
+                "land_grant": "granted",
+                "automations": {"land_queue": True},
+                "worktree": {"setup_command": "npm ci"},
+            }
+        )
+    )
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        current = await read_project_config(str(trunk))
+        written = await client.put(
+            "/api/land/verify-command",
+            json={"project_id": "proj-1", "worktree_root": str(worktree),
+                  "command": "pytest -q", "revision": current["revision"]},
+        )
+        assert written.status == 200, await written.text()
+        after = (await read_project_config(str(trunk)))["values"]
+        assert after["preferred_backend"] == "shell"
+        assert after["land_grant"] == "granted"
+        assert after["automations"] == {"land_queue": True}
+        assert after["worktree"] == {"setup_command": "npm ci", "verify_command": "pytest -q"}
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_command_resolution_is_handed_values_rather_than_the_config_envelope(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The regression that made `[worktree] verify_command` inert for the land gate.
+
+    `read_project_config` returns an envelope with the values under a key. Handed on
+    whole, `resolve_worktree_command` looked for `worktree` at the top level, found
+    nothing, and fell through to the script convention - so the override was declared,
+    documented, and silently ignored while the gate ran something else. The failure had
+    no symptom: both paths produce a working gate.
+    """
+    from swe_mux.project_files import read_project_config_values, serialize_project_config
+    from swe_mux.worktree_verify import describe_verify_command
+
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    mux_dir = trunk / ".swe-mux"
+    mux_dir.mkdir(parents=True, exist_ok=True)
+    (mux_dir / "config.toml").write_bytes(
+        serialize_project_config({"worktree": {"verify_command": "pytest -q"}})
+    )
+    approvals = VerifyApprovalStore(tmp_path / "data")
+
+    values = await read_project_config_values(str(trunk))
+    assert values["worktree"] == {"verify_command": "pytest -q"}
+    resolved = describe_verify_command(worktree, values, approvals, project_root=str(trunk))
+    assert resolved.source == "project_config"
+
+    # The shape that used to be passed. It resolves - to the wrong authority.
+    from swe_mux.project_files import read_project_config
+
+    envelope = await read_project_config(str(trunk))
+    wrong = describe_verify_command(worktree, envelope, approvals, project_root=str(trunk))
+    assert wrong.source == "convention"
+    assert wrong.digest != resolved.digest
+
+
+async def test_an_over_long_command_is_refused_before_it_is_written(
+    tmp_path: Path, trunk: Path
+) -> None:
+    worktree = add_worktree(trunk, "alpha")
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        refused = await client.put(
+            "/api/land/verify-command",
+            json={"project_id": "proj-1", "worktree_root": str(worktree),
+                  "command": "x" * 5000, "revision": "missing"},
+        )
+        assert refused.status == 400
+        assert not (trunk / ".swe-mux" / "config.toml").exists()
     finally:
         await client.close()
         store.close()

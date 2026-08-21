@@ -219,6 +219,7 @@ from .project_files import (
     read_note,
     read_observations,
     read_project_config,
+    read_project_config_values,
     read_project_file,
     read_project_image_content,
     search_project_files,
@@ -344,7 +345,12 @@ from .windows_firewall import (
     repair_wsl_firewall,
 )
 from .worktree_setup import WorktreeSetupResult, run_worktree_setup
-from .worktree_verify import VerifyApprovalStore, describe_verify_command
+from .worktree_verify import (
+    MAX_VERIFY_COMMAND_CHARS,
+    VerifyApprovalStore,
+    describe_verify_command,
+)
+from .worktree_verify import SCRIPT_NAME as VERIFY_SCRIPT_NAME
 from .wsl_bridge import WslBridgeError, wsl_adapter_subnet
 from .wsl_bridge import clear_status_cache as clear_wsl_status_cache
 from .wsl_bridge import install_bridge as install_wsl_bridge
@@ -1062,6 +1068,10 @@ def create_app(
             web.delete("/api/land/{request_id}", cancel_land_request),
             web.get("/api/land/{request_id}/events", land_request_events),
             web.get("/api/land/verify-command", read_land_verify_command),
+            # Editing the gate and approving it are deliberately two routes and two
+            # acts. A write always leaves the result unapproved (the digest moved), so
+            # nothing that can author a command can also authorise it.
+            web.put("/api/land/verify-command", write_land_verify_command),
             web.post("/api/land/verify-command/approve", approve_land_verify_command),
             web.post("/api/reveal", reveal_path),
             web.get("/pty/{sid}", pty_ws),
@@ -1484,7 +1494,15 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         return resolved.get("ref")
 
     async def _land_project_values(root: str) -> dict[str, Any]:
-        return await read_project_config(root)
+        """The Project's *config values*, which is what command resolution reads.
+
+        Handed the whole envelope instead, `resolve_worktree_command` looked for
+        `worktree` at the top level, found nothing, and silently fell through to the
+        `.worktree-verify` convention - so `[worktree] verify_command` was declared,
+        documented, and inert. `read_project_config_values` is the named accessor that
+        makes that mistake impossible to repeat quietly.
+        """
+        return await read_project_config_values(root)
 
     async def _land_busy_sessions(worktree_root: str) -> tuple[str, ...]:
         """Sessions living in this checkout that are not safe to merge underneath.
@@ -13609,13 +13627,24 @@ async def read_land_verify_command(request: web.Request) -> web.Response:
     """
     project = _land_project(request)
     worktree_root = request.query.get("worktree_root") or project.root
-    values = await read_project_config(project.root)
+    identity = _config_identity(request, project.id)
+    config = await read_project_config(project.root, project=identity)
+    # The values, never the envelope: the resolver reads `worktree` off this dict, and
+    # handing it the envelope is what made the override inert (`read_project_config_values`).
+    values = config.get("values") if config.get("status") in {"ready", "read-only"} else {}
+    values = values if isinstance(values, dict) else {}
     info = describe_verify_command(
         Path(worktree_root),
         values,
         request.app["verify_approvals"],
         project_root=project.root,
     )
+    worktree_config = values.get("worktree")
+    configured = ""
+    if isinstance(worktree_config, dict):
+        configured = str(worktree_config.get("verify_command") or "")
+    store: LandStore = request.app["land_store"]
+    plan = await store.verify_plan(project.root, info.digest or "")
     return json_response(
         {
             **info.public_dict(),
@@ -13623,6 +13652,104 @@ async def read_land_verify_command(request: web.Request) -> web.Response:
             "worktree_root": worktree_root,
             "approved_source": info.approved_snapshot,
             "current_source": info.current_source,
+            # The editable half, beside the resolved answer. The editor sets exactly
+            # one key, so it is served alone rather than as the whole config: a surface
+            # that round-trips every Project field would silently rewrite the ones it
+            # does not draw.
+            "config_command": configured,
+            "config_revision": str(config.get("revision") or "missing"),
+            "config_status": str(config.get("status") or "missing"),
+            "config_path": str(config.get("path") or ""),
+            "script_name": VERIFY_SCRIPT_NAME,
+            "script_present": (Path(worktree_root) / VERIFY_SCRIPT_NAME).is_file(),
+            # What a byte-identical run last did, when one has passed. Absent means the
+            # progress reading will report a step number with no total, which is the
+            # honest form rather than an invented one.
+            "plan": plan,
+        }
+    )
+
+
+async def write_land_verify_command(request: web.Request) -> web.Response:
+    """Set or clear `[worktree] verify_command` for a Project.
+
+    Two properties make this safe to expose beside the approval it does *not* grant:
+
+    - It writes exactly one key. The revision guard is the Project config's own, so a
+      concurrent edit to some other field loses the race rather than being clobbered.
+    - The result is unapproved by construction. Approval is a digest over the bytes
+      that will run, so changing them invalidates it without this route saying anything
+      about approval at all - which is what keeps "an agent cannot approve the command
+      its own land runs" true no matter who calls this.
+
+    An empty command clears the override, falling back to the `.worktree-verify`
+    convention. That is a real choice - "use the script in the tree" - and is
+    distinguished from "leave it alone" by the field being absent from the request.
+    """
+    body = await request.json()
+    project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
+    if project is None:
+        raise ValueError("unknown project")
+    command = str(body.get("command") or "").strip()
+    if len(command) > MAX_VERIFY_COMMAND_CHARS:
+        raise ValueError(f"verify_command must be at most {MAX_VERIFY_COMMAND_CHARS} characters")
+    identity = _config_identity(request, project.id)
+    current = await read_project_config(project.root, project=identity)
+    if current.get("status") == "malformed":
+        return json_response(
+            {
+                "error": "this Project's .swe-mux/config.toml cannot be parsed; fix it first",
+                "code": "project_config_malformed",
+            },
+            409,
+        )
+    values = dict(current.get("values") or {})
+    worktree_values = dict(values.get("worktree") or {})
+    if command:
+        worktree_values["verify_command"] = command
+    else:
+        worktree_values.pop("verify_command", None)
+    if worktree_values:
+        values["worktree"] = worktree_values
+    else:
+        values.pop("worktree", None)
+    revision = str(body.get("revision") or current.get("revision") or "missing")
+    try:
+        written = await write_project_config(project.root, values, revision, project=identity)
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    await request.app["events"].emit(
+        "project_configuration_changed", project_id=written["project"]["id"]
+    )
+    # Its own audit record, exactly as an approval leaves one. Without it, "who changed
+    # the gate" would be answerable only from the repository's own history - which is
+    # the wrong place to look for a change this endpoint made on this machine.
+    await request.app["events"].emit(
+        "land_verify_command_changed", source="user", project_id=project.id
+    )
+    worktree_root = str(body.get("worktree_root") or project.root)
+    refreshed = describe_verify_command(
+        Path(worktree_root),
+        written.get("values") or {},
+        request.app["verify_approvals"],
+        project_root=project.root,
+    )
+    return json_response(
+        {
+            **refreshed.public_dict(),
+            "project_id": project.id,
+            "worktree_root": worktree_root,
+            "approved_source": refreshed.approved_snapshot,
+            "current_source": refreshed.current_source,
+            "config_command": command,
+            "config_revision": str(written.get("revision") or "missing"),
+            "config_status": str(written.get("status") or "missing"),
+            "config_path": str(written.get("path") or ""),
+            "script_name": VERIFY_SCRIPT_NAME,
+            "script_present": (Path(worktree_root) / VERIFY_SCRIPT_NAME).is_file(),
+            "plan": None,
         }
     )
 

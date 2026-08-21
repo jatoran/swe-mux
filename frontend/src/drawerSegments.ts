@@ -109,7 +109,9 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // Phase 14. A segment of its own rather than a strip inside Map, for the same
   // watch-here/act-there reason the prompt Queue is separate from the Fleet Queue: Map
   // answers "what is in this worktree", and Land answers "what is happening to it".
-  { tab: 'git', id: 'land', kind: 'segment', label: 'Land', heading: 'Land Queue', title: 'Land - branches queued to reconcile, verify, and fast-forward onto the trunk' },
+  // The act of landing a branch lives on that branch's Map row; this segment is the
+  // queue itself, the Project's verification command, and who besides you may start one.
+  { tab: 'git', id: 'land', kind: 'segment', label: 'Land', heading: 'Land Queue', title: 'Land - the landing queue, the verification command, and who may start a land' },
 ]
 
 export const DRAWER_SEGMENT_TABS: readonly DrawerTabId[] =

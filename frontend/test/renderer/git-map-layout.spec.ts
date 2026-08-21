@@ -6,14 +6,20 @@ for(const width of [180,240,360]){
     await page.goto('/git-map-harness.html')
     const row=page.locator('.git-map-summary').filter({hasText:'sidebar-session-git-lines-fix'})
     await expect(row).toBeVisible()
+    // Scoped to the linked worktree's own row rather than to the first one in the
+    // document: the main tree is pinned to the top of Map regardless of its date
+    // (`sortWorktreesByActivity`), so "the first summary" is the trunk, whose identity
+    // line is the one case with a qualifier under it and therefore not what this
+    // measures.
     const geometry=await page.evaluate(()=>{
-      const box=(selector:string)=>document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().toJSON()
-      const summary=document.querySelector<HTMLElement>('.git-map-summary')!
+      const rows=[...document.querySelectorAll<HTMLElement>('.git-map-summary')]
+      const summary=rows.find(item=>item.innerText.includes('sidebar-session-git-lines-fix'))!
+      const box=(selector:string)=>summary.querySelector<HTMLElement>(selector)!.getBoundingClientRect().toJSON()
       return {
-        summary:box('.git-map-summary'),rail:box('.git-map-rail'),identity:box('.git-map-identity'),
+        summary:summary.getBoundingClientRect().toJSON(),rail:box('.git-map-rail'),identity:box('.git-map-identity'),
         chevron:box('.git-map-chevron'),metrics:box('.git-map-metrics'),
         horizontalOverflow:summary.scrollWidth-summary.clientWidth,
-        identityText:document.querySelector<HTMLElement>('.git-map-identity')!.innerText,
+        identityText:summary.querySelector<HTMLElement>('.git-map-identity')!.innerText,
       }
     })
     expect(geometry.identity.bottom).toBeLessThanOrEqual(geometry.metrics.top+0.5)

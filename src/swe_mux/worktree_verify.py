@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from .verify_progress import VerifyProgress
 from .worktree_exec import (
     WorktreeCommand,
     resolve_worktree_command,
@@ -45,6 +46,9 @@ MAX_APPROVED_SNAPSHOT_BYTES = 128 * 1024
 
 CONFIG_KEY = "verify_command"
 SCRIPT_NAME = ".worktree-verify"
+#: The same bound `parse_project_config` enforces on `[worktree]` command strings, named
+#: here so the editor can refuse before writing rather than after the parse rejects it.
+MAX_VERIFY_COMMAND_CHARS = 4096
 
 VerifyStatus = Literal[
     "not_configured",
@@ -95,6 +99,13 @@ class WorktreeVerifyResult:
     output: bytes = b""
     output_truncated: bool = False
     error: str | None = None
+    #: The step names this run announced, in order, when it announced any. A *passing*
+    #: run's list is what a later run is measured against; a failing run stopped early
+    #: under `set -e`, so its list is a prefix and is never recorded as a plan.
+    steps: tuple[str, ...] = ()
+    #: Lines the gate emitted. Not progress toward an end - the honest fallback for a
+    #: gate that declares no steps of its own.
+    output_lines: int = 0
 
     @property
     def passed(self) -> bool:
@@ -110,6 +121,8 @@ class WorktreeVerifyResult:
             "duration_ms": round(self.duration_ms, 1),
             "output_truncated": self.output_truncated,
             "error": self.error,
+            "steps": list(self.steps),
+            "output_lines": self.output_lines,
         }
 
     def failure_summary(self) -> str:
@@ -260,8 +273,15 @@ async def run_worktree_verify(
     *,
     project_root: str,
     request_id: str,
+    progress: VerifyProgress | None = None,
 ) -> WorktreeVerifyResult:
-    """Run the approved verification command, or refuse without running anything."""
+    """Run the approved verification command, or refuse without running anything.
+
+    `progress` observes the gate's output while it runs, so a caller can report which
+    step it is on instead of an opaque "verifying". It reads the stream and never
+    touches it: the bytes captured and the exit status reported are exactly what the
+    process produced, which is the one property this module refuses to compromise.
+    """
     info = describe_verify_command(worktree, project_values, store, project_root=project_root)
     if not info.configured:
         return WorktreeVerifyResult("not_configured")
@@ -305,7 +325,14 @@ async def run_worktree_verify(
         timeout_seconds=VERIFY_TIMEOUT_SECONDS,
         output_limit=MAX_VERIFY_OUTPUT_BYTES,
         label="verification",
+        on_chunk=progress.feed if progress is not None else None,
     )
+    steps: tuple[str, ...] = ()
+    output_lines = 0
+    if progress is not None:
+        progress.finish()
+        steps = progress.observed_steps()
+        output_lines = progress.lines
     if outcome.timed_out:
         log.warning(
             "worktree_verify_timed_out request_id=%s path=%s duration_ms=%.1f",
@@ -323,6 +350,8 @@ async def run_worktree_verify(
             outcome.output,
             outcome.truncated,
             outcome.error,
+            steps,
+            output_lines,
         )
     if outcome.exit_code is None:
         return WorktreeVerifyResult(
@@ -335,6 +364,8 @@ async def run_worktree_verify(
             outcome.output,
             outcome.truncated,
             outcome.error,
+            steps,
+            output_lines,
         )
     status: VerifyStatus = "passed" if outcome.exit_code == 0 else "failed"
     log.log(
@@ -357,4 +388,7 @@ async def run_worktree_verify(
         outcome.duration_ms,
         outcome.output,
         outcome.truncated,
+        None,
+        steps,
+        output_lines,
     )

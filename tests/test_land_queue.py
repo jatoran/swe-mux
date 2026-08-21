@@ -8,7 +8,9 @@ about either.
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -735,6 +737,205 @@ async def test_a_branch_that_moved_after_verifying_is_refused(
         assert results[0]["state"] == "refused"
         assert "moved after it verified" in results[0]["reason"]
         assert git(trunk, "log", "--oneline", "-1").endswith("initial")
+    finally:
+        store.close()
+
+
+# -- what a running gate reports about itself --------------------------------
+
+
+def write_stepped_verify(
+    worktree: Path, *, steps: tuple[str, ...], exit_code: int = 0, pause: str = ""
+) -> None:
+    """A gate that announces its own steps, in this repository's own `step()` shape."""
+    lines = ["#!/usr/bin/env bash", "set -e", "step() { printf '\\n=== %s ===\\n' \"$*\" >&2; }"]
+    for name in steps:
+        lines.append(f'step "{name}"')
+        lines.append("echo working")
+        if pause:
+            lines.append(f"sleep {pause}")
+    lines.append(f"exit {exit_code}")
+    script = worktree / ".worktree-verify"
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    script.chmod(0o755)
+    git(worktree, "add", ".worktree-verify")
+    git(worktree, "commit", "-m", "add stepped verification")
+
+
+async def test_a_passing_gate_records_its_steps_for_the_next_run_to_be_measured_against(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A total is a measurement of these exact bytes, never an estimate of them."""
+    worktree = add_worktree(trunk, "alpha")
+    write_stepped_verify(worktree, steps=("pytest", "ruff", "mypy"))
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        # Keyed by the trunk root the pipeline resolved, which is the one it writes and
+        # reads under; the path the caller happened to type is not necessarily equal to it.
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        root = row["project_root"]
+        assert await store.verify_plan(root, info.digest or "") is None
+
+        assert (await service.tick())[0]["state"] == "landed"
+
+        plan = await store.verify_plan(root, info.digest or "")
+        assert plan is not None
+        assert plan["steps"] == ["pytest", "ruff", "mypy"]
+        assert plan["duration_ms"] > 0
+    finally:
+        store.close()
+
+
+async def test_a_failing_gate_records_no_plan(tmp_path: Path, trunk: Path) -> None:
+    """A gate stopped by `set -e` announced a *prefix* of its steps.
+
+    Recording that would predict a permanently shorter run, so every later gate would
+    read as nearly finished from its second step onward - which is worse than showing
+    no total at all.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_stepped_verify(worktree, steps=("pytest",), exit_code=1)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin_session_id="sess_1",
+        )
+        assert (await service.tick())[0]["state"] == "handed_back"
+        assert await store.verify_plan(row["project_root"], info.digest or "") is None
+        # The steps it did announce are still in the audit trail, where they describe
+        # what happened rather than predicting what will.
+        verify = [item for item in await store.events(row["id"]) if item["step"] == "verify"]
+        assert verify[0]["detail"]["steps"] == ["pytest"]
+        assert verify[0]["detail"]["output_lines"] > 0
+    finally:
+        store.close()
+
+
+async def _watch_a_step(
+    service: LandQueueService, running: asyncio.Task[Any], project_root: str
+) -> dict[str, Any] | None:
+    """Poll `status()` until the running gate has announced a step, or the run ends.
+
+    Waits for a *step* rather than for any snapshot: the row enters `verifying` before
+    the subprocess has printed anything, and `step_index: 0` there is the honest reading
+    of a gate that has not announced one yet.
+    """
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+        snapshot = await service.status(project_id="p", project_root=project_root)
+        for row in snapshot["requests"]:
+            live = row["verify_progress"]
+            if live is not None and live["step_index"] >= 1:
+                return dict(live)
+        if running.done():
+            return None
+    return None
+
+
+async def test_a_recorded_plan_supplies_the_total_a_first_run_could_not(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """"step 2 of 3" only after a byte-identical run measured what 3 was.
+
+    Two branches carrying the same gate share one plan, because the plan is keyed by the
+    bytes rather than by the branch - which is also why editing the gate withdraws it.
+    """
+    alpha = add_worktree(trunk, "alpha")
+    beta = add_worktree(trunk, "beta")
+    for tree in (alpha, beta):
+        write_stepped_verify(tree, steps=("pytest", "ruff", "mypy"), pause="0.3")
+    commit(alpha, "alpha.txt", "alpha\n", "alpha work")
+    commit(beta, "beta.txt", "beta\n", "beta work")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, alpha, trunk)
+        await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(alpha)
+        )
+        first = asyncio.create_task(service.tick())
+        seen_first = await _watch_a_step(service, first, str(trunk))
+        assert (await first)[0]["state"] == "landed"
+        assert seen_first is not None
+        # Nothing had measured these bytes yet, so no total was invented for them.
+        assert seen_first["expected_step_count"] is None
+
+        await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(beta)
+        )
+        second = asyncio.create_task(service.tick())
+        seen_second = await _watch_a_step(service, second, str(trunk))
+        assert (await second)[0]["state"] == "landed"
+        assert seen_second is not None
+        assert seen_second["expected_step_count"] == 3
+        assert seen_second["expected_steps"] == ["pytest", "ruff", "mypy"]
+        assert seen_second["step_index"] <= 3
+    finally:
+        store.close()
+
+
+async def test_status_reports_a_running_gate_and_only_a_running_one(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The progress reading is a fact about a live process, so it exists only while one is.
+
+    A snapshot left on a finished row would be a claim about a run that is over, and a
+    row a restart returned to `queued` has no run at all - both would read exactly like
+    a gate that is moving.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_stepped_verify(worktree, steps=("pytest", "ruff"), pause="0.4")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        queued = await service.status(project_id="p", project_root=str(trunk))
+        assert queued["requests"][0]["verify_progress"] is None
+
+        running = asyncio.create_task(service.tick())
+        seen: dict[str, Any] | None = None
+        deadline = time.monotonic() + 60
+        # Waits for a *step*, not merely for a snapshot: the row enters `verifying`
+        # before the subprocess has printed anything, and `step_index: 0` there is the
+        # honest reading of a gate that has not announced a step yet.
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+            snapshot = await service.status(project_id="p", project_root=str(trunk))
+            live = snapshot["requests"][0]["verify_progress"]
+            if live is not None and live["step_index"] >= 1:
+                seen = live
+                break
+            if running.done():
+                break
+        results = await running
+
+        assert results[0]["state"] == "landed"
+        assert seen is not None, "the gate never reported a step while it was running"
+        assert seen["step_index"] >= 1
+        assert seen["step_name"] in {"pytest", "ruff"}
+        assert seen["elapsed_ms"] >= 0
+        # No plan on the first run of these bytes, so no total is invented for it.
+        assert seen["expected_step_count"] is None
+        assert seen["attempt"] == 1
+
+        landed = await service.status(project_id="p", project_root=str(trunk))
+        assert landed["requests"][0]["state"] == "landed"
+        assert landed["requests"][0]["verify_progress"] is None
     finally:
         store.close()
 

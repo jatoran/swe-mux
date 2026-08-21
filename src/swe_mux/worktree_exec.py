@@ -23,6 +23,7 @@ import logging
 import os
 import shlex
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -132,14 +133,27 @@ def resolve_worktree_command(
 
 
 async def bounded_output(
-    stream: asyncio.StreamReader, limit: int, *, label: str
+    stream: asyncio.StreamReader, limit: int, *, label: str,
+    on_chunk: Callable[[bytes], None] | None = None,
 ) -> tuple[bytes, bool]:
-    """Read a stream to EOF, retaining its head and tail within `limit` bytes."""
+    """Read a stream to EOF, retaining its head and tail within `limit` bytes.
+
+    `on_chunk` observes the bytes as they arrive and changes nothing about them: this is
+    the only place a caller can watch a long command make progress, because everything
+    downstream sees the capture once, after the process has already exited. An observer
+    that raises is a bug in the observer, so it is contained here rather than allowed to
+    abandon the pipe mid-read - a half-read pipe would block the process it is draining.
+    """
     half = limit // 2
     prefix = bytearray()
     tail = bytearray()
     total = 0
     while chunk := await stream.read(64 * 1024):
+        if on_chunk is not None:
+            try:
+                on_chunk(chunk)
+            except Exception:  # noqa: BLE001 - watching output must not stop reading it
+                log.debug("worktree_command_observer_failed label=%s", label)
         total += len(chunk)
         if len(prefix) < half:
             take = min(half - len(prefix), len(chunk))
@@ -164,6 +178,7 @@ async def run_bounded_command(
     output_limit: int,
     label: str,
     env: dict[str, str] | None = None,
+    on_chunk: Callable[[bytes], None] | None = None,
 ) -> CommandOutcome:
     """Run one repository-declared command and report exactly what it did.
 
@@ -192,7 +207,9 @@ async def run_bounded_command(
             creationflags=background_creation_flags(),
         )
         assert process.stdout is not None
-        output_task = asyncio.create_task(bounded_output(process.stdout, output_limit, label=label))
+        output_task = asyncio.create_task(
+            bounded_output(process.stdout, output_limit, label=label, on_chunk=on_chunk)
+        )
         try:
             exit_code = await asyncio.wait_for(process.wait(), timeout_seconds)
         except TimeoutError:

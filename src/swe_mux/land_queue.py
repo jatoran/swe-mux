@@ -41,6 +41,7 @@ from .land_preconditions import (
     read_repository_facts,
 )
 from .land_store import LandConflict, LandStore
+from .verify_progress import VerifyProgress, sanitize_plan
 from .worktree_verify import (
     MAX_HANDBACK_OUTPUT_BYTES,
     VerifyApprovalStore,
@@ -143,6 +144,11 @@ class LandQueueService:
         self._draft_request = draft_request
         self._clock = clock
         self._roots_in_flight: set[str] = set()
+        #: The one gate currently running, by request id. In memory rather than in the
+        #: store because it is a reading of a live process: a daemon that restarts
+        #: returns the step to `queued` and re-runs it from scratch, so a persisted
+        #: half-progress would be a claim about a run that no longer exists.
+        self._verify_live: dict[str, VerifyProgress] = {}
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -556,16 +562,50 @@ class LandQueueService:
         await self._emit("land_changed", current)
         values = await self._values(row["project_root"])
         attempts = 1 + self._verify_retries()
+        # The bytes about to run, resolved once so the plan is looked up under the same
+        # digest the run will report. A gate that was edited has a different digest and
+        # therefore no plan, which is the honest answer: the old step list describes a
+        # script that is no longer there.
+        info = describe_verify_command(
+            Path(row["worktree_root"]),
+            values,
+            self._approvals,
+            project_root=row["project_root"],
+        )
+        digest = info.digest or ""
+        plan = await self._store.verify_plan(row["project_root"], digest)
+        expected = tuple(sanitize_plan((plan or {}).get("steps") or []))
         outcomes = []
         for attempt in range(attempts):
-            outcome = await run_worktree_verify(
-                Path(row["worktree_root"]),
-                values,
-                self._approvals,
-                project_root=row["project_root"],
-                request_id=request_id,
+            tracker = VerifyProgress(
+                expected_steps=expected,
+                attempt=attempt + 1,
+                attempts=attempts,
+                clock=self._clock,
             )
+            self._verify_live[request_id] = tracker
+            try:
+                outcome = await run_worktree_verify(
+                    Path(row["worktree_root"]),
+                    values,
+                    self._approvals,
+                    project_root=row["project_root"],
+                    request_id=request_id,
+                    progress=tracker,
+                )
+            finally:
+                self._verify_live.pop(request_id, None)
             outcomes.append(outcome)
+            if outcome.passed and outcome.steps:
+                # Only a pass. A gate that stopped on a failure announced a prefix of
+                # its steps, and recording that would predict a permanently shorter run.
+                await self._store.record_verify_plan(
+                    project_root=row["project_root"],
+                    digest=outcome.digest or digest,
+                    steps=outcome.steps,
+                    duration_ms=outcome.duration_ms,
+                    now=self._clock(),
+                )
             await self._store.record_event(
                 request_id=request_id,
                 project_id=row["project_id"],
@@ -899,6 +939,17 @@ class LandQueueService:
         self, *, project_id: str | None = None, project_root: str | None = None
     ) -> dict[str, Any]:
         requests = await self._store.list_requests(project_id=project_id, limit=100)
+        # A running gate's own reading of itself, attached to the row it belongs to.
+        # Only ever present on a row that is verifying right now, and only for a gate
+        # this daemon is watching: a request that a restart returned to `queued` has no
+        # live run, and reporting a stale snapshot would be worse than reporting none.
+        for row in requests:
+            tracker = self._verify_live.get(row["id"])
+            row["verify_progress"] = (
+                tracker.snapshot(now=self._clock())
+                if tracker is not None and row["state"] == "verifying"
+                else None
+            )
         # The two authority facts the Land panel cannot otherwise tell apart from a
         # quiet queue. An operator request bypasses the Project opt-in on purpose - the
         # operator is the authority the grant defers to - but the *sweep* stops dead on

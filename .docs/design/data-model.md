@@ -309,6 +309,18 @@
   `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
   the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
   an originating session to attribute it to.
+- `land_verify_plans` (same database): what a verification gate's steps were the last time these
+  **exact bytes passed**, keyed by `(project_root, digest)` with the step names and the run's
+  duration. It is what lets a running gate say "step 3 of 7" instead of an opaque "verifying",
+  and it is a measurement rather than an estimate: a gate whose bytes changed has a different
+  digest and therefore no plan, and a run that overruns its plan reports no total at all.
+  **Only a passing run writes one.** A gate stopped by a failure announced a *prefix* of its
+  steps, so recording that would predict a permanently shorter run and make every later gate read
+  as nearly finished from its second step onward. A row is replaced rather than accumulated: the
+  newest passing run of one set of bytes is the whole statement about them.
+  The *live* reading of a gate that is running right now is deliberately **not** stored - it is a
+  fact about a process, and a daemon restart returns the step to `queued` and re-runs it from
+  scratch, so a persisted half-progress would describe a run that no longer exists.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.

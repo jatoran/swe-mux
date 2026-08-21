@@ -222,8 +222,10 @@ uncommitted work together.
 ## Git drawer tab
 
 - The Project-scoped Git tab has Map, Log, Provenance, and Land readings of one repository.
-  Land is the queue of branches waiting to reconcile, verify, and fast-forward onto the trunk (`land-queue.md`);
-  it is a segment of its own rather than a strip inside Map, because Map answers what is *in* a worktree and Land answers what is *happening to* it.
+- **Landing a branch is an act on the Map row of the worktree it acts on** (`land-queue.md`).
+  Expanding a worktree row shows its Land control, its live land state - including what a running verification gate reports about itself - and the gate as it resolves for that checkout.
+  The Land segment keeps what has no row to live in: the queue's order and history, the Project's verification command and its approval, and who besides the operator may start a land.
+  It used to carry a launch list of its own, in Map's order, so the two would not disagree; one list is the stronger form of the same guarantee.
 - The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
 
 ### A Project with no repository
@@ -265,8 +267,8 @@ uncommitted work together.
   A session still starting up does occupy it.
 - The count is a control rather than a label: it opens that worktree's sessions at the pointer, and it is a sibling of the row's expand button rather than a span inside it.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
-- Worktrees list most recently active first, and the Land segment lists them in that same order, because both surfaces answer "which of these do I act on next" and two orders would make a reader hunt for a branch they had just found.
-  The main tree is pinned first regardless of its own date: it is the trunk the others are measured against and the Land segment excludes it outright, so it is an anchor rather than a candidate.
+- Worktrees list most recently active first, and this is now the tab's only list of checkouts: the branch a reader just finished work on is the one they came here to act on, and the Land control is on that row rather than on a second list that could disagree about the order.
+  The main tree is pinned first regardless of its own date: it is the trunk the others are measured against and is never offered as something to land, so it is an anchor rather than a candidate.
   A tree whose tip date could not be read sorts last rather than as epoch-old, and ties fall back to path order so a refresh cannot shuffle the list under the pointer.
 - Activity is the **branch tip's committer date** (`head_committed_at`), never the worktree directory's modification time.
   Windows freezes a file's `st_mtime` while a handle is open on it, so a checkout a live session is working in reports a directory timestamp hours stale while every Win32 API agrees with it - ordering by directory mtime would sink the busiest worktree to the bottom.
@@ -367,7 +369,8 @@ uncommitted work together.
 - The Git surface mutates only through the worktree create and remove operations and the one-time repository initialization offered to a Project whose folder has no repository.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
 - The **land queue** is the one path that merges, and it is not this surface: it is a daemon-owned pipeline with its own fixed vocabulary, its own preconditions, and its own approval (`land-queue.md`).
-  Its Land segment in this tab enqueues and cancels *requests* and approves the verification command's bytes; no control there moves a trunk, and the read-mostly rule for the rest of the tab is unchanged.
+  Its controls in this tab - the Land button on a Map row, and the segment's cancel, verification-command editor, and approval - enqueue and cancel *requests*, write one Project config key, and approve the bytes that will run.
+  No control there moves a trunk, and the read-mostly rule for the rest of the tab is unchanged.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 - Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
   Client cancellation cannot interrupt a mutation after Git starts changing repository state.
@@ -432,6 +435,7 @@ and provider-managed worktrees may live outside that root.
   Resolution and bounded execution are shared with bootstrap; the authority is not.
   Bootstrap runs once, for a tree a human just asked to create, before anything starts in it, so it needs no approval of its own.
   Verification runs repeatedly on an agent's request, so it carries an exact-content approval and any edit to it un-approves it.
+  Both read the Project's *config values* through `read_project_config_values`, never the envelope `read_project_config` returns: handed the envelope, resolution finds no `worktree` table, falls through to the convention, and runs a different command than the one the repository declared - with no symptom, because both paths produce a working command.
 - Harness preparation is adapter-owned and best effort.
   Claude atomically clones the primary checkout's `~/.claude.json` trust entry to the canonical forward-slashed worktree key, copies the primary `.claude/settings.local.json` permission allowlist, and adds `--add-dir <primary-root>`.
   Codex atomically writes `trust_level = "trusted"` under the canonical worktree key in the runtime `CODEX_HOME` config and grants the primary root through `sandbox_workspace_write.writable_roots`.
@@ -448,6 +452,7 @@ and provider-managed worktrees may live outside that root.
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`
 - Display-name resolution shared by every surface that names a session: `src/swe_mux/session_titles.py`, `frontend/src/sessionNames.ts`
 - Drawer Map, Log, Provenance ledger, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
+- Landing on a Map row, and the shared queue/gate reads both landing surfaces use: `frontend/src/GitLandRow.tsx`, `frontend/src/landState.ts` (`land-queue.md`)
 - Session-link list and its destination rule: `frontend/src/GitSessionLinks.tsx`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`
