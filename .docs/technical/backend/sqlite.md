@@ -42,6 +42,21 @@ declares one — a `FOREIGN KEY ... ON DELETE CASCADE` added today would be sile
   derivative data — native transcripts remain authoritative — while a malformed file used to
   raise out of store construction and take the daemon down at startup, which under the
   desktop shell presents as an app that simply refuses to come up.
+- **The probe is answered once per database file per process** (`sqlite_store.verify_database`,
+  warmed by `prepare_database`). `PRAGMA quick_check` reads every page, so its cost is the size
+  of the file, and eleven stores share `mux.db`. Measured 2026-08-21: 11.5s per pass against a
+  2.73 GB `mux.db`, so probing per *store* spent ~126s of every daemon start re-answering a
+  question about a file that had not changed between the answers — the largest single component
+  of a measured 226.6s startup, and invisible, because a passing probe logs nothing.
+  The verdict is a property of the file rather than of the store, so caching it is the stricter
+  reading, not the looser one: after a corrupt file is quarantined and recreated, the later
+  stores were probing a *different* file from the one the first store judged. The replacement is
+  recorded as healthy explicitly (`_remember_integrity`), because a cached "corrupt" verdict
+  there would quarantine the fresh file too.
+  The daemon pays for it under its own startup phase, `database-integrity`, on a worker thread
+  (`asyncio.to_thread`) so the health endpoint and the startup watchdog keep answering while it
+  runs, and logs the elapsed seconds and the file size whenever it exceeds a second — this cost
+  grows with the database and is meant to stay visible as it does.
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.

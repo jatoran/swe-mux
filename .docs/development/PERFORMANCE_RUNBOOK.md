@@ -235,37 +235,85 @@ Say so when reporting a before/after number taken that way.
 ## Startup latency
 
 A distinct question from "the running daemon is slow", with its own measurement and its own
-failure mode: nothing the daemon serves exists until the listener binds, and the listener binds
-only after `runtime_context` has opened every store, reattached supervised sessions, and built
-every service.
+failure mode.
 
-Read it from `<data_dir>/daemon.log`:
+**The listener no longer waits for the runtime.** `runtime_context` returns immediately and the
+runtime is built by a background task behind an already-open socket, so a slow start is a
+reachable daemon reporting progress rather than minutes of refused connections. Until the build
+finishes, `/api/health` answers HTTP 503 carrying the phase in flight, and every other route is
+refused with the same body.
+That is a change of what a slow start *costs*, not of how long it takes: the total is still worth
+watching, and the phases are what you read it from.
+
+Read the summary from `<data_dir>/daemon.log`:
 
 ```
-daemon runtime ready in 8.4s (8 live session(s)); binding listeners
+daemon runtime ready in 8.4s (8 live session(s)); serving every route
 ```
 
-The line is INFO under `SLOW_STARTUP_SECONDS` (20s) and WARNING above it, so a drifting start is
-one grep rather than an inference from the gap between two unrelated timestamps.
-Cross-check against `PTY supervisor connected`, which splits the interval into store/DB work
-before it and session reattachment after it.
+INFO under `SLOW_STARTUP_SECONDS` (20s), WARNING above it. Then read where the time went, from the
+per-phase lines that precede it:
 
-Reference, measured 2026-08-06 on a fleet of 6-8 sessions with an 879 MB `mux.db`: **~8s warm**.
-Post-redeploy starts are the slow ones, at 27s and 31s, because the bundle rebuild has just
-flushed the page cache the store opens depend on - the same daemon, the same work, cold.
+```
+startup_phase name=database-integrity elapsed=11.52s total=11.5s
+startup_phase name=stores elapsed=0.31s total=11.8s
+startup_phase name=supervisor-connect elapsed=0.04s total=11.9s
+startup_phase name=session-reattach elapsed=2.41s total=14.3s
+```
 
-Two rules this path earns:
+A phase at or above 10s is a WARNING; a phase still *running* after 15s is reported by the
+timeline's watchdog (`startup_phase_running name=... elapsed=...`) and again every 15s after that.
+That second line is the one that matters most, and the reason the completion line alone is not
+enough — see the incident below. The same transitions go to `lifecycle.log`, and the live phase is
+readable over HTTP without either file.
 
-- **Housekeeping must never gate the port.**
+Reference measurements:
+
+| when | fleet | `mux.db` | total |
+| --- | --- | --- | --- |
+| 2026-08-06 warm | 6-8 sessions | 879 MB | ~8s |
+| 2026-08-06 post-redeploy (cold page cache) | 6-8 sessions | 879 MB | 27-31s |
+| 2026-08-21, before this work | 30 sessions | 2.73 GB | 135-227s |
+
+**The 2026-08-21 incident, because its shape recurs.** A 226.6s start was ~170s of two stretches
+that logged *nothing at all*: 98.6s between the predecessor-death warning and
+`PTY supervisor connected`, and 49.0s between session reattachment and the first
+process-ownership diagnostic. The silence was itself the bug — a healthy-but-slow deploy was
+indistinguishable from a hung one, which is how a 300s health ceiling came to roll back a good
+bundle.
+
+What the two stretches actually were, measured rather than guessed:
+
+- `PRAGMA quick_check`, run by `connect_or_quarantine` once per **store**, at 11.5s per pass
+  against the 2.73 GB `mux.db` — and eleven stores share that file, so ~126s. It is answered once
+  per file now (`technical/backend/sqlite.md`).
+- A full psutil sweep in `ProcessInspector.restore()`: 20.7s cold, 6.0s warm, over 482 processes.
+  Deferred to a background task.
+
+Everything else on the path was cheap and had simply never been separated from those two. The
+whole of SQLite was exonerated by measurement: every unconditional per-boot migration scan in
+`history.py` came in under 10ms, and the 2.73 GB is large tables nothing reads at boot rather than
+work being done. **Measure before moving anything here** — the obvious suspect (a multi-gigabyte
+database) was innocent, and the actual cost was an integrity check nobody had ever timed because
+it logs nothing when it passes.
+
+Three rules this path earns:
+
+- **Nothing may run unlogged for minutes.** A phase is named and timed, and a phase still running
+  is reported while it runs. Completion lines alone would have reproduced the exact failure above,
+  because both silent stretches were work still in flight.
+- **Housekeeping must never gate readiness.**
   Retention prunes are scans whose cost tracks database size and cache state, and they used to run
   on this path for four stores.
   Every one of them was already covered by a supervised background loop that reruns it hourly,
-  so the startup copies bought nothing and delayed the bind by their own cost.
+  so the startup copies bought nothing.
   Anything that is not needed to answer the first request belongs in a loop.
-- **The desktop shell budgets its health wait against this number.**
-  A start that crosses `DAEMON_HEALTH_TIMEOUT_SECONDS` (300s) leaves the tray waiting.
-  A start that crosses it *and* the daemon then answers is the ordinary case that
-  `load_when_healthy` covers; see `design/features/desktop-shell.md`.
+  What may *not* move is recorded at each site in `server.py`: a reconcile that hides false data
+  from the first request, and any `restore()` whose loop starts immediately after it, stay put.
+- **Blocking work on this path must go off the loop.** The staged health answer and the phase
+  watchdog both need the event loop, so a phase that blocks it is invisible in exactly the way
+  this whole mechanism exists to prevent. The integrity probe runs in `asyncio.to_thread` for
+  that reason and not merely for throughput.
 
 ## Known-cost frames
 

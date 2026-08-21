@@ -214,6 +214,21 @@
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`
+- Changing what the daemon does before it can serve - adding a startup phase, moving one
+  behind the listener, or changing what health says while the runtime is being built:
+  `development/PERFORMANCE_RUNBOOK.md` (§Startup latency), `design/architecture.md`
+  (invariant 15), `design/interfaces.md`, `design/features/desktop-shell.md`,
+  `technical/backend/packages/daemon-runtime.md`, `technical/backend/sqlite.md`.
+  Two rules the split exists to enforce. **A bound listener is not a ready daemon**: health
+  answers 503 with the phase in flight until the runtime exists, and every consumer decides on
+  readiness rather than reachability - a 200 during the build would have the tray, the redeploy
+  wait, and the browser's post-restart reload each declare a daemon usable that cannot answer a
+  single request. And **nothing may run unlogged for minutes**: a phase is named and timed *and*
+  reported while it is still running, because both silent stretches of the 226.6s start this was
+  built for were work in flight, which a completion line would never have shown. Anything that
+  blocks the event loop on this path defeats both, so it goes in a thread.
+  Measure before moving a phase: the obvious suspect (a 2.73 GB `mux.db`) was innocent and the
+  real cost was a per-store integrity probe nobody had timed.
 - Changing HTTP/WebSocket traffic accounting, response compression, static precompression,
   or browser polling cadence: `design/features/remote-access.md`, `design/interfaces.md`,
   `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,

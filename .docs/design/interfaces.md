@@ -10,7 +10,21 @@ GET  /health
 POST /desktop/shutdown   Authorization: Bearer DESKTOP_CONTROL_TOKEN
 ```
 
-`GET /health` remains ordinary local/tailnet diagnostics; it also reports `supervisor: bool`
+`GET /health` is **liveness and readiness in one answer**, from the moment the socket opens.
+The daemon binds its listeners before it builds its runtime, so this endpoint answers throughout
+a start that used to refuse connections outright. While the runtime is building it returns
+**HTTP 503** with `{ok: false, status: "starting", phase, phase_seconds, elapsed_seconds,
+phases: [{name, seconds}]}` — the phase in flight and the ones already finished — and every other
+route is refused with the same body plus `code: "daemon_starting"` and a `Retry-After` header.
+A build that fails answers `status: "failed"` with `error` for the moment before the daemon stops,
+so a probe reads a reason rather than an indefinite stall.
+`ok` and the status code move together and both stay false until the runtime exists: the tray, the
+redeploy wait, and the browser's post-restart reload each read one or the other as "not up yet",
+and a 200 here would have all three declare a daemon usable that cannot answer a single request.
+The ready answer carries the same `status`/`phases` block, so one consumer reads one shape either
+way and the phase breakdown of the finished start stays readable without opening a log.
+
+Ready, it remains ordinary local/tailnet diagnostics; it also reports `supervisor: bool`
 (whether the daemon is attached to the PTY supervisor), `supervisor_state`
 (`connected | lost | absent`), and `supervisor_unadopted`. `lost` is deliberately distinct
 from `absent`: the supervisor process is alive and still holds live sessions, this daemon

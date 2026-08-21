@@ -283,13 +283,58 @@ def base_url(config) -> str:  # noqa: ANN001 - Config
     return f"http://127.0.0.1:{config.port}"
 
 
-def health(config, timeout: float = 1.5) -> dict | None:  # noqa: ANN001
+def health_payload(config, timeout: float = 1.5) -> dict | None:  # noqa: ANN001
+    """Whatever `/api/health` says, ready or not.
+
+    A daemon that is still building its runtime answers 503 with the phase it is
+    in, and `urlopen` raises `HTTPError` for that - which is itself a readable
+    response, so the body is parsed rather than discarded. Reading it is the
+    whole reason the health wait can report progress instead of silence.
+    """
     try:
         with urllib.request.urlopen(f"{base_url(config)}/api/health", timeout=timeout) as response:
             payload = json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            payload = json.load(error)
+        except (OSError, ValueError):
+            return None
     except (OSError, ValueError, urllib.error.URLError):
         return None
-    return payload if isinstance(payload, dict) and payload.get("ok") else None
+    return payload if isinstance(payload, dict) else None
+
+
+def health(config, timeout: float = 1.5) -> dict | None:  # noqa: ANN001
+    """The health payload only once the daemon is fully ready.
+
+    Deliberately unchanged in meaning: every caller of this asks "is there a
+    usable daemon on this port", and a daemon part-way through its startup is
+    not one. `health_payload` is the wider read for callers that want the
+    in-progress answer too.
+    """
+    payload = health_payload(config, timeout)
+    return payload if payload is not None and payload.get("ok") else None
+
+
+def startup_progress(payload: dict | None) -> str:
+    """One line describing where a starting daemon has got to, or "".
+
+    Only ever descriptive. It quotes the phase the daemon named and the phases
+    it has already finished; nothing here estimates a remaining time, because
+    the phase durations vary by two orders of magnitude across fleets and a made
+    up percentage is acted on where an absent one is not.
+    """
+    if not payload or payload.get("status") != "starting":
+        return ""
+    phase = str(payload.get("phase") or "starting")
+    phase_seconds = float(payload.get("phase_seconds") or 0.0)
+    elapsed = float(payload.get("elapsed_seconds") or 0.0)
+    done = [str(item.get("name")) for item in (payload.get("phases") or []) if item.get("name")]
+    completed = f"; done: {', '.join(done)}" if done else ""
+    return (
+        f"starting - phase {phase} ({phase_seconds:.0f}s), "
+        f"{elapsed:.0f}s into startup{completed}"
+    )
 
 
 def supervisor_process(config):  # noqa: ANN001
@@ -844,14 +889,30 @@ def wait_healthy(
     process: subprocess.Popen[bytes] | None = None,
 ):  # noqa: ANN001 - Config
     deadline = time.monotonic() + seconds
+    reported_phase: object = None
+    progress = ""
     while time.monotonic() < deadline:
-        payload = health(config, timeout=1.0)
-        if payload is not None:
+        payload = health_payload(config, timeout=1.0)
+        if payload is not None and payload.get("ok"):
             return payload
+        # The daemon binds its listeners before it builds its runtime, so this
+        # wait is no longer blind. Logged on each phase *change* rather than each
+        # poll - the elapsed seconds in the line move every time, so comparing
+        # rendered text would put a line in the log twice a second. This is what
+        # turns a 5-15 minute wait from an indistinguishable-from-hung silence
+        # into a record of progress, which is the ambiguity that once made a
+        # 300s ceiling roll back a perfectly good bundle.
+        if payload is not None and payload.get("status") == "starting":
+            progress = startup_progress(payload)
+            if payload.get("phase") != reported_phase:
+                reported_phase = payload.get("phase")
+                log(f"daemon {progress}")
         if process is not None and process.poll() is not None:
             log(f"launched app process exited with code {process.returncode} before health")
             return None
         time.sleep(0.5)
+    if progress:
+        log(f"health budget expired while the daemon was {progress}")
     return None
 
 

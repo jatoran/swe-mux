@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -14,6 +15,22 @@ log = logging.getLogger(__name__)
 
 _LOCKS_GUARD = threading.Lock()
 _DATABASE_LOCKS: dict[str, Any] = {}
+
+# One integrity verdict per database file per process. `PRAGMA quick_check`
+# reads every page, so its cost is the size of the file: measured 11.5s on a
+# 2.73 GB `mux.db`, and eleven stores share that one file. Probing per *store*
+# therefore spent ~126s of every daemon start re-answering a question about a
+# file that had not changed since the answer before it - the single largest
+# component of a measured 226.6s startup, and entirely invisible because the
+# probe logs nothing when it passes.
+#
+# The verdict belongs to the file, not to the store, so caching it is not a
+# weakening. It is the stricter reading of the two: after a corrupt file is
+# quarantined and recreated, the later stores were probing a *different* file
+# from the one the first store judged, which is a race the cache removes by
+# recording the replacement (`_remember_integrity`).
+_INTEGRITY_GUARD = threading.Lock()
+_INTEGRITY_RESULTS: dict[str, str | None] = {}
 
 _SCHEMA_VERSIONS = (
     "CREATE TABLE IF NOT EXISTS schema_versions("
@@ -54,7 +71,7 @@ def connect_or_quarantine(
     the desktop shell that presents as an app that simply refuses to come up, or
     restart-loops, until someone deletes the file by hand.
     """
-    problem = _integrity_problem(path) if path.exists() else None
+    problem = verify_database(path)
     if problem is None:
         return connect()
     log.error("SQLite database %s is unusable (%s); quarantining and recreating", path, problem)
@@ -68,7 +85,60 @@ def connect_or_quarantine(
         except OSError:
             log.exception("could not quarantine %s", source)
             raise
+    # The file behind this path is now a fresh one the probe has never seen.
+    # Recording it healthy is what stops each remaining store re-probing (and
+    # potentially re-quarantining) a database that was just replaced.
+    _remember_integrity(path, None)
     return connect()
+
+
+def _integrity_key(path: Path) -> str:
+    try:
+        return os.path.normcase(str(path.resolve()))
+    except OSError:
+        return os.path.normcase(str(path))
+
+
+def _remember_integrity(path: Path, problem: str | None) -> None:
+    with _INTEGRITY_GUARD:
+        _INTEGRITY_RESULTS[_integrity_key(path)] = problem
+
+
+def verify_database(path: Path) -> str | None:
+    """The file's integrity verdict: a description of the problem, or None.
+
+    Answered once per file per process (see `_INTEGRITY_RESULTS`). The lock is
+    held across the probe on purpose: two stores opening the same database
+    concurrently should wait for one answer rather than each pay for a full-file
+    read, and the only databases involved are the two this daemon owns, so
+    serialising distinct files costs nothing worth measuring.
+    """
+    key = _integrity_key(path)
+    with _INTEGRITY_GUARD:
+        if key in _INTEGRITY_RESULTS:
+            return _INTEGRITY_RESULTS[key]
+        problem = _integrity_problem(path) if path.exists() else None
+        _INTEGRITY_RESULTS[key] = problem
+        return problem
+
+
+def prepare_database(path: Path) -> float:
+    """Answer the integrity question up front; returns the seconds it took.
+
+    Called once from the daemon's startup path, off the event loop, so the
+    per-file cost is paid where it can be named and timed instead of inside the
+    first store constructor that happens to touch the file - which is where it
+    used to hide, on the event loop, eleven times over.
+    """
+    start = time.monotonic()
+    verify_database(path)
+    return time.monotonic() - start
+
+
+def reset_integrity_cache() -> None:
+    """Forget every cached verdict. For tests that rewrite a database file."""
+    with _INTEGRITY_GUARD:
+        _INTEGRITY_RESULTS.clear()
 
 
 def _integrity_problem(path: Path) -> str | None:
