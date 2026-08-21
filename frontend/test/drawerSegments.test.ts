@@ -142,8 +142,10 @@ test('the host draws one shared control and keeps only what must stay mounted', 
 })
 
 test('Git owns no view state of its own', () => {
-  // Registering Git's three readings is what leaves the drawer with one mechanism for
-  // this idea instead of two, and it buys "open Git Log" as a voice phrase for free.
+  // Registering Git's readings is what leaves the drawer with one mechanism for this
+  // idea instead of two, and it buys "open Git Log" as a voice phrase for free. Land
+  // is a segment for the same reason, and for the watch-here/act-there split: Map
+  // answers "what is in this worktree", Land answers "what is happening to it".
   const git = source('GitTab.tsx')
   assert.ok(git.includes('export type GitView'))
   assert.ok(git.includes('view:GitView'))
@@ -151,6 +153,9 @@ test('Git owns no view state of its own', () => {
   assert.ok(!git.includes('git-view-toggle'), 'the bespoke toggle is replaced by the shared control')
   const tabs: DrawerTabId[] = ['git']
   for (const tab of tabs) {
-    assert.deepEqual(drawerSegmentsFor(tab, 'segment').map(item => item.id), ['map', 'log', 'provenance'])
+    assert.deepEqual(
+      drawerSegmentsFor(tab, 'segment').map(item => item.id),
+      ['map', 'log', 'provenance', 'land'],
+    )
   }
 })

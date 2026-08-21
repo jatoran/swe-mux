@@ -2083,6 +2083,10 @@ export function App() {
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
+          // Its own event rather than folding into `mux:git-changed`: a land step
+          // changes the queue on a five-second cadence, and re-reading the whole
+          // worktree overview and provenance ledger each time is not free.
+          if(event.type==='land_changed'||event.type==='land_verify_approved')window.dispatchEvent(new CustomEvent('mux:land-changed'))
           if(!isReplay&&event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
           // Assistant dialog events fan out to the panel and the UI-action
           // executor; replay is forwarded flagged so views can rebuild state

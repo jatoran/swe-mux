@@ -106,6 +106,10 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   { tab: 'git', id: 'map', kind: 'segment', label: 'Map', heading: 'Worktree Map', title: 'Map - one row per worktree, with its files, changes, and live sessions' },
   { tab: 'git', id: 'log', kind: 'segment', label: 'Log', heading: 'Commit Log', title: 'Log - the repository’s commit graph' },
   { tab: 'git', id: 'provenance', kind: 'segment', label: 'Provenance', heading: 'Commit Provenance', title: 'Provenance - which session and run produced each commit' },
+  // Phase 14. A segment of its own rather than a strip inside Map, for the same
+  // watch-here/act-there reason the prompt Queue is separate from the Fleet Queue: Map
+  // answers "what is in this worktree", and Land answers "what is happening to it".
+  { tab: 'git', id: 'land', kind: 'segment', label: 'Land', heading: 'Land Queue', title: 'Land - branches queued to reconcile, verify, and fast-forward onto the trunk' },
 ]
 
 export const DRAWER_SEGMENT_TABS: readonly DrawerTabId[] =

@@ -27,6 +27,7 @@ import {
 } from './gitWorktrees'
 import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
+import { GitLandPanel } from './GitLandPanel'
 import { GitReviewModal } from './GitReviewModal'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import {
@@ -58,7 +59,7 @@ import type { ReviewLocator } from './gitReview'
 // phrase, and what persists the choice per Project — neither of which a local `useState`
 // could do. The host draws the segmented control above this tab's toolbar; what is left
 // here is the toolbar's actions.
-export type GitView = 'map' | 'log' | 'provenance'
+export type GitView = 'map' | 'log' | 'provenance' | 'land'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
 
@@ -431,6 +432,9 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           of them, so it belongs here rather than on each of their ledgers. */}
       {refMoves.length>0&&<div class="git-ref-moves"><h4>Reference movements</h4>{refMoves.map(move=><article key={move.id}><div><strong>{shortSha(move.commitOid)}</strong><span>{move.subject||'Moved to a commit without readable metadata'}</span></div><p><span class={`git-ref-move-kind ${move.kind}`}>{refMoveLabel(move)}</span></p><small>{move.worktreeRoot} · from {shortSha(move.previousHead)} · observed {new Date(move.observedAt*1000).toLocaleString()}</small></article>)}</div>}
     </section>}
+    {/* Land reads the Map's own worktree list rather than re-listing them: one answer
+        about "which checkouts exist", so the two segments cannot disagree about it. */}
+    {view==='land'&&<GitLandPanel project={project} worktrees={(overview?.worktrees||[]).map(tree=>({path:tree.path,branch:tree.branch,main:tree.main}))}/>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
     {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>
