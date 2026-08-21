@@ -83,8 +83,13 @@ This satisfies the periodic-loop rule in `../../technical/backend/packages.md`, 
 | `ghost_window_sweep_enabled` | `true` | - |
 | `ghost_window_poll_seconds` | `5.0` | 0.5 to 60 seconds |
 
-Both are hot-reloadable.
+Both are hot-reloadable and both are edited in Settings → Processes → **Ghost windows**, which is
+its own section rather than more rows under process evidence: this is the one thing on that tab
+that changes what the machine looks like rather than what swe-mux records about it.
 The loop reads `enabled` each tick, so toggling it takes effect without restarting the task.
+The control says the sweep *parks* a window off screen rather than closing it, because that is
+what it does and because the difference is the reason the browser and its screenshots keep
+working.
 
 ## Boundaries
 

@@ -140,6 +140,12 @@ Per session, under `<data_dir>/recovery/<session_id>/`:
   `session_recovery_max_sessions` (40) caps **open** ones by count, newest first, because those are
   what come back as cold sessions and a machine that crashes repeatedly would otherwise accumulate
   them forever.
+- All three are edited in Settings → Terminals → Scrollback and apply to a running daemon: the
+  store reads each at checkpoint and prune time, so they are pushed onto it rather than declared
+  restart-scoped (`tests/test_settings_hot_apply.py`).
+  `session_recovery_enabled` is the exception and stays config-file only: it decides whether the
+  store is *constructed*, and turning it off with sessions already tracked would leave their rows
+  open forever and bring every one of them back cold.
 - Terminal bytes are whatever the child printed, which includes anything a command echoed.
   The directory is created 0700, it is its own `storage_usage` bucket, and the diagnostics export
   carries the recovery store's counters but never its bytes - the same reason scrollback itself is

@@ -507,6 +507,11 @@ Two tools make the safe call the short one and let the grant say different thing
 | `land_grant` | `<project>/.swe-mux/config.toml` | `off` / `draft` / `granted`, default `draft`. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
 
+Every `global` row above is edited in Settings → Automation → **Land queue**.
+The install stop had a control from the start and the other four did not, which is the shape
+this feature's own prose already names for the verification command: a bound that only a
+config-file edit can reach is a bound nobody adjusts and nobody can see.
+
 ## Key files
 
 - Service, pipeline, handbacks, verdict reuse: `src/swe_mux/land_queue.py`

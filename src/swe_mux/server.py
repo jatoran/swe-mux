@@ -2854,6 +2854,15 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     if sessions:
         if "scrollback_bytes" in changed:
             sessions.max_scrollback = config.scrollback_bytes
+        if "attach_replay_bytes" in changed:
+            # Every live session carries its own copy and reads it at attach time,
+            # so the budget is pushed down rather than left to apply only to
+            # sessions spawned after the change. Unlike `scrollback_bytes` above -
+            # which sizes a buffer already allocated - this is a number consulted
+            # per attach, so a live update genuinely takes effect on the next one.
+            sessions.attach_replay_bytes = config.attach_replay_bytes
+            for session in sessions.sessions.values():
+                session.attach_replay_bytes = config.attach_replay_bytes
         if "shell_exe" in changed:
             sessions.adapters["shell"].configure(config.shell_exe, [])
         if changed & {"harness_exe", "harness_args"}:
@@ -2873,6 +2882,20 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             process_inspector.cadence = config.process_poll_seconds
         if "process_orphan_grace_seconds" in changed:
             process_inspector.orphan_grace_seconds = config.process_orphan_grace_seconds
+    recovery: SessionRecoveryStore | None = app.get("session_recovery")
+    if recovery:
+        # Three bounds the store reads at each checkpoint and each prune, so they
+        # apply live. Whether the store exists at all is `session_recovery_enabled`,
+        # which is restart-scoped for the opposite reason: it decides construction.
+        if "session_recovery_checkpoint_bytes" in changed:
+            recovery.checkpoint_bytes = config.session_recovery_checkpoint_bytes
+        if "session_recovery_retention_days" in changed:
+            recovery.retention_days = config.session_recovery_retention_days
+        if "session_recovery_max_sessions" in changed:
+            recovery.max_cold_sessions = config.session_recovery_max_sessions
+    timeline_store: StatusTimelineStore | None = app.get("status_timeline")
+    if timeline_store and "status_timeline_retention_days" in changed:
+        timeline_store.retention_days = config.status_timeline_retention_days
     ghost_windows: GhostWindowSweeper | None = app.get("ghost_windows")
     if ghost_windows:
         if "ghost_window_poll_seconds" in changed:

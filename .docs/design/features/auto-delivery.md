@@ -261,7 +261,10 @@ the only one that *holds off* another bound rather than granting anything: switc
 is a narrowing, where a zero-length stability window or an unbounded grant would not be.
 Mid-turn delivery adds `agent_interject_enabled` (install master, on),
 `agent_interject_hourly_budget` (10 per origin session) and
-`agent_interject_min_interval_seconds` (60, per target). Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
+`agent_interject_min_interval_seconds` (60, per target), which are edited under the same
+Auto-delivery heading rather than beside the messaging bounds: an interject is a *delivery*
+mode with its own strictly narrower readiness predicate, not a kind of message.
+Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
 SQLite, not config, so the emergency pause never waits on a config write.
 
 ## Key files

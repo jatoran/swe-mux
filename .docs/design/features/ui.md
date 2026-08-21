@@ -632,8 +632,25 @@ Its rules, and what each one is defending:
     rather than under process evidence. They filter the file tree and resource watchers, never Git.
   - **System prerequisites, the three session-preserving reload actions, and the diagnostics
     bundle** are the Diagnostics tab. None of them is remote configuration.
-  - **Scrollback** is on Terminals. `history_limit` is *not* scrollback — it is the history
-    browser's page size — so it sits with native-history indexing on Harnesses.
+  - **Scrollback** is on Terminals, and it is three byte figures over one stream rather than one:
+    what a session retains (`scrollback_bytes`), what a *fresh attach* is handed
+    (`attach_replay_bytes`), and what survives losing the daemon and its PTY owner together
+    (`session_recovery_checkpoint_bytes` and its two companions).
+    They are one section because reading any of them without the other two is how "why did my
+    pane come back short" stayed unanswerable.
+    `history_limit` is *not* scrollback — it is the history browser's page size — so it sits
+    with native-history indexing on Harnesses.
+  - **Agent actuation** is its own section on Prompt queue, beside the messaging bounds rather
+    than inside them. Everything above it delivers *text a human still reads*; spawn, interrupt,
+    end, and settle-watch act on a session directly, and each is three layers deep (the install
+    stop here, the Project's opt-in, the Project's grant).
+  - **Ghost windows** and the **detection timeline** are their own sections on Processes rather
+    than more rows under process evidence: the sweep is the one thing on that tab that changes
+    what the machine looks like rather than what swe-mux records about it, and the timeline is
+    detection evidence rather than process evidence.
+  - **The daemon log level** is on Diagnostics, beside the bundle it decides the contents of.
+    It applies on save with no restart, which is what makes "set DEBUG, reproduce, export" a
+    single pass.
 - Global automation policy is not duplicated across overlays, and Settings is its one home.
   Settings → Automation owns every install-wide automation switch and bound: the `automation_enabled` master switch, the `scan_timeline_enabled` gate, budgets, execution bounds, and retention; the credential and models are on Accounts.
   The Automation dashboard owns rules and runtime — per-rule enable and shadow/live state, the `rules.toml` editor, the per-Project enablement matrix, spend, and diagnostics — and shows the global switches only as read-only state linking into Settings.
@@ -743,6 +760,16 @@ Its rules, and what each one is defending:
   The first-run panel discloses
   what mux injects per session and points at the next onboarding steps (project, CLI login, session,
   phone).
+- **Every `Config` field the daemon enforces has a control here, or a written reason it has
+  none.** A setting with no control is unreachable from the app and invisible to the search
+  above, and nothing noticed thirty of them accumulating that way by 2026-08-21 - the panel's
+  own tests only ever walked from a *link* to its control, which cannot see a field that never
+  had one. `frontend/test/settingsCoverage.test.ts` walks from `config.py` instead, and the
+  escape hatch is a named list with one sentence per entry (`setting-links.md`).
+  A control also has to be honest about *when* it takes effect: a field whose owner reads it at
+  use time applies on save, one whose owner is constructed at startup says so in its own help
+  text and is in `RESTART_FIELDS`, and `tests/test_settings_hot_apply.py` holds the four that
+  had to gain hot-apply wiring to keep the first claim true.
 - The panel header carries a search box that reaches every setting in every tab, including
   tabs that are not mounted. Picking a result switches to its tab, scrolls the control into
   view, and flashes it; `Ctrl`/`Cmd`+`F` focuses the box while the panel is open, arrows and
@@ -789,6 +816,12 @@ Its rules, and what each one is defending:
   a control that opens the setting deciding it.
   It is an index, not a second editor - two controls writing one config key is how a panel starts
   disagreeing with itself.
+  Every row opens a real control now.
+  The Project context card's model was the one that did not: its row said "Configuration file"
+  and told the reader to edit `project_card_model` by hand, which is exactly the defect an index
+  exists to surface rather than to record.
+  It is edited with its budget and its per-build token ceilings, under Automation → Budgets and
+  execution, like every other feature model.
 - Settings → Accounts → **Model provider** chooses *which endpoint* every one of those models is
   requested from: OpenRouter's hosted catalog, or one OpenAI-compatible `/chat/completions` the
   operator runs (llama.cpp, Ollama, vLLM, LM Studio).

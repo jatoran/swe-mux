@@ -316,7 +316,11 @@ name or id. `notify` also accepts `"Project name/session name"` as its `target`.
 
 `agent_messaging_enabled`, `agent_message_max_chars`, `agent_message_hourly_budget`,
 `agent_message_pending_per_target`, `agent_message_max_chain_depth`,
-`agent_message_max_thread_turns`, `request_spawn_enabled` (`config.py`). Per-session `accept_agent_messages` is runtime state
+`agent_message_max_thread_turns`, `request_spawn_enabled` (`config.py`).
+All of them are edited in Settings → Prompt queue: the message bounds under **Agent messaging**,
+and `request_spawn_enabled` with its hourly budget under **Agent actuation**, because a spawn
+acts on the fleet where a message is text a human still reads.
+Per-session `accept_agent_messages` is runtime state
 in `queue_auto_policy`, defaulted on per run by the conversation-default grant rather than by
 a config key - it is a per-conversation decision, and the config file is the wrong place for
 state that has to be flippable instantly and per session.

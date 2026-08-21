@@ -11,6 +11,8 @@
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { Settings } from '../../src/Settings'
+import type { FirewallStatus, RemoteStatus } from '../../src/remoteConnection'
+import type { WslBridgeStatus } from '../../src/wslBridge'
 import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
 import '../../src/style.css'
 
@@ -72,11 +74,29 @@ const BUNDLE = {
 
 // Everything the panel asks for on open. Unlisted paths answer `{}` rather than failing,
 // so a new fetch added to a tab degrades to an empty section instead of a blank harness.
+//
+// The three status payloads are typed against the real ones rather than sketched: all three
+// had drifted onto invented field names (`urls`, `rules`, `distributions` for `tailnet_urls`,
+// `firewall_rule`, `distros`), and the first of those threw on every visit to the Remote tab -
+// `remote?.tailnet_urls.map` guards the fetch failing, not the payload lying. Nothing noticed,
+// because no spec opened that tab until one started opening all seventeen.
+const REMOTE: RemoteStatus = {
+  mode: 'loopback', listen_url: 'http://127.0.0.1:8765', available: false,
+  serve_configured: false, serve_url: null, funnel_detected: false,
+  setup_command: 'tailscale serve', diagnostic: '',
+  tailnet_enabled: false, tailnet_ip: null, tailnet_urls: [], direct_available: false,
+  mobile_voice_configured: false, mobile_voice_url: null, mobile_voice_https_port: 443,
+  connection_state: 'not_installed', device_name: null,
+  connection_command: null, connection_detail: '',
+}
+const FIREWALL: FirewallStatus = { supported: false, detail: '' }
+const WSL: WslBridgeStatus = { supported: false, enabled: false, distros: [] }
+
 const RESPONSES: Record<string, unknown> = {
   '/api/settings/bundle': BUNDLE,
-  '/api/remote/status': { tailnet_enabled: false, urls: [], diagnostic: '' },
-  '/api/remote/firewall': { checked: false, rules: [], diagnostic: '' },
-  '/api/wsl/bridge': { available: false, distributions: [], diagnostic: '' },
+  '/api/remote/status': REMOTE,
+  '/api/remote/firewall': FIREWALL,
+  '/api/wsl/bridge': WSL,
   '/api/diagnostics/prerequisites': { prerequisites: [] },
   '/api/voice': null,
   '/api/voice/stt-latency': null,

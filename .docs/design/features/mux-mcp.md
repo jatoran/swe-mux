@@ -376,6 +376,12 @@ operator's.
   rather than JSON-RPC faults. The install master switch is `config.session_control_enabled`
   (default true), with `session_control_hourly_budget` (default 30) and
   `session_control_graceful_timeout_s` (default 12.0).
+  Every install-wide bound in this section - the two control fields, `agent_spawn_hourly_budget`,
+  and the three `session_watch_*` fields - is edited in Settings → Prompt queue → **Agent
+  actuation**, which is where the layering is stated in one place: the install stop, then the
+  Project's opt-in, then the Project's grant.
+  All of them were enforced with no control anywhere until 2026-08-21, which made the whole
+  actuation surface adjustable only by hand-editing `~/.mux/config.toml`.
 - **Granted spawn.** `mux.requestSpawn` takes the same three-position model. A per-Project
   `spawn_grant` (`"draft"` | `"granted"`, default `"draft"`, gated by the same `session_control`
   automation, read by `project_spawn_grant()`) decides whether the call creates a session in the
