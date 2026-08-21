@@ -24,6 +24,7 @@ import { projectResourceCreationParent } from './projectResourceCreate'
 import { fileSaveTarget, globalNoteSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import { resourceSaveIndicator } from './resourceSaveIndicator'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
+import { recentEntryTitle } from './recentFiles'
 import { currentInsertTarget } from './insertTarget'
 import { isFocusTraversalKey } from './keys'
 import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
@@ -70,7 +71,11 @@ type CreateResourceKind='file'|'directory'
 type CreateResourcePrompt={parent:string;kind:CreateResourceKind;name:string}
 type CreatedResource=DirectoryItem&{parent:string;hidden:boolean}
 type FileDraft={revision:string;text:string;baseline:string;status:string;size:number;presentation:FilePresentation|null;saveState:'idle'|'modified'|'saving'|'saved'|'error';error:string}
-type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>}
+/** One row of the Recent view. Git-derived, so `origin` says which of the two sources
+ *  produced it and only one of `status`/`committed_at` is ever set. */
+type RecentFile={name:string;path:string;kind:'file';origin:'working'|'committed';status:string|null;committed_at:number|null}
+type RecentPayload={items:RecentFile[];available:boolean;reason?:string}
+type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>;recent:boolean}
 
 // Resource views can be reparented when a tab is dragged between panes. Keep
 // their local working state outside the component so that reparenting never
@@ -160,6 +165,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [notice,setNotice]=useState('')
   const [pendingCopy,setPendingCopy]=useState<string|null>(null)
   const [query,setQuery]=useState('')
+  // The Recent view replaces the tree (not the search results — searching is an explicit
+  // act and wins). Cached with the tree so reparenting a tab keeps the view you were in.
+  const [recentOpen,setRecentOpen]=useState(cachedBrowser?.recent||false)
+  const [recent,setRecent]=useState<RecentPayload|null>(null)
+  const [recentLoading,setRecentLoading]=useState(false)
+  const recentGeneration=useRef(0)
   const [searchMode,setSearchMode]=useState<SearchMode>('names')
   const [filtersOpen,setFiltersOpen]=useState(false)
   const [results,setResults]=useState<SearchHit[]|null>(null)
@@ -415,8 +426,42 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[resource.kind,resourceKey,revision,text,baseline,status,fileSize,presentation,saveState,error])
 
   useEffect(()=>{
-    if(resource.kind==='files')browserStates.set(resourceKey,{directories,expanded:new Set(expanded)})
-  },[resource.kind,resourceKey,directories,expanded])
+    if(resource.kind==='files')browserStates.set(resourceKey,{directories,expanded:new Set(expanded),recent:recentOpen})
+  },[resource.kind,resourceKey,directories,expanded,recentOpen])
+
+  // The Recent view's one read. Git-backed and bounded (see `recent_files.py`), so it is
+  // cheap enough to re-run whenever a watched path changes while the view is open rather
+  // than going stale behind the tree beside it.
+  const loadRecent=async()=>{
+    const generation=++recentGeneration.current
+    setRecentLoading(true)
+    try{
+      const payload=await api<RecentPayload>('GET',`/api/projects/${project.id}/files/recent`,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
+      if(generation!==recentGeneration.current)return
+      setRecent(payload);setError('')
+    }catch(cause){
+      if(generation!==recentGeneration.current)return
+      setError(cause instanceof Error?cause.message:String(cause))
+      setRecent({items:[],available:false,reason:'Recent files could not be read.'})
+    }finally{
+      if(generation===recentGeneration.current)setRecentLoading(false)
+    }
+  }
+  const recentRef=useRef(loadRecent)
+  recentRef.current=loadRecent
+  useEffect(()=>{
+    if(resource.kind!=='files'||!recentOpen)return
+    void recentRef.current()
+    const changed=(event:Event)=>{
+      if((event as CustomEvent<ResourceEvent>).detail.projectId!==project.id)return
+      void recentRef.current()
+    }
+    window.addEventListener('mux:project-files-changed',changed)
+    return()=>{
+      recentGeneration.current++
+      window.removeEventListener('mux:project-files-changed',changed)
+    }
+  },[resource.kind,project.id,recentOpen])
 
   // Persist expand changes to the shared server blob. The first pass only records
   // the seeded/restored baseline; after that, user toggles and the self-healing
@@ -1318,6 +1363,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           <button class={`file-search-filter${filtersOpen?' active':''}`} aria-label="Search scope" aria-expanded={filtersOpen} title={`Search scope: ${searchModeLabel[searchMode]}`} onClick={()=>setFiltersOpen(open=>!open)}>
             <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
           </button>
+          {/* Recent replaces the tree with what Git says was touched here. A clock running
+              backwards, the same mark the app menu's Session history wears — this is the
+              same question asked of files. */}
+          <button class={`file-search-recent${recentOpen?' active':''}`} aria-label="Recently changed files" aria-pressed={recentOpen} title="Recently changed files — uncommitted work first, then the newest commits" onClick={()=>setRecentOpen(open=>!open)}>
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.7-6.2"/><polyline points="3 3.5 3 9 8.5 9"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+          </button>
         </div>
         {filtersOpen&&<div class="file-search-modes" role="group" aria-label="Search scope">
           {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={`Match file ${searchModeLabel[mode].toLowerCase()}`} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}
@@ -1334,6 +1385,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
                 {hit.match==='content'&&hit.snippet&&<em class="file-result-snippet">{hit.line!=null?`${hit.line}: `:''}{hit.snippet}</em>}
               </button>})}
               {searchTruncated&&<p class="file-tree-loading">Showing the first {results.length} matches; refine to narrow.</p>}</>}
+        </div>
+        :recentOpen
+        ?<div class="file-results file-recent" role="list" aria-busy={recentLoading} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
+          {!recent&&recentLoading?<p class="file-tree-loading">Reading recent changes…</p>
+            // Unavailable and empty are different answers: no repository is a fact about the
+            // Project, while an empty list is a fact about the work. Saying "nothing recent"
+            // for the first would be a lie the reader cannot see through.
+            :recent&&!recent.available?<p class="file-tree-loading">{recent.reason||'Recent files are unavailable here.'}</p>
+            :recent&&!recent.items.length?<p class="file-tree-loading">Nothing changed recently in this Project.</p>
+            :<>{(recent?.items||[]).map(entry=>{const item:DirectoryItem={name:entry.name,path:entry.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={entry.path} title={`${entry.path} · ${recentEntryTitle(entry)} · right-click or long-press for actions`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(entry.path))} onContextMenu={event=>openTreeMenu(item,event)}>
+                <span class="file-result-line"><span class={`file-recent-mark file-recent-${entry.origin}`} aria-hidden="true">{entry.origin==='working'?'●':'·'}</span><strong>{entry.name}</strong><small>{entry.path}</small></span>
+                <em class="file-recent-when">{recentEntryTitle(entry)}</em>
+              </button>})}</>}
         </div>
         :<div class="file-tree" role="tree" onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>{tree('')}</div>}
     </div>

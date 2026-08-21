@@ -37,7 +37,7 @@ responsive controls.
   A Project row is followed directly by its layout/session rows; notes do not appear in the tree.
   Its fold cell stays allocated for alignment, but the fold control renders only when the Project has sessions to hide.
 - **Project rows carry no `Note` / `Files` chips.**
-  Both surfaces live in the utility drawer and the Project context menu exposes `Notes…` and `Browse files…` for another Project.
+  Both surfaces are drawer tabs scoped to the selected Project, and selecting a Project is one click on the row those chips would have sat in - which is also why the Project context menu stopped offering its own copies of them.
 - The global `PROJECTS` header is navigation chrome rather than a Group.
   Ungrouped Projects render as root rows, with optional named Group sections after them under Manual order and interleaved among them under every other mode.
   On desktop, a Group header reorders on press-and-move and folds on press-and-release; the drag swallows its ending click.
@@ -343,11 +343,17 @@ Its rules, and what each one is defending:
 
 ## Menus and overlays
 
-- Scope follows the menu that opened a surface, never a hidden mode. The app menu opens
-  History, Notes, the fleet queue, prompt library, clipboard history, Resources, and
-  notifications across every Project; right-clicking a Project row opens the same surfaces
-  under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is the
-  no-Project case and matches the app menu.
+- Scope follows the menu that opened a surface, never a hidden mode.
+  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
+  Right-clicking empty sidebar space is the no-Project case and matches the app menu.
+- **A Project menu row has to earn its place against the drawer.**
+  Notes, Processes, the fleet queue, and Browse files each left it, because each is a drawer tab or a dialog that already opens on the *selected* Project - so right-clicking a Project row to reach them was a second route to a place one click away, and the two that stayed are the two with no such home.
+  What stayed with them is what has nowhere else to be pressed: Reveal in Explorer, the Group, Rename, Project settings, Hide, and Remove.
+  Collapse-in-sidebar went the same way (clicking a Project header is the fold), and so did Move Project up/down, which could only ever step one place at a time while long-press drag moves a Project anywhere (see the pointer-drag contract below).
+  The rows that remain carry no trailing ellipsis either, for the reason the app menu's do not: nearly every row here opens something, so a mark meaning "this opens something" distinguished none of them.
+  What the palette keeps, it keeps: `project.moveUp` and `project.moveDown` stay registered and bindable, the same way the removed layout rows did, so dropping a button never removes the keyboard route.
+- **The category headers went with them.**
+  `BROWSE THIS PROJECT` and `PROJECT` labelled three rows apiece in a menu of nine, which is a fifth of its height spent saying what each row's own mark now says.
 - **The app menu is two halves: the places you go, and below a rule, the things you set.**
   The viewers spent a while behind one folding `Utilities` row, on the argument that ten of
   them made the menu a wall. The wall was ten. Consolidating four resource modals into one
@@ -361,18 +367,13 @@ Its rules, and what each one is defending:
 - **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
   the menu is — so a mark that means "this opens something" appeared on nearly all of them
   and therefore distinguished none.
-- **Every row in the app menu and in the sidebar context menu carries its own mark**, opting
-  the row into `.menu-row` (icon, then label, then any trailing hint) and suppressing the
-  terminal skin's `> ` prefix.
-  Same argument as the ellipsis: a marker identical on fifteen rows says only "this is a menu
-  row", so a reader scanned fifteen prefixes and still had to read every label.
-  The marks come from `railIcons.tsx`, the drawer set, so a concept appearing in both places
-  (Notes, Queue, Actions, Alerts) is literally the same drawing.
-  `MenuGroup` takes an `icon` for the same reason and lines its header up with the rows it sits
-  among.
-  This is opt-in per row rather than applied to every `.context-menu button`: most context
-  menus in the app are a handful of verbs about one object ("Rename", "Close", "Duplicate"),
-  where a mark per verb is noise, while these two list a dozen unrelated destinations.
+- **Every row in the app menu, the sidebar context menu, and the Project and session context menus carries its own mark**, opting the row into `.menu-row` (icon, then label, then any trailing hint) and suppressing the terminal skin's `> ` prefix.
+  Same argument as the ellipsis: a marker identical on fifteen rows says only "this is a menu row", so a reader scanned fifteen prefixes and still had to read every label.
+  The marks come from `railIcons.tsx`, the drawer set, so a concept appearing in more than one place (Notes, Queue, Actions, Alerts, History, Groups, Settings) is literally the same drawing.
+  `MenuGroup` takes an `icon` for the same reason and lines its header up with the rows it sits among.
+  Where one control's label switches, its mark switches with it or it contradicts the word beside it: Kill session wears a power glyph and the same button wears a bin once the session has ended and only its row is left to remove.
+  This is opt-in per row rather than applied to every `.context-menu button`: the remaining context menus are a handful of verbs about one object ("Rename", "Close", "Duplicate"), where a mark per verb is noise, while these four list a dozen unrelated acts and destinations.
+  Inside them, a **radio set keeps its plain rows**: the three Read-aloud modes are already marked with a `✓`, and an icon column beside a check column draws two marks for one fact.
   Where two rows differ only in what they reload, the marks name the *thing* rather than the
   act — a server, a package, a refresh arrow — because three refresh arrows would say "reload"
   three times and name nothing.
@@ -397,6 +398,11 @@ Its rules, and what each one is defending:
   buttons inside a `.context-menu` subtree positioned directly after their header in document
   order, so the menu-wide arrow-key walk steps through them where a reader expects. Only one
   group is expanded at a time, and closing the menu collapses it.
+- **A choice among a list is a submenu, not a `<select>`.**
+  The Project menu's Group control is a `MenuGroup` whose header carries the Project's current Group and whose flyout lists Ungrouped, every Group, and `Create new group`, scrolling when there are more Groups than fit.
+  The native `<select>` it replaced rendered its options in a system sheet on a phone - with none of this menu's styling, none of its keyboard walk, and no room for the create row at all.
+  Creating from there also *moves* the Project into what it creates: opening the same empty dialog and leaving the Project where it was would make the row a detour to the sidebar menu rather than an answer to "put this somewhere new".
+  A failed move is reported and leaves the (successfully created) Group in place rather than trying to unwind it, so the sidebar shows exactly what the daemon holds.
 - A prefiltered surface always exposes its scope as a visible, clearable control, so a Project
   entry point narrows the same browser rather than opening a different one. The prompt library is
   the deliberate exception: its Project argument adds that Project's templates to the global set
@@ -440,14 +446,15 @@ Its rules, and what each one is defending:
   and reading it off a menu opened on some other session made the pane it landed in a guess.
   The palette keeps `pane.stackNew` for the focused pane, where "as a tab in *which* pane" has an
   answer.
-- **The session menu is tiered by source.** A session's own header (`⋯`, or right-click on the
-  pane bar) is its full-detail surface and carries `Copy working directory`,
-  `Insert prompt template…` and `Processes and previews…`.
-  A sidebar row, a desktop tab title and a mobile tab do not.
-  Those menus are opened by pointing at a session from a list, and what a person points at a list
-  row for is Rename, read state, broadcast, and Kill; three rows of rarely-wanted plumbing in
-  between only pushed those further down.
-  Same actions, same registry commands, one surface each.
+- **Every session-menu row acts on that session, immediately.**
+  `Insert prompt template` and `Processes and previews` left it entirely: both open a whole surface of their own (the prompt library, the Resources dialog) from a menu whose every other row does something to the session and closes, and both remain a palette command and a drawer tab away from wherever you already are.
+  `Open in focused pane` left for a simpler reason - clicking the row already does it, from the same list the menu was opened on.
+- **The session menu is still tiered by source.** A session's own header (`⋯`, or right-click on the pane bar) carries `Copy working directory`; a sidebar row, a desktop tab title and a mobile tab do not.
+  Those menus are opened by pointing at a session from a list, and what a person points at a list row for is Rename, read state, broadcast, and Kill.
+  Same action, same registry command, one surface.
+- **The menu says what a session *is*, not how it started.**
+  Its header carries the PID and the Git branch.
+  The boot-timing chip that used to sit with them is a fact about how the session *began*, which nobody right-clicks a live session to learn; it lives in the durable startup diagnostics instead (`development/PERFORMANCE_RUNBOOK.md`), and the browser milestones are still recorded and POSTed - they simply no longer sit in render state that nothing reads.
 - **Read state is one row, not two.** `Mark as read` / `Mark as unread` is a single toggle whose
   label states the action it performs, on every source, for live agent sessions.
   Listing both halves would make the reader work out which of the pair is currently true before
@@ -1496,6 +1503,11 @@ Its rules, and what each one is defending:
   Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.
   A terminal typing tap, returning explicitly to Live mode, opening Draft, and the manual Paste fallback remain the paths that intentionally request a soft keyboard.
   The fixed Send end-cap carries the same focus-preserving press guard as the scrolling rail.
+- **Nothing raises the soft keyboard just because a surface opened.**
+  The Queue tab's composer takes focus on open only where `hasSoftKeyboard()` is false - a physical keyboard is already there, so a caret costs nothing.
+  Where the only keyboard is on-screen, focusing a field is a layout change rather than a convenience: it covers most of the drawer, so a tab opened to *read* a queue arrives with the list already hidden and a dismissal to perform.
+  The condition is `hasSoftKeyboard()` rather than the mobile breakpoint on purpose - a narrowed desktop window has a real keyboard and a landscape tablet does not (`deviceSettings.ts`).
+  The other half of the fix is at the caller: opening the Queue to *reveal* an already-written message no longer asks for focus at all (`prompt-queue.md`).
 - Action configuration separates **what an action is** from **where it appears**, and the second half is per device.
   The shared *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
   The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` under the terminal and the `panel` rendered as Quick actions in the Actions drawer.

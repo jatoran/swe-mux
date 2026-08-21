@@ -89,7 +89,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { ActionsIcon, AlertsIcon, BroadcastIcon, ClipboardHistoryIcon, CogIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HistoryIcon, NavPanelIcon, NotesIcon, PackageIcon, PlusIcon, ProcessesIcon, PromptsIcon, QueueIcon, RefreshIcon, SearchIcon, ServerIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
+import { ActionsIcon, AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotesIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, TrashIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -379,38 +379,6 @@ function pendingTerminal(id:string,project:Project,backend:string='shell',option
   }
 }
 
-function formatStartupMs(value:number):string {
-  return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`
-}
-
-function startupSummary(session:Session):{label:string;value:number}|null {
-  const server=session.startup_timing_ms||{}
-  const value=server.first_prompt??server.first_output??server.server_ready
-  if(value===undefined)return null
-  return {label:server.first_prompt!==undefined?'ready':'boot',value}
-}
-
-function startupTimingTitle(session:Session,client:ClientStartupTiming):string {
-  const server=session.startup_timing_ms||{}
-  const browser=Object.keys(client).length?client:session.client_startup_timing_ms||{}
-  const lines=['SESSION STARTUP']
-  const add=(label:string,value:number|undefined)=>{if(value!==undefined)lines.push(`${label}: ${formatStartupMs(value)}`)}
-  add('project resolution',server.project_resolution)
-  add('project config',server.project_config)
-  add('profile resolution',server.profile_resolution)
-  add('PTY spawn',server.pty_spawn)
-  add('registration',server.registration)
-  add('durable registration',server.durable_registration)
-  add('server ready (total)',server.server_ready)
-  add('first output (total)',server.first_output)
-  add('first prompt (total)',server.first_prompt)
-  add('API response (browser total)',browser.api_response)
-  add('pane mounted (browser total)',browser.pane_mounted)
-  add('socket open (browser total)',browser.socket_open)
-  add('replay ready (browser total)',browser.replay_ready)
-  return lines.join('\n')
-}
-
 function historyName(entry:HistoryEntry):string {
   return runDisplayName(entry)
 }
@@ -622,7 +590,9 @@ export function App() {
     return()=>window.clearTimeout(timeout)
   },[drawerNoteClaimRequest?.token])
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
-  const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
+  // `adoptProjectId` is set only when the dialog was opened from a Project's Group submenu:
+  // the new Group takes that Project with it, which is the whole reason the row is there.
+  const [groupEdit,setGroupEdit]=useState<{id?:string;name:string;adoptProjectId?:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Settings' own section drawer, the narrow-layout twin of the docked column. It lives
   // here rather than inside Settings because the gesture recognizer below is the shell's,
@@ -1164,7 +1134,10 @@ export function App() {
   const [profiles, setProfiles] = useState<LaunchProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
-  const [clientStartupTimings,setClientStartupTimings]=useState<Record<string,ClientStartupTiming>>({})
+  // The ref alone, deliberately. These milestones exist to be POSTed to the daemon's
+  // startup diagnostics; nothing renders them any more (the session menu's boot chip was
+  // the only reader), so holding them in state re-rendered the whole workspace once per
+  // milestone for a value nobody displayed.
   const clientStartupTimingValues=useRef<Record<string,ClientStartupTiming>>({})
 
   const showPointerDropIndicator=(element:HTMLElement|null,indicator?:string)=>{
@@ -3280,7 +3253,6 @@ export function App() {
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
       clientStartupTimingValues.current[next.id]=browserTiming
-      setClientStartupTimings(current=>({...current,[next.id]:browserTiming}))
       if (profileId) { localStorage.setItem('mux.lastProfile',profileId); setLauncherProfile(profileId) }
       // Remembered so holding mobile Run repeats the last launch without the menu.
       localStorage.setItem('mux.lastBackend',backend)
@@ -3381,7 +3353,6 @@ export function App() {
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
       clientStartupTimingValues.current[next.id]=browserTiming
-      setClientStartupTimings(current=>({...current,[next.id]:browserTiming}))
       localStorage.setItem('mux.lastBackend',backend)
       pendingSpawns.current[pendingId].resolvedId=next.id
       setSessions(items=>[
@@ -3555,6 +3526,19 @@ export function App() {
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
+  /** Move one Project into a Group (or back to the root list), from the Project menu.
+   *
+   *  Closes the menu first: the submenu it is invoked from renders the Project's *current*
+   *  Group in its header, so leaving it open would show the old answer until the PATCH
+   *  landed and then silently change under the pointer. */
+  const assignProjectGroup=async(project:Project,group_id:string|null)=>{
+    setProjectMenu(null)
+    try{
+      const updated=await api<Project>('PATCH',`/api/projects/${project.id}`,{group_id})
+      setProjects(items=>items.map(item=>item.id===updated.id?updated:item))
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+
   const submitGroup=async()=>{
     if(!groupEdit?.name.trim())return
     if(groupEdit.id){
@@ -3563,6 +3547,11 @@ export function App() {
     }else{
       const created=await api<ProjectGroup>('POST','/api/project-groups',{name:groupEdit.name})
       setProjectGroups(items=>[...items,created])
+      // Opened from a Project's Group submenu: the Project goes in. A failure to move is
+      // reported and leaves the (successfully created) Group in place rather than trying
+      // to unwind it — the sidebar then shows exactly what the daemon holds.
+      const adopt=groupEdit.adoptProjectId?projects.find(item=>item.id===groupEdit.adoptProjectId):undefined
+      if(adopt)await assignProjectGroup(adopt,created.id)
     }
     setGroupEdit(null)
   }
@@ -3866,7 +3855,6 @@ export function App() {
     setSessions(items => items.filter(item => item.id !== session.id))
     delete startupOrigins.current[session.id]
     delete clientStartupTimingValues.current[session.id]
-    setClientStartupTimings(current=>{const next={...current};delete next[session.id];return next})
     if (activeId === session.id) setActiveId(nextActiveId)
     if (focusedViewId === session.id) setFocusedViewId(nextActiveId)
     if (zoomedId === session.id) setZoomedId(null)
@@ -3913,7 +3901,6 @@ export function App() {
       setSessions(items => [...items.filter(item => item.id !== session.id && item.id !== next.id), next])
       delete startupOrigins.current[session.id]
       delete clientStartupTimingValues.current[session.id]
-      setClientStartupTimings(current => { const copy = { ...current }; delete copy[session.id]; return copy })
       setProjectId(session.project_id)
       if (activeId === session.id) setActiveId(next.id)
       if (focusedViewId === session.id) setFocusedViewId(next.id)
@@ -4149,12 +4136,19 @@ export function App() {
    *
    *  Focuses the target first: the tab is session-scoped and follows focus, so a chip
    *  clicked on an unfocused pane would otherwise open the queue of a different agent
-   *  than the one the click named. */
-  const openQueueForSession = async (sessionId: string) => {
+   *  than the one the click named.
+   *
+   *  `compose` separates the two reasons the Queue tab ever opens, which were one call
+   *  before. A person pressing the queue chip or the palette command is *about to write*,
+   *  so the composer earns focus. A send that came back `queued_behind` or `not_due` opens
+   *  the same tab to say "your message is in there" — a reveal, not an invitation, and
+   *  focusing the composer for it put a caret (and, on a phone, the whole soft keyboard)
+   *  over the list the user was being shown. */
+  const openQueueForSession = async (sessionId: string, compose = true) => {
     const session = sessionsRef.current.find(item => item.id === sessionId)
     if (session) await selectSession(session)
     openDrawerTab('queue',session?.project_id||projectId)
-    setQueueOpenToken(current => current + 1)
+    if (compose) setQueueOpenToken(current => current + 1)
   }
 
   /** Read one session's conversation in the drawer without replacing its terminal.
@@ -4246,15 +4240,17 @@ export function App() {
           await selectSession(target.session)
           return { status: 'done' }
         case 'queued_behind':
-          // Strict order: the message waits in the one audited place. Show it.
-          await openQueueForSession(sid)
+          // Strict order: the message waits in the one audited place. Show it — the
+          // message is already written, so this reveals the queue rather than asking
+          // for another one.
+          await openQueueForSession(sid, false)
           return { status: 'done' }
         case 'blocked':
           return { status: 'blocked', messageId, revision, reasons: outcome.reasons, protected: outcome.protected }
         case 'not_due':
           // A scheduled item reached this path (retarget/confirm of an
-          // existing message): it is queued, just not yet due.
-          await openQueueForSession(sid)
+          // existing message): it is queued, just not yet due. Same reveal.
+          await openQueueForSession(sid, false)
           return { status: 'done' }
         case 'stranded':
         case 'expired':
@@ -5829,7 +5825,6 @@ export function App() {
     if(current[milestone]!==undefined)return
     const next={...current,[milestone]:elapsedMs}
     clientStartupTimingValues.current[sessionId]=next
-    setClientStartupTimings(values=>({...values,[sessionId]:next}))
     if(milestone==='replay_ready'){
       void api('POST',`/api/sessions/${sessionId}/startup-metrics`,{timing_ms:next}).catch(()=>undefined)
     }
@@ -6966,38 +6961,41 @@ export function App() {
       </div>
     </div>}
 
-    {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 430)) }}>
+    {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 360)) }}>
       <div class="context-title">{sessionStateDot(contextMenu.session,rowConfig.dotShape,null,sessionStandingMark(contextMenu.session,rowConfig))}<strong>{sessionName(contextMenu.session)}</strong></div>
+      {/* PID and branch, and nothing else. The startup timing that sat here with them is a
+          number about how the session *began*, which nobody right-clicks a live session to
+          learn — it belongs to the startup diagnostics, not to the menu you open to rename
+          or kill something. */}
       <div class="context-session-info">
         <span title="Process ID of the session's root process">PID {contextMenu.session.pid}</span>
         {contextMenu.session.git.branch&&<span class="git-chip" title={`Git branch ${contextMenu.session.git.branch}${contextMenu.session.git.dirty?` · ${contextMenu.session.git.dirty} changed files`:' · clean'}`}>git:{contextMenu.session.git.branch}{contextMenu.session.git.dirty?` +${contextMenu.session.git.dirty}`:''}</span>}
-        {(()=>{const startup=startupSummary(contextMenu.session);return startup&&<span class="startup-chip" title={startupTimingTitle(contextMenu.session,clientStartupTimings[contextMenu.session.id]||{})}>{startup.label}:{formatStartupMs(startup.value)}</span>})()}
       </div>
-      <button onClick={() => runNamedCommand('session.rename')}>Rename</button>
-      {isAgent(contextMenu.session)&&contextMenu.session.auto_named!==false&&!isEndedSession(contextMenu.session)&&<button onClick={() => runNamedCommand('session.regenerateTitle')}>Regenerate title</button>}
-      {contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>}
-      {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
-      {canRestartCold(contextMenu.session) && <button onClick={() => runNamedCommand('session.restartCold')}>Restart terminal</button>}
-      {activityBadges(contextMenu.session).length>0&&<button onClick={() => runNamedCommand('session.clearStandingActivity')}>Clear standing activity</button>}
-      {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button onClick={() => runNamedCommand('session.approveOnce')}>Approve this request</button>}
+      <button class="menu-row" onClick={() => runNamedCommand('session.rename')}><span class="menu-row-icon" aria-hidden="true"><RenameIcon/></span><span class="menu-row-label">Rename</span></button>
+      {isAgent(contextMenu.session)&&contextMenu.session.auto_named!==false&&!isEndedSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.regenerateTitle')}><span class="menu-row-icon" aria-hidden="true"><SparkleIcon/></span><span class="menu-row-label">Regenerate title</span></button>}
+      {/* No `Open in focused pane`. Clicking the row already does it, from the same list
+          the menu was opened on, so the row existed only to say so a second time. */}
+      {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume as new…</span></button>}
+      {canRestartCold(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.restartCold')}><span class="menu-row-icon" aria-hidden="true"><RefreshIcon/></span><span class="menu-row-label">Restart terminal</span></button>}
+      {activityBadges(contextMenu.session).length>0&&<button class="menu-row" onClick={() => runNamedCommand('session.clearStandingActivity')}><span class="menu-row-icon" aria-hidden="true"><ClearIcon/></span><span class="menu-row-label">Clear standing activity</span></button>}
+      {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button class="menu-row" onClick={() => runNamedCommand('session.approveOnce')}><span class="menu-row-icon" aria-hidden="true"><CheckIcon/></span><span class="menu-row-label">Approve this request</span></button>}
       {/* Revoking is offered wherever a grant is standing, and only revoking:
           *granting* authority from a right-click on a row you are not looking at
           is the wrong affordance for it, and the pane's strip is where the mode,
           its rules, and its budget are all visible together. */}
-      {effectiveApprovalMode(contextMenu.session,Date.now()/1000)!=='wait'&&<button onClick={() => runNamedCommand('session.approvals.wait')}>Stop auto-approving here</button>}
-      {isAgent(contextMenu.session)&&!isEndedSession(contextMenu.session)&&<button onClick={()=>runNamedCommand('session.toggleRead')}>{isUnread(contextMenu.session,ackedTurns)?'Mark as read':'Mark as unread'}</button>}
-      <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
+      {effectiveApprovalMode(contextMenu.session,Date.now()/1000)!=='wait'&&<button class="menu-row" onClick={() => runNamedCommand('session.approvals.wait')}><span class="menu-row-icon" aria-hidden="true"><ShieldOffIcon/></span><span class="menu-row-label">Stop auto-approving here</span></button>}
+      {isAgent(contextMenu.session)&&!isEndedSession(contextMenu.session)&&<button class="menu-row" onClick={()=>runNamedCommand('session.toggleRead')}><span class="menu-row-icon" aria-hidden="true"><MailIcon/></span><span class="menu-row-label">{isUnread(contextMenu.session,ackedTurns)?'Mark as read':'Mark as unread'}</span></button>}
+      <button class="menu-row" onClick={() => runNamedCommand('session.copyId')}><span class="menu-row-icon" aria-hidden="true"><CopyIcon/></span><span class="menu-row-label">Copy session ID</span></button>
       {/* Pane-only, deliberately. A session's own ⋯ header menu is where its
-          full detail lives, and these are errands you run while working *in* a
+          full detail lives, and this is an errand you run while working *in* a
           session rather than while pointing at one from a list. On a sidebar row
-          or a tab title they were pure length: three rows of rarely-wanted
-          plumbing between the two things those menus are actually opened for,
-          Rename and Kill. Same actions, same commands, one surface. */}
-      {contextMenu.source==='pane'&&<>
-        <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
-        <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
-        <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
-      </>}
+          or a tab title it was pure length, between the two things those menus are
+          actually opened for, Rename and Kill. Same action, same command, one surface.
+          Insert prompt template and Processes-and-previews left even from here: both
+          open a whole surface of their own (the prompt library, the Resources dialog)
+          from a menu whose other rows all act on the session immediately, and both are
+          a command and a drawer tab away in the place you already are. */}
+      {contextMenu.source==='pane'&&<button class="menu-row" onClick={() => runNamedCommand('session.copyCwd')}><span class="menu-row-icon" aria-hidden="true"><CopyPathIcon/></span><span class="menu-row-label">Copy working directory</span></button>}
       {/* No context menu touches tab order or pane geometry on any platform — not split,
           stack, dissolve, or move. They answer "how is the workspace laid out", which is
           not the question a menu opened on a session or a tab is asked, and the direction
@@ -7011,47 +7009,67 @@ export function App() {
           `New terminal as tab` went the same way, on every source including the ⋯ menu:
           it spawns a *new* session, which is the Run button's whole job, and reading it
           off a menu opened on some other session made the pane it landed in a guess. */}
-      {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<MenuGroup id="session-voice" label={`Read aloud · ${voiceModeLabel(effectiveVoiceMode(contextMenu.session))}`} openId={menuGroup} onOpenChange={setMenuGroup} hint="Spoken replies for this session">
+      {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<MenuGroup id="session-voice" label={`Read aloud · ${voiceModeLabel(effectiveVoiceMode(contextMenu.session))}`} icon={<SpeakerIcon/>} openId={menuGroup} onOpenChange={setMenuGroup} hint="Spoken replies for this session">
         {/* Four flat rows for a setting most sessions never change, sitting between
             the actions this menu exists for. Behind one row carrying its current
-            mode, so the common case reads the state without opening anything. */}
+            mode, so the common case reads the state without opening anything.
+            These four keep the plain rows: three are a radio set whose `✓` already
+            marks the state, and an icon column beside a check column would draw two
+            marks for one fact. */}
         {(['off','on_demand','auto'] as VoiceMode[]).map(mode=><button key={mode} onClick={()=>{void setVoiceMode(contextMenu.session,mode);setContextMenu(null)}}>{effectiveVoiceMode(contextMenu.session)===mode?'✓ ':''}{mode==='off'?'Off':mode==='on_demand'?'On demand':'Auto on reply'}</button>)}
         <button onClick={()=>{const target=contextMenu.session;setContextMenu(null);void speakLastReply(target)}}>Speak last reply now</button>
       </MenuGroup>}
       <div class="context-rule" />
-      <button onClick={() => runNamedCommand('session.broadcastMembership')}>{contextMenu.session.broadcast ? 'Remove from broadcast' : 'Add to broadcast'}</button>
-      <button class="danger" onClick={() => runNamedCommand('session.killImmediate')}>{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</button>
+      <button class="menu-row" onClick={() => runNamedCommand('session.broadcastMembership')}><span class="menu-row-icon" aria-hidden="true"><BroadcastIcon/></span><span class="menu-row-label">{contextMenu.session.broadcast ? 'Remove from broadcast' : 'Add to broadcast'}</span></button>
+      {/* One control, two marks: a live session is stopped (power), an ended one is
+          only cleared off the list (bin). The label already switches; the icon has to
+          switch with it or it contradicts the word beside it. */}
+      <button class="menu-row danger" onClick={() => runNamedCommand('session.killImmediate')}><span class="menu-row-icon" aria-hidden="true">{isEndedSession(contextMenu.session) ? <TrashIcon/> : <PowerIcon/>}</span><span class="menu-row-label">{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</span></button>
     </div>}
 
-    {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 470)) }}>
+    {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 320)) }}>
       <div class="context-title"><strong>{projectMenu.project.name}</strong></div>
       {/* Starting work belongs to the Run button (sidebar header, every Project row,
           and the mobile rail), which offers the same backends plus Project tasks —
           duplicating it here left two doors to one action. */}
-      {/* The same surfaces the app menu opens globally, prefiltered to this Project. */}
-      <div class="context-subtitle">BROWSE THIS PROJECT</div>
-      <button onClick={() => runNamedCommand('history.openProject')}>Session history…</button>
-      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openNotesBrowser(target)}}>Notes…</button>
-      <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
-      <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
-      <button onClick={() => runNamedCommand('queue.fleetProject')}>Fleet queue…</button>
-      <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
-      <div class="context-subtitle">PROJECT</div>
-      <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
-      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);toggleProjectCollapsed(target.id)}}>{collapsedProjects.has(projectMenu.project.id)?'Expand in sidebar':'Collapse in sidebar'}</button>
-      {confirmHideId!==projectMenu.project.id&&<button onClick={()=>{const target=projectMenu.project;if(canHideProject(openWorkFor(target))){setProjectMenu(null);void hideProject(target)}else setConfirmHideId(target.id)}}>Hide from sidebar</button>}
+      {/* Two surfaces the app menu opens globally, prefiltered to this Project — and only
+          two. The category headers went with the rest: a heading that labels three rows in
+          a menu of nine is a fifth of the height spent saying what each icon now says.
+          Notes, Processes, Fleet queue, and Browse files all left because each is a drawer
+          tab or a dialog that opens on the *selected* Project anyway, so right-clicking a
+          Project row to reach them was a second route to a place one click away — and the
+          two that stayed are the ones with no such home. Collapse-in-sidebar left because
+          clicking the Project header is the fold, and the two Move rows left because
+          long-press drag is the reorder path and the buttons could only ever step one
+          place at a time. */}
+      <button class="menu-row" onClick={() => runNamedCommand('history.openProject')}><span class="menu-row-icon" aria-hidden="true"><HistoryIcon/></span><span class="menu-row-label">Session history</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('prompts.openProject')}><span class="menu-row-icon" aria-hidden="true"><PromptsIcon/></span><span class="menu-row-label">Prompt library</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('project.reveal')}><span class="menu-row-icon" aria-hidden="true"><RevealIcon/></span><span class="menu-row-label">Reveal in Explorer</span></button>
+      {/* A Group is a list, so it is a list: a pop-out that scrolls, exactly like the
+          Maintenance and Run menus, instead of a native `<select>` whose options a phone
+          renders in a system sheet with none of this menu's styling or keyboard walk. */}
+      <MenuGroup id="project-group" label={`Group · ${projectGroups.find(group=>group.id===projectMenu.project.group_id)?.name||'Ungrouped'}`} icon={<GroupIcon/>} openId={menuGroup} onOpenChange={setMenuGroup} hint="Which sidebar Group holds this Project">
+        {[{id:'',name:'Ungrouped'},...projectGroups].map(group=>{
+          const active=(projectMenu.project.group_id||'')===group.id
+          return <button key={group.id||'ungrouped'} class="menu-row" role="menuitemradio" aria-checked={active} onClick={()=>void assignProjectGroup(projectMenu.project,group.id||null)}><span class="menu-row-icon" aria-hidden="true">{active?<CheckIcon/>:<GroupIcon/>}</span><span class="menu-row-label">{group.name}</span></button>
+        })}
+        <div class="context-rule" />
+        {/* Creating from here also *moves* this Project into what it creates. Opening the
+            same empty dialog and leaving the Project where it was would make the row a
+            detour to the sidebar menu rather than an answer to "put this somewhere new". */}
+        <button class="menu-row" onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setGroupEdit({name:'',adoptProjectId:target.id})}}><span class="menu-row-icon" aria-hidden="true"><PlusIcon/></span><span class="menu-row-label">Create new group</span></button>
+      </MenuGroup>
+      <button class="menu-row" onClick={() => runNamedCommand('project.rename')}><span class="menu-row-icon" aria-hidden="true"><RenameIcon/></span><span class="menu-row-label">Rename</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('project.settings')}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Project settings</span></button>
+      <div class="context-rule" />
+      {confirmHideId!==projectMenu.project.id&&<button class="menu-row" onClick={()=>{const target=projectMenu.project;if(canHideProject(openWorkFor(target))){setProjectMenu(null);void hideProject(target)}else setConfirmHideId(target.id)}}><span class="menu-row-icon" aria-hidden="true"><HideIcon/></span><span class="menu-row-label">Hide from sidebar</span></button>}
       {confirmHideId===projectMenu.project.id&&<>
         <div class="context-subtitle">CLOSE OPEN WORK TO HIDE</div>
         <div class="context-note">{describeOpenWork(openWorkFor(projectMenu.project))||'No live work'} still attached. Hiding would strand it off-screen.</div>
-        <button class="danger" onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setConfirmHideId(null);void closeWorkAndHideProject(target).catch(cause=>{setError(cause instanceof Error?cause.message:String(cause));void refresh()})}}>Close it &amp; hide</button>
-        <button onClick={()=>setConfirmHideId(null)}>Cancel</button>
+        <button class="menu-row danger" onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setConfirmHideId(null);void closeWorkAndHideProject(target).catch(cause=>{setError(cause instanceof Error?cause.message:String(cause));void refresh()})}}><span class="menu-row-icon" aria-hidden="true"><HideIcon/></span><span class="menu-row-label">Close it &amp; hide</span></button>
+        <button class="menu-row" onClick={()=>setConfirmHideId(null)}><span class="menu-row-icon" aria-hidden="true"><CloseIcon/></span><span class="menu-row-label">Cancel</span></button>
       </>}
-      <label class="context-select">Group<select value={projectMenu.project.group_id||''} onChange={event=>{const target=projectMenu.project;const group_id=event.currentTarget.value||null;void api<Project>('PATCH',`/api/projects/${target.id}`,{group_id}).then(updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item)));setProjectMenu(null)}}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>
-      <button onClick={() => runNamedCommand('project.rename')}>Rename project</button>
-      <button disabled={!commands.find(item=>item.id==='project.moveUp')?.available} onClick={()=>runNamedCommand('project.moveUp')}>Move Project up</button>
-      <button disabled={!commands.find(item=>item.id==='project.moveDown')?.available} onClick={()=>runNamedCommand('project.moveDown')}>Move Project down</button>
-      <button onClick={() => runNamedCommand('project.settings')}>Project settings…</button>
-      <button class="danger" onClick={() => runNamedCommand('project.delete')}>Remove from swe-mux…</button>
+      <button class="menu-row danger" onClick={() => runNamedCommand('project.delete')}><span class="menu-row-icon" aria-hidden="true"><TrashIcon/></span><span class="menu-row-label">Remove from swe-mux</span></button>
     </div>}
 
     {sidebarMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-300))}}>

@@ -264,6 +264,7 @@ from .provider_accounts import (
     ProviderAccountManager,
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
+from .recent_files import read_recent_files
 from .reconcile import reconcile_external_history
 from .scan_consumers import catch_me_up, handoff_progress, live_blocker, search_scan_records
 from .scan_timeline import SCAN_RULE_ID, ScanContext, ScanTimelineService
@@ -979,6 +980,7 @@ def create_app(
                 restore_agent_context,
             ),
             web.get("/api/projects/{project_id}/files/tree", list_project_files_tree),
+            web.get("/api/projects/{project_id}/files/recent", list_recent_project_files),
             web.get("/api/projects/{project_id}/files", list_project_files),
             web.post("/api/projects/{project_id}/resources", post_project_resource),
             web.get("/api/projects/{project_id}/search", search_project_files_route),
@@ -10608,6 +10610,22 @@ async def list_project_files_tree(request: web.Request) -> web.Response:
         lambda: list_project_directories(project.root, wanted, ignore_patterns=patterns),
     )
     return json_response(result)
+
+
+async def list_recent_project_files(request: web.Request) -> web.Response:
+    """The Files explorer's Recent view: what Git says was touched here, newest first.
+
+    Deliberately Git-backed rather than an mtime walk - see `recent_files`. The ignore
+    patterns are read off the loop because they parse the Project's config file; the Git
+    calls are already async and bounded.
+    """
+    project = _request_project(request)
+    patterns = await asyncio.to_thread(
+        effective_project_ignores,
+        project.root,
+        request.app["config"].project_ignore_patterns,
+    )
+    return json_response(await read_recent_files(project.root, ignore_patterns=patterns))
 
 
 async def search_project_files_route(request: web.Request) -> web.Response:

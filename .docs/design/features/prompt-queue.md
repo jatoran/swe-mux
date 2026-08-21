@@ -150,14 +150,22 @@ separately opt-in.
   It reports install-wide auto-delivery state and owns none of it.
   It also projects pending and decided `request_spawn` records as targetless approval rows.
   Approve and dismiss remain explicit human acts; Fleet Queue does not gain general spawn authority and message rows still have no send control.
-- **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.** Rows carry only `Send now` (head) and the arm toggle
-  inline; edit, move, cancel/skip, delete, the schedule presets and copy live behind a per-row `⋯`
-  that opens a tray under the row rather than a floating menu. Terminal-state items
-  (sent/failed/cancelled) collapse behind a `N delivered or closed` disclosure instead of
-  rendering crossed out in place. The auto-delivery controls collapse to a one-line
-  `auto: …` status with a disclosure. `Ctrl+Enter` in the composer stages armed.
-  Delete uses an inline second-click confirmation and is also available in the fleet queue;
-  it is hidden while the item is `delivering`.
+- **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.**
+  Rows carry `Send now` (head), the arm toggle, and a compact delete end-cap inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯` that opens a tray under the row rather than a floating menu.
+  Terminal-state items (sent/failed/cancelled) collapse behind a `N delivered or closed` disclosure instead of rendering crossed out in place.
+  The auto-delivery controls collapse to a one-line `auto: …` status with a disclosure.
+  `Ctrl+Enter` in the composer stages armed.
+- **Delete is drawn twice and implemented once.**
+  Removing a message someone changed their mind about was wanted often enough to resent opening a tray for, so the row carries a `×` end-cap beside the `⋯`; the tray keeps its worded copy for the case where the compact mark is ambiguous.
+  Two copies of a *destructive* control is exactly where behaviour drifts, so both call one helper: the same arm-then-confirm (one click marks, the second deletes) through one shared confirming id - so confirming from either place is the same armed state rather than two - the same busy guard, and the same absence while the item is `delivering`, which is the one state the daemon will not accept a delete in.
+  Only the resting label differs, because a full-width tray row has space for a word and an inline row does not.
+  Delete is also available in the fleet queue.
+- **Opening the Queue to read it is not a request to write in it.**
+  Focus goes to the composer only where a physical keyboard is already present (`hasSoftKeyboard()`, not the mobile breakpoint - a narrowed desktop window has a real keyboard and a landscape tablet does not).
+  On a phone, focusing a field is a layout change rather than a convenience: the on-screen keyboard rises over most of the drawer, so the tab arrives with the list it was opened to show already covered.
+  Underneath that, the two *reasons* the tab opens are now distinguished at the caller.
+  A queue chip, the palette command, or a keybinding is someone about to write, and earns the caret; a send that came back `queued_behind` or `not_due` opens the same tab to say where an already-written message went, and earns nothing.
+  Conflating them is what made the caret appear precisely when something was already queued.
 - **The `queue:<session_id>` pane leaf survives as an explicit pop-out** (the `↗` in the
   panel header) for wide review or two queues side by side, and is what a persisted layout
   holding one resolves to. It renders the same component with its target pinned instead of

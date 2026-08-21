@@ -277,6 +277,8 @@ PUT     /projects/{project_id}/notes/{note_id}            {markdown, revision}
 PATCH   /projects/{project_id}/notes/{note_id}            {title, revision}
 DELETE  /projects/{project_id}/notes/{note_id}            {revision}
 GET     /projects/{project_id}/files?path=RELATIVE
+GET     /projects/{project_id}/files/tree?path=RELATIVE&path=…   the root plus each expanded folder
+GET     /projects/{project_id}/files/recent   {items[{name,path,kind,origin,status,committed_at}], available, reason?}
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
 GET     /projects/{project_id}/search?q=&mode=names|contents|both
 GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]

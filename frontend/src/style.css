@@ -937,7 +937,6 @@ body {
 .pane-divider.vertical { height:4px;cursor:row-resize }
 .pane-divider:hover { background:var(--accent) }
 .pane-tools .pane-tool-label{width:auto;min-width:28px;max-width:150px;padding:0 4px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pane-tools .startup-chip{color:var(--muted);white-space:nowrap;cursor:help}
 .context-menu,.terminal-menu { max-height:calc(100dvh - 8px);overflow-y:auto;overscroll-behavior:contain }
 .session-row { grid-template-columns:10px minmax(0,1fr) }
 /* Absolutely positioned, so showing it never reflows the row it sits on. The box is
@@ -1391,9 +1390,9 @@ body {
 .file-search-input:focus{outline:0;border-color:var(--green)}
 .file-search-clear{position:absolute;right:2px;width:22px;height:calc(22px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1}
 .file-search-clear:hover{color:var(--text)}
-.file-search-filter{flex:none;display:flex;align-items:center;justify-content:center;width:28px;height:calc(28px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;font-size:13px}
-.file-search-filter:hover{color:var(--text)}
-.file-search-filter.active{background:var(--bg);color:var(--green);border-color:var(--green)}
+.file-search-filter,.file-search-recent{flex:none;display:flex;align-items:center;justify-content:center;width:28px;height:calc(28px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;font-size:13px}
+.file-search-filter:hover,.file-search-recent:hover{color:var(--text)}
+.file-search-filter.active,.file-search-recent.active{background:var(--bg);color:var(--green);border-color:var(--green)}
 .file-search-modes{display:flex;gap:4px}
 .file-search-modes button{flex:1;height:calc(24px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 .file-search-modes button:hover{color:var(--text)}
@@ -1403,6 +1402,13 @@ body {
 .file-result-line{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:6px;min-width:0}
 .file-result-line small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .file-result-snippet{margin-left:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-style:normal;font-size:8px}
+/* Recent rows reuse the search-result row. The only additions say which of the two Git
+   sources a row came from: a filled mark and the accent colour for uncommitted work, the
+   tree's own faint dot for something already committed. */
+.file-recent-mark{text-align:center}
+.file-recent-working{color:var(--green)}
+.file-recent-committed{color:var(--muted)}
+.file-recent-when{margin-left:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-style:normal;font-size:8px}
 @media(max-width:760px){.resource-actions button{min-height:36px}.file-tree-row{min-height:36px}}
 
 /* Phase 5.5: layout hierarchy, terminal stacks, and the durable project shelf. */
@@ -2603,7 +2609,6 @@ body {
 .voice-strip .voice-generate{white-space:nowrap}
 .context-session-info{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:2px 8px 6px;border-bottom:1px solid #292f37;margin-bottom:4px;color:#7d8692;font:9px 'JetBrains Mono'}
 .context-session-info .git-chip{color:#8b939d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
-.context-session-info .startup-chip{white-space:nowrap}
 .voice-strip .voice-autoplay,.voice-strip .voice-content{white-space:nowrap}
 .voice-strip .voice-autoplay.active{color:var(--green,#8bd450)}
 .voice-strip .voice-content.verbatim{color:var(--text)}
@@ -2992,7 +2997,6 @@ body {
    at the section's static position rather than at either edge. */
 .sidebar-project-bucket[data-pointer-drop-indicator^="insert-"]:after{content:"";position:absolute;left:2px;right:2px;height:3px;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]:after{top:-3px}.sidebar-project-bucket[data-pointer-drop-indicator="insert-after"]:after{bottom:-3px}
 .empty-project-cta{width:100%;display:grid;gap:5px;padding:14px;border:1px dashed var(--line);background:transparent;color:var(--text);text-align:left;cursor:pointer}.empty-project-cta small{color:var(--muted)}
-.context-select{display:grid;grid-template-columns:auto minmax(110px,1fr);align-items:center;gap:9px;padding:6px 9px;color:var(--muted);font-size:9px}.context-select select{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .project-resource{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto [resource-editor] minmax(0,1fr);background:var(--bg)}.project-resource>header{min-width:0;min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-bottom:1px solid var(--line)}.project-resource>header>div{min-width:0;display:grid;gap:3px}.project-resource>header strong,.project-resource>header span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-resource>header span{color:var(--muted);font-size:8px}.project-resource>header button{min-height:29px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}.project-resource textarea{width:100%;height:100%;min-height:0;resize:none;border:0;padding:12px;background:var(--bg);color:var(--text);font:12px/1.55 'Cascadia Mono',Consolas,monospace;outline:none}.file-list{min-height:0;overflow:auto}.file-list>button{width:100%;min-height:31px;display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:7px;border:0;border-bottom:1px solid var(--line);padding:0 9px;background:transparent;color:var(--text);text-align:left}.file-list>button:hover{background:var(--panel2)}.file-list>button span,.file-list>button small{color:var(--muted)}.file-list>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.resource-error,.resource-unavailable{margin:0;padding:12px;color:var(--red)}.resource-unavailable{color:var(--muted)}
 .project-resource>header>.autosave-resource-heading{display:flex;align-items:center;gap:7px}.autosave-resource-heading>strong{min-width:0}.autosave-resource-heading>.resource-heading-separator,.autosave-resource-heading>.resource-heading-scope,.autosave-resource-heading>.resource-save-indicator{flex:none}.autosave-resource-heading>.resource-heading-separator{overflow:visible;color:var(--muted)}.resource-save-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted)}.resource-save-indicator.saved{background:var(--green);box-shadow:0 0 7px color-mix(in srgb,var(--green) 60%,transparent)}.resource-save-indicator.modified{background:var(--blue);box-shadow:0 0 7px color-mix(in srgb,var(--blue) 60%,transparent)}.resource-save-indicator.error{background:var(--red);box-shadow:0 0 7px color-mix(in srgb,var(--red) 60%,transparent)}
 .resource-actions button.active{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2))}
@@ -3998,6 +4002,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* The overflow toggle sits hard right so the two acts that matter (send, arm) stay left-
    aligned across every row, and its tray opens under the row rather than floating. */
 .queue-item-actions .queue-item-menu{margin-left:auto;min-width:28px;color:var(--muted)}
+/* The row's own delete: an end-cap beside the overflow, sized like it so the pair reads as
+   chrome rather than as two more actions competing with Send. It widens on its own when the
+   confirming label replaces the mark. */
+.queue-item-actions .queue-item-delete{min-width:28px;padding:0 6px;text-align:center}
 .queue-item-actions .queue-item-menu.open{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-more{padding-top:6px;border-top:1px dashed var(--line)}
 /* Terminal-state items are audit, not work: one line until asked for. */
