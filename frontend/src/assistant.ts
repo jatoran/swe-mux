@@ -86,6 +86,64 @@ export const dialogDetail = (dialogId: string) =>
   api<AssistantDialogDetail>('GET', `/api/assistant/dialogs/${dialogId}`)
 
 /**
+ * A device's current dialog has been replaced by a fresh one.
+ *
+ * Announced rather than returned because two surfaces start a new conversation
+ * - the panel's own `new` button and the voice registry alias - and only the
+ * panel holds the view being cleared. One event keeps the two from growing two
+ * different notions of "the current dialog".
+ */
+export const ASSISTANT_DIALOG_RESET_EVENT = 'mux:assistant-dialog-reset'
+
+/**
+ * Deterministic spoken aliases for starting a fresh conversation. Declared
+ * beside the reply so the registry entry and its tests cannot drift apart.
+ * Nothing here collides with the spawn aliases (`new claude`, `new codex`),
+ * which are `new <harness>` and never `new conversation`.
+ */
+export const NEW_CONVERSATION_PHRASES: string[] = [
+  'new conversation',
+  'start a new conversation',
+  'new assistant conversation',
+  'new chat',
+  'start a new chat',
+  'clear context',
+  'clear the context',
+  'clear our context',
+  'clear the conversation',
+]
+
+/**
+ * The spoken reply, which has to say *both* halves.
+ *
+ * Clearing context runs on the word with no confirmation card, and that is only
+ * safe because nothing is destroyed: the daemon keeps the dialog and the panel
+ * keeps it readable. A reply that said "context cleared" alone would describe
+ * the same act as a deletion the operator cannot see or undo, which is the
+ * failure the second half exists to prevent.
+ */
+export const NEW_CONVERSATION_REPLY =
+  'Started a new conversation. The context is cleared, and the previous conversation is still there in the panel.'
+
+/**
+ * Forget this device's dialog and open a fresh one, then announce the swap.
+ *
+ * Reversible by construction: the prior dialog is neither deleted nor closed,
+ * only unremembered, so it stays in the daemon's dialog list and in the panel's
+ * previous-conversation disclosure.
+ */
+export async function startNewDialog(): Promise<string> {
+  rememberDialogId(null)
+  const id = await ensureDialog()
+  // Guarded rather than assumed: this module is imported by tests with no DOM,
+  // where there is no panel view to repaint anyway.
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(ASSISTANT_DIALOG_RESET_EVENT, { detail: { dialog_id: id } }))
+  }
+  return id
+}
+
+/**
  * Per-tab identity for client-executed assistant actions. The daemon stamps
  * dispatched actions with the id of the tab whose turn proposed them, and only
  * that tab executes — an untargeted broadcast would type into every mounted

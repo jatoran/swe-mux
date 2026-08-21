@@ -259,6 +259,7 @@ A phase here may depend on one, but none of them is a phase.
 | `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
+| `USABILITY_AUDIT_2026-08-20.md` | audit report, findings open | The deliverable of Phase 15's "Global usability audit session". Twelve ranked first-use and overwhelm findings, each anchored to a file and line, split into quick polish and needs-design. Nothing in it is scheduled; a maintainer decides which findings earn work. |
 
 ## Phase 1 — Evidence replay and delivery readiness
 
@@ -3797,22 +3798,38 @@ Today the assistant re-sends its primer plus the dialog window on every model ca
 `cache_control` anywhere, so Anthropic-routed models get zero caching and nobody can see what any
 model is hitting.
 
-- [ ] Mark the stable prefix (primer + tool definitions) with an explicit cache breakpoint when
+- [x] Mark the stable prefix (primer + tool definitions) with an explicit cache breakpoint when
   the resolved model routes to a provider that requires one (Anthropic); implicit-caching
   providers need no request change.
-- [ ] Keep the per-round budget line trailing, as it is today, so the prefix stays cache-stable
+  Shipped as `cache_stable_message` / `needs_explicit_cache_control` in `openrouter.py`, applied
+  to the primer only: the provider orders tool definitions ahead of the system prompt, so one
+  breakpoint covers both, and a second one over the per-round tail would be a cache write billed
+  at a premium and never read back.
+- [x] Keep the per-round budget line trailing, as it is today, so the prefix stays cache-stable
   across the up-to-14 rounds of one turn; treat any future prompt change that inserts ahead of
   the primer as a cache regression.
-- [ ] Record `cached_tokens` from the usage payload into the assistant spend ledger and surface
+  Both halves of that rule now have a test: the primer is asserted byte-identical across a
+  turn's rounds, and the budget line is asserted last.
+- [x] Record `cached_tokens` from the usage payload into the assistant spend ledger and surface
   the hit rate beside spend, so caching is measured rather than assumed.
+  `automation_budget_ledger.cached_tokens` (schema 9, backfilled to 0), carried through `spend()`
+  and `spend_breakdown` with `input_tokens` as the honest denominator, and drawn as a `cached`
+  column plus a `prompt cache` tile in `AutomationSpendView` - the same component the Automation
+  dashboard and Resources → Tokens both draw.
 
 ### "New conversation" by voice
 
-- [ ] Deterministic command-registry aliases ("mux, new conversation" / "clear context") that call
+- [x] Deterministic command-registry aliases ("mux, new conversation" / "clear context") that call
   the existing new-dialog path (`AssistantPanel` already has the button; voice has no route to
   it).
-- [ ] No confirmation: the act is reversible, because the old dialog stays readable in the panel,
+  Shipped as `assistant.newConversation`; both surfaces now route through one `startNewDialog`,
+  which announces `mux:assistant-dialog-reset` rather than letting the panel clear itself.
+- [x] No confirmation: the act is reversible, because the old dialog stays readable in the panel,
   and the spoken reply says both things - context cleared, old conversation still there.
+  "Stays readable" was a claim the panel did not yet honour - it cleared its view outright - so
+  the cleared conversation is now kept in a collapsed `previous conversation` disclosure.
+  Without that the reply would have been describing a reversibility the operator had no way to
+  reach, which is the one thing that would have made the absent confirmation unsafe.
 
 ### Unfinished-utterance deferral
 
@@ -3820,18 +3837,31 @@ The defining voice-agent complaint: the operator rushes because a pause becomes 
 The design is deterministic-first, because a model-arbitrated "are you done" loop is the
 round-trip spam the feature exists to avoid.
 
-- [ ] A completeness heuristic runs before a chat turn is dispatched: an utterance ending
+- [x] A completeness heuristic runs before a chat turn is dispatched: an utterance ending
   mid-clause (dangling conjunction, preposition, or article) earns one adaptive patience
   extension instead of submitting.
   At most one deferral per utterance, so unbounded round-trips are structurally impossible.
-- [ ] Queue-merge stays the safety net for fragments that slip through: the second breath merges
+- [x] Queue-merge stays the safety net for fragments that slip through: the second breath merges
   into the pending turn, and barge-in already silences a reply to fragment one.
-- [ ] The model is never instructed to return nothing - incomplete fragments are handled before
+- [x] The model is never instructed to return nothing - incomplete fragments are handled before
   the model, not by it.
-- [ ] The primer teaches the model to suggest hold/proceed once when the operator is clearly
+- [x] The primer teaches the model to suggest hold/proceed once when the operator is clearly
   thinking aloud, rather than emulating it.
-- [ ] Every deferral is logged with the trigger token, so the heuristic's false-positive rate is
+- [x] Every deferral is logged with the trigger token, so the heuristic's false-positive rate is
   measurable before anyone tunes it.
+
+Shipped (`design/features/voice.md`, endpointing). `utteranceCompleteness.ts` is the pure rule
+set, `utteranceDeferral.ts`'s clock-injected `DeferralPen` owns the one-deferral-per-utterance
+decisions, and `ConversationControl.tsx` keeps the effects; the extension is the operator's own
+`voice_chat_patience_ms` (floored at 600 ms, capped at 5 s) rather than a second knob, and it
+also raises the gate's `endpointPatienceMs` while a fragment is held so the second breath is not
+itself chopped in half.
+Two structural guards keep false positives down without a parser - questions strand prepositions
+legitimately, and prepositions that double as verb particles need a five-word clause - and the
+resolution report (`POST /api/voice/deferral-diagnostic`) carries the trigger plus the outcome
+that judges it, since `merged` versus `submitted` IS the false-positive rate.
+The release timer re-arms while speech is still arriving or an utterance is mid-decode, bounded
+by a hard 15 s hold ceiling.
 
 ### Token caps and cost caps everywhere
 
@@ -3862,11 +3892,19 @@ ask.
 
 ### Global usability audit session
 
-- [ ] Spawn a dedicated audit session - prompt staged for operator review, per `stage_text` -
+- [x] Spawn a dedicated audit session - prompt staged for operator review, per `stage_text` -
   charged with an app-wide first-use/overwhelm audit: every surface with complex functionality,
   not voice alone, drawing on the continuity project's UI/UX-psychology documentation and its own
   research, producing a written report with ranked recommendations.
   This is a session to run, not code to write; it is in the phase so it is not lost.
+  Delivered 2026-08-20 as `USABILITY_AUDIT_2026-08-20.md`: twelve ranked findings, each anchored
+  to a file and line, split into quick polish and needs-design.
+  The report is the deliverable and nothing in it is scheduled here; acting on a finding is a
+  separate decision.
+  Two findings are deliberately handed to the in-flight gated-feature enablement work rather than
+  acted on (Run with no harness enabled, and the assistant's off-state naming a Settings tab that
+  does not exist), and the report asks only that the Voice-tab split be sequenced before the
+  global TTS master switch in this phase.
 
 ### Bring-your-own LLM endpoint, and gating on a verified provider
 
@@ -3915,6 +3953,9 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
 
 - [ ] Anthropic-routed assistant turns show nonzero cached tokens in the spend view, and the hit
   rate is visible beside spend.
+  The breakpoint, the ledger column, and the surface are built and tested; the criterion stays
+  open until an operator reads a nonzero rate off a real Anthropic-routed turn, which no test
+  can stand in for.
 - [ ] "Mux, new conversation" clears context by voice and says so.
 - [ ] A deliberately trailed-off utterance is deferred exactly once and merges with its
   completion; the deferral appears in the log with its trigger.

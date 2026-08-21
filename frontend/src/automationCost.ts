@@ -35,6 +35,14 @@ export type SpendRule = {
   today_calls: number
   today_tokens: number
   today_cost_usd: number
+  /** Prompt tokens only. `tokens` includes output, which was never cacheable, so it is the
+   *  wrong denominator for a hit rate. Absent on a daemon predating cache accounting. */
+  input_tokens?: number
+  /** Prompt tokens the provider served from its cache — a subset of `input_tokens`, never
+   *  added to it. */
+  cached_tokens?: number
+  today_input_tokens?: number
+  today_cached_tokens?: number
   models?: string[]
   last_at?: number
 }
@@ -51,6 +59,10 @@ export type SpendBreakdown = {
     today_calls: number
     today_tokens: number
     today_cost_usd: number
+    input_tokens?: number
+    cached_tokens?: number
+    today_input_tokens?: number
+    today_cached_tokens?: number
   }
 }
 
@@ -113,6 +125,38 @@ export function formatDuration(seconds: number | null | undefined): string {
 
 export const formatPercent = (fraction: number | null | undefined) =>
   `${Math.round((Number(fraction) || 0) * 100)}%`
+
+/** A measured prompt-cache reading, or `null` when there is nothing to measure. */
+export type CacheHit = { rate: number; cached: number; prompt: number }
+
+/**
+ * What fraction of a row's prompt tokens the provider served from its cache.
+ *
+ * `null` and `0%` are deliberately different answers. Null is "no billed prompt tokens in this
+ * window", which is what an unused rule and a pre-cache-accounting daemon both look like, and
+ * printing 0% for either would accuse a working cache of being broken. Zero is a real reading:
+ * prompt tokens were billed and none of them were cached.
+ *
+ * The denominator is prompt tokens, never `tokens` — output is not cacheable, so including it
+ * would cap the achievable rate below 100% by an amount that varies with reply length.
+ *
+ * One honest limit: a provider that caches implicitly but reports no `cached_tokens` reads as
+ * 0% here. The ledger records what the usage payload said and nothing more.
+ */
+export function cacheHit(
+  promptTokens: number | undefined,
+  cachedTokens: number | undefined,
+): CacheHit | null {
+  const prompt = Number(promptTokens || 0)
+  const cached = Number(cachedTokens || 0)
+  if (!Number.isFinite(prompt) || prompt <= 0) return null
+  return { rate: Math.min(1, Math.max(0, cached / prompt)), cached, prompt }
+}
+
+/** The cell's tooltip: the two exact figures the rounded percentage came from. */
+export const cacheHitDetail = (hit: CacheHit | null) =>
+  hit ? `${integer.format(hit.cached)} of ${integer.format(hit.prompt)} prompt tokens served from cache`
+      : 'no billed prompt tokens in this window'
 
 /**
  * Ranked spend rows with each one's share of the window.

@@ -24,7 +24,10 @@ from swe_mux.assistant import (
     AssistantStore,
     action_outcome_line,
     action_snapshot,
-    apply_note_edit,
+    apply_note_write,
+    note_headings,
+    note_outline,
+    note_page,
     output_looks_unhealthy,
     speech_form,
     split_sentences,
@@ -83,7 +86,10 @@ class LedgerStub:
 
 
 def tool_turn(
-    content: str = "", tool_calls: list[dict[str, Any]] | None = None
+    content: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
+    *,
+    cached_tokens: int = 0,
 ) -> OpenRouterToolTurn:
     calls = tool_calls or []
     message: dict[str, Any] = {"role": "assistant", "content": content}
@@ -101,6 +107,7 @@ def tool_turn(
         output_tokens=50,
         cost_usd=0.001,
         latency_ms=300,
+        cached_tokens=cached_tokens,
     )
 
 
@@ -211,13 +218,14 @@ def make_service(
     trust: str = "confirm",
     ledger: LedgerStub | None = None,
     actions: ActionStub | None = None,
+    model: str = "test/assistant-model",
 ) -> tuple[AssistantService, list[MuxEvent], QueueStub, dict[str, Any]]:
     config = load_config(tmp_path / "config.toml")
     update_config(
         config,
         {
             "assistant_enabled": enabled,
-            "assistant_model": "test/assistant-model",
+            "assistant_model": model,
             "assistant_trust_reversible": trust,
         },
     )
@@ -359,67 +367,236 @@ async def run_turn(service: AssistantService, text: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-async def test_apply_note_edit_covers_every_action_and_refusal() -> None:
-    body = "# Notes\nfirst item\nsecond item"
-    # insert_line: the text *becomes* that line (the live ask: "on the second
-    # line please add 'asdf'").
-    inserted = apply_note_edit(body, {"action": "insert_line", "line": 2, "text": "asdf"})
-    assert inserted.split("\n")[1] == "asdf"
-    assert inserted.split("\n")[2] == "first item"
-    # A line past the end appends rather than raising.
-    tail = apply_note_edit(body, {"action": "insert_line", "line": 99, "text": "end"})
-    assert tail.split("\n")[-1] == "end"
-    assert apply_note_edit(body, {"action": "append", "text": "new"}).endswith("new\n")
-    assert apply_note_edit(body, {"action": "prepend", "text": "top"}).startswith("top\n\n# Notes")
-    replaced = apply_note_edit(body, {"action": "replace_text", "find": "second", "text": "2nd"})
+NOTE_BODY = (
+    "# swe-mux Notes\n"
+    "\n"
+    "## Unsorted\n"
+    "\n"
+    "first item\n"
+    "\n"
+    "second item\n"
+    "\n"
+    "## Release\n"
+    "\n"
+    "ship it\n"
+)
+
+
+async def test_note_top_lands_under_the_leading_heading_run() -> None:
+    """The whole point: `top` means under the title, never above it.
+
+    A voice note that lands above `# swe-mux Notes` orphans the heading, which
+    is what the operator was seeing before this. The run is contiguous, so both
+    the H1 and the H2 immediately under it count as preamble.
+    """
+    written = apply_note_write(NOTE_BODY, {"text": "newest"})
+    assert written.startswith("# swe-mux Notes\n\n## Unsorted\n\nnewest\n\nfirst item")
+    # A heading with a paragraph under it ends the run: only the H1 is preamble.
+    split = apply_note_write("# Title\n\nintro\n\n## Second\n", {"text": "x"})
+    assert split.startswith("# Title\n\nx\n\nintro")
+
+
+async def test_top_heals_a_note_whose_title_earlier_writes_buried() -> None:
+    """The note this feature exists for opens with text above its own H1.
+
+    The old `prepend` wrote to byte 0, so three dictated items sit above
+    `# swe-mux Notes`. Respecting that as a lead paragraph would stack every new
+    write on the damage forever, and nobody writes prose above their own title on
+    purpose — so a level-1 heading near the start is a buried title, and `top`
+    goes under it.
+    """
+    buried = "stray item\n\nanother stray\n\n# swe-mux Notes\n\n## Unsorted\n\nold\n"
+    written = apply_note_write(buried, {"text": "newest"})
+    assert "## Unsorted\n\nnewest\n\nold" in written
+    assert written.startswith("stray item")  # the strays are not moved, only skipped
+    # The bounds are what keep this from firing on a genuinely prose-first note:
+    # a level-2 first heading is a section following an introduction...
+    assert apply_note_write("lead para\n\n## Later\n", {"text": "x"}).startswith("x\n\nlead para")
+    # ...and so is an H1 far enough down to be a chapter rather than a title.
+    deep = "\n".join(["prose"] * 60) + "\n\n# Appendix\n"
+    assert apply_note_write(deep, {"text": "x"}).startswith("x\n\nprose")
+
+
+async def test_note_headings_ignore_fenced_code() -> None:
+    """A `#` inside a fence is a comment, not the note's structure."""
+    fenced = "```\n# not a heading\n```\n\n# Real\n\nbody\n"
+    assert [item["text"] for item in note_headings(fenced)] == ["Real"]
+    # A mis-detected fence would make `# not a heading` the note's title and put
+    # the write inside someone's pasted code sample.
+    assert "# Real\n\nx\n\nbody" in apply_note_write(fenced, {"text": "x"})
+    # Tildes close only on tildes, and a shorter run does not close a longer one.
+    mixed = "~~~~\n# no\n```\n# still no\n~~~~\n\n# Real\n"
+    assert [item["text"] for item in note_headings(mixed)] == ["Real"]
+
+
+async def test_note_sections_resolve_or_refuse() -> None:
+    top = apply_note_write(NOTE_BODY, {"text": "x", "section": "release"})
+    assert "## Release\n\nx\n\nship it" in top
+    end = apply_note_write(NOTE_BODY, {"text": "x", "where": "end", "section": "Unsorted"})
+    # End of *that* section, before the next same-level heading — not the file.
+    assert "second item\n\nx\n\n## Release" in end
+    exact = apply_note_write(
+        "# T\n\n## Release\n\na\n\n## Release Notes\n\nb\n", {"text": "x", "section": "Release"}
+    )
+    assert "## Release\n\nx\n\na" in exact
+    with pytest.raises(AssistantError, match="matches 3 headings"):
+        apply_note_write(NOTE_BODY, {"text": "x", "section": "e"})
+    with pytest.raises(AssistantError, match="no section named"):
+        apply_note_write(NOTE_BODY, {"text": "x", "section": "Nowhere"})
+
+
+async def test_note_end_reaches_the_bottom_only_when_asked() -> None:
+    assert apply_note_write(NOTE_BODY, {"text": "x", "where": "end"}).endswith("ship it\n\nx\n")
+    # Default is top even for text an operator would call an "append".
+    assert not apply_note_write(NOTE_BODY, {"text": "x"}).endswith("x\n")
+
+
+async def test_note_anchor_and_line_positions() -> None:
+    after = apply_note_write(
+        NOTE_BODY, {"text": "x", "where": "after", "anchor": "first item"}
+    )
+    assert "first item\n\nx\n\nsecond item" in after
+    before = apply_note_write(
+        NOTE_BODY, {"text": "x", "where": "before", "anchor": "second item"}
+    )
+    assert "first item\n\nx\n\nsecond item" in before
+    # at_line is deliberately exact: the model picks the number off the numbered
+    # view, so the text has to *become* that line.
+    exact = apply_note_write(NOTE_BODY, {"text": "x", "where": "at_line", "line": 4})
+    assert exact.split("\n")[3] == "x"
+    assert apply_note_write(
+        NOTE_BODY, {"text": "x", "where": "at_line", "line": 999}
+    ).endswith("x\n")
+    replaced = apply_note_write(NOTE_BODY, {"where": "replace", "find": "second", "text": "2nd"})
     assert "2nd item" in replaced
+
+
+async def test_note_write_refusals() -> None:
     with pytest.raises(AssistantError, match="not found"):
-        apply_note_edit(body, {"action": "replace_text", "find": "absent", "text": "x"})
+        apply_note_write(NOTE_BODY, {"where": "replace", "find": "absent", "text": "x"})
     with pytest.raises(AssistantError, match="appears 2 times"):
-        apply_note_edit(body, {"action": "replace_text", "find": "item", "text": "x"})
+        apply_note_write(NOTE_BODY, {"where": "replace", "find": "item", "text": "x"})
+    with pytest.raises(AssistantError, match="appears 2 times"):
+        apply_note_write(NOTE_BODY, {"where": "after", "anchor": "item", "text": "x"})
     with pytest.raises(AssistantError, match="line number"):
-        apply_note_edit(body, {"action": "insert_line", "text": "x"})
+        apply_note_write(NOTE_BODY, {"where": "at_line", "text": "x"})
+    with pytest.raises(AssistantError, match="needs an `anchor`"):
+        apply_note_write(NOTE_BODY, {"where": "after", "text": "x"})
     with pytest.raises(AssistantError, match="must not be empty"):
-        apply_note_edit(body, {"action": "append", "text": "  "})
-    with pytest.raises(AssistantError, match="unknown note edit"):
-        apply_note_edit(body, {"action": "obliterate", "text": "x"})
+        apply_note_write(NOTE_BODY, {"text": "  "})
+    with pytest.raises(AssistantError, match="unknown note write position"):
+        apply_note_write(NOTE_BODY, {"where": "obliterate", "text": "x"})
 
 
-async def test_note_edit_is_reversible_and_routes_through_the_closure(tmp_path: Path) -> None:
-    edits: list[tuple[str, str | None, dict[str, Any]]] = []
+async def test_note_page_numbers_lines_and_reports_more() -> None:
+    page = note_page(NOTE_BODY, from_line=1, max_lines=3)
+    assert page["numbered"] == "1: # swe-mux Notes\n2: \n3: ## Unsorted"
+    assert page["total_lines"] == 12 and page["to_line"] == 3 and page["more"] is True
+    tail = note_page(NOTE_BODY, from_line=9, max_lines=50)
+    assert tail["numbered"].startswith("9: ## Release")
+    assert tail["more"] is False
+    assert note_outline(NOTE_BODY) == [
+        "1: # swe-mux Notes",
+        "3: ## Unsorted",
+        "9: ## Release",
+    ]
 
-    async def note_edit(
+
+async def test_note_write_is_reversible_and_routes_through_the_closure(tmp_path: Path) -> None:
+    writes: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    async def note_write(
         project_id: str, note: str | None, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        edits.append((project_id, note, payload))
+        writes.append((project_id, note, payload))
         return {"title": "swe-mux notes", "bytes": 42}
 
     call = {
         "id": "call-1",
         "type": "function",
         "function": {
-            "name": "edit_project_note",
+            "name": "write_project_note",
             "arguments": json.dumps(
-                {"project": "pixel lab", "action": "insert_line", "line": 2, "text": "asdf"}
+                {"project": "pixel lab", "where": "at_line", "line": 2, "text": "asdf"}
             ),
         },
     }
     service, _emitted, _queue, _effects = make_service(
         tmp_path, [tool_turn("", [call]), tool_turn("Inserted.")], trust="confirm"
     )
-    service.note_edit = note_edit
+    service.note_write = note_write
     try:
-        assert service._classify("edit_project_note", {}) == ACTION_CLASS_REVERSIBLE
+        assert service._classify("write_project_note", {}) == ACTION_CLASS_REVERSIBLE
         dialog_id = await run_turn(service, "add asdf on line 2 of the pixel lab notes")
         actions = await service.store.actions(dialog_id)
         assert actions[0]["status"] == "pending"  # confirm trust: nothing ran yet
         assert "line 2" in str(actions[0]["restatement"])
-        assert edits == []
+        assert writes == []
         outcome = await service.confirm_action(str(actions[0]["id"]))
         assert outcome["action"]["status"] == "executed"
-        assert edits[0][0] == "p1" and edits[0][2]["line"] == 2
+        assert writes[0][0] == "p1" and writes[0][2]["line"] == 2
     finally:
         service.store.close()
+
+
+async def test_the_turn_carries_a_numbered_view_of_the_note(tmp_path: Path) -> None:
+    """"Jot this down" is one tool call only if the model knows the note's shape.
+
+    Without this the model either burns a round trip reading the note or writes
+    blind, and writing blind is how text ended up above the note's own title.
+    The numbers are the ones `at_line` takes, so they have to be in the prompt.
+    """
+    long_note = NOTE_BODY + "\n".join(f"filler {index}" for index in range(90))
+
+    async def note_read(project_id: str, note: str | None) -> dict[str, Any]:
+        return {"title": "pixel lab notes", "markdown": long_note}
+
+    service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Noted.")])
+    service.note_read = note_read
+    try:
+        await run_turn(service, "what is in my notes")
+        provider = cast(Any, service.provider)
+        context = str(provider.calls[-1]["messages"][1]["content"])
+        assert "1: # swe-mux Notes" in context
+        assert "Outline: 1: # swe-mux Notes | 3: ## Unsorted | 9: ## Release" in context
+        # The tail is addressable rather than truncated into silence.
+        assert "read_project_note from_line=61" in context
+    finally:
+        service.store.close()
+
+
+async def test_a_missing_or_unreadable_note_never_fails_a_turn(tmp_path: Path) -> None:
+    async def note_read(project_id: str, note: str | None) -> dict[str, Any]:
+        raise OSError("the note is gone")
+
+    service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Fine.")])
+    service.note_read = note_read
+    try:
+        dialog_id = await run_turn(service, "hello")
+        messages = await service.store.messages(dialog_id)
+        assert [item["role"] for item in messages] == ["user", "assistant"]
+    finally:
+        service.store.close()
+
+
+async def test_note_card_says_END_when_the_write_goes_to_the_bottom() -> None:
+    """`end` is never inferred, so the one that is asked for has to be legible.
+
+    The spoken form drops the text preview for latency but keeps the position:
+    it is the detail the operator would otherwise have to undo by hand, and the
+    cancel window is only useful if the announcement names it.
+    """
+    from swe_mux.assistant import restate_action
+
+    end = {"project": "swe-mux", "where": "end", "text": "later"}
+    assert "very END" in restate_action("write_project_note", end)
+    assert "very END" in restate_action("write_project_note", end, spoken=True)
+    top = {"project": "swe-mux", "text": "later"}
+    assert restate_action("write_project_note", top).startswith("add at the top of")
+    scoped = {"project": "swe-mux", "where": "end", "section": "Future", "text": "later"}
+    assert "Future section" in restate_action("write_project_note", scoped)
+    # Retired kinds still sit in stored ledgers and must not degrade to a name.
+    assert "project note" in restate_action("append_project_note", top)
 
 
 async def test_split_sentences_and_speech_form() -> None:
@@ -1481,7 +1658,7 @@ def note_call(text: str = "ship the thing", call_id: str = "call-1") -> dict[str
         "id": call_id,
         "type": "function",
         "function": {
-            "name": "append_project_note",
+            "name": "write_project_note",
             "arguments": json.dumps({"project": "pixel lab", "text": text}),
         },
     }
@@ -1492,12 +1669,15 @@ def note_service(
 ) -> tuple[AssistantService, list[MuxEvent], list[str]]:
     appended: list[str] = []
 
-    async def note_append(project_id: str, text: str) -> dict[str, Any]:
+    async def note_write(
+        project_id: str, note: str | None, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        text = str(payload.get("text") or "")
         appended.append(f"{project_id}:{text}")
         return {"title": "pixel lab notes", "bytes": len(text)}
 
     service, emitted, _queue, _effects = make_service(tmp_path, turns, trust=trust)
-    service.note_append = note_append
+    service.note_write = note_write
     return service, emitted, appended
 
 
@@ -1560,7 +1740,9 @@ async def test_the_spoken_card_line_omits_the_text_it_is_about_to_write(
         assert body in str(card.payload["restatement"]), "the card still shows it"
         announcement = str(card.payload["announcement"])
         assert body not in announcement
-        assert announcement == "Append to the pixel lab project note. Confirm or cancel?"
+        assert announcement == (
+            "Add at the top of the pixel lab project's primary note. Confirm or cancel?"
+        )
     finally:
         service.store.close()
 
@@ -1812,7 +1994,7 @@ async def test_the_turn_prompt_carries_what_already_happened(tmp_path: Path) -> 
         context = str(provider.calls[-1]["messages"][1]["content"])
         assert "Actions already proposed in this conversation" in context
         assert "executed" in context
-        assert "append to the pixel lab project note" in context
+        assert "add at the top of the pixel lab project's primary note" in context
     finally:
         service.store.close()
 
@@ -1961,6 +2143,99 @@ async def test_the_model_is_told_how_many_rounds_remain(tmp_path: Path) -> None:
         assert "Tool rounds remaining" in str(second[-1]["content"])
         assert str(second[-1]["role"]) == "system"
         assert "Batch independent calls" in str(second[-1]["content"])
+    finally:
+        service.store.close()
+
+
+async def test_the_primer_carries_a_cache_breakpoint_for_a_provider_that_needs_one(
+    tmp_path: Path,
+) -> None:
+    """Anthropic caches nothing without an explicit breakpoint (Phase 15).
+
+    The marker goes on the primer because it is the one message identical on every
+    call this assistant ever makes, and the provider orders tool definitions ahead
+    of the system prompt - so one breakpoint covers both.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("", [dict(call, id="call-1")]), tool_turn("Done.")],
+        model="anthropic/claude-sonnet-4.5",
+    )
+    try:
+        await run_turn(service, "how is backend agent")
+        provider = cast(ToolProviderStub, service.provider)
+        primers = [str(json.dumps(item["messages"][0])) for item in provider.calls]
+        assert len(primers) == 2
+        first = provider.calls[0]["messages"][0]
+        assert first["role"] == "system"
+        assert isinstance(first["content"], list)
+        assert first["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert first["content"][-1]["text"].startswith("You are Mux")
+        # The whole point: byte-identical on every round, or each round is a cache
+        # write rather than a read.
+        assert len(set(primers)) == 1
+        # And the budget line stays trailing: it is appended after the first round,
+        # so every later round appends rather than shifting the prefix.
+        for item in provider.calls[1:]:
+            assert "Tool rounds remaining" in str(item["messages"][-1]["content"])
+    finally:
+        service.store.close()
+
+
+async def test_an_implicit_caching_model_still_sends_a_plain_primer(tmp_path: Path) -> None:
+    # The marked shape is only ever sent where it is understood; every other
+    # provider keeps the request it has always received.
+    service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Done.")])
+    try:
+        await run_turn(service, "hello")
+        provider = cast(ToolProviderStub, service.provider)
+        primer = provider.calls[0]["messages"][0]
+        assert isinstance(primer["content"], str)
+        assert primer["content"].startswith("You are Mux")
+    finally:
+        service.store.close()
+
+
+async def test_cached_prompt_tokens_are_recorded_per_call_in_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """Per call, not per turn: the first round writes the cache and the rest read it.
+
+    A turn-level figure would average the write into the hit rate and hide whether
+    the breakpoint is working at all.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    ledger = LedgerStub()
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [
+            tool_turn("", [dict(call, id="call-1")], cached_tokens=0),
+            tool_turn("Done.", cached_tokens=180),
+        ],
+        ledger=ledger,
+        model="anthropic/claude-sonnet-4.5",
+    )
+    try:
+        await run_turn(service, "how is backend agent")
+        assert [row["cached_tokens"] for row in ledger.spend_rows] == [0, 180]
+        assert [row["input_tokens"] for row in ledger.spend_rows] == [200, 200]
+        # The turn's own usage carries the total, so a reader of one turn sees it too.
+        assert emitted[-1].payload["usage"]["cached_tokens"] == 180
     finally:
         service.store.close()
 

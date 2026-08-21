@@ -1737,7 +1737,7 @@ body {
 .data-table td small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 /* The rate cluster: three numbers that only mean anything beside their own names. */
 .telemetry-rates{display:flex;gap:12px;justify-content:flex-end}.telemetry-rates>span{display:grid;justify-items:end}
-.cost-summary{grid-template-columns:repeat(4,minmax(0,1fr))}.cost-summary article{gap:3px}.cost-summary strong{font-size:15px}.cost-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.cost-summary small.warn{color:var(--amber)}
+.cost-summary{grid-template-columns:repeat(5,minmax(0,1fr))}.cost-summary article{gap:3px}.cost-summary strong{font-size:15px}.cost-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.cost-summary small.warn{color:var(--amber)}
 .automation-cost>.usage-table{margin-top:10px}
 .cost-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 /* Rank is the point of this table, and a column of near-identical small numbers does not
@@ -1774,6 +1774,9 @@ body {
 .data-table td>*{grid-column:2}
 .telemetry-rates{justify-content:flex-start}.telemetry-rates>span{display:flex;gap:5px}
 .cost-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+/* Five tiles over two columns leaves one alone on the last row; it spans rather
+   than sitting in a half-width cell beside empty space. */
+.cost-summary article:last-child:nth-child(odd){grid-column:1/-1}
 .cost-name{gap:5px}
 /* The panel subtitle is context, not content, and three wrapped lines of it at the top of a
    phone screen costs a row of the table underneath. */
@@ -2635,6 +2638,15 @@ body {
 .assistant-panel.disabled{min-height:0;display:block;padding:8px;color:var(--muted)}
 .assistant-log{min-height:220px;overflow:auto;overscroll-behavior:contain;display:grid;align-content:start;gap:6px;padding:6px;border:1px solid var(--line);background:var(--bg)}
 .assistant-empty{margin:0;color:var(--muted);font:10px/1.5 'JetBrains Mono'}
+/* The conversation the last "new conversation" cleared. Collapsed and muted so
+   it never competes with the live dialog, but present, because it is the reason
+   clearing context needs no confirmation. */
+.assistant-previous{display:grid;gap:6px;padding-bottom:4px;border-bottom:1px dashed var(--line)}
+.assistant-previous>summary{color:var(--muted);font:9px/1.4 'JetBrains Mono';cursor:pointer;list-style:none}
+.assistant-previous>summary::-webkit-details-marker{display:none}
+.assistant-previous>summary::before{content:'▸ '}
+.assistant-previous[open]>summary::before{content:'▾ '}
+.assistant-previous .assistant-message{opacity:.65}
 .assistant-message{display:grid;gap:2px;padding:5px 7px;border-left:2px solid var(--line);background:var(--panel)}
 .assistant-message.user{border-left-color:var(--blue,#7aa2f7)}
 .assistant-message.assistant{border-left-color:var(--green,#8bd450)}

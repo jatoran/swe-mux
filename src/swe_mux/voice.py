@@ -825,6 +825,57 @@ class VoiceService:
         log.info("voice barge-in %s", json.dumps(sample, sort_keys=True))
         return sample
 
+    def record_deferral_diagnostic(self, raw: Any) -> dict[str, Any]:
+        """Durably log one unfinished-utterance deferral and how it resolved.
+
+        The client's completeness heuristic holds an utterance that ends on a
+        dangling conjunction, preposition, or article for exactly one patience
+        extension instead of dispatching it as an assistant turn. That rule set
+        is a word list, and a word list is only tunable against evidence, so
+        every deferral lands here with the token that triggered it and the
+        outcome that judges it: `merged` means the operator really was
+        mid-sentence, while `submitted` means they were finished and the trigger
+        cost them one extension - the false-positive rate is the ratio of the
+        two. `held` (folded into a brainstorm hold) and `discarded` (Talk
+        stopped, standby, or cancel) are neither, and are counted separately so
+        they cannot be mistaken for either verdict.
+        """
+        if not isinstance(raw, dict):
+            raise VoiceError("deferral diagnostic must be an object")
+        outcome = str(raw.get("outcome") or "")
+        if outcome not in {"merged", "submitted", "discarded", "held"}:
+            raise VoiceError("deferral outcome must be merged, submitted, discarded, or held")
+        kind = str(raw.get("kind") or "")
+        if kind not in {"conjunction", "preposition", "article"}:
+            raise VoiceError("deferral kind must be conjunction, preposition, or article")
+        # The trigger is a transcript fragment, so it is narrowed to what a word
+        # can be rather than trusted: this string is written to the daemon log,
+        # and a log line is a place a control character does not belong.
+        trigger = "".join(
+            character
+            for character in str(raw.get("trigger") or "").strip().lower()[:48]
+            if character.isalnum() or character in {" ", "'", "-"}
+        ).strip()
+        if not trigger:
+            raise VoiceError("deferral trigger must name the dangling token")
+
+        def bounded_int(value: Any, ceiling: int) -> int:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                return 0
+            return max(0, min(number, ceiling))
+
+        sample: dict[str, Any] = {
+            "outcome": outcome,
+            "kind": kind,
+            "trigger": trigger,
+            "words": bounded_int(raw.get("words"), 10_000),
+            "held_ms": bounded_int(raw.get("heldMs"), 3_600_000),
+        }
+        log.info("voice utterance deferral %s", json.dumps(sample, sort_keys=True))
+        return sample
+
     def record_capture_diagnostic(self, raw: Any) -> dict[str, Any]:
         """Durably log one browser-side capture stall or recovery.
 

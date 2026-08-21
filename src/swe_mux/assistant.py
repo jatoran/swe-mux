@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from .config import Config
 from .event_bus import EventBus
 from .leaf_names import suggest_folder_name, validate_leaf_name
-from .openrouter import OpenRouterClient, OpenRouterError
+from .openrouter import OpenRouterClient, OpenRouterError, cache_stable_message
 from .path_identity import same_path
 from .projects import RESERVED_PROJECT_FOLDER_NAMES
 from .session import TERMINAL_SESSION_STATES
@@ -113,8 +113,7 @@ _STREAM_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 # second identical note append writes the paragraph twice; a second identical
 # spawn is a thing operators genuinely ask for, so it stays unguarded.
 DUPLICATE_GUARDED_KINDS = {
-    "append_project_note",
-    "edit_project_note",
+    "write_project_note",
     "create_project",
     "send_to_session",
 }
@@ -156,8 +155,7 @@ CLIENT_EXECUTED_KINDS = {
 # can tell "one card and nothing else" — where the card says it all — from a
 # turn that also did work the operator has no other way to hear about.
 MUTATION_KINDS = {
-    "append_project_note",
-    "edit_project_note",
+    "write_project_note",
     "send_to_session",
     "spawn_session",
     "interrupt_session",
@@ -228,11 +226,18 @@ clarifying question. Every status figure you state must come from the workspace 
 a tool result, never from memory; include the provided age qualifiers when a reading is stale.
 
 Use tools for anything you cannot answer from the snapshot. Refer to sessions and projects \
-by their names exactly as the snapshot spells them. Project notes are fully editable: \
-append, prepend, insert at a specific line, or replace a unique text span \
-(edit_project_note); read a note first when a precise position matters. If a tool reports \
-ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on the device the \
-operator is speaking through; if none is connected the tool will say so.
+by their names exactly as the snapshot spells them. If a tool reports ambiguity, ask the \
+operator to choose. UI commands (focus, open tabs) run on the device the operator is \
+speaking through; if none is connected the tool will say so.
+
+Notes are a stack, not a log: write_project_note defaults to the top, under the note's \
+leading headings, and that is what "add", "jot", "note this down" and even "append" mean \
+from an operator. Never pass where="end" unless they explicitly said the end or the bottom. \
+When they name a place — a section, "under Release", "next to the Tailscale bit" — use \
+`section`, or `after`/`before` with a unique anchor span, or `at_line` with a number read \
+off the numbered note view you are given. That view carries the note's outline and its \
+first lines; call read_project_note with `from_line` when the place they mean is further \
+down, and read it before writing whenever the position has to be exact.
 
 A turn has a limited number of tool rounds and you are told how many remain. Spend them on \
 work, not on repetition: everything a tool already returned this turn is still in front of \
@@ -240,6 +245,12 @@ you, and the action ledger lists what earlier turns did, so do not read the same
 twice. When a request names several targets — three sessions, two notes — emit all the \
 independent tool calls in one response rather than one per round. If the rounds run low, \
 stop starting new work and say plainly what is done and what is not.
+
+The operator is usually speaking, and speech arrives in breaths. If a turn reads as an \
+unfinished thought - it stops mid-clause, or it is context with no request in it yet - offer \
+once, in one short sentence, to hold while they finish: they can say "hold on" to keep talking \
+and "go ahead" when they want an answer. Suggest it, never assume it. Still answer whatever \
+they did say in the same reply, and do not repeat the offer later in the conversation.
 
 spawn_session has two prompt parameters and they are not interchangeable. stage_text \
 leaves the prompt waiting in the new session's composer WITHOUT sending it, so the \
@@ -322,51 +333,336 @@ CREATE INDEX IF NOT EXISTS idx_assistant_actions_dialog
 """
 
 
-NOTE_EDIT_ACTIONS = ("append", "prepend", "insert_line", "replace_text")
+# Where a note write lands. `top` is the default and the only one an operator
+# gets without asking for it by name: a note is a stack of things you thought
+# of, so the newest belongs where it will be read first. `end` exists because
+# "put this at the bottom of Future" is a real request, but it is never inferred
+# — see `NOTE_WRITE_TOOL_DESCRIPTION` and `restate_action`, which say the word
+# END on the card so an unrequested one is visible before it runs.
+NOTE_WRITE_POSITIONS = ("top", "end", "after", "before", "at_line", "replace")
+
+NOTE_WRITE_TOOL_DESCRIPTION = (
+    "Write text into a project note. `where` defaults to `top`, which puts the text "
+    "at the top of the note UNDER its leading headings — that is what an operator "
+    "means by add, jot, note this down, and by append. Do NOT use `end` unless they "
+    "explicitly asked for the end or the bottom of something. `section` writes under "
+    "a named heading (with `top` or `end`); `after`/`before` sit beside a unique "
+    "`anchor` span; `at_line` makes the text become a 1-indexed line from the "
+    "numbered note view; `replace` swaps a unique `find` span. Reversible; may need "
+    "confirmation."
+)
+
+_ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:\s|$)")
+_CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# How much of the note travels in every turn's context, and the ceiling on one
+# on-demand page. The early chunk is what makes an insert point choosable
+# without a tool round trip; the outline is what makes the rest addressable.
+NOTE_CONTEXT_LINES = 60
+# How far into a note a level-1 heading still counts as a buried title rather
+# than a section that follows an introduction. See `_stranded_title`.
+NOTE_TITLE_SEARCH_LINES = 40
+NOTE_CONTEXT_LINE_CHARS = 200
+NOTE_OUTLINE_LIMIT = 40
+NOTE_PAGE_MAX_LINES = 240
+NOTE_PAGE_MAX_CHARS = 8_000
 
 
-def apply_note_edit(markdown: str, payload: dict[str, Any]) -> str:
-    """Apply one granular edit to a note body; raises AssistantError on refusal.
+def _fence_state(line: str, marker: str | None) -> str | None:
+    """Track fenced-code state across one line.
 
-    Pure so the transform is testable without a project on disk. Line numbers
-    are 1-indexed over the note body as the editor shows it; `insert_line` makes
-    the text *become* that line. `replace_text` demands a unique match — a find
-    string that appears three times is an ambiguity to answer, never a guess.
+    A `#` inside a fenced block is not a heading, and a note that pastes a shell
+    transcript is exactly where that bites: without this the anchor scanner
+    would treat a comment line as the note's structure and insert into the
+    middle of someone's code sample.
     """
-    action = str(payload.get("action") or "append")
+    match = _CODE_FENCE.match(line)
+    if match is None:
+        return marker
+    token = match.group(1)
+    if marker is None:
+        return token
+    # A fence closes only on the same character, at least as long as the opener.
+    if token[0] == marker[0] and len(token) >= len(marker):
+        return None
+    return marker
+
+
+def note_headings(markdown: str) -> list[dict[str, Any]]:
+    """Every ATX heading in a note body, with 1-indexed lines and levels."""
+    out: list[dict[str, Any]] = []
+    marker: str | None = None
+    for index, line in enumerate(markdown.split("\n")):
+        previous = marker
+        marker = _fence_state(line, marker)
+        if previous is not None or marker is not None:
+            continue
+        match = _ATX_HEADING.match(line)
+        if match is None:
+            continue
+        out.append(
+            {
+                "line": index + 1,
+                "level": len(match.group(1)),
+                "text": line.strip().lstrip("#").strip(),
+            }
+        )
+    return out
+
+
+def _heading_levels(markdown: str) -> dict[int, int]:
+    """0-indexed line -> heading level, for the scanners below."""
+    return {int(item["line"]) - 1: int(item["level"]) for item in note_headings(markdown)}
+
+
+def _stranded_title(lines: list[str], levels: dict[int, int], start: int) -> int | None:
+    """The index of an H1 that earlier writes buried under orphaned text.
+
+    A note whose body opens with prose usually has a lead paragraph to respect.
+    But the note this feature exists for opens with three dictated items sitting
+    *above* `# swe-mux Notes`, because the old `prepend` wrote to byte 0 — and if
+    `top` respects that, every new write stacks on the damage forever.
+
+    The discriminator is that nobody writes prose above their own H1 on purpose:
+    a level-1 heading close to the start, with nothing but non-heading text above
+    it, is a title that got buried rather than a section that follows an
+    introduction. The level and distance bounds are what keep this from firing on
+    an all-prose note whose only heading is a `## Later` near the bottom.
+    """
+    for index in range(start, min(len(lines), start + NOTE_TITLE_SEARCH_LINES)):
+        level = levels.get(index)
+        if level is None:
+            continue
+        return index if level == 1 else None
+    return None
+
+
+def _consume_heading_run(lines: list[str], levels: dict[int, int], start: int) -> int:
+    """Index one past a contiguous run of headings beginning at or after `start`.
+
+    "Contiguous" tolerates blank lines between headings and nothing else, which
+    is what makes `# swe-mux Notes` / `## Unsorted` one preamble and a heading
+    with a paragraph under it a section boundary. Returns `start` unchanged when
+    the first non-blank line is not a heading and no buried title explains why —
+    a note that genuinely opens with prose has no preamble to slot under, and
+    inventing one would bury the operator's own lead paragraph.
+    """
+    index = start
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index >= len(lines) or index not in levels:
+        # Only at the document top: inside a section the range is already cut at
+        # the next same-or-shallower heading, so there is no title to strand.
+        buried = _stranded_title(lines, levels, index) if start == 0 else None
+        if buried is None:
+            return start
+        index = buried
+    last = index
+    probe = index + 1
+    while probe < len(lines):
+        if not lines[probe].strip():
+            probe += 1
+            continue
+        if probe in levels:
+            last = probe
+            probe += 1
+            continue
+        break
+    return last + 1
+
+
+def resolve_note_section(markdown: str, section: str) -> dict[str, Any]:
+    """Locate one section by heading text; raises AssistantError on ambiguity.
+
+    Exact (case-folded) matches win outright, so a note holding both `## Release`
+    and `## Release Notes` still resolves "Release". Only when nothing matches
+    exactly does a substring match apply, and a substring that hits twice is an
+    ambiguity to answer rather than a coin flip — the same rule `replace`
+    already enforces on its find string.
+    """
+    wanted = " ".join(section.split()).casefold()
+    headings = note_headings(markdown)
+    if not wanted:
+        raise AssistantError("the section name must not be empty")
+    if not headings:
+        raise AssistantError("this note has no headings to target by section")
+    exact = [item for item in headings if str(item["text"]).casefold() == wanted]
+    matches = exact or [
+        item for item in headings if wanted in str(item["text"]).casefold()
+    ]
+    if not matches:
+        names = ", ".join(str(item["text"]) for item in headings[:NOTE_OUTLINE_LIMIT])
+        raise AssistantError(f'no section named "{section[:60]}"; this note has: {names}')
+    if len(matches) > 1:
+        lines = ", ".join(f'"{item["text"]}" (line {item["line"]})' for item in matches[:6])
+        raise AssistantError(
+            f'"{section[:60]}" matches {len(matches)} headings: {lines} — name one exactly'
+        )
+    found = matches[0]
+    total = len(markdown.split("\n"))
+    level = int(found["level"])
+    end = total
+    for item in headings:
+        if int(item["line"]) > int(found["line"]) and int(item["level"]) <= level:
+            end = int(item["line"]) - 1
+            break
+    return {
+        "heading_line": int(found["line"]),
+        "text": str(found["text"]),
+        "level": level,
+        # 0-indexed half-open body range, excluding the heading line itself.
+        "body_start": int(found["line"]),
+        "body_end": end,
+    }
+
+
+def _unique_span(markdown: str, needle: str, label: str) -> int:
+    count = markdown.count(needle)
+    if count == 0:
+        raise AssistantError(f'"{needle[:80]}" was not found in the note')
+    if count > 1:
+        raise AssistantError(
+            f'"{needle[:80]}" appears {count} times; give a longer, unique span for {label}'
+        )
+    return markdown.index(needle)
+
+
+def _splice(lines: list[str], index: int, text: str) -> list[str]:
+    """Insert a paragraph at a line index, keeping exactly one blank line each side.
+
+    The seam is normalized rather than the whole note: a dictated paragraph that
+    glues onto the next one is the difference between a note and a wall, and
+    reflowing anything further would rewrite text the operator did not touch.
+    """
+    block = text.strip().split("\n")
+    before = lines[:index]
+    after = lines[index:]
+    while before and not before[-1].strip():
+        before.pop()
+    while after and not after[0].strip():
+        after.pop(0)
+    result: list[str] = []
+    if before:
+        result.extend(before)
+        result.append("")
+    result.extend(block)
+    if after:
+        result.append("")
+        result.extend(after)
+    return result
+
+
+def apply_note_write(markdown: str, payload: dict[str, Any]) -> str:
+    """Apply one note write; raises AssistantError on refusal.
+
+    Pure so the transform is testable without a project on disk. The whole point
+    of this function is that `top` means *the top an operator would point at* —
+    under the note's leading heading run, not above the title — because a voice
+    note that lands above `# swe-mux Notes` orphans the heading and reads as a
+    bug every single time.
+    """
+    where = str(payload.get("where") or "top")
     text = str(payload.get("text") or "")
-    if action not in NOTE_EDIT_ACTIONS:
-        raise AssistantError(f"unknown note edit action {action}")
-    if not text.strip() and action != "replace_text":
-        raise AssistantError("the edit text must not be empty")
-    if action == "append":
-        base = markdown.rstrip()
-        return f"{base}\n\n{text.strip()}\n" if base else f"{text.strip()}\n"
-    if action == "prepend":
-        rest = markdown.lstrip("\n")
-        return f"{text.strip()}\n\n{rest}" if rest else f"{text.strip()}\n"
-    if action == "insert_line":
+    section = str(payload.get("section") or "").strip()
+    if where not in NOTE_WRITE_POSITIONS:
+        raise AssistantError(f"unknown note write position {where}")
+    if not text.strip() and where != "replace":
+        raise AssistantError("the text must not be empty")
+    if where == "replace":
+        find = str(payload.get("find") or "")
+        if not find:
+            raise AssistantError("replace needs the text to find")
+        _unique_span(markdown, find, "replace")
+        return markdown.replace(find, text)
+
+    lines = markdown.split("\n")
+    if where in {"after", "before"}:
+        anchor = str(payload.get("anchor") or "")
+        if not anchor:
+            raise AssistantError(f"{where} needs an `anchor` — a unique span to sit beside")
+        offset = _unique_span(markdown, anchor, where)
+        start_line = markdown.count("\n", 0, offset)
+        end_line = start_line + anchor.count("\n")
+        index = end_line + 1 if where == "after" else start_line
+        return "\n".join(_splice(lines, index, text)).rstrip("\n") + "\n"
+
+    if where == "at_line":
         try:
             line = int(payload.get("line") or 0)
         except (TypeError, ValueError):
             line = 0
         if line < 1:
-            raise AssistantError("insert_line needs a 1-indexed line number")
-        lines = markdown.split("\n")
+            raise AssistantError("at_line needs a 1-indexed line number")
+        # Deliberately exact, unlike every other position: the model picks this
+        # number off the numbered view it was handed, so the text has to *become*
+        # that line. Pick a blank-line boundary and the paragraph still breathes.
         index = min(line - 1, len(lines))
-        lines[index:index] = [text]
-        return "\n".join(lines)
-    find = str(payload.get("find") or "")
-    if not find:
-        raise AssistantError("replace_text needs the text to find")
-    count = markdown.count(find)
-    if count == 0:
-        raise AssistantError(f'"{find[:80]}" was not found in the note')
-    if count > 1:
-        raise AssistantError(
-            f'"{find[:80]}" appears {count} times; give a longer, unique span'
-        )
-    return markdown.replace(find, text)
+        lines[index:index] = text.split("\n")
+        return "\n".join(lines).rstrip("\n") + "\n"
+
+    levels = _heading_levels(markdown)
+    if section:
+        found = resolve_note_section(markdown, section)
+        body_start = int(found["body_start"])
+        body_end = int(found["body_end"])
+        if where == "top":
+            index = _consume_heading_run(lines[:body_end], levels, body_start)
+        else:
+            index = body_end
+            while index > body_start and not lines[index - 1].strip():
+                index -= 1
+    elif where == "top":
+        index = _consume_heading_run(lines, levels, 0)
+    else:
+        index = len(lines)
+        while index > 0 and not lines[index - 1].strip():
+            index -= 1
+    return "\n".join(_splice(lines, index, text)).rstrip("\n") + "\n"
+
+
+def note_outline(markdown: str) -> list[str]:
+    """The note's headings as `line: ## text`, for context and error messages."""
+    return [
+        f"{item['line']}: {'#' * int(item['level'])} {item['text']}"
+        for item in note_headings(markdown)[:NOTE_OUTLINE_LIMIT]
+    ]
+
+
+def note_page(
+    markdown: str, *, from_line: int = 1, max_lines: int = NOTE_CONTEXT_LINES
+) -> dict[str, Any]:
+    """A line-numbered window onto a note body.
+
+    Numbered because a position is only choosable if it is nameable: handed a
+    numbered early chunk plus the outline, the model can pick `at_line` or a
+    section without spending a tool round trip discovering the note's shape,
+    and can ask for a later window when the early one is not where the text
+    belongs.
+    """
+    lines = markdown.split("\n")
+    total = len(lines)
+    start = max(1, int(from_line or 1))
+    count = max(1, min(int(max_lines or NOTE_CONTEXT_LINES), NOTE_PAGE_MAX_LINES))
+    window = lines[start - 1 : start - 1 + count]
+    rendered: list[str] = []
+    budget = NOTE_PAGE_MAX_CHARS
+    shown = 0
+    for offset, line in enumerate(window):
+        trimmed = line[:NOTE_CONTEXT_LINE_CHARS]
+        if len(line) > NOTE_CONTEXT_LINE_CHARS:
+            trimmed += "…"
+        entry = f"{start + offset}: {trimmed}"
+        if budget - len(entry) < 0:
+            break
+        budget -= len(entry) + 1
+        rendered.append(entry)
+        shown += 1
+    return {
+        "total_lines": total,
+        "from_line": start,
+        "to_line": start + shown - 1 if shown else start - 1,
+        "more": start + shown - 1 < total,
+        "numbered": "\n".join(rendered),
+    }
 
 
 class _SentenceStreamer:
@@ -702,23 +998,47 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
                 "its history and settings)"
             )
         return f'create the new project "{name}"{where}{git_note}{revive}'
-    if kind == "append_project_note":
-        return f"append to the {target} project note:{preview}" if preview else (
-            f"append to the {target} project note"
-        )
-    if kind == "edit_project_note":
+    if kind == "write_project_note":
         note = str(arguments.get("note") or "primary")
-        action = str(arguments.get("action") or "append")
-        where = f"the {target} project's {note} note"
-        if action == "insert_line":
-            return f"insert at line {arguments.get('line')} of {where}:{preview}" if preview \
-                else f"insert a line into {where}"
-        if action == "replace_text":
+        where = str(arguments.get("where") or "top")
+        section = str(arguments.get("section") or "").strip()
+        destination = f"the {target} project's {note} note"
+        # The position is the one detail the spoken form keeps. It is what the
+        # operator would have to undo by hand, and "at the very END" is exactly
+        # the choice they need to hear in time to cancel it.
+        if where == "replace":
             find = str(arguments.get("find") or "")[:80]
             if spoken:
-                return f"replace a span in {where}"
-            return f'replace "{find}" in {where} with{preview}'
-        return f"{action} to {where}:{preview}" if preview else f"{action} to {where}"
+                return f"replace a span in {destination}"
+            return f'replace "{find}" in {destination} with{preview}'
+        if where == "at_line":
+            place = f"at line {arguments.get('line')} of {destination}"
+        elif where in {"after", "before"}:
+            anchor = str(arguments.get("anchor") or "")[:60]
+            place = (
+                f"{where} a span in {destination}"
+                if spoken
+                else f'{where} "{anchor}" in {destination}'
+            )
+        elif where == "end":
+            place = (
+                f"at the very END of {destination}'s {section} section"
+                if section
+                else f"at the very END of {destination}"
+            )
+        else:
+            place = (
+                f"at the top of {destination}'s {section} section"
+                if section
+                else f"at the top of {destination}"
+            )
+        return f"add {place}:{preview}" if preview else f"add {place}"
+    # Retired kinds still sit in stored ledgers; a card the operator already
+    # confirmed should not degrade into a bare tool name months later.
+    if kind in {"append_project_note", "edit_project_note"}:
+        return f"write to the {target} project note:{preview}" if preview else (
+            f"write to the {target} project note"
+        )
     if kind == "interrupt_session":
         return f"interrupt the agent in {target}"
     if kind == "end_session":
@@ -857,9 +1177,8 @@ class AssistantService:
         end_op: Callable[[Session, str], Awaitable[Any]],
         history_search: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         note_read: Callable[[str, str | None], Awaitable[dict[str, Any]]] | None = None,
-        note_append: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
         note_list: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
-        note_edit: Callable[
+        note_write: Callable[
             [str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]
         ] | None = None,
         create_project_op: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -890,8 +1209,7 @@ class AssistantService:
         self.history_search = history_search
         self.note_read = note_read
         self.note_list = note_list
-        self.note_edit = note_edit
-        self.note_append = note_append
+        self.note_write = note_write
         self.create_project_op = create_project_op
         self.action_catalog = action_catalog
         self.action_preview = action_preview
@@ -1304,17 +1622,63 @@ class AssistantService:
             + "\n".join(lines[-CONTEXT_ACTION_LIMIT:])
         )
 
+    async def _note_context(self, project: Any) -> str:
+        """The primary note's outline and opening lines, numbered, for one project.
+
+        Carried every turn rather than fetched on demand because the common
+        request — "jot this down" — is one tool call only if the model already
+        knows the note's shape. Without it the model either burns a round trip
+        reading the note or writes blind, and writing blind is how text ends up
+        above the note's own title. Scoped to the focused session's project, or
+        to the only project when there is exactly one; guessing among several
+        would hand the model an outline for a note the operator did not mean.
+        """
+        if self.note_read is None:
+            return ""
+        if project is None:
+            ordered = self.projects.ordered_projects()
+            if len(ordered) != 1:
+                return ""
+            project = ordered[0]
+        try:
+            note = await self.note_read(project.id, None)
+        except Exception:  # noqa: BLE001 - context must never fail a turn
+            log.debug("note context read failed", exc_info=True)
+            return ""
+        if note.get("error") or not str(note.get("markdown") or "").strip():
+            return ""
+        markdown = str(note["markdown"])
+        page = note_page(markdown, from_line=1, max_lines=NOTE_CONTEXT_LINES)
+        outline = note_outline(markdown)
+        lines = [
+            f"The {project.name} project's primary note "
+            f'("{note.get("title")}", {page["total_lines"]} lines), as numbered lines. '
+            "Line numbers are the ones write_project_note's at_line takes; "
+            "read_project_note with from_line pages further down.",
+        ]
+        if outline:
+            lines.append("Outline: " + " | ".join(outline))
+        lines.append(page["numbered"])
+        if page["more"]:
+            lines.append(
+                f"… lines {page['to_line'] + 1}-{page['total_lines']} not shown; "
+                f"read_project_note from_line={page['to_line'] + 1} for more."
+            )
+        return "\n".join(lines)
+
     async def _context_message(
         self, client_context: dict[str, Any], dialog_id: str = ""
     ) -> str:
         snapshot = await self.fleet_snapshot()
         focused = str(client_context.get("focused_session_id") or "")
         focused_name = None
+        focused_project = None
         if focused:
             session = self.sessions.sessions.get(focused)
             if session is not None:
                 names = await self._display_names([session])
                 focused_name = names.get(session.record.id, session.record.name)
+                focused_project = self.projects.projects.get(session.record.project_id)
         commands = client_context.get("commands")
         command_lines: list[str] = []
         if isinstance(commands, list):
@@ -1327,6 +1691,9 @@ class AssistantService:
         ]
         if focused_name:
             parts.append(f"The operator's focused session is: {focused_name}")
+        note_view = await self._note_context(focused_project)
+        if note_view:
+            parts.append(note_view)
         parts.append(
             "run_ui_command executes on the operator's device through the workspace's "
             "deterministic spoken grammar. Reliable command shapes: 'open project "
@@ -1401,12 +1768,24 @@ class AssistantService:
             ),
             tool(
                 "read_project_note",
-                "Read one of a project's notes; omit `note` for the primary note.",
+                "Read one of a project's notes as numbered lines, plus its heading "
+                "outline. Omit `note` for the primary note; pass `from_line` to page "
+                "further down a long note.",
                 {
                     "project": project_property,
                     "note": {
                         "type": "string",
                         "description": "The note's title from list_project_notes",
+                    },
+                    "from_line": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "1-indexed first line to return (default 1)",
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": f"Lines to return, up to {NOTE_PAGE_MAX_LINES}",
                     },
                 },
                 ["project"],
@@ -1419,35 +1798,45 @@ class AssistantService:
                 [],
             ),
             tool(
-                "append_project_note",
-                "Append text to a project's primary note. Reversible; may need confirmation.",
-                {"project": project_property, "text": {"type": "string"}},
-                ["project", "text"],
-            ),
-            tool(
-                "edit_project_note",
-                "Granular edit to a project note: append, prepend, insert at a "
-                "1-indexed line (the text becomes that line), or replace a unique "
-                "text span. Reversible; may need confirmation.",
+                "write_project_note",
+                NOTE_WRITE_TOOL_DESCRIPTION,
                 {
                     "project": project_property,
                     "note": {
                         "type": "string",
                         "description": "Note title; omit for the primary note",
                     },
-                    "action": {"type": "string", "enum": list(NOTE_EDIT_ACTIONS)},
+                    "where": {
+                        "type": "string",
+                        "enum": list(NOTE_WRITE_POSITIONS),
+                        "description": (
+                            "Default top. Use end ONLY when the operator said the "
+                            "end or the bottom."
+                        ),
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": (
+                            "Heading to write under, from the note outline; "
+                            "combines with top or end"
+                        ),
+                    },
                     "line": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "For insert_line: the line the text becomes",
+                        "description": "For at_line: the line the text becomes",
+                    },
+                    "anchor": {
+                        "type": "string",
+                        "description": "For after/before: a unique span to sit beside",
                     },
                     "find": {
                         "type": "string",
-                        "description": "For replace_text: a unique span to replace",
+                        "description": "For replace: a unique span to replace",
                     },
                     "text": {"type": "string"},
                 },
-                ["project", "action", "text"],
+                ["project", "text"],
             ),
             tool(
                 "send_to_session",
@@ -1638,7 +2027,7 @@ class AssistantService:
         # registration tombstone that deletes nothing on disk, and the folder the
         # tool minted inside the configured parent is empty.
         if kind in {
-            "append_project_note", "edit_project_note", "spawn_session", "type_into_session",
+            "write_project_note", "spawn_session", "type_into_session",
             "create_project",
         }:
             return ACTION_CLASS_REVERSIBLE
@@ -2010,10 +2399,7 @@ class AssistantService:
             # confirms names the session the way their screen does.
             names = await self._display_names([session])
             arguments["session"] = names.get(session.record.id, session.record.name)
-        if kind in {
-            "spawn_session", "append_project_note", "edit_project_note",
-            "run_project_action",
-        }:
+        if kind in {"spawn_session", "write_project_note", "run_project_action"}:
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
@@ -2036,19 +2422,28 @@ class AssistantService:
             refusal = await self._preflight_run_action(arguments)
             if refusal is not None:
                 return refusal
-        if kind == "edit_project_note":
-            action = str(arguments.get("action") or "")
-            if action not in NOTE_EDIT_ACTIONS:
-                return {"error": f"action must be one of {', '.join(NOTE_EDIT_ACTIONS)}"}
-            if action == "insert_line" and int(arguments.get("line") or 0) < 1:
-                return {"error": "insert_line needs a 1-indexed line number"}
-            if action == "replace_text" and not str(arguments.get("find") or ""):
-                return {"error": "replace_text needs the text to find"}
-            if action != "replace_text" and not str(arguments.get("text") or "").strip():
+        if kind == "write_project_note":
+            where = str(arguments.get("where") or "top")
+            if where not in NOTE_WRITE_POSITIONS:
+                return {"error": f"where must be one of {', '.join(NOTE_WRITE_POSITIONS)}"}
+            if where == "at_line" and int(arguments.get("line") or 0) < 1:
+                return {"error": "at_line needs a 1-indexed line number"}
+            if where in {"after", "before"} and not str(arguments.get("anchor") or ""):
+                return {"error": f"{where} needs an anchor — a unique span to sit beside"}
+            if where == "replace" and not str(arguments.get("find") or ""):
+                return {"error": "replace needs the text to find"}
+            if where != "replace" and not str(arguments.get("text") or "").strip():
                 return {"error": "text must not be empty"}
+            if str(arguments.get("section") or "").strip() and where not in {"top", "end"}:
+                return {
+                    "error": (
+                        "section only combines with where=top or where=end; "
+                        f"{where} already names its own position"
+                    )
+                }
         text = arguments.get("text") or arguments.get("seed_text")
         if kind in {
-            "send_to_session", "append_project_note", "type_into_session",
+            "send_to_session", "type_into_session",
         } and not str(text or "").strip():
             return {"error": "text must not be empty"}
         return None
@@ -2297,26 +2692,23 @@ class AssistantService:
                 raise AssistantError("the target session is no longer live")
             await self.end_op(session, "assistant")
             return {"ended": True, "session": session.record.name}
-        if kind == "append_project_note":
+        if kind == "write_project_note":
             project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 raise AssistantError("the target project no longer exists")
-            if self.note_append is None:
+            if self.note_write is None:
                 raise AssistantError("note writing is not wired on this daemon")
-            note = await self.note_append(project.id, str(arguments.get("text") or ""))
-            return {"appended": True, "note": note.get("title"), "bytes": note.get("bytes")}
-        if kind == "edit_project_note":
-            project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
-            if project is None:
-                raise AssistantError("the target project no longer exists")
-            if self.note_edit is None:
-                raise AssistantError("note editing is not wired on this daemon")
-            note = await self.note_edit(
+            note = await self.note_write(
                 project.id, str(arguments.get("note") or "") or None, dict(arguments)
             )
             if note.get("error"):
                 raise AssistantError(str(note["error"]))
-            return {"edited": True, "note": note.get("title"), "bytes": note.get("bytes")}
+            return {
+                "written": True,
+                "note": note.get("title"),
+                "where": str(arguments.get("where") or "top"),
+                "bytes": note.get("bytes"),
+            }
         raise AssistantError(f"unknown mutation {kind}")
 
     # -------------------------------------------------- project action outcomes
@@ -2623,9 +3015,23 @@ class AssistantService:
             note = await self.note_read(project.id, str(arguments.get("note") or "") or None)
             if note.get("error"):
                 return {"error": str(note["error"]), "candidates": note.get("candidates") or []}
+            markdown = str(note.get("markdown") or "")
+            try:
+                from_line = max(1, int(arguments.get("from_line") or 1))
+            except (TypeError, ValueError):
+                from_line = 1
+            try:
+                max_lines = int(arguments.get("max_lines") or NOTE_PAGE_MAX_LINES)
+            except (TypeError, ValueError):
+                max_lines = NOTE_PAGE_MAX_LINES
+            page = note_page(markdown, from_line=from_line, max_lines=max_lines)
+            # Numbered, not raw: a position is only choosable if it is nameable,
+            # and the outline travels with every page so a later window is still
+            # addressable by section without paging back to the top.
             return {
                 "title": note.get("title"),
-                "markdown": str(note.get("markdown") or "")[:8_000],
+                "outline": note_outline(markdown),
+                **page,
             }
         if kind == "list_project_actions":
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
@@ -2903,8 +3309,16 @@ class AssistantService:
             model=turn.resolved_model,
             input_tokens=turn.input_tokens,
             output_tokens=turn.output_tokens,
+            # Per call rather than per turn: the first round of a turn writes the
+            # cache and the rest read it, so a turn-level figure would average the
+            # write into the hit rate and hide whether the breakpoint is working.
+            cached_tokens=turn.cached_tokens,
             cost_usd=turn.cost_usd or 0,
             call_id=call_id,
+        )
+        log.debug(
+            "assistant model call turn=%s step=%d in=%d cached=%d out=%d",
+            turn_id, step, turn.input_tokens, turn.cached_tokens, turn.output_tokens,
         )
         return turn
 
@@ -2916,7 +3330,21 @@ class AssistantService:
             dialog_id, limit=self.config.assistant_context_messages
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PRIMER},
+            # The one message that is identical on every call this assistant ever
+            # makes, so it is where the cache breakpoint goes. For a provider that
+            # needs the marker the breakpoint also covers the tool definitions,
+            # which the provider orders ahead of the system prompt; for the rest
+            # `cache_stable_message` hands the plain string straight back.
+            #
+            # Nothing may be inserted ahead of this message, and its text may not
+            # be interpolated per turn: either change moves the prefix and turns
+            # every subsequent call into a cache write. The workspace snapshot is
+            # the *second* message for exactly that reason, and the per-round
+            # budget line stays trailing.
+            cache_stable_message(
+                {"role": "system", "content": SYSTEM_PRIMER},
+                model=self.config.assistant_model,
+            ),
             {
                 "role": "system",
                 "content": await self._context_message(client_context, dialog_id),
@@ -2930,7 +3358,13 @@ class AssistantService:
         messages.append({"role": "user", "content": text})
         client_id = str(client_context.get("client_id") or "")[:64]
         tools = self._tool_definitions()
-        totals = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "calls": 0}
+        totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost_usd": 0.0,
+            "calls": 0,
+        }
         display_parts: list[str] = []
         spoken_parts: list[str] = []
         sentence_index = 0
@@ -2978,6 +3412,7 @@ class AssistantService:
             )
             totals["input_tokens"] += turn.input_tokens
             totals["output_tokens"] += turn.output_tokens
+            totals["cached_tokens"] += turn.cached_tokens
             totals["cost_usd"] += float(turn.cost_usd or 0)
             totals["calls"] += 1
             if turn.content.strip():
@@ -3014,7 +3449,7 @@ class AssistantService:
                 known = {
                     "session_detail", "read_transcript", "search_history",
                     "read_project_note", "list_project_notes", "list_queue",
-                    "append_project_note", "edit_project_note", "send_to_session",
+                    "write_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
                     "type_into_session", "submit_session_composer", "create_project",
                     "list_project_actions", "run_project_action",
@@ -3116,11 +3551,11 @@ class AssistantService:
         await self.store.touch_dialog(dialog_id)
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
-            "assistant turn complete dialog=%s turn=%s calls=%d in=%d out=%d "
+            "assistant turn complete dialog=%s turn=%s calls=%d in=%d cached=%d out=%d "
             "cost=%.5f elapsed=%.0fms sentences=%d cards=%d mutations=%d "
             "suppressed=%s exhausted=%s",
             dialog_id, turn_id, totals["calls"], totals["input_tokens"],
-            totals["output_tokens"], totals["cost_usd"], elapsed_ms,
+            totals["cached_tokens"], totals["output_tokens"], totals["cost_usd"], elapsed_ms,
             sentence_index, cards_opened, mutations_executed,
             suppress_speech, exhausted,
         )

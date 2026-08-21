@@ -1308,7 +1308,12 @@ async def test_dry_run_is_repeatable_and_writes_no_automation_records(tmp_path: 
     assert first[0]["actions"][0]["would_execute"]["kind"] == "llm"
     assert await store.firings() == []
     assert await store.annotations() == []
-    assert await store.spend() == {"tokens": 0, "cost_usd": 0.0}
+    assert await store.spend() == {
+        "tokens": 0,
+        "cost_usd": 0.0,
+        "input_tokens": 0,
+        "cached_tokens": 0,
+    }
     store.close()
 
 
@@ -1960,6 +1965,108 @@ async def test_legacy_observer_calls_gain_safe_response_diagnostics(tmp_path: Pa
         assert row["response_content_length"] == 0
         assert row["http_status"] == 200
         assert row["retryable"] == 1
+        assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_ledger_records_cached_prompt_tokens_as_a_subset_of_the_input(
+    tmp_path: Path,
+) -> None:
+    """Caching is measured, not assumed (Phase 15).
+
+    Cached tokens are part of `input_tokens`, never added to it: they were sent and
+    counted, only billed at a discount. Summing the two would inflate every token
+    figure on the page by exactly the amount caching saved.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="builtin:assistant",
+            model="anthropic/claude-sonnet-4.5",
+            input_tokens=2400,
+            output_tokens=60,
+            cached_tokens=2000,
+            cost_usd=0.01,
+            call_id="call-1",
+        )
+        # A caller that reports nothing about caching reads as zero, which is the
+        # honest figure for a provider that was never asked to cache.
+        await store.add_spend(
+            rule_id="builtin:assistant",
+            model="anthropic/claude-sonnet-4.5",
+            input_tokens=1600,
+            output_tokens=40,
+            cost_usd=0.01,
+            call_id="call-2",
+        )
+
+        today = await store.spend(rule_id="builtin:assistant")
+        assert today["input_tokens"] == 4000
+        assert today["cached_tokens"] == 2000
+        assert today["tokens"] == 4100, "input + output, with cached counted once"
+
+        breakdown = await store.spend_breakdown(days=7)
+        row = breakdown["rules"][0]
+        assert row["input_tokens"] == 4000
+        assert row["cached_tokens"] == 2000
+        assert row["today_input_tokens"] == 4000
+        assert row["today_cached_tokens"] == 2000
+        assert breakdown["totals"]["cached_tokens"] == 2000
+        assert breakdown["totals"]["today_cached_tokens"] == 2000
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_ledger_gains_cached_tokens_backfilled_to_zero(tmp_path: Path) -> None:
+    # Zero rather than NULL: every pre-migration row was billed by a request that
+    # carried no cache breakpoint, so zero is that row's true reading.
+    path = tmp_path / "mux.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE automation_budget_ledger ("
+        "id TEXT PRIMARY KEY, day TEXT NOT NULL, rule_id TEXT NOT NULL,"
+        "project_id TEXT, agent_run_id TEXT,"
+        "requested_model TEXT, input_tokens INTEGER NOT NULL,"
+        "output_tokens INTEGER NOT NULL,"
+        "cost_usd REAL NOT NULL, observer_call_id TEXT, created_at REAL NOT NULL)"
+    )
+    legacy.execute(
+        "INSERT INTO automation_budget_ledger"
+        "(id,day,rule_id,requested_model,input_tokens,output_tokens,cost_usd,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (
+            "old-1",
+            time.strftime("%Y-%m-%d", time.gmtime()),
+            "builtin:assistant",
+            "openai/gpt-5.6-terra",
+            300,
+            20,
+            0.001,
+            time.time(),
+        ),
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = AutomationStore(path)
+    try:
+        today = await store.spend(rule_id="builtin:assistant")
+        assert today["input_tokens"] == 300
+        assert today["cached_tokens"] == 0
+        # And the migrated table still takes a write naming the new column.
+        await store.add_spend(
+            rule_id="builtin:assistant",
+            model="anthropic/claude-sonnet-4.5",
+            input_tokens=1000,
+            output_tokens=10,
+            cached_tokens=800,
+            cost_usd=0.002,
+            call_id="call-1",
+        )
+        assert (await store.spend(rule_id="builtin:assistant"))["cached_tokens"] == 800
         assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
     finally:
         store.close()

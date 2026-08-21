@@ -119,6 +119,21 @@ and the declared minimum observation capability.
   card, attention narration, the Mux assistant, adaptive titles — so the daemon labels every row
   and tags it `observer`, `custom`, `feature`, or `retired` (billed under an id the page has no
   control for). Before this they were visible only inside the aggregate.
+- **The prompt-cache hit rate is measured beside the spend it explains.** Every ledger row
+  carries `cached_tokens` alongside its input and output counts, so the breakdown and the
+  headline both answer "how much of this bill was a repeat of the last one". Cached tokens are
+  a *subset* of the prompt tokens, never added to them: they were sent and counted, only billed
+  at a discount, and summing the two would inflate every token figure on the page by exactly
+  the amount caching saved. The denominator is prompt tokens rather than the `tokens` total,
+  since output is not cacheable and including it would cap the achievable rate below 100% by an
+  amount that varies with reply length.
+  A dash and `0%` are different answers and the view keeps them apart: a dash means no billed
+  prompt tokens in the window, which is what an unused rule and a database predating the column
+  both look like, while `0%` means tokens were billed and none of them were cached - the
+  actionable reading. One honest limit: a provider that caches implicitly and reports no
+  `cached_tokens` also reads as `0%`, because the ledger records what the usage payload said
+  and nothing more (`assistant.md` for where the breakpoint that earns a nonzero rate is
+  placed).
 - **A row's `enabled` is read from the switch that governs it, and a spender missing from the
   table is the dangerous case.** `enabled` is what separates a live bill from spent history, so
   a feature row asserting `True` regardless told the reader to go turn off something already
