@@ -26,7 +26,8 @@ Writes, all thin callers into services that hold the authority: `notify`, `reque
 
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
 
-**Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), session-control authority and bounds (`session_control.py`), land authority and bounds (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`server.py`).
+**Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`server.py`).
+Nor any authority a write tool borrows: session control (`session_control.py`), landing (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`).
 
 ### `mcp_contract.py`
 
