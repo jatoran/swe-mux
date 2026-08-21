@@ -105,7 +105,7 @@ export const SETTING_TARGETS = {
     label: 'Scan timeline', where: 'Settings → Automation',
   },
   'automation.budgets': {
-    surface: 'settings', section: 'Automation', setting: 'automation_daily_budget_usd',
+    surface: 'settings', section: 'Automation', setting: 'automation_daily_budget',
     label: 'Automation budgets', where: 'Settings → Automation',
   },
   // The land queue's install-wide emergency stop. Its own switch rather than a facet of

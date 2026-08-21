@@ -43,6 +43,11 @@ export type SpendRule = {
   cached_tokens?: number
   today_input_tokens?: number
   today_cached_tokens?: number
+  /** Calls whose provider reported no cost at all. Their `cost_usd` contribution is 0
+   *  because nobody measured it, not because it was free, so a nonzero count here means
+   *  the money beside it is a floor. See `src/swe_mux/budget.py`. */
+  unpriced_calls?: number
+  today_unpriced_calls?: number
   models?: string[]
   last_at?: number
 }
@@ -63,6 +68,8 @@ export type SpendBreakdown = {
     cached_tokens?: number
     today_input_tokens?: number
     today_cached_tokens?: number
+    unpriced_calls?: number
+    today_unpriced_calls?: number
   }
 }
 

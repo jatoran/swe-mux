@@ -58,11 +58,11 @@ test('scan spending limits are global settings, never per-project', () => {
   // The dollar ceiling lived in each Project's committed .swe-mux/config.toml,
   // so the cap most likely to stop scanning sat in a file nobody opens and had
   // to be raised once per checkout.
-  assert.ok(settings.includes('scan_timeline_daily_budget_usd'))
-  assert.ok(settings.includes('scan_timeline_daily_token_budget'))
+  assert.ok(settings.includes('scan_timeline_daily_budget'))
+  assert.ok(settings.includes('scan_timeline_run_budget'))
   assert.ok(settings.includes('scan_timeline_hourly_call_cap'))
   assert.ok(settings.includes('scan_timeline_max_output_tokens'))
-  assert.ok(!projects.includes('scan_timeline_daily_budget_usd'))
+  assert.ok(!projects.includes('scan_timeline_daily_budget'))
   assert.ok(projects.includes('Settings → Automation'))
 })
 

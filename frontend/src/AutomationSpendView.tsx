@@ -64,6 +64,11 @@ export function AutomationSpendView() {
   // breakpoint and never got one reads 0% here, which is the whole point of showing it.
   const windowCache = cacheHit(spendTotals?.input_tokens, spendTotals?.cached_tokens)
   const todayCache = cacheHit(spendTotals?.today_input_tokens, spendTotals?.today_cached_tokens)
+  // Calls the provider never priced. Their contribution to every dollar figure on this
+  // page is zero because nobody measured it, so saying "$0.0043" without saying "and N
+  // calls we could not price" would present a floor as a total.
+  const unpricedToday = spendTotals?.today_unpriced_calls || 0
+  const unpricedWindow = spendTotals?.unpriced_calls || 0
 
   return <div class="automation-cost">
     {error && <div class="usage-error" role="alert">{error}</div>}
@@ -71,8 +76,8 @@ export function AutomationSpendView() {
             call; agents bill a subscription and their figures are estimates. Adding them
             would produce a number that is true of nothing. */}
         <div class="usage-summary cost-summary">
-          <article><span>observers today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong><small>{formatCount(spendTotals?.today_calls||0)} calls · {formatCount(spendTotals?.today_tokens||0)} tokens</small></article>
-          <article><span>observers · {spendDays}d</span><strong title={exactMoney(spendTotals?.cost_usd||0)}>{formatMoney(spendTotals?.cost_usd||0)}</strong><small>{formatCount(spendTotals?.calls||0)} calls · {formatCount(spendTotals?.tokens||0)} tokens</small></article>
+          <article><span>observers today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{unpricedToday?'≥ ':''}{formatMoney(data?.spend_today.cost_usd||0)}</strong><small class={unpricedToday?'warn':''}>{formatCount(spendTotals?.today_calls||0)} calls · {formatCount(spendTotals?.today_tokens||0)} tokens{unpricedToday?` · ${formatCount(unpricedToday)} reported no cost`:''}</small></article>
+          <article><span>observers · {spendDays}d</span><strong title={exactMoney(spendTotals?.cost_usd||0)}>{unpricedWindow?'≥ ':''}{formatMoney(spendTotals?.cost_usd||0)}</strong><small class={unpricedWindow?'warn':''}>{formatCount(spendTotals?.calls||0)} calls · {formatCount(spendTotals?.tokens||0)} tokens{unpricedWindow?` · ${formatCount(unpricedWindow)} reported no cost`:''}</small></article>
           {/* Beside the money, because the hit rate is only ever read as "is this spend
               avoidable". Today first: a breakpoint that started working this morning is
               invisible in a seven-day average. */}
@@ -91,8 +96,8 @@ export function AutomationSpendView() {
                 <div class="cost-bar" style={`--share:${Math.max(0.015,costShareTotal>0?row.share:row.callShare)}`}/>
                 <small title={row.rule_id}>{row.detail||row.rule_id}</small>
               </td>
-              <td data-label="today" title={exactMoney(row.today_cost_usd)}>{formatMoney(row.today_cost_usd)}</td>
-              <td data-label={`${spendDays} days`} title={exactMoney(row.cost_usd)}><strong>{formatMoney(row.cost_usd)}</strong>{costShareTotal>0?<em>{formatPercent(row.share)}</em>:null}</td>
+              <td data-label="today" title={exactMoney(row.today_cost_usd)}>{row.today_unpriced_calls?'≥ ':''}{formatMoney(row.today_cost_usd)}</td>
+              <td data-label={`${spendDays} days`} title={row.unpriced_calls?`${exactMoney(row.cost_usd)} measured; ${row.unpriced_calls} calls reported no cost`:exactMoney(row.cost_usd)}><strong>{row.unpriced_calls?'≥ ':''}{formatMoney(row.cost_usd)}</strong>{costShareTotal>0?<em>{formatPercent(row.share)}</em>:null}</td>
               <td data-label="calls" title={integer.format(row.calls)}>{formatCount(row.calls)}</td>
               <td data-label="tokens" title={integer.format(row.tokens)}>{formatCount(row.tokens)}</td>
               <td data-label="cached" title={cacheHitDetail(hit)}>{hit?formatPercent(hit.rate):'—'}</td>

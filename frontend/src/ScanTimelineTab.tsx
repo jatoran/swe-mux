@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
 import type { GrantId } from './grants'
-import type { Session } from './types'
+import type { Budget, Session } from './types'
 
 type Coverage = {messages_seen:number;facts_seen:number;truncated:boolean;remaining?:number}
 type TimelineRecord = {
@@ -24,8 +24,8 @@ type Backfill = {
 type Gate = {id:string;label:string;unit:'tokens'|'usd'|'calls';used:number;limit:number}
 type TimelineState = {
   session_id:string;project_id:string|null;agent_run_id:string|null;global_enabled:boolean;project_enabled:boolean
-  run_enabled:boolean;auto_enable:boolean;run_decided:boolean;model:string;daily_budget_usd:number
-  spend_today:{tokens:number;cost_usd:number};run_token_budget:number
+  run_enabled:boolean;auto_enable:boolean;run_decided:boolean;model:string;daily_budget:Budget
+  spend_today:{tokens:number;cost_usd:number;unpriced_calls?:number};run_budget:Budget
   run_spend:{tokens:number;cost_usd:number};metrics:Metrics;gates:Gate[]
   skip_reason:string|null;last_scan_at:number|null;scanning:boolean
   records:TimelineRecord[];boundaries:Boundary[];backfill:Backfill

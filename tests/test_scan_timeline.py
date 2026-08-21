@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 
 from swe_mux.automation import TranscriptSlice
-from swe_mux.budget import Budget
 from swe_mux.automation_store import AutomationStore
+from swe_mux.budget import Budget
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent

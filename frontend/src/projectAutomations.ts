@@ -62,6 +62,14 @@ export type LlmReadiness = {
   code: 'ready' | 'no_key' | 'no_endpoint' | 'no_model' | 'unverified' | 'endpoint_changed'
     | 'unknown'
   reason: string
+  /**
+   * Whether this endpoint reports what a completion cost. A local OpenAI-compatible
+   * server usually does not, and absent cost is unknown rather than zero, so a
+   * dollar-only budget cannot bind against it - which is what `BudgetControl` says
+   * when this is false. Optional because an older daemon does not send it, and
+   * "not stated" must not render as an accusation against a working endpoint.
+   */
+  reports_cost?: boolean
 }
 
 const cache = new Map<string, Promise<ProjectAutomationState>>()

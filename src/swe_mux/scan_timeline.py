@@ -24,8 +24,8 @@ from .behavioral_consumers import ADAPTIVE_TITLE_CHECKPOINT_PREFIX
 from .budget import Budget, coerce_budget
 from .budget import gauges as budget_gauges
 from .config import BUDGET_FIELDS
-from .llm_endpoint import resolve_endpoint
 from .event_bus import EventBus
+from .llm_endpoint import resolve_endpoint
 from .models import MuxEvent
 from .openrouter import OpenRouterError
 from .text_safety import utf8_safe_value

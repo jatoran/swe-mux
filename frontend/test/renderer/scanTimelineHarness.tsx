@@ -49,9 +49,9 @@ const STATE = {
   global_enabled: true, project_enabled: true, run_enabled: true,
   auto_enable: true, run_decided: true,
   model: 'deepseek/deepseek-v4-flash',
-  daily_budget_usd: 5,
+  daily_budget: { tokens: 3_000_000, usd: 5, mode: 'either' as const },
   spend_today: { tokens: 412_000, cost_usd: 0.94 },
-  run_token_budget: 500_000,
+  run_budget: { tokens: 500_000, usd: null, mode: 'tokens' as const },
   run_spend: { tokens: 61_000, cost_usd: 0.12 },
   metrics: { record_reads: 7, rehydrations: 7, rehydration_rate: 1 },
   gates: [

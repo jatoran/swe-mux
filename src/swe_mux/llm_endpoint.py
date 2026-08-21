@@ -287,6 +287,17 @@ class LlmReadiness:
     provider: str
     code: str
     reason: str
+    reports_cost: bool = True
+    """Whether this endpoint tells swe-mux what a completion cost.
+
+    Carried here rather than derived in the browser because it is a property of
+    the endpoint, and the surfaces that need it are the budget controls: a
+    dollar-only cap cannot bind against a provider that reports nothing, so the
+    control says so and offers the token axis as the backstop (`budget.py`).
+    Distinct from `ready` in both directions - an unverified endpoint can still
+    be one that would report cost, and a perfectly ready local server never
+    will.
+    """
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -294,6 +305,7 @@ class LlmReadiness:
             "provider": self.provider,
             "code": self.code,
             "reason": self.reason,
+            "reports_cost": self.reports_cost,
         }
 
 
@@ -311,6 +323,7 @@ def readiness(
     "you changed it since you proved it" distinguished from "you never proved
     it" because they are different sentences and only one of them is a surprise.
     """
+    reports_cost = endpoint.supports_generation_cost
     if endpoint.provider == "openrouter":
         if not api_key:
             return LlmReadiness(
@@ -318,8 +331,11 @@ def readiness(
                 endpoint.provider,
                 "no_key",
                 "No OpenRouter API key is configured, so nothing model-backed can run.",
+                reports_cost,
             )
-        return LlmReadiness(True, endpoint.provider, "ready", "OpenRouter key configured.")
+        return LlmReadiness(
+            True, endpoint.provider, "ready", "OpenRouter key configured.", reports_cost
+        )
 
     if not endpoint.origin:
         return LlmReadiness(
@@ -327,6 +343,7 @@ def readiness(
             endpoint.provider,
             "no_endpoint",
             "The custom model endpoint has no base URL yet.",
+            reports_cost,
         )
     if not endpoint.model_override:
         return LlmReadiness(
@@ -334,6 +351,7 @@ def readiness(
             endpoint.provider,
             "no_model",
             "The custom model endpoint has no model id yet.",
+            reports_cost,
         )
     if not verified_fingerprint:
         return LlmReadiness(
@@ -342,6 +360,7 @@ def readiness(
             "unverified",
             "The custom model endpoint has not been verified yet. "
             "Verify it in Settings → Accounts to see one real reply from it.",
+            reports_cost,
         )
     if verified_fingerprint != endpoint.fingerprint(api_key):
         return LlmReadiness(
@@ -350,12 +369,14 @@ def readiness(
             "endpoint_changed",
             "The custom model endpoint changed since it was verified. "
             "Verify it again in Settings → Accounts.",
+            reports_cost,
         )
     return LlmReadiness(
         True,
         endpoint.provider,
         "ready",
         f"Verified against {endpoint.origin}.",
+        reports_cost,
     )
 
 

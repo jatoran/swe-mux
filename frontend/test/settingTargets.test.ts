@@ -22,8 +22,14 @@ test('every settings target names a control that exists in the panel it points a
   for (const id of ids) {
     const target = settingTarget(id)
     if (target.surface !== 'settings' || !target.setting) continue
+    // A shared control carries the mark from its own `name` prop, so the literal
+    // `data-setting="..."` lives in the component rather than in the panel. Both
+    // forms are the same promise - a marked element the reveal can scroll to -
+    // and only the second one is greppable from the panel's source.
+    const marked = settingsSources.includes(`data-setting="${target.setting}"`)
+      || settingsSources.includes(`<BudgetControl name="${target.setting}"`)
     assert.ok(
-      settingsSources.includes(`data-setting="${target.setting}"`),
+      marked,
       `${id} points at a control the Settings panel does not mark: ${target.setting}`,
     )
   }

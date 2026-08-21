@@ -1,5 +1,28 @@
 import type { PaneLayout } from './layout'
 
+/**
+ * Which axes of a spending cap are enforced. `either` enforces both and trips on
+ * whichever is reached first. Mirrors `src/swe_mux/budget.py`.
+ */
+export type BudgetMode = 'tokens' | 'usd' | 'either'
+
+/**
+ * One spending ceiling. An axis the mode does not name may still carry a figure -
+ * it is remembered so switching modes does not lose it, and it is not enforced.
+ * `null` means no figure at all, which is distinct from `0` (a total ceiling).
+ */
+export type Budget = { tokens: number | null; usd: number | null; mode: BudgetMode }
+
+/** What a budget check concluded, as the daemon reports it beside spend. */
+export type BudgetVerdict = {
+  exhausted: boolean
+  axis: 'tokens' | 'usd' | ''
+  reason: string
+  unpriced_calls: number
+  cost_blind: boolean
+  note: string
+}
+
 export type SessionState = 'starting' | 'running' | 'working' | 'idle' | 'awaiting' | 'exited' | 'crashed'
 
 /** Typed sub-reason set whenever state === 'awaiting'; mirrors the backend contract. */
@@ -221,7 +244,7 @@ export interface KokoroModelStatus {
 export interface VoiceStatus {
   enabled:boolean; engine:string; engine_available:boolean; diagnostic?:string|null
   content:'summary'|'verbatim'; default_mode:VoiceMode; voice:string; summary_model:string
-  spend_today:{tokens:number;cost_usd:number}; daily_budget_usd:number
+  spend_today:{tokens:number;cost_usd:number;unpriced_calls?:number}; daily_budget:Budget
   cache_bytes:number; cache_limit_bytes:number; clip_count:number; stt_enabled:boolean
   kokoro_model?:KokoroModelStatus; kokoro_voice?:string
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null

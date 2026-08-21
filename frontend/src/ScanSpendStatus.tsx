@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
-import type { Session } from './types'
+import type { Budget, Session } from './types'
 
 type Spend = {
   global_enabled:boolean;project_enabled:boolean;run_enabled:boolean
-  daily_budget_usd:number;spend_today:{tokens:number;cost_usd:number}
+  daily_budget:Budget;spend_today:{tokens:number;cost_usd:number;unpriced_calls?:number}
 }
 
 export function ScanSpendStatus({session,onOpen}:{session:Session|null;onOpen:()=>void}) {
@@ -24,6 +24,18 @@ export function ScanSpendStatus({session,onOpen}:{session:Session|null;onOpen:()
     return()=>{stale=true;window.clearInterval(interval);window.removeEventListener('mux:turn-ended',refresh)}
   },[sid,run])
   if(!state?.global_enabled||!state.project_enabled)return null
-  const title=`Scan timeline ${state.run_enabled?'on for this run':'off for this run'} · $${state.spend_today.cost_usd.toFixed(4)} of $${state.daily_budget_usd.toFixed(2)} today · ${state.spend_today.tokens.toLocaleString()} tokens`
-  return <button class={`scan-spend-status ${state.run_enabled?'active':''}`} title={title} aria-label={title} onClick={onOpen}><span>SCAN</span><strong>${state.spend_today.cost_usd.toFixed(4)}</strong><em>/ ${state.daily_budget_usd.toFixed(2)}</em></button>
+  // The chip reads whichever axis the budget actually enforces. A dollar figure
+  // drawn against a token-only cap would name a limit that cannot stop scanning,
+  // and against a provider that reports no cost it would sit at $0.0000 forever.
+  const budget=state.daily_budget
+  const enforcesUsd=budget.mode!=='tokens'&&budget.usd!=null
+  const spent=enforcesUsd
+    ?`$${state.spend_today.cost_usd.toFixed(4)}`
+    :state.spend_today.tokens.toLocaleString()
+  const cap=enforcesUsd
+    ?`$${(budget.usd??0).toFixed(2)}`
+    :(budget.tokens??0).toLocaleString()
+  const unpriced=state.spend_today.unpriced_calls||0
+  const title=`Scan timeline ${state.run_enabled?'on for this run':'off for this run'} · ${spent} of ${cap} today${enforcesUsd?` · ${state.spend_today.tokens.toLocaleString()} tokens`:''}${enforcesUsd&&unpriced?` · ${unpriced} of today's calls reported no cost`:''}`
+  return <button class={`scan-spend-status ${state.run_enabled?'active':''}`} title={title} aria-label={title} onClick={onOpen}><span>SCAN</span><strong>{spent}</strong><em>/ {cap}</em></button>
 }

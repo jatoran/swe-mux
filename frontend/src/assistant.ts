@@ -8,6 +8,7 @@
  * panel resumes the same conversation any other device sees.
  */
 import { api } from './api.ts'
+import type { Budget, BudgetVerdict } from './types.ts'
 
 export type AssistantActionClass = 'read' | 'navigation' | 'reversible' | 'consequential'
 
@@ -41,7 +42,8 @@ export type AssistantMessage = {
 export type AssistantStatus = {
   enabled: boolean
   model: string
-  daily_budget_usd: number
+  daily_budget: Budget
+  budget_status?: BudgetVerdict
   spend_today: { tokens: number; cost_usd: number }
   trust_reversible: 'auto' | 'cancel_window' | 'confirm'
   diagnostic?: string | null

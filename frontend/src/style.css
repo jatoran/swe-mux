@@ -1835,6 +1835,24 @@ body {
 .automation-pill.feature{border-color:var(--green);color:var(--green)}
 .automation-pill.retired,.automation-pill.off{border-color:var(--amber);color:var(--amber)}
 .settings-warning{border-left:2px solid var(--accent);padding:7px 9px;background:var(--bg)}
+/* BudgetControl: one spending cap, drawn as the mode that decides what binds and
+   the two figures under it. The unenforced axis stays legible and editable rather
+   than disabled, because it is a number the operator is keeping, not one that is
+   unavailable - so it dims and says so instead of going grey and silent. */
+.budget-control{border:1px solid var(--line);background:var(--bg);padding:8px 10px 9px;margin:0 0 9px;display:grid;gap:6px}
+.budget-control>legend{padding:0 4px;color:var(--muted)}
+.budget-hint,.budget-mode-hint{margin:0;color:var(--muted)}
+.budget-modes{display:flex;flex-wrap:wrap;gap:10px}
+.budget-mode{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.budget-mode>input{margin:0}
+.budget-axes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.budget-axis{display:grid;gap:3px}
+.budget-axis>input{width:100%}
+.budget-axis-off{opacity:.55}
+.budget-axis-off>small{color:var(--muted)}
+.budget-warning{margin:0;color:var(--amber)}
+.budget-warning.settings-warning{color:inherit;border-left-color:var(--amber)}
+@media(max-width:760px){.budget-axes{grid-template-columns:1fr}}
 .transcript-annotations{flex:none;max-height:180px;overflow:auto;border-bottom:1px solid var(--line);padding:7px 16px}.transcript-annotations h4{margin:0 0 5px;color:var(--muted);font:inherit}.transcript-annotations details{padding:4px 0;border-top:1px solid var(--line)}.transcript-annotations summary{cursor:pointer}.transcript-annotations small{display:block;margin-top:4px;color:var(--muted)}
 @media(max-width:760px){.automation-panel label{grid-template-columns:1fr}.automation-panel label>input,.automation-panel label>select,.automation-panel label>textarea{grid-column:1}.automation-row{flex-wrap:wrap}.automation-row>button{min-height:34px}.automation-flow,.automation-term-grid,.automation-health-grid{grid-template-columns:1fr}.automation-row>.automation-row-actions{width:100%;padding-left:18px}.automation-row-actions button{min-height:34px}
 /* Each row becomes its own card, with every cell labelled from `data-label`. The header row

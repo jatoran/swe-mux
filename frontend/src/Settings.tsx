@@ -15,6 +15,8 @@ import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailAr
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { kokoroVoiceLabel, sortKokoroVoices } from './kokoroVoices'
 import { ThemePicker } from './ThemePicker'
+import { BudgetControl } from './BudgetControl'
+import type { Budget } from './types'
 import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
 import { currentProfile } from './deviceSettings'
@@ -109,23 +111,26 @@ type Config = {
   approval_keystroke_delivery:boolean;approval_keystroke_window_seconds:number
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
-  automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
-  automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
+  automation_daily_budget:Budget;automation_rule_daily_budget:Budget
+  automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
   llm_provider:string;custom_llm_base_url:string;custom_llm_model:string
-  // Config-file only. The Project context card has no Settings control of its own,
-  // so this is read to report the model it resolves to, never written here.
-  project_card_model:string
+  // Config-file only: the Project context card's model is picked under Accounts
+  // like every other feature model, so this is read to report what it resolves
+  // to. Its *budget* is a control here, because Settings -> Automation owns every
+  // install-wide automation bound and a cap with no control cannot be given the
+  // tokens-or-dollars choice at all.
+  project_card_model:string;project_card_daily_budget:Budget
   land_queue_enabled:boolean;land_hourly_budget:number
   scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
   scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
-  scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
-  scan_timeline_daily_token_budget:number;scan_timeline_daily_budget_usd:number
+  scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_budget:Budget
+  scan_timeline_daily_budget:Budget
   scan_timeline_hourly_call_cap:number;scan_timeline_max_output_tokens:number
   attention_daily_interrupt_budget:number;attention_hourly_interrupt_cap:number
   attention_incident_window_seconds:number;attention_breakpoint_markers:boolean
   attention_narration_enabled:boolean;attention_narration_model:string
-  attention_narration_daily_budget_usd:number
+  attention_narration_daily_budget:Budget
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
   observer_titler_enabled:boolean
   phase7_observers_enabled:boolean
@@ -134,11 +139,11 @@ type Config = {
   tts_lexicon:Record<string,string>
   tts_sapi_voice:string;tts_sapi_rate:number
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
-  tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
+  tts_daily_budget:Budget;tts_cache_mb:number;stt_enabled:boolean
   stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string;stt_routing_model:string
   voice_wake_words:string[];voice_commands:{action:string;phrases:string[]}[]
   voice_chat_patience_ms:number
-  assistant_enabled:boolean;assistant_model:string;assistant_daily_budget_usd:number
+  assistant_enabled:boolean;assistant_model:string;assistant_daily_budget:Budget
   assistant_max_output_tokens:number;assistant_context_messages:number
   assistant_trust_reversible:'auto'|'cancel_window'|'confirm'
 }
@@ -149,7 +154,8 @@ type KokoroModelInfo = {
 }
 type VoiceStatusInfo = {
   enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
-  summary_model:string;spend_today:{tokens:number;cost_usd:number};daily_budget_usd:number
+  summary_model:string;spend_today:{tokens:number;cost_usd:number;unpriced_calls?:number}
+  daily_budget:Budget
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
   kokoro_model?:KokoroModelInfo;kokoro_voice?:string
   spelled_words?:{word:string;count:number;first_seen:number;last_seen:number}[]
@@ -1602,10 +1608,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Budgets and execution</h3>
-          <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
-          <label data-setting="automation_daily_budget_usd">Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
-          <label>Per-rule daily tokens<input type="number" value={draft.automation_rule_daily_token_budget} onInput={event=>change('automation_rule_daily_token_budget',Number(event.currentTarget.value))}/></label>
-          <label>Per-rule daily dollars<input type="number" step="0.01" value={draft.automation_rule_daily_budget_usd} onInput={event=>change('automation_rule_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          <p>Every cap below takes tokens, dollars, or first hit - the same three choices everywhere, because which unit describes a cost is a property of the provider, not of the feature. A limit the mode does not enforce is kept rather than cleared, so trying the other axis is reversible.</p>
+          <BudgetControl name="automation_daily_budget" label="All automation, daily" value={draft.automation_daily_budget} onChange={value=>change('automation_daily_budget',value)} maxTokens={100000000} maxUsd={10000} reportsCost={provider?.llm?.reports_cost} hint="The shared ceiling over every automation, reset daily (UTC)."/>
+          <BudgetControl name="automation_rule_daily_budget" label="Per automation rule, daily" value={draft.automation_rule_daily_budget} onChange={value=>change('automation_rule_daily_budget',value)} maxTokens={100000000} maxUsd={10000} reportsCost={provider?.llm?.reports_cost} hint="What any one rule may spend, so a single misbehaving observer cannot consume the shared ceiling."/>
+          <BudgetControl name="project_card_daily_budget" label="Project context card, daily" value={draft.project_card_daily_budget} onChange={value=>change('project_card_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} hint="Bounds rebuilding a Project's context card. Each Project opts in separately; the model follows the card model under Accounts."/>
           <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Per-rule hourly calls<input type="number" value={draft.automation_rule_hourly_call_cap} onInput={event=>change('automation_rule_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
@@ -1636,9 +1642,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
           <label class="settings-toggle" data-setting="scan_timeline_enabled"><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={event=>change('scan_timeline_enabled',event.currentTarget.checked)}/>Allow scan timeline<small>The install-wide gate. Off, nothing is scanned anywhere, whatever any Project permitted.</small></label>
           <label for="scan-timeline-model-picker" data-setting="scan_timeline_model">Scan timeline model<ModelPicker id="scan-timeline-model-picker" value={draft.scan_timeline_model} options={modelOptions(draft.scan_timeline_model)} emptyLabel="Select exact model…" required onChange={value=>change('scan_timeline_model',value)}/><small>Pinned rather than routed: scanning runs continuously over long transcript slices, so it needs a model that is both cheap at volume and reliable at structured output. Defaults to the DeepSeek V4 Flash latest alias. Needs the OpenRouter key under <strong>Accounts</strong>.</small></label>
-          <label>Daily dollar budget<input type="number" min="0" max="1000" step="0.25" value={draft.scan_timeline_daily_budget_usd} onInput={event=>change('scan_timeline_daily_budget_usd',Number(event.currentTarget.value))}/><small>Across every Project and session, reset daily (UTC).</small></label>
-          <label>Daily token budget<input type="number" min="512" max="100000000" value={draft.scan_timeline_daily_token_budget} onInput={event=>change('scan_timeline_daily_token_budget',Number(event.currentTarget.value))}/></label>
-          <label>Tokens per conversation<input type="number" min="512" max="20000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
+          <BudgetControl name="scan_timeline_daily_budget" label="Scan timeline, daily" value={draft.scan_timeline_daily_budget} onChange={value=>change('scan_timeline_daily_budget',value)} maxTokens={100000000} minTokens={512} maxUsd={1000} usdStep={0.25} reportsCost={provider?.llm?.reports_cost} hint="Across every Project and session, reset daily (UTC)."/>
+          <BudgetControl name="scan_timeline_run_budget" label="Scan timeline, per conversation" value={draft.scan_timeline_run_budget} onChange={value=>change('scan_timeline_run_budget',value)} maxTokens={20000000} minTokens={512} maxUsd={1000} usdStep={0.25} reportsCost={provider?.llm?.reports_cost} hint="What one conversation may spend before its timeline stops. Resets when the conversation does."/>
           <label>Hourly scan cap<input type="number" min="1" max="100000" value={draft.scan_timeline_hourly_call_cap} onInput={event=>change('scan_timeline_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" min="256" max="8192" value={draft.scan_timeline_max_output_tokens} onInput={event=>change('scan_timeline_max_output_tokens',Number(event.currentTarget.value))}/><small>The record schema allows about 2,600 characters; too low truncates the response and loses the record.</small></label>
           </section>
@@ -1651,7 +1656,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check"><span>Report shell breakpoints (OSC 133)</span><input type="checkbox" checked={draft.attention_breakpoint_markers} onChange={event=>change('attention_breakpoint_markers',event.currentTarget.checked)}/></label>
           <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
           <label for="narration-model-picker" data-setting="attention_narration_model">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
-          <label>Narration daily dollars<input type="number" step="0.01" min="0" max="100" value={draft.attention_narration_daily_budget_usd} onInput={event=>change('attention_narration_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          <BudgetControl name="attention_narration_daily_budget" label="Attention narration, daily" value={draft.attention_narration_daily_budget} onChange={value=>change('attention_narration_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost}/>
           </section>
 
         </Fragment>}
@@ -1756,7 +1761,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select><small>The default for every session. A pane's player strip overrides it for that session alone.</small></label>
           <label for="summary-model-picker" data-setting="tts_summary_model">Summary model<ModelPicker id="summary-model-picker" value={draft.tts_summary_model} options={modelOptions(draft.tts_summary_model)} emptyLabel="Use the cheap model…" onChange={value=>change('tts_summary_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
-          <label>Daily summary budget (USD)<input type="number" step="0.01" min="0" max="100" value={draft.tts_daily_budget_usd} onInput={e=>change('tts_daily_budget_usd',Number(e.currentTarget.value))} /></label>
+          <BudgetControl name="tts_daily_budget" label="Read-aloud summaries, daily" value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>
           <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /><small>Applies to the verbatim mode only, where no model is involved to shorten anything.</small></label>
           </section>
 
@@ -1825,7 +1830,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
           <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
           <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
-          <label>Daily assistant budget (USD)<input type="number" step="0.05" min="0" max="1000" value={draft.assistant_daily_budget_usd} onInput={e=>change('assistant_daily_budget_usd',Number(e.currentTarget.value))} /></label>
+          <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
           <label>Reversible-action trust<select value={draft.assistant_trust_reversible} onChange={e=>change('assistant_trust_reversible',e.currentTarget.value as Config['assistant_trust_reversible'])}><option value="cancel_window">Announce with a cancel window (default)</option><option value="confirm">Always confirm</option><option value="auto">Run silently</option></select><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
           <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
