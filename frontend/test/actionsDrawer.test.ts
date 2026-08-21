@@ -37,7 +37,15 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   // The rail gear opens the in-place editor; the full modal stays one click away
   // behind its "All options…" control, so a rail configured down to nothing
   // still has a way back into configuration.
-  assert.ok(terminal.includes('aria-label="Customize actions"'), 'the Action rail gear must open the in-place editor')
+  // The gear is drawn by the row (`RailStrip`) rather than by the pane, because it rides
+  // the row's trailing cluster; the pane owns only what pressing it does. The overflow
+  // popover offers the same act from its header, since a full overflow is the surface
+  // that prompts the thought.
+  const strip = source('RailStrip.tsx')
+  const popover = source('RailOverflowPopover.tsx')
+  assert.ok(strip.includes('aria-label="Customize actions"'), 'the Action rail gear must open the in-place editor')
+  assert.ok(popover.includes('aria-label="Customize actions"'), 'the overflow popover must reach the same editor')
+  assert.ok(terminal.includes('onConfigure={index===renderedRailRows.length-1?()=>setRailEditOpen(true):undefined}'))
   assert.ok(terminal.includes('<RailInlineEditor'), 'the gear flips the rail area into RailInlineEditor')
   assert.ok(inline.includes('onOpenFull'), 'the in-place editor must reach the full modal')
   assert.ok(actions.includes('run: onConfigureActions'), 'Quick actions must expose Configure')

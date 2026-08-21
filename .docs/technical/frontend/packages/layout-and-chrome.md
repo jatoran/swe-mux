@@ -22,7 +22,7 @@ The pan begins on any child, with no button excluded: `railOverflow.ts` exports 
 
 ## Pinned rail and overflow popover
 
-`RailStrip.tsx`, `RailOverflowPopover.tsx`, plus `railFitCount` / `railPopoverStyle` / `railPopoverClosingCommand` in `railOverflow.ts`
+`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, plus `railFitCount` / `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
 
 `RailStrip.tsx` is one Action rail row: it measures every chip, splits the row into what fits and a trailing `+N` chip, and hands the remainder to a popover scoped to that row.
 It wraps `OverflowRail` rather than replacing it — a split row does not overflow, but that component still owns the touch-drag click suppression, `holdSoftKeyboard`, wheel translation, and focus reveal, and a pixel of measurement error wants somewhere to go.
@@ -32,13 +32,25 @@ It is a *sibling* of the scroller and not a child, because an absolutely-positio
 `railFitCount` is the pure split, and its two edges are the ones a reviewer should check: a row that fits returns its full count and reserves nothing (so a fitting row is byte-identical to the pre-split rail), and once anything overflows the `+N` chip's width is spent before the first chip is placed (so the count can legitimately be zero).
 The chip's width is fixed in CSS as `--rail-more-width` and read back from the same variable, so the reservation and the chip cannot disagree.
 Only elements marked `data-rail-fixed` are reserved out of the budget - the gear, never the status readout, which shrinks and ellipsises instead so a transient `Copied` cannot move every chip beside it.
+The `+N` chip is reserved separately by the split itself and lives *in* the trailing cluster rather than after the last pinned chip, which is what gives it one place on every row: the cluster is `flex:1 1 auto` with `justify-content:flex-end`, so it absorbs the slack the split leaves and everything in it sits on the rail's trailing edge.
+`RailStrip` also owns the gear now, because the gear rides that cluster; `TerminalPane` passes `status` and `onConfigure` and owns only what pressing it does.
+
+`railOverlayPlacement.ts` is the DOM half of placing **every** command-rail overlay - the popover and each drop-up - and exists for two soft-keyboard bugs that presented as one.
+`railOverlayView()` reads the *visual* viewport, because `interactive-widget=resizes-visual` keeps the layout viewport at full height and every bound drawn against `innerHeight` therefore describes a rectangle running behind the keyboard.
+`fixedContainingBlock()` walks for the nearest ancestor that establishes a containing block for fixed descendants - `.terminal-surface`, once `.soft-keyboard-open` transforms it - and `railOverlayCss()` subtracts its origin, so the numbers the pure `railOverlayBox` produces keep meaning screen coordinates whether or not the keyboard is up.
+Portalling the overlays to the body would fix the same thing and take the rail's chip styling with them, which is why the block is measured instead.
+`watchRailOverlayPlacement()` is the listener set both components share: `visualViewport` resize and scroll on top of window resize and capture-phase scroll, since the keyboard's open and close fire nothing else and the rail is itself a horizontal scroller.
+
+`railOverlayBox` is the pure geometry, and the two rules worth knowing are both device-class rules: below 760px an overlay takes half the screen and goes to the screen's trailing edge whatever opened it, while above it keeps its trigger's edge and its own width cap (`RAIL_POPOVER_MAX_WIDTH_PX` for a wrap grid, `RAIL_DROPUP_MAX_WIDTH_PX` for a list).
+It returns the panel's bottom *edge* rather than a CSS inset, which is what makes the containing-block conversion checkable rather than implied.
 
 `RailOverflowPopover.tsx` is the panel, and it is deliberately not a `RailDropup`: a drop-up is a picker that closes on selection, this is the rail folded, and a rail does not close when you press a key on it.
 Three consequences are behaviours rather than details, and all three are covered by `test/renderer/rail-overflow.spec.ts`:
 a drop-up opened from a chip inside it is outside its DOM, so the pointer that opens one is exempted from outside-dismissal;
 Escape reaches both listeners on `window`, where `stopPropagation` stops neither and this one is registered first, so the panel stands aside while any `.rail-dropup` exists;
 and `railPopoverClosingCommand` folds the panel for the selections that navigate away (a drawer tab, a drawer section, the prompt library), listened for on the `mux:command` bus so a drop-up's sticky exit and a voice command fold it the same way a chip does.
-The glass opacity is one CSS variable, `--rail-glass`, and it is measured rather than chosen: `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every theme in the stylesheet and requires it both to cost no theme its 4.5:1 and to stay under 90%, so a later contrast "fix" cannot pass by going opaque.
+The glass opacity is one CSS variable at `:root`, `--rail-glass`, shared with every drop-up, and it is measured rather than chosen: `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every theme in the stylesheet and requires it both to cost no theme its 4.5:1 and to stay under 95%, so a later contrast "fix" cannot pass by going opaque.
+The *single-layer* composition sets the number - a drop-up row is transparent over its panel where a popover chip has its own background - so testing only the chip would have let the drop-ups ship at an opacity that fails.
 
 ## Rail density
 

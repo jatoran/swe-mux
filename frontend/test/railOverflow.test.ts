@@ -5,11 +5,15 @@ import {
   railFitCount,
   railFocusTarget,
   railOverflowState,
+  railOverlayBox,
   railPageTarget,
   railPopoverClosingCommand,
-  railPopoverStyle,
+  RAIL_DROPUP_MAX_WIDTH_PX,
   RAIL_POPOVER_MAX_WIDTH_PX,
 } from '../src/railOverflow.ts'
+
+/** The whole window is visible: no soft keyboard, no pinch-zoom. */
+const wholeWindow = (width: number, height: number) => ({ left: 0, top: 0, width, height })
 
 test('rail edge controls appear only in directions with hidden content', () => {
   assert.deepEqual(railOverflowState({ scrollLeft: 0, scrollWidth: 300, clientWidth: 300 }), { left: false, right: false })
@@ -131,22 +135,74 @@ test('a rail narrower than its first chip pins nothing and shows only the overfl
   assert.equal(railFitCount({ widths: [], gap: 5, available: 400, overflowWidth: 42 }), 0)
 })
 
-test('the overflow popover opens upward, right-aligned to its chip, inside the viewport', () => {
-  const style = railPopoverStyle({ left: 1100, right: 1150, top: 860 }, { width: 1400, height: 900 })
-  assert.equal(style.width, `${RAIL_POPOVER_MAX_WIDTH_PX}px`)
-  // Right edge on the chip's right edge: 1150 - 520.
-  assert.equal(style.left, '630px')
-  // Anchored above the chip rather than below it, which is what "grows upward" means.
-  assert.equal(style.bottom, `${900 - 860 + 4}px`)
-  assert.ok(Number.parseInt(style.maxHeight, 10) <= 450)
+test('the overflow popover opens upward, on the rail\'s trailing edge, inside the viewport', () => {
+  // The rect is the trailing *cluster*, not the `+N` chip inside it, so the panel lands on
+  // the rail's edge whatever that row is carrying.
+  const box = railOverlayBox({ left: 1040, right: 1150, top: 860 }, wholeWindow(1400, 900), RAIL_POPOVER_MAX_WIDTH_PX)
+  assert.equal(box.width, RAIL_POPOVER_MAX_WIDTH_PX)
+  // Right edge on the cluster's right edge: 1150 - 520.
+  assert.equal(box.left, 630)
+  // The bottom *edge* sits just above the anchor, which is what "grows upward" means.
+  assert.equal(box.bottom, 856)
+  assert.ok(box.maxHeight <= 450)
 })
 
-test('a phone clamps the popover to the viewport instead of hanging off the rail edge', () => {
-  const style = railPopoverStyle({ left: 300, right: 360, top: 700 }, { width: 390, height: 760 })
-  assert.equal(style.width, `${390 - 16}px`)
-  assert.equal(style.left, '8px')
-  // Half the viewport at most, so a phone's popover never blankets the composer above it.
-  assert.ok(Number.parseInt(style.maxHeight, 10) <= 380)
+test('a drop-up gets a list width where the popover gets a grid width', () => {
+  const view = wholeWindow(1400, 900)
+  const dropup = railOverlayBox({ left: 300, right: 360, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  assert.equal(dropup.width, RAIL_DROPUP_MAX_WIDTH_PX)
+  // Same rule, one number apart: a list of one-line rows at grid width reads as a stretched
+  // menu, and a wrap grid of chips at list width is a column of one chip per row.
+  assert.ok(RAIL_DROPUP_MAX_WIDTH_PX < RAIL_POPOVER_MAX_WIDTH_PX)
+})
+
+test('a phone gives a rail overlay half its screen, on the screen\'s trailing edge', () => {
+  const view = wholeWindow(390, 760)
+  const box = railOverlayBox({ left: 300, right: 360, top: 700 }, view, RAIL_POPOVER_MAX_WIDTH_PX)
+  // Half the screen, so the terminal it is opened over stays readable beside it.
+  assert.equal(box.width, 195)
+  assert.equal(box.left, 390 - 195 - 8)
+  // Half the visible height at most, so it never blankets the composer above it.
+  assert.ok(box.maxHeight <= 380)
+
+  // And the *screen's* edge rather than the trigger's: a drop-up opened from a chip in the
+  // middle of the rail must land where the overflow popover lands, not in the middle.
+  const middle = railOverlayBox({ left: 120, right: 180, top: 700 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  assert.equal(middle.left, box.left)
+})
+
+test('a desktop keeps a rail overlay on its own trigger, where there is room to say so', () => {
+  const view = wholeWindow(1400, 900)
+  const left = railOverlayBox({ left: 300, right: 360, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  const right = railOverlayBox({ left: 1040, right: 1150, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  assert.equal(left.left, 360 - RAIL_DROPUP_MAX_WIDTH_PX)
+  assert.equal(right.left, 1150 - RAIL_DROPUP_MAX_WIDTH_PX)
+})
+
+test('the half-screen rule follows the device class, not the anchor', () => {
+  const anchor = { left: 700, right: 760, top: 700 }
+  // Exactly at the breakpoint is still the phone's layout, so still the phone's budget.
+  assert.equal(railOverlayBox(anchor, wholeWindow(760, 800), RAIL_POPOVER_MAX_WIDTH_PX).width, 380)
+  assert.equal(railOverlayBox(anchor, wholeWindow(761, 800), RAIL_POPOVER_MAX_WIDTH_PX).width, RAIL_POPOVER_MAX_WIDTH_PX)
+})
+
+test('an open soft keyboard shrinks what the overlay is allowed to fill', () => {
+  // The layout viewport stays 760 tall under `interactive-widget=resizes-visual`; only the
+  // visual one shrinks. The rail rides up with it, so the anchor moves too.
+  const keyboard = { left: 0, top: 0, width: 390, height: 420 }
+  const box = railOverlayBox({ left: 300, right: 360, top: 380 }, keyboard, RAIL_POPOVER_MAX_WIDTH_PX)
+  // Half of what is *visible*, not half of a viewport that runs behind the keyboard.
+  assert.ok(box.maxHeight <= 210, `maxHeight ${box.maxHeight} is measured against the layout viewport`)
+  // And the panel's top stays on screen rather than being pushed above it.
+  assert.ok(box.bottom - box.maxHeight >= 0)
+  assert.ok(box.bottom <= keyboard.height)
+})
+
+test('a rail too high in a short view stops hugging rather than opening off the top', () => {
+  // The minimum height is a floor, so an anchor with less room above it than that floor
+  // would otherwise be handed a panel whose first row is above the window.
+  const box = railOverlayBox({ left: 100, right: 200, top: 60 }, wholeWindow(390, 400), RAIL_POPOVER_MAX_WIDTH_PX)
+  assert.ok(box.bottom - box.maxHeight >= 0, 'the panel opened off the top of the view')
 })
 
 test('a selection that opens a drawer or the library collapses the popover; a rail key does not', () => {
@@ -195,13 +251,48 @@ test('the measured copy of a row is unpaintable, untouchable, and outside the sc
 })
 
 test('the trailing gear is reserved out of the fit budget and the status readout is not', () => {
-  const pane = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(pane, /class="rail-config" data-rail-fixed/)
+  assert.match(strip, /class="rail-config"\s+data-rail-fixed/)
   assert.match(strip, /querySelectorAll<HTMLElement>\('\[data-rail-fixed\]'\)/)
   // The readout's text changes under the row (a transient "Copied", a selection count).
   // Reserving it would move every chip beside it each time it appeared.
-  assert.doesNotMatch(pane, /aria-live="polite" data-rail-fixed/)
+  assert.doesNotMatch(strip, /aria-live="polite" data-rail-fixed/)
+})
+
+test('the overflow chip rides the trailing cluster, not the tail of the pinned chips', () => {
+  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const cluster = strip.slice(strip.indexOf('class="rail-row-trailing"'), strip.indexOf('</OverflowRail>'))
+  // Order inside the cluster is load-bearing: the readout is the only shrinking thing, so
+  // it goes first, and the chip sits between it and the gear.
+  assert.ok(cluster.indexOf('aria-live="polite"') < cluster.indexOf('ref={moreRef}'))
+  assert.ok(cluster.indexOf('ref={moreRef}') < cluster.indexOf('class="rail-config"'))
+  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const rule = declarations(styles, /\.terminal-action-scroll>\.rail-row-trailing\{([^}]*)\}/)
+  // Taking the row's slack is what puts the cluster - and so the chip - on the trailing edge
+  // however many chips happened to fit.
+  assert.match(rule, /flex:1 1 auto/)
+  assert.match(rule, /justify-content:flex-end/)
+  // An auto margin on the gear would push it away from the chip it now sits beside.
+  assert.doesNotMatch(declarations(styles, /\.terminal-action-rail \.rail-config\{([^}]*)\}/), /margin-left:auto/)
+})
+
+test('the panel is placed against the trailing cluster, so it lands on the rail\'s edge', () => {
+  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  // Anchoring to the `+N` chip instead would leave the panel a gear-width short of the edge
+  // on the one row that carries a gear, which is two placements for one control.
+  assert.match(strip, /anchor=\{trailingRef\.current\}/)
+})
+
+test('the popover offers the rail editor, and closes as it hands over', () => {
+  const popover = readFileSync(new URL('../src/RailOverflowPopover.tsx', import.meta.url), 'utf8')
+  assert.match(popover, /class="rail-overflow-configure"/)
+  // The editor replaces the whole rail area, so a panel left floating over it would be
+  // pointing at a surface that no longer exists.
+  assert.match(popover, /onClick=\{\(\) => \{ onClose\(\); onConfigure\(\) \}\}/)
+  // Chrome in the header, beside the close control - not a chip in the grid, where it would
+  // read as one more thing to press into the terminal.
+  const grid = popover.slice(popover.indexOf('rail-overflow-grid'))
+  assert.doesNotMatch(grid, /rail-overflow-configure/)
 })
 
 test('the terminal rail keeps the scroller that owns its touch-drag click suppression', () => {

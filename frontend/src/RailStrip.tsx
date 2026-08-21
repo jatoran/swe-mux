@@ -1,4 +1,4 @@
-import { cloneElement, type ComponentChildren, type VNode } from 'preact'
+import { cloneElement, type VNode } from 'preact'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import { OverflowRail } from './RailScroller'
@@ -37,8 +37,13 @@ import { railFitCount, railPopoverClosingCommand } from './railOverflow'
 interface RailStripProps {
   /** The row's chips, in configured order. Split between the row and its popover. */
   chips: VNode[]
-  /** Fixed furniture pinned to the row's trailing edge (status readout, the gear). */
-  trailing?: ComponentChildren
+  /** The status readout, on whichever row carries it. Shrinks and ellipsises rather than
+   *  taking room from the chips, so its text changing never moves one. */
+  status?: string
+  /** Opens the in-place rail editor. Given to whichever row carries the gear; the popover
+   *  offers it too, because "this rail is too full" is most often thought while reading
+   *  the overflow. */
+  onConfigure?: () => void
   /** Accessible name for this row's overflow popover. */
   label: string
 }
@@ -51,7 +56,7 @@ function reservedWidth(host: HTMLElement | null, gap: number): number {
   return fixed.reduce((total, element) => total + element.getBoundingClientRect().width + gap, 0)
 }
 
-export function RailStrip({ chips, trailing, label }: RailStripProps) {
+export function RailStrip({ chips, status, onConfigure, label }: RailStripProps) {
   const rowRef = useRef<HTMLDivElement>(null)
   const measureRef = useRef<HTMLDivElement>(null)
   const trailingRef = useRef<HTMLDivElement>(null)
@@ -141,21 +146,42 @@ export function RailStrip({ chips, trailing, label }: RailStripProps) {
     </div>
     <OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain={1.75} preserveSoftKeyboard>
       {chips.slice(0, pinnedCount)}
-      {overflow.length > 0 && <button
-        ref={moreRef}
-        type="button"
-        class={`rail-more${open ? ' rail-more-open' : ''}`}
-        aria-expanded={open}
-        aria-label={`${overflow.length} more action${overflow.length === 1 ? '' : 's'}`}
-        title={`${overflow.length} more action${overflow.length === 1 ? '' : 's'} — opens a panel that stays open`}
-        onClick={() => setOpen(value => !value)}
-      >+{overflow.length}</button>}
-      {trailing && <div class="rail-row-trailing" ref={trailingRef}>{trailing}</div>}
+      {/* The trailing cluster, which is the row's fixed furniture *and* the `+N` chip.
+          The chip lives here rather than after the last pinned chip so it has one place
+          on every row however that row is populated - the split leaves up to a chip's
+          width of slack, so trailing it behind the chips put it at a different offset on
+          every rail. The cluster takes the slack and pushes its contents right, so the
+          chip is always at the rail's trailing edge and its panel always opens from
+          there. The readout sits to its left and is the only shrinking thing in here. */}
+      {(overflow.length > 0 || status !== undefined || onConfigure) && <div class="rail-row-trailing" ref={trailingRef}>
+        {status !== undefined && <span aria-live="polite">{status}</span>}
+        {overflow.length > 0 && <button
+          ref={moreRef}
+          type="button"
+          class={`rail-more${open ? ' rail-more-open' : ''}`}
+          aria-expanded={open}
+          aria-label={`${overflow.length} more action${overflow.length === 1 ? '' : 's'}`}
+          title={`${overflow.length} more action${overflow.length === 1 ? '' : 's'} — opens a panel that stays open`}
+          onClick={() => setOpen(value => !value)}
+        >+{overflow.length}</button>}
+        {onConfigure && <button
+          class="rail-config"
+          data-rail-fixed
+          title="Customize this rail in place — drag, remove, add (All options… opens the full editor)"
+          aria-label="Customize actions"
+          onClick={onConfigure}
+        >⚙</button>}
+      </div>}
     </OverflowRail>
     {open && overflow.length > 0 && <RailOverflowPopover
       label={label}
-      anchor={moreRef.current}
+      // The whole trailing cluster, not the `+N` chip: the panel aligns to the rail's
+      // trailing edge, which is the cluster's right edge (the chip's own is a gear-width
+      // short of it on the row that carries one). The cluster's top is the chip's top,
+      // since it is a single centred row, so one element answers both axes.
+      anchor={trailingRef.current}
       onClose={() => setOpen(false)}
+      onConfigure={onConfigure}
     >{overflow}</RailOverflowPopover>}
   </div>
 }

@@ -119,13 +119,15 @@ Autofocus of the filter is gated on `hasSoftKeyboard()` **and on an `autoFocusTo
 
 `RailDropup.tsx` is the chrome only.
 
-- Upward placement through `anchoredPopoverStyle`, and dismissal on outside pointer or Escape.
-- Repositioning on resize and on capture-phase scroll, since the rail is itself a horizontal scroller and a trigger can pan out from under a fixed popover.
+- Upward placement through `railOverlayPlacement.ts`, shared with the rail's overflow popover, and dismissal on outside pointer or Escape.
+  It used to borrow `anchoredPopoverStyle` from the account switcher: the same *shape*, a different problem, since that one knows nothing about a phone's width budget or about the soft keyboard resizing the visual viewport and re-anchoring every fixed element under the transformed terminal surface.
+- Repositioning on resize, on capture-phase scroll, and on `visualViewport` resize and scroll, since the rail is itself a horizontal scroller, a trigger can pan out from under a fixed popover, and the keyboard's open and close fire nothing else.
+- Glass, at the shared `--rail-glass`: the panel, its sticky exits, and a hovered row. A drop-up row is transparent over that panel, so it is the *single-layer* composition that sets the number for every rail overlay (`layout-and-chrome.md`).
 - `holdSoftKeyboard` on pointer-down, and an arrow-key walk in document order.
 - The sticky first row that leads to the full drawer section, or a bar of them side by side when a picker has two exits.
 The five-row cap is CSS (`--rail-dropup-rows` over a fixed `--rail-dropup-row`), so it is a height and never a slice - capping by count would make the sticky row the only route to a sixth entry, and it is also why a second exit shares the sticky bar rather than taking a list row.
 
-A drop-up trigger may itself be inside the rail's overflow popover (`RailStrip.tsx`, `layout-and-chrome.md`), which is why `RailDropup` sits one z-index above it.
+A drop-up trigger may itself be inside the rail's overflow popover (`RailStrip.tsx`, `layout-and-chrome.md`), which is why `RailDropup` sits one z-index above it and why it anchors to its own trigger rather than to the rail.
 The two exemptions that make the pairing work belong to the popover rather than to this component: the pointer that opens a drop-up is not an outside press for the panel behind it, and Escape belongs to the drop-up for as long as one is open.
 Nothing here changes for that case, which is the point: the panel holds the same real chips the row does, so a picker opened from it is the same picker.
 
