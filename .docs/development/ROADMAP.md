@@ -3609,7 +3609,36 @@ construction, which is the same property that already makes it the one merge sha
 outside a worktree.
 Every prerequisite is shipped: worktree tooling (`../design/features/git.md`), the Phase 7.6
 `off`/`draft`/`granted` authority grant, the Phase 4/5 queue and its readiness contract, the
-project-actions trust contract for repository-owned tasks, and Tier 0 fact capture.
+bounded daemon-owned subprocess runner worktree bootstrap already uses, the project-actions
+exact-content approval model, and Tier 0 fact capture.
+
+### Decisions taken before the build (2026-08-20)
+
+- **The verification task is not a Project Action.** The two mechanisms it would have needed are
+  both refused by their own designs: an action's cwd is bounded by the canonical Project root and
+  is *deliberately* denied the sibling-worktree widening that spawns get
+  (`../design/features/project-actions.md`), and an action step becomes a one-shot terminal
+  session rather than a captured subprocess. The pipeline needs an exit code and bounded output
+  inside a tree that lives outside the Project root, which is exactly what `worktree_setup.py`
+  already does for bootstrap.
+  The verify runner therefore mirrors setup - `[worktree].verify_command` in
+  `.swe-mux/config.toml` else the executable `.worktree-verify` convention - and borrows only the
+  *trust* half from project actions: a machine-local SHA-256 over the resolved command or script
+  bytes, keyed by canonical Project root, un-approved by any edit to it.
+  Say the widening out loud rather than inheriting it quietly: worktree setup runs once per
+  human-initiated create, while verify runs repeatedly on an agent's request, and the fingerprint
+  approval is what makes that acceptable. An agent that edits the verify script un-approves it,
+  so an agent still cannot approve its own command.
+- **One trunk per Project.** A land targets the Project's primary checkout on its effective
+  comparison ref (`git_review.resolve_comparison_ref`, the same inference the Git drawer and the
+  session monitor already share), and any other target refuses. One trunk is one serialization
+  domain, and fast-forward-only is only a safety proof against a trunk the daemon can identify.
+- **The agent-facing request ships in this phase.** Operator-only would leave the operator doing
+  the serializing, which is the whole thing the phase removes. The `draft` default is what makes
+  that safe to ship at once.
+- **A busy worktree waits rather than bouncing.** An agent that requests a land and keeps working
+  is the common case, not an error, so the item holds in a visible `waiting` state and retries
+  until a bounded timeout, and only then hands back.
 
 ### The request, not the action
 
@@ -3619,18 +3648,43 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
 - [ ] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
   `off`/`draft`/`granted`, default `draft` so a human approves each land - registered as its own
   `land_queue` automation in the enablement DAG and capped by an hourly budget.
+  Its own automation id rather than a second meaning for `session_control`: that one acts on a
+  *session*, this one acts on a *repository*, and they deserve separate switches and separate
+  budgets.
+- [ ] Bind the request to what it was made about: the worktree root and the branch tip OID at
+  request time. A branch that moved before the item runs is a refusal, not a silent land of
+  something else.
 
 ### The pipeline
 
 - [ ] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
-  in arrival order.
+  in arrival order. Verification is measured parallel-safe across worktrees, but `advance` re-runs
+  every remaining item after each land anyway, so concurrency buys only the first item and is left
+  as a config ceiling the store's shape permits rather than as v1 behaviour.
+- [ ] Check preconditions before **every** mutation rather than once at enqueue, and fail closed:
+  the worktree is clean on tracked paths, its branch tip still matches the bound OID, the resolved
+  trunk is the main tree and not a worktree (the `--absolute-git-dir` versus `--git-common-dir`
+  test, never a name comparison), and no live session rooted in that worktree is `working`.
+  The last one is the hazard the pipeline exists inside: reconcile writes into a checkout an agent
+  owns and may be mid-turn writing to, and `delivery_readiness` already answers that question with
+  the same fail-closed predicate `interrupt` gates on.
+- [ ] Hold a busy item in a visible `waiting` state with its reason, retrying on the ordinary tick
+  until a bounded timeout; only the timeout hands back. A wait is a state a human can read, never
+  an invisible sleep.
 - [ ] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
   records the conflicting paths, and hands the request back to the originating agent session as a
   bounded deterministic template through the Phase 5 queue - a draft by default, promotable by the
   ordinary auto-delivery grant like any other item.
-- [ ] Verify: run the Project's declared verification task inside the worktree under the shipped
-  project-actions trust contract - exact-content approval, revoked by any change to the task file -
-  and record the exact commit OID that passed.
+- [ ] Verify: run the Project's declared verification command inside the worktree through the
+  daemon's own bounded-subprocess runner, under the fingerprint approval above, and record the
+  exact commit OID that passed.
+  Run it verbatim and read its real exit code: never pipe it, never trim it, never wrap it in a
+  shell that can replace the status. A gate command trimmed inside its own pipeline has already
+  shipped a failing suite green in this repository once.
+  Running under the daemon's `base_session_env` rather than an agent shell also removes the known
+  intermittent false failure `.worktree-verify` shows in an agent shell, by construction.
+- [ ] Skip re-verification only for a reconcile that reported nothing to merge. A verified OID
+  still standing is the one case where re-running the gate proves nothing.
 - [ ] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
   the verified OID or the checkout is dirty on touched paths. A refusal is a reported failure,
   never a retried force.
@@ -3639,6 +3693,8 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
   reconciles.
 - [ ] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
   end: who asked, what verified, which OID moved the trunk.
+- [ ] Keep the queue itself machine-local, like scheduled runs: a land queue committed to a
+  repository would arm itself in every clone and every worktree of it.
 
 ### Boundaries
 
@@ -3648,6 +3704,11 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
 - [ ] A verification failure hands back like a conflict, with the failing output attached. Retries
   are bounded and explicit - at most one, and only when configured - never silent, because a flaky
   gate that loops is worse than one that stops.
+  A retry that fails *differently* from the first attempt stops rather than retrying again: two
+  unlike failures are evidence about the gate, not about the branch.
+- [ ] A handback body is bounded and redacted before it becomes an agent's prompt: the tail of the
+  output at a few KiB through the same `looks_like_secret` gate every other excerpt uses, keyed by
+  the request id as its `correlation_id` so the queue's existing uniqueness index dedupes repeats.
 - [ ] The daemon is the single writer for the trunk merge, which also closes the race two sessions
   otherwise have over the primary checkout's one index.
 - [ ] Kill switches at the config level and per Project, per the completion policy; `off` is inert
@@ -3662,7 +3723,12 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
   reconciles against the first's result automatically, and the conflicting third is handed back
   with its conflict list while the trunk stays clean.
 - [ ] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
-  failure - are covered by tests, and each reports rather than retries.
+  failure, a trunk that resolves to a worktree - are covered by tests, and each reports rather than
+  retries.
+- [ ] A worktree whose session is mid-turn holds in a readable `waiting` state and lands once that
+  session settles, and only a bounded timeout converts the wait into a handback.
+- [ ] The verify command is refused until its exact bytes are approved, and editing it un-approves
+  it, so no agent can author the command its own land runs.
 - [ ] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
   budget accounting.
 - [ ] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
