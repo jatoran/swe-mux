@@ -51,7 +51,7 @@ from .assistant import (
     AssistantService,
     AssistantStore,
     action_snapshot,
-    apply_note_edit,
+    apply_note_write,
 )
 from .attention_narration import NARRATION_RULE_ID, AttentionNarrator
 from .attention_ranking import AttentionRankingService
@@ -1645,12 +1645,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             project=_registered_identity(project),
         )
 
-    async def _assistant_note_edit(
+    async def _assistant_note_write(
         project_id: str, note_reference: str | None, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """One granular note edit through the ordinary revisioned write path.
+        """One note write through the ordinary revisioned write path.
 
-        The transform itself is `assistant.apply_note_edit` (pure, tested); this
+        The transform itself is `assistant.apply_note_write` (pure, tested); this
         closure supplies what only the daemon has — the note inventory, the
         current revision, and the change event other devices refresh on.
         """
@@ -1668,7 +1668,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             default_title=f"{project.name} notes",
             project=identity,
         )
-        edited = apply_note_edit(str(current.get("markdown") or ""), payload)
+        edited = apply_note_write(str(current.get("markdown") or ""), payload)
         result = await write_note(
             project.root,
             storage_id,
@@ -1683,38 +1683,6 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             scope="project",
             project_id=project.id,
             note_id=str(resolved["note_id"]),
-            revision=result.get("revision"),
-        )
-        return result
-
-    async def _assistant_note_append(project_id: str, text: str) -> dict[str, Any]:
-        project = projects.projects.get(project_id)
-        if project is None:
-            raise ValueError("unknown project")
-        identity = _registered_identity(project)
-        storage_id = _storage_note_id(project, project.id)
-        current = await read_note(
-            project.root,
-            storage_id,
-            default_title=f"{project.name} notes",
-            project=identity,
-        )
-        base = str(current.get("markdown") or "")
-        stamped = f"{base.rstrip()}\n\n{text.strip()}\n" if base.strip() else f"{text.strip()}\n"
-        result = await write_note(
-            project.root,
-            storage_id,
-            stamped,
-            str(current.get("revision") or "missing"),
-            default_title=f"{project.name} notes",
-            project=identity,
-        )
-        await events.emit(
-            "note_changed",
-            source="assistant",
-            scope="project",
-            project_id=project.id,
-            note_id=project.id,
             revision=result.get("revision"),
         )
         return result
@@ -1808,9 +1776,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         end_op=lambda session, reason: _end_session_gracefully(app, session, reason),
         history_search=_assistant_history_search,
         note_read=_assistant_note_read,
-        note_append=_assistant_note_append,
         note_list=_assistant_note_list,
-        note_edit=_assistant_note_edit,
+        note_write=_assistant_note_write,
         create_project_op=_assistant_create_project,
     )
     app["assistant"] = assistant

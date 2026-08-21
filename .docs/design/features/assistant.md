@@ -21,7 +21,7 @@ Asked for something that is coding, it routes: queue a message to an existing se
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
-  - *reversible* (queue an inert draft, append to or granularly edit a project note — `edit_project_note`: append, prepend, insert at a 1-indexed line, or replace a unique text span (`apply_note_edit`, pure) through the ordinary revisioned note write — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
+  - *reversible* (queue an inert draft, write to a project note — `write_project_note`, below — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
   - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
   A pending or scheduled action is typed state (`assistant_actions` row) rendered as a card, and a daemon restart expires anything still pending — a confirmation minted by a dead daemon can never execute.
 - **Dialog state is daemon-owned** (`assistant_dialogs`/`assistant_messages`/`assistant_actions` in SQLite, one worker thread like `voice_clips`).
@@ -121,6 +121,35 @@ synthetic `dispatched` `assistant_action` event carries the work (with
 field the bus lifts out of the payload) and the device reports back through the same
 `ui-result` endpoint UI commands use.
 
+## Writing notes
+
+`write_project_note` is the only note-write tool - it replaced `append_project_note` and `edit_project_note`, whose split taught the model a distinction operators do not make.
+The transform is `apply_note_write` (pure, tested); the daemon closure supplies the note inventory, the current revision, and the `note_changed` event other devices refresh on.
+
+**`top` is the default and it means under the note's leading heading run**, not byte 0.
+The scanner consumes a contiguous run of ATX headings from the start of the body - blank lines between them are fine, anything else ends the run - so `# swe-mux Notes` followed by `## Unsorted` is one preamble and a dictated note lands beneath both.
+A heading with a paragraph under it is a section boundary, not preamble.
+Fenced code is tracked while scanning, so a `#` line inside a pasted shell transcript is a comment rather than the note's structure - a mis-detected fence would make some pasted `# comment` the note's title and write into the middle of a code sample.
+
+A body that opens with prose usually has a lead paragraph to respect, and the write goes above it rather than inventing a structure.
+The exception is a **buried title** (`_stranded_title`): the swe-mux note this feature exists for opens with three dictated items sitting above `# swe-mux Notes`, because the old `prepend` wrote to byte 0.
+Respecting that as a lead paragraph would stack every new write on the damage forever, so a level-1 heading within `NOTE_TITLE_SEARCH_LINES` of the start, with nothing but non-heading text above it, counts as a title that got buried and `top` goes under it.
+The level and distance bounds are the whole guard: a `## Later` near the bottom of an all-prose note is a section following an introduction, not a title, and does not fire.
+Existing strays are skipped, never moved - the tool writes, it does not reorganize.
+
+The other positions: `section` writes under a named heading (resolving case-folded, exact matches winning over substrings, and refusing ambiguity the way `replace` refuses a non-unique find); `after`/`before` sit beside a unique `anchor` span; `at_line` makes the text *become* a 1-indexed line; `replace` swaps a unique `find` span.
+Every position except `at_line` normalizes the seam to exactly one blank line on each side so a dictated paragraph never glues onto the next; `at_line` is deliberately exact, because the model picks that number off the numbered view and the number has to mean what it says.
+
+**`end` exists but is never inferred.** "Add", "jot", "note this down" and "append" all mean `top` - a note is a stack of things you thought of, and nothing is ever pinned to the bottom of one.
+Nothing at the tool layer can verify what the operator said, so the guard is legibility rather than validation: the schema and system prompt both say `end` requires an explicit request, and `restate_action` writes "at the very END of" into the card **and** into the spoken announcement.
+The spoken form drops the text preview for latency but keeps the position, because that is the detail the operator would otherwise have to undo by hand and the cancel window is only useful if the announcement names it.
+
+Every turn carries the focused project's primary note as **numbered lines plus its heading outline** (`_note_context` → `note_page`/`note_outline`, first `NOTE_CONTEXT_LINES`).
+That is what makes "jot this down" one tool call: without it the model either burns a round trip reading the note or writes blind, and writing blind is how text ended up above the note's own title.
+The tail is addressable rather than truncated into silence - the context names the `read_project_note from_line=…` that pages further down, and that tool returns numbered lines and the outline too.
+Scoped to the focused session's project, or to the only project when there is exactly one; guessing among several would hand the model an outline for a note the operator did not mean.
+A missing or unreadable note is swallowed to a debug log: context assembly never fails a turn.
+
 ## Creating projects
 
 `create_project` mints a project that does not exist yet — the one assistant mutation that touches the filesystem — and its whole safety story is one constraint: **the model supplies a name, never a path.**
@@ -200,7 +229,7 @@ correctness does not depend on it either way, only time-to-first-word).
 
 - `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution, the duplicate guard and action ledger), `AssistantStore`, `_SentenceStreamer`, `restate_action`/`action_announcement`, the tool definitions, the primer.
 - `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path.
-- `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/append closures, history search, spawn/interrupt/end operations shared with session control).
+- `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/write closures, history search, spawn/interrupt/end operations shared with session control).
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
 - `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.
 - `frontend/src/AssistantPanel.tsx` — the conversation view and action cards.
