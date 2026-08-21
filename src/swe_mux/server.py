@@ -14275,11 +14275,14 @@ async def list_land_requests(request: web.Request) -> web.Response:
 
 
 async def request_land(request: web.Request) -> web.Response:
-    """Enqueue an operator-initiated land.
+    """Enqueue an operator-initiated land, or a verify-only run of the same pipeline.
 
     The operator *is* the authority the grant defers to, so this does not consult
     it - but it consults nothing else differently either: the same preconditions,
     the same fixed vocabulary, the same serialisation.
+
+    `kind` defaults to `"land"`, so a caller written before verify-only existed asks
+    for exactly what it always asked for.
     """
     body = await request.json()
     project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
@@ -14288,11 +14291,15 @@ async def request_land(request: web.Request) -> web.Response:
     worktree_root = str(body.get("worktree_root") or "").strip()
     if not worktree_root:
         raise ValueError("worktree_root is required")
+    kind = str(body.get("kind") or "land").strip()
+    if kind not in ("land", "verify"):
+        raise ValueError("kind must be 'land' or 'verify'")
     try:
         row = await request.app["land_queue"].request(
             project_id=project.id,
             project_root=project.root,
             worktree_root=worktree_root,
+            kind=kind,
             origin="operator",
         )
     except LandRefusal as exc:

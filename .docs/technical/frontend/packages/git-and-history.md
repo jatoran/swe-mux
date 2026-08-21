@@ -50,6 +50,7 @@ Also: read-specific timeout guidance, failed-removal refresh with the mutation e
 Landing has no view of its own and is split by what each part is a *property of*.
 
 `GitLandRow.tsx` draws the act inside the expanded Map row of the worktree it acts on: the Land button, that request's live state, a Cancel, and what stopped it last time including a conflict's paths.
+It offers **only** Land: a verify-only run is an agent surface (`request_verify`), and an operator with a worktree open has a terminal in it, so the row renders such requests without being able to start one.
 It draws **nothing Project-wide at all**, because a row is repeated once per worktree and a Project-wide fact drawn there is drawn N times.
 A row that cannot land names the blocker and *opens the strip* instead of drawing a second copy of its control.
 
@@ -68,12 +69,17 @@ It opens itself only while landing is blocked - the install stop is off, or the 
 - `verifyProgressLabel` has exactly three forms (`step k of N · name · elapsed`, `step k · name · elapsed`, `elapsed · N lines`) and **never a percentage**, asserted rather than trusted in `test/gitLand.test.ts` and `test/renderer/git-land.spec.ts`.
 - A `waiting` row takes the idle tone rather than the warn one, so a normal hold does not train the operator to intervene.
 - `landGateNote` draws **only** a skipped gate, on the row, in the strip's queue and history, and on the summary line while it runs.
-  A full gate gets no note, because the states already narrate it and a chip on every row would bury the one that matters; a documentation-only land has no such state, going from merging the trunk straight to fast-forwarding.
+  A full gate gets no note, because the states already narrate it and a chip on every row would bury the one that matters; neither a documentation-only land nor a reusing one has such a state, going from merging the trunk straight to fast-forwarding.
+  The two skips read differently on purpose: one means nobody has ever run this content through the suite, the other means this queue ran exactly it, and a reader deciding whether to trust the row needs them apart.
 - An unrecognised `verify_gate` parses to `''` rather than to a gate that ran, so no value this build does not know can render as "nothing verified this".
+- `landKindNote` draws **only** a verify-only request, beside the branch and *before* the states it qualifies, for the mirror-image reason: a verify-only row moves through `Merging trunk` and `Verifying` in a landing's own words and stops one step early, which is when nobody is still watching.
+  A land gets no note, and an unrecognised `kind` parses to `land` - a verify-only run drawn as a land under-claims, while a land drawn as a verify-only run would tell a reader a trunk did not move when it did.
 - `landAttentionRow` is the supersession rule: a handed-back or refused row stops speaking for the summary once a **later** request for the same branch reaches a state that answered the branch, because nothing ever closes the old row and the redo is a new id.
+  `verified` counts among those states, because the redo loop a handback asks for often runs through a verify-only request first, and leaving it out would reproduce the same defect one request kind over.
   `cancelled` does not supersede - withdrawing a re-request is not an answer - and ties do not either, so a bounce keeps asking for attention unless something demonstrably followed it.
   It is derived at the reading rather than written back, because `land_events` and the history disclosure are an audit that must keep saying the handback happened.
 - `recentLandings` is what an idle summary says instead of the stalest historical row, and it is a floor rather than a total: `landed` only, a 24-hour window, over the newest 100 rows the daemon returns.
+  `verified` is not counted, because nothing moved and the line says *landed*.
 
 `landSetupPrompt.ts` is the copyable prompt the strip offers for setting verification up in *another* repository, shown in a collapsed disclosure beside the editor rather than only copied.
 It is a frontend template because every fact in it is a property of the land queue's design rather than of an install, and the one variable is the script convention's name the gate payload already carries.

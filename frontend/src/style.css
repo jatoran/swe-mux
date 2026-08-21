@@ -4254,6 +4254,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* A skipped gate. Amber rather than muted: it is the one thing about a finished land
    that a reader must not scan past, since the row's states cannot show it. */
 .git-land-gate-note{color:var(--amber);font-size:8px;white-space:nowrap}
+/* Which act this row is, when it is not the usual one. Muted rather than amber: a
+   verify-only request is not a warning, it is a different request - what it must not do
+   is read as a landing, and a quiet qualifier beside the branch is enough for that. */
+.git-land-kind-note{color:var(--muted);font-size:8px;white-space:nowrap;letter-spacing:.04em;text-transform:uppercase}
 .git-land-reason{margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
 .git-land-paths{display:grid;gap:2px;margin:0;padding-left:14px;font-size:9px}
 .git-land-paths code{overflow-wrap:anywhere}

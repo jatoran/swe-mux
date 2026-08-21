@@ -184,6 +184,21 @@
   `verify` step still present in the trail and the class persisted on the row, because a
   documentation-only land never enters `verifying` and would otherwise read exactly like
   one that passed three minutes of pytest.
+  A *second* way to skip it obeys the same audit rule: a request comes in one of two
+  **kinds**, and the kind decides exactly one thing - whether the fast-forward happens.
+  A `verify` request runs every earlier step identically, which is what makes its verdict
+  the verdict a land would have produced, and that verdict is kept against the git
+  **tree** it ran over and the **digest** of the command that ran (the tree, not the
+  commit: a reconcile over an unchanged trunk makes a new commit over identical content,
+  which is exactly the case a commit key would miss). A later land over the same content
+  skips the gate and records the reuse *with its key*, so it is checkable rather than
+  asserted; a moved trunk yields a new tree and the gate runs again, which is correct.
+  Only a run the queue executed is ever kept - an agent's own shell run is self-reported
+  and has a file-swap loophole (run modified bytes, restore the approved file) - and that
+  same asymmetry is why a green self-run does not let an agent land itself: the gate is
+  the expensive part, not the authoritative one, and landing outside the queue puts a
+  second writer on the primary checkout, skips the per-mutation preconditions, and leaves
+  the audit and provenance with a hole where that land was.
   A second rule governs what a *running* gate may say: every signal is observed or absent,
   never estimated. A step number counts markers the gate itself printed, a step *total*
   exists only where a byte-identical run has already passed and is withdrawn the moment a

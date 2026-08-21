@@ -83,7 +83,9 @@ That is what stops an agent approving the command its own land runs - editing th
 
 It owns the *lifetime* of a gate's progress reading: created per attempt, seeded from the recorded plan for that digest, attached to a `verifying` row by `status()` and dropped the instant the process ends, and recorded as a new plan only when the run passed.
 
-It also owns *which* gate runs: between reconcile and verify it classifies the change set, records the decision on both outcomes, and either enters `verifying` or transitions straight to `landing` with the `verify` step recorded as `skipped`.
+It also owns *which* gate runs: between reconcile and verify it classifies the change set, records the decision on both outcomes, and either enters `verifying` or clears the gate without it - as `skipped` for a documentation-only change set, or as `reused` when a verdict this queue produced already stands over the same tree under the same digest.
+It owns the *kind* too, which decides exactly one thing - whether the fast-forward happens - so a verify-only request runs every earlier step identically and settles as `verified`, and its verdict is therefore the verdict a land would have produced.
+`_clear_gate` is the one place that decides where a cleared gate leads, so the three ways of clearing it cannot drift apart about it.
 
 And it owns whether the handback may reach its author **unattended** (`_reply_arming`): only the request's own origin session, only on the run that asked, only for an agent's request, only while the Project still permits landing, and once per request.
 The request is the consent, so the narrowing of the Phase 5 floor is exactly as wide as the request and no wider; the decision and its reason are recorded on the handback event, because a draft nobody delivered otherwise reads exactly like an answer that arrived.
@@ -110,12 +112,14 @@ It fails closed, and identifies the main tree by `--absolute-git-dir` versus `--
 
 ### `land_store.py`
 
-`land_requests`, `land_events`, and `land_verify_plans` on a dedicated worker thread.
+`land_requests`, `land_events`, `land_verify_plans`, and `land_verify_memos` on a dedicated worker thread.
 
 - Conditional state transitions, the per-step audit trail, and restart recovery of orphaned steps.
 - `verify_gate` on the request row, added at schema version 3 through the `PRAGMA table_info` column migration and backfilled to `''` rather than to `full`.
 - `armed_replies` on the request row (schema version 4, same migration), spent through the conditional `claim_armed_reply` so the per-request cap on unattended handbacks is a claim rather than a read-then-write, and `open_origin_requests`, the live-request-per-origin read behind the reply window.
 - The two partial unique indexes that make one-request-per-branch and one-land-per-trunk properties of the schema rather than of the worker.
+- `kind` on the request row (schema version 5, same migration), backfilled to `'land'` - which here is a fact about the column rather than only about history, since nothing could ask for anything else.
 - The upserted per-digest record of what a *passing* gate's steps were; a malformed one reads back as no plan, never as a wrong total.
+- The upserted per-`(project_root, tree_oid, digest)` record of a gate verdict that already stands, read under a caller-supplied `not_before` floor. There is deliberately no writer here but the pipeline's own observed pass.
 
 **Not:** policy, git, or HTTP; and never the live reading of a running gate, which is deliberately not persisted.

@@ -484,11 +484,14 @@ class AutoDeliveryController:
 
         There are two kinds of evidence, and they are the same fact about two
         pipes. ``kind="message"`` is a delivered agent message awaiting a reply.
-        ``kind="land"`` is a land request this session made that the daemon has
-        not answered yet (`land-queue.md`) - the same waiting half of the same
+        ``kind="land"`` is a land-queue request this session made that the daemon
+        has not answered yet (`land-queue.md`) - the same waiting half of the same
         bounded exchange, except that what owes the answer is the daemon rather
         than a peer, and a session that asked to land goes quiet *by definition*,
-        so this is the case where the lapse bites hardest. A message window wins
+        so this is the case where the lapse bites hardest. It covers a verify-only
+        request too, which waits in exactly the same way; ``request_kind`` on the
+        entry says which was asked for, and the evidence kind stays the pipe's
+        name rather than the request's. A message window wins
         when a session somehow has both, because it carries the thread budget.
 
         Three things keep it from being a widening:
@@ -534,7 +537,7 @@ class AutoDeliveryController:
                     "thread_messages_limit": 0,
                     **{
                         key: entry[key]
-                        for key in ("request_id", "branch", "state")
+                        for key in ("request_id", "branch", "request_kind", "state")
                         if key in entry
                     },
                 }

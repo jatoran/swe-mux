@@ -969,6 +969,12 @@ class Config:
     # a flaky gate that loops is worse than one that stops, and a retry that fails
     # differently from the first attempt stops rather than retrying again.
     land_retry_verification: bool = False
+    # How long a green gate verdict stands for the exact (git tree, command digest) it
+    # was observed on, so a verify-only run and the land that follows it do not spend
+    # the same minutes twice. Bounded rather than forever because a tree hash is a claim
+    # about *content* and the machine underneath it drifts - an installed dependency, a
+    # toolchain, an OS update - none of which changes the tree. Zero disables reuse.
+    land_verify_memo_seconds: float = 24 * 3600.0
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -1533,6 +1539,10 @@ def _validate(config: Config) -> None:
         errors["land_hourly_budget"] = "must be between 0 and 1000 land requests per hour"
     if not 60 <= config.land_hold_timeout_seconds <= 24 * 3600:
         errors["land_hold_timeout_seconds"] = "must be between 60 seconds and 24 hours"
+    if not 0 <= config.land_verify_memo_seconds <= 7 * 24 * 3600:
+        errors["land_verify_memo_seconds"] = (
+            "must be between 0 (no reuse) and 7 days"
+        )
     if not 1 <= config.scheduled_runs_poll_seconds <= 300:
         errors["scheduled_runs_poll_seconds"] = "must be between 1 and 300 seconds"
     if not 1 <= config.scheduled_run_retention_days <= 3650:

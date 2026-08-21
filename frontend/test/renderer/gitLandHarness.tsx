@@ -85,6 +85,11 @@ globalThis.fetch=async(input,init)=>{
        branch:'worktree-gamma',trunk_ref:'master',origin:'operator',state:'landed',
        created_at:1786700000,updated_at:1786700300,finished_at:1786700300,
        trunk_before:'c'.repeat(40),landed_oid:'d'.repeat(40)},
+      // A verify-only request that cleared its gate. It moved no trunk, so it has no
+      // OID pair to draw and must not read as a landing anywhere on this surface.
+      {id:'lnd_checked',project_id:project.id,project_root:project.root,worktree_root:'D:\\wt\\delta',
+       branch:'worktree-delta',trunk_ref:'master',origin:'agent',kind:'verify',state:'verified',
+       created_at:1786700400,updated_at:1786700600,finished_at:1786700600},
     ],
   })
   throw new Error(`Unexpected harness request: ${url}`)

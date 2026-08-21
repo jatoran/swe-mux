@@ -68,6 +68,10 @@ def test_every_write_tool_is_covered_by_a_live_wire_test() -> None:
         "interrupt",
         "end_session",
         "request_land",
+        # Driven in the land canary, from the same worktree and the same session: the
+        # two share every bound and differ only in which step the pipeline stops at, so
+        # a second agent spawn would prove nothing the first does not.
+        "request_verify",
     }
     covered_elsewhere = {"run_action"}
     assert set(WRITE_TOOL_NAMES) == driven_on_the_wire | covered_elsewhere
@@ -312,11 +316,25 @@ async def test_request_land_enqueues_the_callers_own_worktree(
         )
         assert pid
 
+        # The verify-only kind first, because one branch holds one request at a time:
+        # both tools reach the same service over the same wire and the only difference
+        # is which step the pipeline stops at.
+        checked, check_error = await daemon.call_tool(
+            token, "request_verify", {"reason": "wire canary"}
+        )
+        assert not check_error, checked
+        assert checked["state"] == "queued", checked
+        assert checked["kind"] == "verify", checked
+        assert checked["branch"] == "worktree-alpha", checked
+        cancelled = await daemon.client.delete(f"/api/land/{checked['id']}")
+        assert cancelled.status == 200, await cancelled.text()
+
         payload, is_error = await daemon.call_tool(
             token, "request_land", {"reason": "wire canary"}
         )
         assert not is_error, payload
         assert payload["state"] == "queued", payload
+        assert payload["kind"] == "land", payload
         assert payload["branch"] == "worktree-alpha", payload
 
         # The same call from the trunk itself has nothing to land into.
