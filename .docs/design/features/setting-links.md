@@ -146,6 +146,7 @@ only route to the owning overlay.
 |---|---|---|---|
 | Clipboard section (Actions tab) | `clipboard_history_enabled` | install | grant |
 | Queue pane | `auto_delivery_enabled` | install | grant |
+| Queue pane (grant lapsed for idleness) | `auto_delivery_session_ttl_minutes` | install | link (a value, not a switch) |
 | Fleet Queue | `auto_delivery_enabled` | install | grant (inline) |
 | Approval chip menu | `approval_auto_enabled` | install | grant (inline) |
 | Schedule tab (list) | `scheduled_runs_enabled` | install | grant |

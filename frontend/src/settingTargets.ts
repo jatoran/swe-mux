@@ -50,6 +50,14 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Prompt queue', setting: 'auto_delivery_enabled',
     label: 'Allow auto-delivery for agent conversations', where: 'Settings → Prompt queue',
   },
+  // How long a conversation may sit idle before its grant lapses. A *value*
+  // rather than a switch - a gate can honestly offer "turn this on", never "pick
+  // a number" - so it stays a link, and the surfaces that report a lapse route
+  // here rather than growing a second editor for the same bound.
+  'queue.grantWindow': {
+    surface: 'settings', section: 'Prompt queue', setting: 'auto_delivery_session_ttl_minutes',
+    label: 'Idle minutes before a grant lapses', where: 'Settings → Prompt queue',
+  },
   'queue.agentMessaging': {
     surface: 'settings', section: 'Prompt queue', setting: 'agent_messaging_enabled',
     label: 'Allow agent-to-agent messages', where: 'Settings → Prompt queue',

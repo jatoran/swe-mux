@@ -271,7 +271,7 @@
   `accept_agent_interjections`, `disabled_reason`), one reserved `*` row for the emergency
   pause, and the persisted
   proving-period counters (`auto_sent`, `auto_refused`, `auto_failed`, `unsafe_reported`,
-  `proving_since`). The store carries a v1→v2 migration: the Phase 5 columns are added in
+  `auto_lapsed`, `proving_since`). The store carries a v1→v2 migration: the Phase 5 columns are added in
   place, because `CREATE TABLE IF NOT EXISTS` would otherwise reach only fresh databases.
   `accept_agent_messages` and `accept_agent_interjections` both keep a column default of `0`
   while the conversation-default grant writes `1` explicitly. A column default would also land
@@ -291,6 +291,19 @@
   reason that clears on evidence rather than on a human act, so the store recognizes it (the
   current string and the two earlier spellings) and restores the grant when a human sends by
   hand or the session writes a reply (`features/auto-delivery.md`).
+  Schema v5 adds the **lapse audit** - `disabled_at`, `lapse_idle_seconds`,
+  `lapse_window_minutes`, `lapse_pending` - written only by the idle lapse and cleared by every
+  other write to the row. The reason it is stored rather than derived is that a lapse is the
+  only disable with no act behind it: an opt-out, a failed delivery, and a spent send budget
+  are each explained by the thing that happened, while a lapse leaves nothing but a sentence,
+  and the operator asking whether the window is too short and the sender asking why its message
+  never moved both need the numbers that were true at that moment. All four columns are
+  nullable and are deliberately **not** backfilled: a row that lapsed before they existed lost
+  the evidence, and inventing a zero for it would read as "lapsed the instant it was granted".
+  The counterpart bound has no column at all: whether an exchange is holding a lapse off is
+  derived from `queue_messages` (the caller's most recent `sent` agent message, inside the
+  reply window, in a thread that still has budget), like thread identity and chain depth, so no
+  second table can disagree with the audit trail.
 - `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start or
   reopen an agent session on their own, and their run history.
   A definition is a deferred `SpawnRequest` (`project_id`, `backend`, `profile_id`, `cwd`,

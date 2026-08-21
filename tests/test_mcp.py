@@ -1277,6 +1277,7 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "project_actions",
         "spawn_requests",
         "notify",
+        "revoke_message",
         "request_spawn",
         "run_action",
         "interrupt",

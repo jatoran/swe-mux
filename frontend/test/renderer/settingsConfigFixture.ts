@@ -59,6 +59,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "auto_delivery_quiet_end": "",
   "auto_delivery_quiet_start": "",
   "auto_delivery_refusal_backoff_seconds": 30.0,
+  "auto_delivery_reply_window_minutes": 30,
   "auto_delivery_session_ttl_minutes": 60,
   "auto_delivery_stable_seconds": 8.0,
   "automation_concurrency": 2,

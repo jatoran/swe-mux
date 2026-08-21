@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
 import { GrantGate } from './GrantGate'
+import { SettingLink } from './SettingLink'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
 import { agentTargetName, agentTargets } from './agentTargets'
@@ -9,7 +10,8 @@ import {
   fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, reportUnsafeDelivery,
   retargetQueueMessage, scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage,
   setAutoPaused, setSessionAutoPolicy,
-  type QueueAutoStatus, type QueueMessage, type QueueSendOutcome, type QueueTargetView,
+  type QueueAutoSession, type QueueAutoStatus, type QueueMessage, type QueueSendOutcome,
+  type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
 import { deliversHarnessPrompts } from './harnessRegistry'
@@ -116,16 +118,35 @@ const DELAY_PRESETS: { label: string; seconds: number }[] = [
  *  Answers for the install first, then for the session. The install-wide states are the
  *  ones that make every other reading a lie, and they are true with no session focused —
  *  which is why this line, and the emergency stop behind it, survive an empty target. */
+/** The numbers behind a lapse, in the one place a reader is already asking why.
+ *
+ *  A lapse is the only disable with no act behind it, so "lapsed while the conversation
+ *  was idle" is the whole story anyone ever got — true, and useless for deciding whether
+ *  the window is too short or the conversation really was abandoned. Absent fields stay
+ *  absent: a grant that lapsed before the audit existed says nothing rather than zero. */
+function describeLapse(lapse: QueueAutoSession['lapse']): string {
+  if (!lapse) return ''
+  const parts: string[] = []
+  if (lapse.idle_seconds !== null) parts.push(`idle ${Math.round(lapse.idle_seconds / 60)} min`)
+  if (lapse.window_minutes !== null) parts.push(`${Math.round(lapse.window_minutes)} min window`)
+  if (lapse.pending) parts.push(`${lapse.pending} waiting`)
+  return parts.length ? ` (${parts.join(', ')})` : ''
+}
+
 function describeAuto(status: QueueAutoStatus | null, sessionId: string): string {
   if (!status) return '…'
   if (!status.master_enabled) return 'off for this install'
   if (status.paused) return 'paused (emergency stop)'
   if (!sessionId) return 'armed for this install'
   const row = status.sessions.find(item => item.session_id === sessionId)
-  if (!row?.enabled) return row?.disabled_reason ? `off — ${row.disabled_reason}` : 'off'
+  if (!row?.enabled) {
+    return row?.disabled_reason ? `off — ${row.disabled_reason}${describeLapse(row.lapse)}` : 'off'
+  }
   const minutes = row.expires_in_s === null ? null : Math.max(0, Math.round(row.expires_in_s / 60))
   const parts = [`${row.sends_remaining} send${row.sends_remaining === 1 ? '' : 's'} left`]
   if (minutes !== null) parts.push(`${minutes} min left`)
+  // Why the grant is still here rather than lapsed: this conversation is owed a reply.
+  if (row.reply_window) parts.push('reply window open')
   if (status.quiet_hours.active) parts.push('quiet hours — paused')
   return `on · ${parts.join(' · ')}`
 }
@@ -626,6 +647,30 @@ export function QueuePane({
                 <span>accept mid-turn agent messages</span>
               </label>
             </>
+          )}
+          {/* A lapse is the one "off" a reader cannot act on from the reason alone.
+              The window is a value rather than a switch, so this is a link and not a
+              gate: a gate can honestly offer "turn this on", never "pick a number". */}
+          {sessionTargeted && policy?.lapse && (
+            <p class="queue-auto-lapse">
+              This conversation's grant lapsed on its own after{' '}
+              {policy.lapse.idle_seconds !== null
+                ? `${Math.round(policy.lapse.idle_seconds / 60)} idle minutes`
+                : 'the idle window'}
+              {policy.lapse.window_minutes !== null
+                && ` of a ${Math.round(policy.lapse.window_minutes)}-minute window`}
+              {!!policy.lapse.pending && `, leaving ${policy.lapse.pending} message(s) waiting`}
+              . It comes back on its own when the conversation is used again.{' '}
+              <SettingLink variant="link" target="queue.grantWindow">Lengthen the window</SettingLink>{' '}
+              if peers keep finding each other unreachable.
+            </p>
+          )}
+          {sessionTargeted && policy?.reply_window && (
+            <p class="queue-auto-lapse">
+              Held open by an exchange: this session is owed a reply, so the idle window
+              is not closing its grant yet ({policy.reply_window.thread_messages_used} of{' '}
+              {policy.reply_window.thread_messages_limit} messages used in that thread).
+            </p>
           )}
           {auto && !auto.master_enabled && (
             <GrantGate ids={['queue.autoDelivery']}

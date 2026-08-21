@@ -20,7 +20,10 @@ mux shell session via the agent shims.
 **No read tool delivers anything, and neither `notify` nor `request_spawn` does.** `notify`
 stages a message in another session's Phase 4 queue, where head-of-line order, receiver
 readiness, and (by default) human arming still apply; `request_spawn` writes an inert Fleet
-Queue approval draft and starts nothing. `notify(delivery="now")` asks for the item to be
+Queue approval draft and starts nothing. `notify(dry_run=true)` stages nothing at all - it is
+the same call answering the same question with no side effect - and `revoke_message` only
+removes something the caller itself put there and nothing has delivered, so neither adds
+authority to the surface. `notify(delivery="now")` asks for the item to be
 delivered into a turn that is already running rather than at the target's next prompt; it
 still delivers nothing itself, is refused unless the target's Project granted it and the
 target session accepts it, and is authorized at delivery time by a strictly narrower
@@ -161,7 +164,8 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `find_references` | every call or reference to a symbol in a file — the precise structural neighborhood, not a grep. Gated on `code_graph` |
 | `code_context` | a compact structural neighborhood for context packing: each file's key symbols, imports, and direct callers, instead of reading whole files. Gated on `code_graph` |
 | `test_gap` | recently-changed files whose static blast radius contains no covering test. A lower bound: a test reaching the code through dynamic dispatch is invisible, so a listed file is a candidate not a proof. Gated on `code_graph` |
-| `notify` | stages a message with a visible sender/message/correlation envelope, a `from_project` header when it crossed a Project, and a `delivery` header when it landed mid-turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not |
+| `notify` | stages a message with a visible sender/message/correlation envelope, a `from_project` header when it crossed a Project, and a `delivery` header when it landed mid-turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not. `dry_run:true` runs every one of those bounds and answers with the same verdict having staged nothing and spent nothing, so an unreachable peer is chosen rather than discovered after the item is armed |
+| `revoke_message` | withdraws one message the caller sent that nothing has delivered, cancelling it as `revoked`. Attribution is the whole check and a miss answers `unknown_message`; a delivered message answers `not_revocable`, because the text is already in another terminal |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
@@ -332,7 +336,7 @@ operator's.
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. Generated per-session settings allow the closed sixteen-tool read set without a prompt and do not allow `notify`, `request_spawn`, `run_action`, `interrupt`, or `end_session`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed sixteen-tool read set without a prompt and do not allow `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, or `end_session`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.
@@ -367,7 +371,7 @@ The stub tests in `tests/test_mcp*.py` prove the tool logic against fakes.
 Two gated live tiers prove the surface against real agents and the real endpoint.
 The in-process automations tier (`tests/test_live_automations.py`, `SWEMUX_RUN_LIVE_AUTOMATIONS_TESTS=1`) runs a real CLI, captures the Tier 0 facts that run produced, and asserts the memory reads (`provenance`, `verified_status`) over those real facts with no daemon and no port.
 It also proves `dead_ends` and `prior_resolutions` against a real store round-trip, because neither has a deterministic offline producer.
-The wire tier (`tests/test_live_mcp_control.py`, `SWEMUX_RUN_LIVE_MCP_TESTS=1`) stands up an isolated daemon on an ephemeral port, spawns a real agent, recovers its bearer token from the live process environment with psutil, and drives `/mcp` end to end for `get_session`, `notify`, `interrupt`, `end_session`, and granted `request_spawn`.
+The wire tier (`tests/test_live_mcp_control.py`, `SWEMUX_RUN_LIVE_MCP_TESTS=1`) stands up an isolated daemon on an ephemeral port, spawns a real agent, recovers its bearer token from the live process environment with psutil, and drives `/mcp` end to end for `get_session`, `notify` (including its `dry_run` preview), `revoke_message`, `interrupt`, `end_session`, and granted `request_spawn`.
 The same read of the child environment asserts the per-session env override held, so the spawned agent's `MUX_HOOK_URL` names the isolated daemon rather than the live fleet.
 Both tiers are excluded from `.worktree-verify` and CI.
 
