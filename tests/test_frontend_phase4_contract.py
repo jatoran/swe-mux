@@ -763,25 +763,43 @@ def test_browser_title_stays_stable_without_attention_count() -> None:
 
 
 def test_the_transcript_tab_reads_and_only_reads() -> None:
-    """The drawer's one inert session surface, and the three rules that keep it inert.
+    """The drawer's one write-nothing session surface, and the rules that keep it so.
 
     Every other session-scoped tab exists to put text into an agent. Mixing that into
     the surface meant for reviewing what already happened is how a stray tap becomes a
     message nobody wrote, so the absence of an insert path is a contract rather than an
     omission — including the `onDone` every sibling takes, which on mobile would close
     the drawer after each copy and end the reading.
+
+    The contract bounds *what a tap can reach*, not how many buttons the tab has. Copy,
+    select, and the per-message read-aloud markers all leave the conversation, the PTY,
+    and the session exactly as they were, which is why per-message playback could join
+    them while branching could not (`design/features/ui.md`, `design/features/voice.md`).
+    What the tab may be *handed* is bounded here for the same reason: the session it
+    reads, and display flags. `readAloud` is `tts_enabled`, and it decides only whether
+    the markers are drawn at all.
     """
     app = source("App.tsx")
     drawer = source("UtilityDrawer.tsx")
     tab = source("TranscriptTab.tsx")
     view = source("transcriptView.ts")
 
-    assert "<TranscriptTab session={session} />" in drawer
+    mount = re.search(r"<TranscriptTab ([^>]*)/>", drawer)
+    assert mount is not None, "the drawer must mount the transcript tab"
+    assert set(re.findall(r"(\w+)=", mount.group(1))) == {"session", "readAloud"}
     for injection in ("onInsert", "onDone", "onSend", "/input"):
         assert injection not in tab, injection
+    # The one request this tab makes that is not a read asks for audio for a message it
+    # is already showing. It cannot reach the conversation, and it names the message
+    # rather than "the latest reply" — which is what lets the daemon answer with an
+    # existing clip instead of synthesizing a second copy (`design/features/voice.md`).
+    posts = set(re.findall(r"api<[^>]*>\('POST', `([^`]+)`", tab))
+    assert posts == {"/api/sessions/${sessionId}/voice/generate"}, posts
+    assert "message_id: message.message_id" in tab
 
-    # Copy is this tab's only verb and agent replies run to kilobytes, so they stay out
-    # of the clipboard ring rather than evicting the snippets it exists to hand back.
+    # Copy and playback both leave the agent alone, and agent replies run to kilobytes,
+    # so they stay out of the clipboard ring rather than evicting the snippets it
+    # exists to hand back.
     assert "withoutClipboardCapture" in tab
     assert "suppressDepth > 0" in source("clipboardHistory.ts")
 
