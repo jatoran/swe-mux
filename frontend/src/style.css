@@ -368,6 +368,20 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .theme-swatches{width:94px;display:grid;grid-template-columns:repeat(6,12px);justify-content:end;gap:3px}
 .theme-swatches i{width:12px;height:12px;border:1px solid color-mix(in srgb,currentColor 35%,transparent);box-shadow:inset 0 0 0 1px #0003}
 .settings-confirm-layer { z-index:70 }.settings-confirm { width:min(520px,calc(100% - 30px)) }.settings-confirm-body { padding:20px 22px }.settings-confirm-body p { margin:0;color:var(--muted);line-height:1.6 }.settings-confirm .modal-footer { gap:7px }.settings-confirm .modal-footer button.danger { color:var(--red);border-color:var(--red) }
+/* A numbered stack of switches that only make sense read in order — layer 1 gates
+   layer 2 gates layer 3. The rule is drawn on the left so the block reads as one
+   policy rather than three neighbouring settings, and a layer whose gate is off is
+   dimmed rather than disabled: it is still editable (you may want it set correctly
+   before turning the master on), it just is not doing anything yet. */
+.settings-panel .policy-stack { margin:0 0 12px;border:1px solid var(--line);background:var(--bg) }
+.settings-panel .policy-stack h4 { margin:0;padding:7px 10px;border-bottom:1px solid var(--line);color:var(--green);font-size:inherit;text-transform:uppercase;letter-spacing:.04em }
+.settings-panel .policy-layer { display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;padding:9px 10px;border-bottom:1px solid var(--line) }
+.settings-panel .policy-layer:last-child { border-bottom:0 }
+.settings-panel .policy-layer.inert { opacity:.55 }
+.settings-panel .policy-step { width:18px;height:18px;display:grid;place-items:center;border:1px solid var(--line);color:var(--muted);line-height:1 }
+.settings-panel .policy-body { min-width:0 }
+.settings-panel .policy-body label { margin:0 }
+.settings-panel .policy-body small { display:block;margin-top:5px;color:var(--muted);line-height:1.5 }
 .settings-panel .file-input { display:none }.theme-actions { display:flex;gap:6px }.theme-tokens { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px }.settings-errors { grid-column:1/-1 }.settings-errors p { color:var(--red) }
 .quick-launcher select { width:100%;height:calc(31px*var(--ui-scale));border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--bg);color:var(--text);font:inherit }.path-entry { display:grid;grid-template-columns:minmax(0,1fr) auto auto }.path-entry input { min-width:0 }.path-entry button,.directory-browser button { border:1px solid var(--line);border-radius:0;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer }.directory-browser { max-height:180px;overflow:auto;display:grid;padding:5px;border-top:1px solid var(--line) }.directory-browser>span { padding:5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis }.directory-browser button { min-height:27px;text-align:left;padding:0 7px;border-width:0 0 1px }
 .profile-settings { grid-column:1/-1 }.profile-list { display:grid;gap:7px }.profile-list article,.project-default { padding:9px;border:1px solid var(--line);background:var(--bg) }.profile-row { display:grid;grid-template-columns:minmax(90px,.7fr) minmax(130px,1fr) repeat(5,auto);gap:4px;align-items:end }.profile-row label { margin:0 }.profile-row button { min-width:29px;padding:0 5px }.profile-list textarea { min-height:55px }.profile-list small { display:block;color:var(--muted);margin-top:5px }.project-default { margin-bottom:7px }.project-default>strong { display:block;margin-bottom:8px;color:var(--green) }
@@ -2502,6 +2516,12 @@ body {
 .voice-strip .voice-content.verbatim{color:var(--text)}
 .voice-strip .voice-content.summary{color:var(--green,#8bd450)}
 .voice-strip .voice-flag{flex:none;color:var(--green,#8bd450);border:1px solid currentColor;border-radius:3px;padding:0 3px;line-height:calc(14px*var(--ui-scale))}
+/* Held clips are the one thing on this strip the operator did not ask for and has
+   not heard yet, so it is the only control that reads as an offer rather than a
+   state: filled, in the accent, and it disappears the moment the backlog is played
+   or dismissed. */
+.voice-strip .voice-held{flex:none;white-space:nowrap;color:var(--bg,#11151a);background:var(--green,#8bd450);font-weight:600}
+.voice-strip .voice-held:hover:not(:disabled){background:var(--green,#8bd450);color:var(--bg,#11151a);filter:brightness(1.12)}
 .voice-strip .voice-error{flex:none;color:var(--error,#f07178);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
 /* The gear is the last item on both floating surfaces: the route into everything Voice
    settings owns that the strip and the panel have no room for. It replaced the header's

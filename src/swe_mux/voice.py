@@ -950,6 +950,13 @@ class VoiceService:
         content_mode: str | None = None,
         stream_id: str | None = None,
     ) -> dict[str, Any]:
+        # The master switch, checked here rather than only on the automatic path:
+        # `tts_enabled` off means no session generates audio, and a manual "speak
+        # this reply" is a session generating audio. Without this the switch was a
+        # master only for the paths that happened to consult it, which is exactly
+        # the confusion the three-layer policy exists to end.
+        if not self.config.tts_enabled:
+            raise VoiceError("read aloud is off")
         session = self.sessions.sessions.get(session_id)
         if not session:
             raise VoiceError("session is not live")

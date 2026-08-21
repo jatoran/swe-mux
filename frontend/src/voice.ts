@@ -4,11 +4,23 @@
 // programmatic play() on an element that has already played inside a user
 // gesture, so any voice-UI gesture calls unlockPlayback() and later automatic
 // clips reuse the same unlocked element.
+//
+// Read aloud is three layers, and this module owns the third. The daemon's
+// `tts_enabled` master decides whether anything is generated or spoken at all;
+// each session's `voice_mode` decides whether *that* session generates; and here
+// the device autoplay toggle plus one global, focus-driven rule decide what
+// actually comes out of this browser's speakers.
 
 export type PlaybackOrigin = 'agent' | 'system'
 export type PlaybackState = { clipId: string | null; playing: boolean; position: number; duration: number; origin: PlaybackOrigin | null }
+/** An agent clip that was ready while its session was not the one being watched. */
+export type HeldClip = { clipId: string; streamId: string | null; at: number }
 
 const AUTOPLAY_KEY = 'mux:voice-autoplay'
+// How many held clips one session keeps. A session that has been talking to
+// itself for an hour has nothing useful to say in its ninth-oldest clip, and the
+// operator asked for less noise, not a backlog to work through.
+const HELD_PER_SESSION = 5
 // How many finished/abandoned stream ids stay remembered as suppressed. Only
 // large enough that a clip synthesized long after its stream was cut still
 // finds it here; the ids themselves are UUIDs and cost nothing to keep.
@@ -36,6 +48,27 @@ const suppressedStreams = new Set<string>()
 const requestedStreams = new Map<string,{sessionId:string|null;origin:PlaybackOrigin}>()
 let state: PlaybackState = { clipId: null, playing: false, position: 0, duration: 0, origin: null }
 const listeners = new Set<() => void>()
+
+// ------------------------------------------------------------ playback focus
+//
+// Playback policy is global and focus-driven, not per session: the session the
+// operator is watching plays its automatic clips here, and every other session
+// generates its clip, keeps it (durably, in `voice_clips`) and offers it as
+// ready-to-play. Three panes on `auto` used to talk over each other and over
+// whatever the operator was actually reading, which is the overwhelm this rule
+// exists to end.
+//
+// `focusKnown` separates "no session is focused" from "the app has not told us
+// yet". Before the first report the legacy behaviour stands, so a page that
+// never reports focus (or reports it a tick late) does not swallow the clip it
+// would have played before this rule existed.
+let focusKnown = false
+let focusedSessionId: string | null = null
+// Sessions that play here regardless of focus. Voice Comms pins one agent and
+// converses with it hands-free; its replies are the point of the mode, so they
+// cannot be held just because the operator's eyes are on another pane.
+const pinnedPlaybackSessions = new Set<string>()
+const heldClips = new Map<string, HeldClip[]>()
 
 function notify() { for (const listener of [...listeners]) listener() }
 
@@ -222,9 +255,96 @@ export function setAutoplayEnabled(value: boolean): void {
   notify()
 }
 
+/**
+ * Report which agent session the operator is watching, or `null` for none.
+ *
+ * Called by the app whenever focus settles. Moving focus never plays anything:
+ * a held clip stays held until it is asked for, because arriving at a pane is
+ * not a request to be talked at.
+ */
+export function setPlaybackFocus(sessionId: string | null): void {
+  const changed = !focusKnown || focusedSessionId !== sessionId
+  focusKnown = true
+  focusedSessionId = sessionId
+  if (changed) notify()
+}
+
+export function playbackFocus(): string | null { return focusKnown ? focusedSessionId : null }
+
+/** Pin (or release) a session that plays here whatever has focus — Voice Comms. */
+export function setPinnedPlaybackSession(sessionId: string, pinned: boolean): void {
+  if (pinned) pinnedPlaybackSessions.add(sessionId)
+  else pinnedPlaybackSessions.delete(sessionId)
+  notify()
+}
+
+/** Does an automatic clip from this session play on this device right now? */
+export function sessionPlaysHere(sessionId: string | null): boolean {
+  // A clip nobody can attribute to a session cannot be held against one either,
+  // so it keeps the pre-policy behaviour and plays.
+  if (!sessionId) return true
+  if (pinnedPlaybackSessions.has(sessionId)) return true
+  if (!focusKnown) return true
+  return focusedSessionId === sessionId
+}
+
+export function heldClipsFor(sessionId: string): HeldClip[] { return heldClips.get(sessionId) || [] }
+
+export function heldClipTotal(): number {
+  let total = 0
+  for (const items of heldClips.values()) total += items.length
+  return total
+}
+
+export function heldClipSessions(): string[] {
+  return [...heldClips.entries()].filter(([, items]) => items.length).map(([sessionId]) => sessionId)
+}
+
+function holdClip(sessionId: string, clipId: string, streamId: string | null): void {
+  const items = heldClips.get(sessionId) || []
+  if (items.some(item => item.clipId === clipId)) return
+  items.push({ clipId, streamId, at: Date.now() })
+  while (items.length > HELD_PER_SESSION) items.shift()
+  heldClips.set(sessionId, items)
+  notify()
+}
+
+/**
+ * Play what this session held, oldest first, behind whatever is speaking now.
+ *
+ * Deliberately not a floor-taking play: the operator asked to hear a backlog,
+ * not to cut off the sentence they are listening to. Clips whose stream was
+ * suppressed in the meantime (barge-in, a pane switched off) stay dead.
+ */
+export function playHeldClips(sessionId: string): void {
+  const items = heldClips.get(sessionId)
+  if (!items || !items.length) return
+  heldClips.delete(sessionId)
+  notify()
+  const playable: QueueItem[] = items
+    .filter(item => !(item.streamId && suppressedStreams.has(item.streamId)))
+    .map(item => ({ clipId: item.clipId, streamId: item.streamId, sessionId, origin: 'agent' as const }))
+  if (!playable.length) return
+  if (playbackBusy()) { queue.push(...playable); return }
+  const first = playable.shift() as QueueItem
+  queue.push(...playable)
+  void playQueuedClip(first).catch(() => { /* blocked until a gesture unlocks the element */ })
+}
+
+/** Play every held clip on this device, oldest session first. */
+export function playAllHeldClips(): void { for (const sessionId of heldClipSessions()) playHeldClips(sessionId) }
+
+export function dismissHeldClips(sessionId: string): void {
+  if (heldClips.delete(sessionId)) notify()
+}
+
 export function enqueueAutoplay(clipId: string, streamId: string | null = null, sessionId: string | null = null): void {
   if (!autoplayEnabled()) return
   if(streamId&&suppressedStreams.has(streamId))return
+  // The unfocused half of the policy. The clip is already durable on the daemon;
+  // holding it here is what turns "every pane speaks at once" into "the pane you
+  // are watching speaks, and the rest have something ready for you".
+  if (sessionId && !sessionPlaysHere(sessionId)) { holdClip(sessionId, clipId, streamId); return }
   const item:QueueItem={clipId,streamId,sessionId,origin:'agent'}
   if (state.playing && currentClipId && currentClipId !== clipId) { queue.push(item); return }
   queue = []
@@ -295,6 +415,9 @@ function haltCurrentClip():void{
 // queued clips; other sessions keep playing, and anything already queued for them
 // advances rather than being stranded behind the halted clip.
 export function stopSessionPlayback(sessionId: string): void {
+  // Held clips go with it: they are this session's queued speech, and "off"
+  // that leaves a play-me button behind is not off.
+  heldClips.delete(sessionId)
   const hitCurrent = currentSessionId === sessionId
   if (hitCurrent) suppressCurrentStream()
   queue = queue.filter(item => item.sessionId !== sessionId)
@@ -307,6 +430,9 @@ export function stopSessionPlayback(sessionId: string): void {
 // Read aloud was turned off globally (Settings) or for this device (autoplay
 // toggle): nothing should keep playing anywhere.
 export function stopAllPlayback(): void {
+  // The master switch and the device toggle are both "nothing plays here", and a
+  // backlog offering itself afterwards contradicts the switch that was thrown.
+  heldClips.clear()
   suppressCurrentStream()
   // Suppressed, not merely unclaimed: a `speak` request in flight when the
   // switch was thrown still has its HTTP response as a playback fallback, and

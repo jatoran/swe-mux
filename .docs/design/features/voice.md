@@ -20,12 +20,39 @@ affect the PTY, session state, transcripts, history, or projects.
 
 ## Read aloud (TTS)
 
+### One policy, three layers
+
+Read aloud is decided in exactly three places, and they are read in order. They used to sit in
+three unrelated surfaces - a checkbox in Settings, a chip on a pane, a button on a floating
+strip - so "why is it talking" and "why is it silent" both needed all three answered, which is
+the overwhelm this ordering exists to end.
+
+1. **Master** (`tts_enabled`, Settings -> Voice). Off means *no session generates and nothing
+   plays*, on any device. It is checked on the automatic path (`_consider`), on manual
+   generation (`generate`), and on trusted application speech (`speak`) - a switch that only
+   governs the paths that happen to consult it is not a master, which is what it was before
+   Phase 15.
+2. **Per-session participation** (`voice_mode`, the pane's `tts:` chip). Answers *does this
+   session generate*, and nothing else. `auto` no longer implies "and plays here": what is
+   spoken is layer 3's question, so a session can be a full participant while being silent on
+   the device you happen to be looking at.
+3. **This device** (the browser's autoplay toggle, plus the focus rule below). Answers *does
+   this browser speak, and for which session*.
+
+The three are presented as one numbered block in Settings -> Voice, each layer naming where its
+per-item control lives. The block is the source of truth for the wording; the chip and the strip
+say the same thing in one line each.
+
 ### Generation model
 
 - Per-session generation mode is volatile live-session state: `off`, `on_demand`, or `auto`.
-  `null` inherits the configured global default (`tts_default_mode`) while the global TTS
-  toggle (`tts_enabled`) is on. The mode is set through ordinary `PATCH /sessions/{id}` and
-  dies with the session.
+  `null` inherits the configured global default (`tts_default_mode`) while the master
+  (`tts_enabled`) is on. The mode is set through ordinary `PATCH /sessions/{id}` and
+  dies with the session. It governs *generation*: `auto` generates on every completed reply,
+  `on_demand` only when asked, `off` never. An explicit human request (the strip's `↻ speak`,
+  `Speak last reply now`) is deliberately still honoured for an `off` session, because that is
+  a direct instruction rather than participation - and because the shipped default for
+  `tts_default_mode` is `off`, refusing there would have silenced the speak button install-wide.
 - `auto` subscribes to `turn_ended`, debounces one second per session (`DEBOUNCE_SECONDS`),
   and reads `transcript_view.final_exchange`: the agent's newest assistant segment plus the
   message it was answering. That is the same reduction the drawer's Transcript tab renders and
@@ -152,6 +179,29 @@ affect the PTY, session state, transcripts, history, or projects.
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
   The silent unlock is transport setup, never public playback state, because capture uses that
   state to decide whether a new utterance could be speaker echo.
+- **Within a device, playback is focus-driven and global: the focused session speaks, every
+  other session holds its clip.** Three panes on `auto` used to talk over each other and over
+  whatever the operator was actually reading. The app reports the focused agent session
+  (`setPlaybackFocus`, driven by the same `focusedAgentSession` every other pane-scoped surface
+  uses, so a note or a shell in focus means *no* session plays); `enqueueAutoplay` plays a clip
+  whose session matches and otherwise **holds** it. The clip is already durable in `voice_clips`
+  and on disk, so holding costs nothing and loses nothing - what is held is only the decision to
+  speak it.
+- **A held clip is surfaced as ready-to-play, never played retroactively.** Moving focus onto a
+  pane does not start its backlog: arriving somewhere is not a request to be talked at. The
+  pane's player strip grows a `▶ n held` button (click plays them oldest first, behind whatever
+  is currently speaking rather than cutting it; right-click dismisses), and the command palette
+  carries `Read aloud: play clips held while you were elsewhere` for a session whose pane is not
+  currently drawn. The backlog is bounded at `HELD_PER_SESSION` (5, newest kept) and is dropped
+  by every switch that means "stop": `stopSessionPlayback` (the pane went off), `stopAllPlayback`
+  (the master or the device toggle), and a muted device holds nothing in the first place - an
+  "off" that leaves a play-me button behind is not off. The palette entry deliberately carries no
+  count, because rendering one would subscribe `App` to every `timeupdate` the audio element
+  fires.
+- **Voice Comms pins its agent past the focus rule** (`setPinnedPlaybackSession`). Hands-free
+  conversation is the one mode where focus is the wrong question - the operator is talking to
+  that agent, so its replies are the point of the mode - and the pin is released when comms is
+  turned off, alongside the autoplay and session-mode restore.
 - Every segmented response shares a stream ID across its clips.
   A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
   The response remains a fallback if that event was delayed or lost.
@@ -196,9 +246,18 @@ affect the PTY, session state, transcripts, history, or projects.
   `stopAllPlayback`. All of them fire on the click, not when the PATCH lands or when the
   current clip finishes. A hard stop abandons the clip (unlike `pausePlayback`, which keeps it
   loaded to resume), so the strip reads as stopped and a later play restarts from zero.
-- The autoplay path re-checks the pane's mode on arrival as well as on the daemon, because a
-  clip synthesized just before the user hit `off` would otherwise land and start speaking after
-  the switch was thrown.
+  Each of those stops takes the held backlog with it for the same reason.
+- The autoplay path re-checks the pane's participation on arrival as well as on the daemon,
+  because a clip synthesized just before the user hit `off` would otherwise land and start
+  speaking after the switch was thrown. Whether that clip then *plays* or is *held* is
+  `enqueueAutoplay`'s decision alone, so the device toggle and the focus rule are not
+  half-applied at the event handler.
+- **Focus that has never been reported is not the same as no session focused.** `voice.ts`
+  tracks the two separately: before the first `setPlaybackFocus` the pre-policy behaviour
+  stands and a clip plays, so a client that reports focus a tick late (or a surface that never
+  reports it) cannot swallow audio it would have spoken before this rule existed. A clip with
+  no session attributed to it plays for the same reason - it cannot be held against a session
+  nobody named.
 
 ## Conversation mode (STT)
 

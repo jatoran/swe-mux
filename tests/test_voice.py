@@ -474,6 +474,29 @@ async def test_engine_failure_records_failed_clip(tmp_path: Path) -> None:
         service.store.close()
 
 
+async def test_master_switch_off_blocks_manual_generation(tmp_path: Path) -> None:
+    """The master gates generation everywhere, not only on the automatic path.
+
+    `tts_enabled` off means no session generates audio. Before Phase 15 the manual
+    "speak this reply" path never consulted it, so the install-wide switch was a
+    master only for the paths that happened to check.
+    """
+    service, _events, emitted, record = make_service(tmp_path, tts_enabled=False)
+    record.voice_mode = "auto"  # an explicit mode must not out-rank the master
+    write_transcript(service, REPLY_EVENTS)
+    patch_engine(service)
+    try:
+        with pytest.raises(VoiceError, match="read aloud is off"):
+            await service.generate("s1", trigger="manual")
+        assert emitted == []
+        assert await service.store.clips(session_id="s1") == []
+        service.config.tts_enabled = True
+        clip = await service.generate("s1", trigger="manual")
+        assert clip["status"] == "ready"
+    finally:
+        service.store.close()
+
+
 async def test_generate_rejects_plain_shells(tmp_path: Path) -> None:
     service, _events, _emitted, _record = make_service(tmp_path, backend="shell")
     try:

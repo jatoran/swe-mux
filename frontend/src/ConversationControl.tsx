@@ -11,7 +11,8 @@ import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import {
   autoplayEnabled, bargeInPlayback, beginRequestedStream, cancelRequestedStream, getPlayback,
-  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPlaybackDucked, unlockPlayback,
+  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPinnedPlaybackSession,
+  setPlaybackDucked, unlockPlayback,
 } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
@@ -292,6 +293,7 @@ export function useConversation(
       }
       if(commsPreviousAutoplay.current!==null)setAutoplayEnabled(commsPreviousAutoplay.current)
       commsPreviousAutoplay.current=null
+      setPinnedPlaybackSession(activeId,false)
       setPinnedTarget(commsPreviousPin.current);commsPreviousPin.current=null
       if(restoreFailure){reportFailure(restoreFailure);return}
       setPhase('listening');respond('Voice comms off. Normal agent replies restored.');return
@@ -306,6 +308,11 @@ export function useConversation(
     }catch(cause){reportFailure(cause);return}
     commsPreviousAutoplay.current=autoplayEnabled()
     setAutoplayEnabled(true)
+    // Playback is otherwise focus-driven, and Voice Comms is the one mode where that
+    // is wrong: the operator is talking to *this* agent hands-free, so its replies
+    // have to speak even while their eyes are on another pane. The pin is released
+    // when comms is turned off, above.
+    setPinnedPlaybackSession(target.id,true)
     commsPreviousPin.current=pinnedTargetRef.current
     commsTargetRef.current=target.id;setCommsTargetId(target.id);setPinnedTarget(target)
     setPhase('listening');respond(`Voice comms on for ${target.label}. Replies will be short and read aloud.`)

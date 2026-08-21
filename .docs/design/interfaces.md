@@ -1352,6 +1352,7 @@ Ordering is the invariant: one worker drains one FIFO per stream, so clip indice
 `/sessions/{id}/voice/generate` reads the latest assistant reply using the session/global effective content mode unless `content_mode` is supplied.
 The request override is validated, applies to one clip only, and never mutates the session's persistent read-aloud preference.
 The optional stream ID has the same claim-before-request role as `/voice/speak`.
+Both it and `/voice/speak` refuse with `409 read aloud is off` while the `tts_enabled` master is off: the master gates generation everywhere, not only on the automatic `turn_ended` path.
 
 Automatic, manual, and application-text synthesis returns the first coherent clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
 Agent replies of at most 420 characters stay in that one clip; longer replies prefer a complete opening sentence before continuing.

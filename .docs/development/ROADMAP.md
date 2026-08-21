@@ -3850,14 +3850,20 @@ Read aloud is currently three independent switches (per-session mode, device aut
 with no master, and the note behind this section is an overwhelm complaint as much as a feature
 ask.
 
-- [ ] A global read-aloud master switch, shaped like the assistant's: off means no session
-  generates or plays.
-- [ ] Per-session participation stays and narrows to "does this session generate" - some sessions
-  should never speak.
-- [ ] Playback policy becomes global and focus-driven: the focused session auto-plays, unfocused
+- [x] A global read-aloud master switch, shaped like the assistant's: off means no session
+  generates or plays. `tts_enabled` is that master and is now checked on manual `generate` as
+  well as on the automatic path and `speak`, so it governs every path rather than the ones that
+  happened to consult it.
+- [x] Per-session participation stays and narrows to "does this session generate" - some sessions
+  should never speak. An explicit human "speak this reply" is still honoured for an `off`
+  session: that is an instruction, not participation, and the shipped `tts_default_mode` is
+  `off`, so refusing there would have silenced the speak button install-wide.
+- [x] Playback policy becomes global and focus-driven: the focused session auto-plays, unfocused
   sessions generate and hold their clips (already durable in `voice_clips`), and held clips
   surface as ready-to-play rather than auto-playing over whatever the operator is doing.
-- [ ] The Settings surface presents the three layers as one legible policy: master, per-session
+  A Voice Comms pin is the one override, because that mode is a conversation with an agent the
+  operator may not be looking at.
+- [x] The Settings surface presents the three layers as one legible policy: master, per-session
   participation, this-device autoplay.
 
 ### Global usability audit session
@@ -3910,7 +3916,7 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
   completion; the deferral appears in the log with its trigger.
 - [ ] Every budget setting offers tokens, USD, or first-hit, and pre-existing caps enforce
   exactly what they enforced before migration.
-- [ ] Read aloud has one master switch; an unfocused session's reply holds its clip instead of
+- [x] Read aloud has one master switch; an unfocused session's reply holds its clip instead of
   speaking over the focused one.
 - [ ] A local OpenAI-compatible endpoint passes verification and unlocks LLM-gated automations;
   removing or editing it re-locks them with a stated reason.
