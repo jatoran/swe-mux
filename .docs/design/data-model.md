@@ -379,6 +379,15 @@
   The *live* reading of a gate that is running right now is deliberately **not** stored - it is a
   fact about a process, and a daemon restart returns the step to `queued` and re-runs it from
   scratch, so a persisted half-progress would describe a run that no longer exists.
+- **Session-settle watches have no table, deliberately** (`features/mux-mcp.md`). A watch is a
+  promise made to one live conversation about another live session, and both halves of that are
+  process state: it is dropped when the watcher session ends and when the watcher's conversation
+  rolls over, so a durable row would outlive everything that gives it meaning and would have to be
+  swept for exactly those two conditions. The thing a watch *produces* is durable - one ordinary
+  `rule`-sender row in `queue_messages`, correlation-keyed on the watch id - which is where the
+  audit trail belongs. What in-memory costs is that a daemon restart loses armed watches, and that
+  is paid rather than hidden: the service flushes each open watch as a notice on its way out, so a
+  restart reads as "your watch was dropped, re-arm it" instead of as a watch that never fired.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.

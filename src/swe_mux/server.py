@@ -299,6 +299,7 @@ from .session_attachments import (
 from .session_control import SessionControlService
 from .session_recovery import SessionRecoveryStore
 from .session_resume import ResumeRefused, resolve_latest_run, resume_run
+from .session_watch import SessionWatchService
 from .settings_store import SettingsStore
 from .spawn_contract import (
     SpawnRequest,
@@ -1739,6 +1740,34 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     )
     publish(app, session_control=session_control)
 
+    # Session-settle watches. Same shape again: the service owns the bounds and
+    # the MCP tool is a caller. The only write it produces is a `rule`-sender
+    # queue item addressed to the session that armed the watch, so it borrows the
+    # land queue's handback path exactly rather than growing a delivery path.
+    async def _session_watch_notice(**kwargs: Any) -> dict[str, Any]:
+        """The notice, through the ordinary Phase 5 queue and nothing else.
+
+        A watcher that ended between the sweep's liveness check and this enqueue
+        is not an error worth raising: there is nobody left to read the notice,
+        and the resolution is already in the log and the event stream.
+        """
+        try:
+            return await prompt_queue.enqueue(**kwargs)
+        except QueueError as exc:
+            if exc.code in {"target_ended", "unknown_target"}:
+                log.info("session_watch_target_gone code=%s", exc.code)
+                return {}
+            raise
+
+    session_watch = SessionWatchService(
+        sessions=sessions,
+        projects=projects,
+        config=config,
+        events=events,
+        queue_message=_session_watch_notice,
+    )
+    publish(app, session_watch=session_watch)
+
     # Phase 14 land queue. Same shape as session control: every bound lives in the
     # service and the MCP tool and HTTP route are thin callers. The trunk is the
     # Project root and the ref is the one the Git drawer and the session monitor
@@ -2353,6 +2382,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # resumed from a position nothing recorded.
     await land_queue_service.restore()
     land_queue_service.start()
+    # Watches are in-memory and therefore start empty: there is nothing to
+    # restore, because the previous daemon flushed each open watch as a notice on
+    # its way out rather than leaving a promise nothing could keep.
+    session_watch.start()
     # The auto-delivery controller starts regardless of the master switch: it
     # also sweeps message expiry, which is a promise the user made about any
     # delivery path, and it re-checks its own enablement every tick.
@@ -2447,6 +2480,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             # the `scan_timeline` tool answer "is this timeline stopped" from one
             # implementation rather than two that can disagree.
             scan_timeline_service=scan_timeline,
+            # The settle-watch service: `watch_session` arms through it and
+            # nothing else reaches it, because a watch is only ever asked for by
+            # the session that will receive the notice.
+            session_watch=session_watch,
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -2594,6 +2631,11 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         "auto_delivery",
         "schedules",
         "land_queue",
+        # Before `prompt_queue`, and that position is load-bearing rather than
+        # alphabetical: stopping the watch service flushes every open watch as a
+        # durable notice, which is what keeps a routine daemon restart from
+        # silently un-arming an orchestrator's watches.
+        "session_watch",
         "prompt_queue",
         "assistant",
         "voice",
@@ -7473,6 +7515,9 @@ async def get_background_health(request: web.Request) -> web.Response:
             "project_contexts": request.app["project_contexts"].status(),
             "scan_timeline": request.app["scan_timeline"].status(),
             "mcp": request.app["mcp"].status(),
+            # A watch service that stopped resolving is indistinguishable from a
+            # fleet nobody is watching, so its counters and open count are here.
+            "session_watch": request.app["session_watch"].status(),
         }
     )
 

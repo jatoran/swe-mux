@@ -17,7 +17,10 @@ Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), Phase 5
 and Codex session — no user setup — and reachable by a user-typed `claude`/`codex` inside a
 mux shell session via the agent shims.
 
-**No read tool delivers anything, and neither `notify` nor `request_spawn` does.** `notify`
+**No tool here delivers anything.** The one read that produces a message at all is
+`watch_session`, and it produces exactly one, addressed to the caller itself, through the
+ordinary queue where the same head-of-line order and readiness contract apply (see
+"Session-settle watches" below). Neither `notify` nor `request_spawn` delivers either. `notify`
 stages a message in another session's Phase 4 queue, where head-of-line order, receiver
 readiness, and (by default) human arming still apply; `request_spawn` writes an inert Fleet
 Queue approval draft and starts nothing. `notify(dry_run=true)` stages nothing at all - it is
@@ -164,6 +167,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `find_references` | every call or reference to a symbol in a file — the precise structural neighborhood, not a grep. Gated on `code_graph` |
 | `code_context` | a compact structural neighborhood for context packing: each file's key symbols, imports, and direct callers, instead of reading whole files. Gated on `code_graph` |
 | `test_gap` | recently-changed files whose static blast radius contains no covering test. A lower bound: a test reaching the code through dynamic dispatch is invisible, so a listed file is a candidate not a proof. Gated on `code_graph` |
+| `watch_session` | arms a one-shot watch on another session and returns having delivered nothing. Exactly one deterministic notice then enters the **caller's own** prompt queue: when the target leaves working for a settled state and holds it, when it ends, or when the caller's timeout elapses - whichever is first. The notice names which case fired and the target's state, including the `awaiting` sub-reason and any background work still running. Bounded per watcher, one per target, ephemeral (see "Session-settle watches" below) |
 | `notify` | stages a message with a visible sender/message/correlation envelope, a `from_project` header when it crossed a Project, and a `delivery` header when it landed mid-turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not. `dry_run:true` runs every one of those bounds and answers with the same verdict having staged nothing and spent nothing, so an unreachable peer is chosen rather than discovered after the item is armed |
 | `revoke_message` | withdraws one message the caller sent that nothing has delivered, cancelling it as `revoked`. Attribution is the whole check and a miss answers `unknown_message`; a delivered message answers `not_revocable`, because the text is already in another terminal |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
@@ -278,6 +282,46 @@ pair one level up: search broadly across runs, then read one run's spine deeply.
   `read_transcript` has no time-window argument of its own, so an agent told only "use the
   window" would try something that does not exist.
 
+## Session-settle watches
+
+An orchestrator running many workers had no way to be *told* when one of them
+stopped working.
+It polled `list_sessions` (or `/api/sessions` from an ad-hoc script), spending a turn per poll, and the only observable it got back was `idle` - which also means "stalled at a question nobody answered".
+`watch_session` moves that loop into the daemon, where the state already lives and costs nothing to read.
+
+- **A watch is a read that matures into exactly one bounded message.**
+  It grants no authority the caller did not already have.
+  The target is only ever read - the same `SessionRecord.state` `get_session` returns - and the single write it produces is a fixed daemon-authored template into the **caller's own** prompt queue, staged as a `rule` sender: the deterministic-observer path the land queue's handback already uses (`prompt-queue.md`, `land-queue.md`).
+  Nothing here writes a PTY, addresses a third session, spends a budget, or triggers a scan.
+  That is why it is declared a read tool: it addresses nobody, actuates nothing, and re-arming returns the watch that already exists, so it grants strictly less than the `list_sessions` polling loop it replaces - and permission-gating it would put an approval prompt in front of the monitoring call an orchestrator makes most often, for nothing.
+- **The timeout is the point, not the fallback.**
+  Either the watch resolves or it says it did not, and both notices name the case and the target's state at that moment.
+  A hung worker can therefore never be confused with a watch that quietly evaporated, which is the failure this was asked for.
+  The timeout is checked *after* the settle rules on the same sweep, so a settle that matured on that pass reports the case that actually happened; a timeout that lands mid-hold reports the timeout and the state it saw, because a timeout that waited for the hold would be a suggestion rather than a bound.
+- **A settle is an edge, and it has to hold.**
+  Firing on the first `idle` would be wrong about two times in five: on a measured 10-hour, 17-session day, **89 of 211 idle transitions were back to `working` inside 120 s** with no human input in between (`notifications.md`).
+  The watch therefore requires the target to have been observed **working** and then to hold a settled state for the same 120 s that surface holds a "ready" alert for; a flap restarts the hold rather than accumulating across it.
+  `starting` deliberately does not count as working: a booting session reaches `idle` through `startup_quiet_fallback`, which is inferred from PTY quiet and is not even input-ready, so counting it would fire "your worker finished" before the seed prompt had run a turn.
+- **`awaiting` is settled, and the notice never calls it done.**
+  Being blocked on a person is exactly the outcome an orchestrator most needs told apart from a finish, so it resolves the watch and the notice states the state and its sub-reason rather than a verdict.
+- **An idle session with running background work has not finished.**
+  The turn ended; the agent did not, and it will resume itself when its subagents or background tasks land.
+  The watch suppresses that case the same way the notification path does and for the same reason (`RUNNING_ACTIVITY_KINDS`, `idle_reason: waiting_on_background`) - and the timeout is what stops the suppression from becoming silence.
+- **Ended fires unconditionally.**
+  A session that exited or crashed will never work again, so requiring a working edge there would guarantee a timeout.
+  A target that has *already* ended is refused at arming time with its final state, rather than answered by a notice half a second later.
+- **Ephemeral, and never silently so.**
+  Watches live in daemon memory: they die with the watcher session, are dropped when the watcher's conversation rolls over (an in-CLI `/clear` mints a successor that never armed the watch and would read the notice as a recollection it does not have), and do not survive a restart.
+  Because a daemon restart under live sessions is a routine act here, stopping the service **flushes every open watch as a notice** before the prompt queue stops, so a restart says "your watch was dropped, re-arm it" instead of leaving a promise nothing could keep.
+- **Bounded and one-shot.**
+  A few watches per watcher (`session_watch_max_per_session`, default 8), one per target - re-arming returns the existing watch rather than a second copy of one notice - a ceiling on the timeout (`session_watch_max_minutes`, default 240), and an install-wide kill switch (`session_watch_enabled`).
+  A `0` timeout is refused rather than read as "omitted": it means "no timeout", which is the one shape this service will not promise.
+- **The result says what will deliver the notice, because "queued" alone is unactionable.**
+  A `rule` sender is never self-arming (`prompt-queue.md`), so the notice waits in the watcher's queue for the operator exactly like a land-queue handback, and the arming result says so rather than letting a caller wait for a message no machine was going to hand it.
+  This is the same lesson `notify`'s `target_delivery` records.
+
+What is deliberately absent: no per-Project opt-in and no grant, because a watch reads what the caller can already read and writes only to itself; and no self-arming exception for a self-requested `rule` item, which would be a change to the queue's arming rule and belongs to that contract rather than to this feature.
+
 ## Session control (Phase 7.6)
 
 `interrupt` and `end_session` are the first MCP tools that act on another running agent.
@@ -389,6 +433,8 @@ Both tiers are excluded from `.worktree-verify` and CI.
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
 - Session-control authority and bounds (grant, budget, cycle, idempotency, readiness gate):
   `src/swe_mux/session_control.py`
+- Settle-watch bounds, the fire rules, and the notice template:
+  `src/swe_mux/session_watch.py`
 - Shared interrupt/graceful-end daemon operations, the daemon-owner guard, and the drafted
   control-request approval: `src/swe_mux/server.py`
 - Endpoint handler, rate limit, wiring: `src/swe_mux/server.py`
@@ -396,7 +442,8 @@ Both tiers are excluded from `.worktree-verify` and CI.
 - Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
   `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
 - Tests: `tests/test_mcp.py`, `tests/test_mcp_scan_timeline.py`,
-  `tests/test_agent_messaging.py`, `tests/test_project_scope.py`;
+  `tests/test_agent_messaging.py`, `tests/test_project_scope.py`,
+  `tests/test_session_watch.py`;
   live tiers `tests/test_live_automations.py`, `tests/test_live_mcp_control.py`, with the
   in-process fact and isolated-daemon harnesses in `tests/support/live_facts.py` and
   `tests/support/live_daemon.py`

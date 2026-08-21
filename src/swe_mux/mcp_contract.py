@@ -44,6 +44,16 @@ READ_TOOL_NAMES = (
     "find_references",
     "code_context",
     "test_gap",
+    # Session-settle watches. Declared a read, and the reasoning is worth
+    # stating because the tool does eventually cause a message: it reads a
+    # target's state and nothing else, and the one write it matures into is a
+    # fixed daemon-authored template into the *caller's own* prompt queue. It
+    # addresses nobody, actuates nothing, spends nothing, and re-arming returns
+    # the watch that already exists - so it grants strictly less than
+    # `list_sessions` polled in a loop, which is exactly what it replaces.
+    # Permission-gating it would put an approval prompt in front of the
+    # monitoring call an orchestrator makes most often, buying nothing.
+    "watch_session",
 )
 
 WRITE_TOOL_NAMES = (

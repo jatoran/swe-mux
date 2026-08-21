@@ -303,6 +303,19 @@
   a read costs nothing while a scan spends the human's gated budget.
 - Changing the agent MCP surface (endpoint, tools, per-session tokens, CLI registration):
   `design/features/mux-mcp.md`, `design/interfaces.md`, `technical/backend/packages.md`
+- Changing session-settle watches (`watch_session`, the fire rules, the settle hold, the
+  notice template, or the per-watcher bounds): `design/features/mux-mcp.md`,
+  `design/features/prompt-queue.md`, `design/features/status-detection.md`,
+  `design/interfaces.md`, `design/data-model.md`,
+  `technical/backend/packages/agent-surfaces.md`.
+  The rule the design turns on: a watch is a **read that matures into exactly one bounded
+  message**, addressed to the session that armed it, so it needs no grant and no opt-in -
+  and the moment a watch could address a third session, or act instead of report, it stops
+  being that and needs the authority model interrupt/end already have. Two consequences are
+  load-bearing and neither is optional: the timeout always fires, because a watch that
+  quietly evaporates is indistinguishable from a worker that hung; and `idle` alone is
+  never reported as finished, because `awaiting` and idle-with-running-background-work are
+  the two states that render identically and mean the opposite.
 - Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,
   `design/data-model.md`
 - Changing preview screenshot capture or the region selector:

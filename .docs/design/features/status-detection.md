@@ -975,6 +975,20 @@ split is the same one `hasRunningActivity` uses for the blue ring, defined once 
 `hasRunningWork`; a test pins the first two equal). The rule reaches the notification path
 only because `state_changed` carries the axes — see below.
 
+### The agent-facing consumer
+
+`session_watch.py` is the third read-only consumer of this contract, beside the UI and the
+notification path, and it is the one whose audience cannot ask a follow-up question: an
+orchestrator agent is *told* "your worker settled" and acts on it.
+It therefore inherits both of this contract's hard-won suppressions rather than restating
+them - a session with running work has not finished, and a `starting` session that reaches
+`idle` through the startup-quiet fallback has not started - and it applies the same 120 s
+hold `push.py` applies, because the same measured flap (89 of 211 idle transitions back to
+`working` inside 120 s) would otherwise make two of every five notices wrong.
+It never renders `idle` as "done": every notice carries the state, its `awaiting_reason` or
+`idle_reason`, and any running standing activity, because those are three different answers
+that share one word (`mux-mcp.md`).
+
 ### What `state_changed` carries, and why
 
 `state_changed` is the event the "the agent is waiting for your input" alert is raised

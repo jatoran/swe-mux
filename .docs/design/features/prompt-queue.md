@@ -108,6 +108,13 @@ separately opt-in.
   template, keyed by the land request id as its `correlation_id` so a repeat dedupes on
   the existing uniqueness index (`land-queue.md`). It is a message rather than an action
   because the pipeline has no way to resolve a conflict and no business trying.
+  A **settle-watch notice** is the third caller of that same shape, and the one addressed to
+  the session that asked for it: `watch_session` arms a read-only watch on a sibling, and when
+  that sibling settles, ends, or the caller's timeout elapses, one fixed template is staged
+  against the *watcher* as a `rule` sender keyed by the watch id (`mux-mcp.md`). The
+  consequence of the sender kind is the same one the land handback has and is stated in the
+  arming result rather than discovered later: a `rule` item is never self-arming, so the notice
+  waits for a person.
   A scheduled **resume** stages its opening prompt the same way rather than as an argv seed:
   the resumed pane's argv is already `--resume <id>`, and whether a positional prompt may follow
   that is per-harness luck rather than a contract.
