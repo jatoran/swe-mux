@@ -39,14 +39,14 @@ const DASHBOARD = {
     days: 7, today: '2026-08-15', start_day: '2026-08-09',
     rules: [
       // The expensive one is a feature, not a rule: invisible before this view existed.
-      { rule_id: 'builtin:scan-timeline', label: 'Scan timeline', detail: 'Per-run scans that extract timeline records', kind: 'feature', enabled: true, setting_label: '', calls: 214, tokens: 4_182_664, cost_usd: 1.8342, today_calls: 31, today_tokens: 612_004, today_cost_usd: 0.2611, models: ['anthropic/claude-sonnet-5'], last_at: NOW - 400 },
-      { rule_id: 'builtin.session-titler-initial', label: 'Session titler', detail: 'Names a pane once, from the request that started the run.', kind: 'observer', enabled: true, setting_label: 'Session titler', calls: 409, tokens: 288_114, cost_usd: 0.0412, today_calls: 22, today_tokens: 16_204, today_cost_usd: 0.0006258, models: ['openai/gpt-5-mini'], last_at: NOW - 90 },
+      { rule_id: 'builtin:scan-timeline', label: 'Scan timeline', detail: 'Per-run scans that extract timeline records', kind: 'feature', enabled: true, setting_label: '', calls: 214, tokens: 4_182_664, cost_usd: 1.8342, today_calls: 31, today_tokens: 612_004, today_cost_usd: 0.2611, input_tokens: 3_900_000, cached_tokens: 3_000_000, today_input_tokens: 580_000, today_cached_tokens: 460_000, models: ['anthropic/claude-sonnet-5'], last_at: NOW - 400 },
+      { rule_id: 'builtin.session-titler-initial', label: 'Session titler', detail: 'Names a pane once, from the request that started the run.', kind: 'observer', enabled: true, setting_label: 'Session titler', calls: 409, tokens: 288_114, cost_usd: 0.0412, today_calls: 22, today_tokens: 16_204, today_cost_usd: 0.0006258, input_tokens: 250_000, cached_tokens: 0, today_input_tokens: 14_000, today_cached_tokens: 0, models: ['openai/gpt-5-mini'], last_at: NOW - 90 },
       { rule_id: 'builtin:voice-summary', label: 'Read aloud', detail: 'Spoken summaries of agent replies', kind: 'feature', enabled: true, setting_label: '', calls: 88, tokens: 41_002, cost_usd: 0.0091, today_calls: 0, today_tokens: 0, today_cost_usd: 0, models: ['openai/gpt-5-mini'], last_at: NOW - 90_000 },
       { rule_id: 'custom.doc-drift', label: 'Doc drift watch', detail: '', kind: 'custom', enabled: true, setting_label: '', calls: 12, tokens: 9_004, cost_usd: 0.0004, today_calls: 1, today_tokens: 700, today_cost_usd: 0.00002, models: ['openai/gpt-5-mini'], last_at: NOW - 3600 },
       // Billed under an id the page has no control for: it must still be visible.
       { rule_id: 'builtin.removed-triage', label: 'builtin.removed-triage', detail: '', kind: 'retired', enabled: false, setting_label: '', calls: 41, tokens: 88_120, cost_usd: 0.0000009, today_calls: 0, today_tokens: 0, today_cost_usd: 0, models: [], last_at: NOW - 400_000 },
     ],
-    totals: { calls: 764, tokens: 4_608_904, cost_usd: 1.8849009, today_calls: 54, today_tokens: 628_904, today_cost_usd: 0.2617458 },
+    totals: { calls: 764, tokens: 4_608_904, cost_usd: 1.8849009, today_calls: 54, today_tokens: 628_904, today_cost_usd: 0.2617458, input_tokens: 4_150_000, cached_tokens: 3_000_000, today_input_tokens: 594_000, today_cached_tokens: 460_000 },
   },
 }
 

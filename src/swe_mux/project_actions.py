@@ -1113,6 +1113,75 @@ def write_actions_source(project_root: str, text: str, expected_revision: str) -
     return diagnostics
 
 
+def preview_action_run(
+    catalog: ActionCatalog,
+    reference: str,
+    values: dict[str, str],
+    *,
+    project_label: str,
+) -> dict[str, Any]:
+    """What running an action named in conversation would do, or why it cannot.
+
+    The caller is a conversational surface, so the action arrives as a title a
+    person said rather than as an id: this resolves it, and answers an
+    ambiguous or unknown name with candidates instead of a guess.
+
+    Three refusals, all typed data rather than exceptions, because the caller
+    has to relay them:
+
+    - an unknown or ambiguous name, with candidate titles;
+    - an unapproved (or since-edited) source file, naming the file a human must
+      review - the same answer the MCP surface gives, and the only useful next
+      step, since neither an agent nor the assistant can approve its own
+      command;
+    - an input value the action would reject, checked through
+      :func:`substituted_action` rather than a second copy of that rule.
+
+    Success carries the resolved id, the title, and the step count, which is
+    what a confirmation card restates. Nothing here executes or writes.
+    """
+    needle = reference.strip().casefold()
+    matches = [
+        item for item in catalog.actions
+        if item.id.casefold() == needle or item.label.casefold() == needle
+    ]
+    if not matches and needle:
+        matches = [
+            item for item in catalog.actions
+            if needle in item.label.casefold() or needle in item.id.casefold()
+        ]
+    if not matches:
+        return {
+            "error": f'{project_label} declares no action called "{reference}"',
+            "candidates": [item.label for item in catalog.actions][:6],
+        }
+    if len(matches) > 1:
+        return {
+            "error": f'"{reference}" matches more than one action in {project_label}',
+            "candidates": [item.label for item in matches][:6],
+        }
+    action = matches[0]
+    if action.source_path not in catalog.trusted_paths():
+        return {
+            "error": (
+                f'"{action.label}" cannot run: {action.source_path} is not approved, '
+                "or changed since it was approved"
+            ),
+            "trust_required": True,
+            "file": action.source_path,
+        }
+    try:
+        substituted_action(action, dict(values), Path(catalog.root))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {
+        "action_id": action.id,
+        "label": action.label,
+        "source_path": action.source_path,
+        "steps": len(action.steps),
+    }
+
+
 def substituted_action(
     action: ProjectAction, values: dict[str, str], root: Path
 ) -> ProjectAction:

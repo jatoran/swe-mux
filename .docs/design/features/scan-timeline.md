@@ -186,7 +186,20 @@ The footer reports whether a scan request is actually out, since "working on it"
 The record list opens scrolled to the newest entry and stays pinned there until the reader scrolls up.
 When scanning is actually stopped, the drawer states the scanner's own reason; a merely idle run says nothing.
 It also shows Project permission and context, current-run permission, and full-session chunk arithmetic on every terminal state, not just while running.
-Each record shows the count of deterministic evidence targets and keeps their paths, symbols, and command strings inside a collapsed, scroll-bounded disclosure, plus any repairs applied to the model's output and any messages the window did not reach.
+
+**A record is a compact row until the reader opens it.**
+Rendering every record's full field stack made the tab a wall of prose rather than a timeline: eight records measured 1898 px in a 380 px drawer, five screens for one short run, and finding the moment you were looking for meant scrolling past everything that was not it.
+The same eight rows now measure about 361 px.
+A closed row still carries the record's identity - its time, its work phase, its lifecycle state, and one clamped line of `summary` (falling back to `intent`, then `claim`, then an explicit "no semantic change recorded" so a record the model returned nothing useful for is still visibly a record).
+It also keeps the four signals a collapse must not swallow, as flags: `blocked` and `dead end`, which say this window is where the run stalled, and `behind` and `repaired`, which say the record itself is partial.
+Everything else - the asked/intent/claim/blocked detail, the deterministic evidence targets in their collapsed scroll-bounded disclosure, the repairs applied to the model's output, the messages the window did not reach, novelty, behaviour labels, confidence, and source expansion - is mounted only for a record that is open.
+Expansion is therefore for detail, never for working out which record this is.
+
+Three things this collapse deliberately does not reach.
+Conversation boundaries are landmarks in the sequence rather than entries, so they stay drawn in full and are not openable.
+The enablement/liveness block (`liveness()`, the budget row, the stopped reason, the backfill line) lives in the panel chrome above the scroller, because a budget-stopped scanner and a genuinely quiet one both return an empty tail and only that block separates them - putting any of it behind a disclosure would restore exactly the ambiguity it was built to remove.
+And which rows are open is per-device throwaway state held in the component, never server state and never a device store: record ids are per-run and unbounded, so persisting them would grow forever to remember something worth one tap, and every row's resting state is compact on every visit.
+On a phone the row is the tab's primary control and is sized as a tap target (48 px minimum, full width), with two clamped lines of summary rather than the one a wide drawer can afford.
 The rehydration rate is a Tier 2 metric with no Tier 2 consumer yet, and the only caller hard-codes `rehydrate=1`, so it is structurally 1.0 and is no longer given a headline slot.
 There is no scan button or scan-spend control in the application topbar.
 
@@ -271,6 +284,9 @@ Unbounded, a 230-record run rendered a 17 KB digest, which is not a digest.
 - `src/swe_mux/project_context.py`
 - `frontend/src/ScanTimelineTab.tsx`
 - `frontend/src/ProjectContextEditor.tsx`, `frontend/src/ProjectsManager.tsx`
+- `frontend/test/scanTimeline.test.ts`
+- `frontend/test/renderer/scanTimelineHarness.tsx`, `frontend/test/renderer/scan-timeline-rows.spec.ts`
+  (the row geometry: nothing below the browser can see that a record costs a row rather than a screen)
 - `tests/test_scan_timeline.py`
 - `tests/test_mcp_scan_timeline.py`
 - `tests/test_transcript_forward_slice.py`

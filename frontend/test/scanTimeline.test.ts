@@ -145,3 +145,48 @@ test('timeline records collapse verbose evidence targets by default', () => {
   assert.ok(!timeline.includes("record.target.join(' · ')"))
   assert.ok(styles.includes('.scan-record-targets ul{max-height:240px;overflow:auto'))
 })
+
+test('a timeline record is compact until it is opened, and opens one at a time', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  // Every record rendering its full detail made the tab a wall of prose rather than a
+  // timeline. Detail is mounted only for a record the reader opened.
+  assert.ok(timeline.includes('const open=!!openRecords[record.id]'))
+  assert.ok(timeline.includes('{open&&<div class="scan-record-detail"'))
+  assert.ok(timeline.includes('toggleRecord(record.id)'))
+  assert.ok(timeline.includes('aria-expanded={open}'))
+  // Expansion is per-device throwaway state, never server state and never a device
+  // store keyed by unbounded per-run record ids.
+  assert.ok(!timeline.includes('localStorage'))
+})
+
+test('a collapsed record still carries its own identity and its warnings', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  const styles = source('style.css')
+  // Time, phase, lifecycle state and one line of summary are what makes a row
+  // identifiable; expansion is for detail, not for working out which record this is.
+  assert.ok(timeline.includes('{clock(record.t1)}'))
+  assert.ok(timeline.includes('class="scan-record-gist"'))
+  assert.ok(timeline.includes('gistOf'))
+  assert.ok(timeline.includes('No semantic change recorded.'))
+  // A window where the run stalled, or a record that is itself partial, says so
+  // without being opened.
+  assert.ok(timeline.includes('flagsOf'))
+  for (const flag of ['blocked', 'dead end', 'behind', 'repaired']) assert.ok(timeline.includes(`label:'${flag}'`))
+  // Conversation boundaries are not records and never collapse.
+  assert.ok(timeline.includes("event.kind==='boundary'"))
+  assert.ok(timeline.includes('class="scan-boundary"'))
+  // The row is the control, so it has to be a tap target on a phone.
+  assert.ok(styles.includes('.scan-record-head{min-height:48px'))
+})
+
+test('the enablement and liveness block never hides behind a record collapse', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  // ScanTimelineService.liveness() owns why a quiet timeline is quiet. Budget-stopped
+  // and genuinely idle look identical from an empty tail, so both readings stay in the
+  // panel chrome, outside the per-record disclosure.
+  const listStart = timeline.indexOf('<div class="scan-timeline-list"')
+  for (const marker of ['Not scanning:', 'state.skip_reason', 'scan-gate-binding', 'scan-backfill-status',
+    'It resets on /clear, /new, or session end']) {
+    assert.ok(timeline.indexOf(marker) < listStart, `${marker} must render outside the record list`)
+  }
+})

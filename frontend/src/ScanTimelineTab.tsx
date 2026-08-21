@@ -47,6 +47,19 @@ const backfillLabel:Record<BackfillState,string> = {
   idle:'idle', running:'running', completed:'complete',
   completed_with_gaps:'complete with gaps', partial:'stopped early', failed:'failed',
 }
+// The one line a collapsed row stands on. A record whose model produced no summary
+// still has to be identifiable, or collapsing it would hide that it exists at all.
+const gistOf = (record:TimelineRecord) =>
+  record.summary||record.intent||record.claim||'No semantic change recorded.'
+// Flags a collapsed row cannot afford to drop: the two semantic ones say this window
+// is where the run stalled, and the two caveat ones say the record itself is partial.
+// Everything else is detail, which is what the expansion is for.
+const flagsOf = (record:TimelineRecord) => [
+  ...(record.blocked_on&&record.blocked_on!=='none' ? [{key:'blocked',label:'blocked',tone:'warn'}] : []),
+  ...(record.dead_end&&record.approach_status==='abandoned' ? [{key:'dead',label:'dead end',tone:'warn'}] : []),
+  ...(record.coverage?.remaining ? [{key:'behind',label:'behind',tone:'note'}] : []),
+  ...(record.repairs?.length ? [{key:'repaired',label:'repaired',tone:'note'}] : []),
+]
 
 export function ScanTimelineTab({session,onOpenProjectSettings}:{
   session:Session|null
@@ -56,6 +69,10 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
   const [expanded,setExpanded]=useState<Record<string,unknown[]|null>>({})
+  // Which records are showing their detail. Deliberately *not* persisted: record ids are
+  // per-run and unbounded, so a device store keyed by them would grow forever to remember
+  // something that is worth one tap. Compact is the resting state of every row, every time.
+  const [openRecords,setOpenRecords]=useState<Record<string,true>>({})
   const listRef=useRef<HTMLDivElement|null>(null)
   const pinned=useRef(true)
   const sid=session?.id||''
@@ -90,7 +107,9 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
   // The newest record is the one worth seeing, and it is at the bottom because
   // the list is chronological — so opening the tab used to land on the oldest.
   // Stays pinned as records arrive, and lets go the moment the reader scrolls up.
-  useEffect(()=>{pinned.current=true},[sid,run])
+  // A new conversation replaces every record, so both per-record maps are keyed by ids
+  // that no longer exist. Dropping them is what keeps them bounded.
+  useEffect(()=>{pinned.current=true;setOpenRecords({});setExpanded({})},[sid,run])
   useEffect(()=>{
     const list=listRef.current
     if(!list||!pinned.current)return
@@ -129,6 +148,12 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
+  const toggleRecord=(id:string)=>setOpenRecords(current=>{
+    const next={...current}
+    if(next[id])delete next[id]
+    else next[id]=true
+    return next
+  })
   const source=async(record:TimelineRecord)=>{
     if(expanded[record.id]!==undefined){setExpanded(current=>{const next={...current};delete next[record.id];return next});return}
     setBusy(true)
@@ -227,26 +252,47 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
       {events.map(event=>{
         if(event.kind==='boundary')return <div class="scan-boundary" key={event.boundary.id}><strong>New conversation</strong><span>{clock(event.boundary.created_at)} · {event.boundary.reason}</span></div>
         const record=event.record
+        // Compact is the resting state. The row still carries the record's identity:
+        // when it happened, what phase it belongs to, one line of what happened, and
+        // whichever flags say this window stalled or this record is partial. So the
+        // expansion is for detail rather than for working out which record this is.
+        const open=!!openRecords[record.id]
+        const detailId=`scan-record-detail-${record.id}`
         return <div class="scan-record-wrap" key={record.id}>
-          <article class="scan-record">
-            <header><time>{clock(record.t1)}</time><strong>{record.work_phase}</strong><span>{record.lifecycle_state}</span><em>novelty {percent(record.novelty)}</em></header>
-            <p>{record.summary||record.intent||'No semantic change recorded.'}</p>
-            {record.user_ask&&<dl><dt>Asked</dt><dd>{record.user_ask}</dd></dl>}
-            {record.intent&&<dl><dt>Intent</dt><dd>{record.intent}</dd></dl>}
-            {record.claim&&<dl><dt>Claim</dt><dd>{record.claim}</dd></dl>}
-            {record.blocked_on!=='none'&&<dl><dt>Blocked</dt><dd>{record.blocked_on}</dd></dl>}
-            {record.dead_end&&record.approach_status==='abandoned'&&<dl class="scan-dead-end"><dt>Dead end</dt><dd>{record.dead_end}</dd></dl>}
-            {!!record.target.length&&<details class="scan-record-targets">
-              <summary>Evidence targets <span>{record.target.length}</span></summary>
-              <ul>{record.target.map(target=><li key={target}><code>{target}</code></li>)}</ul>
-            </details>}
-            {!!record.coverage?.remaining&&<p class="scan-record-lag">{record.coverage.remaining} later messages were still unscanned when this record was written; a catch-up scan follows.</p>}
-            {!!record.repairs?.length&&<details class="scan-record-targets scan-record-repairs">
-              <summary>Model output repaired <span>{record.repairs.length}</span></summary>
-              <ul>{record.repairs.map(repair=><li key={repair}>{repair}</li>)}</ul>
-            </details>}
-            <footer><span>{record.behavior.join(' · ')} · confidence {percent(record.confidence)}</span><button disabled={busy} onClick={()=>void source(record)}>{expanded[record.id]!==undefined?'Hide source':'View source'}</button></footer>
-            {expanded[record.id]!==undefined&&<pre class="scan-source">{JSON.stringify(expanded[record.id],null,2)}</pre>}
+          <article class={`scan-record${open?' open':''}`}>
+            <button class="scan-record-head" aria-expanded={open} aria-controls={detailId}
+              title={open?'Collapse this record':gistOf(record)}
+              onClick={()=>toggleRecord(record.id)}>
+              <span class="scan-record-line">
+                <time>{clock(record.t1)}</time>
+                <strong>{record.work_phase}</strong>
+                <span class="scan-record-state">{record.lifecycle_state}</span>
+                {flagsOf(record).map(flag=><span key={flag.key} class={`scan-record-flag ${flag.tone}`}>{flag.label}</span>)}
+              </span>
+              <span class="scan-record-gist">{gistOf(record)}</span>
+              <b class="scan-record-caret" aria-hidden="true">›</b>
+            </button>
+            {open&&<div class="scan-record-detail" id={detailId}>
+              <p class="scan-record-novelty">novelty {percent(record.novelty)}</p>
+              {record.user_ask&&<dl><dt>Asked</dt><dd>{record.user_ask}</dd></dl>}
+              {record.intent&&<dl><dt>Intent</dt><dd>{record.intent}</dd></dl>}
+              {record.claim&&<dl><dt>Claim</dt><dd>{record.claim}</dd></dl>}
+              {/* Same guard as the row's `blocked` flag: an empty blocker is not a blocker,
+                  and drew a labelled row with nothing in it. */}
+              {record.blocked_on&&record.blocked_on!=='none'&&<dl><dt>Blocked</dt><dd>{record.blocked_on}</dd></dl>}
+              {record.dead_end&&record.approach_status==='abandoned'&&<dl class="scan-dead-end"><dt>Dead end</dt><dd>{record.dead_end}</dd></dl>}
+              {!!record.target.length&&<details class="scan-record-targets">
+                <summary>Evidence targets <span>{record.target.length}</span></summary>
+                <ul>{record.target.map(target=><li key={target}><code>{target}</code></li>)}</ul>
+              </details>}
+              {!!record.coverage?.remaining&&<p class="scan-record-lag">{record.coverage.remaining} later messages were still unscanned when this record was written; a catch-up scan follows.</p>}
+              {!!record.repairs?.length&&<details class="scan-record-targets scan-record-repairs">
+                <summary>Model output repaired <span>{record.repairs.length}</span></summary>
+                <ul>{record.repairs.map(repair=><li key={repair}>{repair}</li>)}</ul>
+              </details>}
+              <footer><span>{record.behavior.join(' · ')} · confidence {percent(record.confidence)}</span><button disabled={busy} onClick={()=>void source(record)}>{expanded[record.id]!==undefined?'Hide source':'View source'}</button></footer>
+              {expanded[record.id]!==undefined&&<pre class="scan-source">{JSON.stringify(expanded[record.id],null,2)}</pre>}
+            </div>}
           </article>
         </div>
       })}

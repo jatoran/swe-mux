@@ -20,12 +20,39 @@ affect the PTY, session state, transcripts, history, or projects.
 
 ## Read aloud (TTS)
 
+### One policy, three layers
+
+Read aloud is decided in exactly three places, and they are read in order. They used to sit in
+three unrelated surfaces - a checkbox in Settings, a chip on a pane, a button on a floating
+strip - so "why is it talking" and "why is it silent" both needed all three answered, which is
+the overwhelm this ordering exists to end.
+
+1. **Master** (`tts_enabled`, Settings -> Voice). Off means *no session generates and nothing
+   plays*, on any device. It is checked on the automatic path (`_consider`), on manual
+   generation (`generate`), and on trusted application speech (`speak`) - a switch that only
+   governs the paths that happen to consult it is not a master, which is what it was before
+   Phase 15.
+2. **Per-session participation** (`voice_mode`, the pane's `tts:` chip). Answers *does this
+   session generate*, and nothing else. `auto` no longer implies "and plays here": what is
+   spoken is layer 3's question, so a session can be a full participant while being silent on
+   the device you happen to be looking at.
+3. **This device** (the browser's autoplay toggle, plus the focus rule below). Answers *does
+   this browser speak, and for which session*.
+
+The three are presented as one numbered block in Settings -> Voice, each layer naming where its
+per-item control lives. The block is the source of truth for the wording; the chip and the strip
+say the same thing in one line each.
+
 ### Generation model
 
 - Per-session generation mode is volatile live-session state: `off`, `on_demand`, or `auto`.
-  `null` inherits the configured global default (`tts_default_mode`) while the global TTS
-  toggle (`tts_enabled`) is on. The mode is set through ordinary `PATCH /sessions/{id}` and
-  dies with the session.
+  `null` inherits the configured global default (`tts_default_mode`) while the master
+  (`tts_enabled`) is on. The mode is set through ordinary `PATCH /sessions/{id}` and
+  dies with the session. It governs *generation*: `auto` generates on every completed reply,
+  `on_demand` only when asked, `off` never. An explicit human request (the strip's `↻ speak`,
+  `Speak last reply now`) is deliberately still honoured for an `off` session, because that is
+  a direct instruction rather than participation - and because the shipped default for
+  `tts_default_mode` is `off`, refusing there would have silenced the speak button install-wide.
 - `auto` subscribes to `turn_ended`, debounces one second per session (`DEBOUNCE_SECONDS`),
   and reads `transcript_view.final_exchange`: the agent's newest assistant segment plus the
   message it was answering. That is the same reduction the drawer's Transcript tab renders and
@@ -152,6 +179,29 @@ affect the PTY, session state, transcripts, history, or projects.
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
   The silent unlock is transport setup, never public playback state, because capture uses that
   state to decide whether a new utterance could be speaker echo.
+- **Within a device, playback is focus-driven and global: the focused session speaks, every
+  other session holds its clip.** Three panes on `auto` used to talk over each other and over
+  whatever the operator was actually reading. The app reports the focused agent session
+  (`setPlaybackFocus`, driven by the same `focusedAgentSession` every other pane-scoped surface
+  uses, so a note or a shell in focus means *no* session plays); `enqueueAutoplay` plays a clip
+  whose session matches and otherwise **holds** it. The clip is already durable in `voice_clips`
+  and on disk, so holding costs nothing and loses nothing - what is held is only the decision to
+  speak it.
+- **A held clip is surfaced as ready-to-play, never played retroactively.** Moving focus onto a
+  pane does not start its backlog: arriving somewhere is not a request to be talked at. The
+  pane's player strip grows a `▶ n held` button (click plays them oldest first, behind whatever
+  is currently speaking rather than cutting it; right-click dismisses), and the command palette
+  carries `Read aloud: play clips held while you were elsewhere` for a session whose pane is not
+  currently drawn. The backlog is bounded at `HELD_PER_SESSION` (5, newest kept) and is dropped
+  by every switch that means "stop": `stopSessionPlayback` (the pane went off), `stopAllPlayback`
+  (the master or the device toggle), and a muted device holds nothing in the first place - an
+  "off" that leaves a play-me button behind is not off. The palette entry deliberately carries no
+  count, because rendering one would subscribe `App` to every `timeupdate` the audio element
+  fires.
+- **Voice Comms pins its agent past the focus rule** (`setPinnedPlaybackSession`). Hands-free
+  conversation is the one mode where focus is the wrong question - the operator is talking to
+  that agent, so its replies are the point of the mode - and the pin is released when comms is
+  turned off, alongside the autoplay and session-mode restore.
 - Every segmented response shares a stream ID across its clips.
   A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
   The response remains a fallback if that event was delayed or lost.
@@ -196,9 +246,18 @@ affect the PTY, session state, transcripts, history, or projects.
   `stopAllPlayback`. All of them fire on the click, not when the PATCH lands or when the
   current clip finishes. A hard stop abandons the clip (unlike `pausePlayback`, which keeps it
   loaded to resume), so the strip reads as stopped and a later play restarts from zero.
-- The autoplay path re-checks the pane's mode on arrival as well as on the daemon, because a
-  clip synthesized just before the user hit `off` would otherwise land and start speaking after
-  the switch was thrown.
+  Each of those stops takes the held backlog with it for the same reason.
+- The autoplay path re-checks the pane's participation on arrival as well as on the daemon,
+  because a clip synthesized just before the user hit `off` would otherwise land and start
+  speaking after the switch was thrown. Whether that clip then *plays* or is *held* is
+  `enqueueAutoplay`'s decision alone, so the device toggle and the focus rule are not
+  half-applied at the event handler.
+- **Focus that has never been reported is not the same as no session focused.** `voice.ts`
+  tracks the two separately: before the first `setPlaybackFocus` the pre-policy behaviour
+  stands and a clip plays, so a client that reports focus a tick late (or a surface that never
+  reports it) cannot swallow audio it would have spoken before this rule existed. A clip with
+  no session attributed to it plays for the same reason - it cannot be held against a session
+  nobody named.
 
 ## Conversation mode (STT)
 
@@ -303,6 +362,51 @@ affect the PTY, session state, transcripts, history, or projects.
   instant and feeling stuck. The real decode stays on the `dictation` profile — an answer that
   turns out to be conversational still has to be transcribed accurately, and the speculation
   already carries the latency win.
+- **Unfinished-utterance deferral** (`utteranceCompleteness.ts`, dispatched from
+  `ConversationControl.tsx`): the defining voice-agent complaint is that a pause becomes a reply,
+  so the operator rushes to beat the endpoint.
+  A **completeness heuristic runs before a chat turn is dispatched**, and an utterance that ends
+  mid-clause - on a dangling conjunction, preposition, or article - earns exactly **one** adaptive
+  patience extension instead of submitting.
+  The design is deterministic-first and pre-model for two reasons: a model-arbitrated "are you
+  done?" loop is the round-trip spam the feature exists to remove, and a model instructed to
+  sometimes return nothing will return nothing when it should have answered.
+  **The model is never told to withhold a reply**; it is taught one thing instead - to offer the
+  brainstorm hold once when a turn reads as an unfinished thought (`assistant.md`).
+  - **One deferral per utterance, structurally.** The decisions live in `DeferralPen`
+    (`utteranceDeferral.ts`) and the effects stay in `ConversationControl.tsx`, so the invariant
+    is tested rather than asserted. The held fragment resolves exactly once:
+    merged into the next plain chat utterance, submitted alone when the extension expires, folded
+    into the brainstorm buffer if the operator says "hold on", or dropped by cancel, standby, or
+    Talk stopping. The merge path deliberately does **not** re-run the heuristic, so a chain of
+    fragments cannot compound into an unbounded wait.
+  - **The extension is the operator's own `voice_chat_patience_ms`, not a second knob** (floored
+    at 600 ms, capped at 5 s): an unfinished thought waits its normal patience at the gate and one
+    more patience-length window at the dispatch layer, so "how long before Mux answers" stays one
+    number to turn. While the fragment is held, the gate's `endpointPatienceMs` returns
+    patience + extension (capped at 10 s), so the second breath is not itself chopped in half.
+  - **The release timer re-arms while speech is still arriving or an utterance is mid-decode**,
+    because answering half a sentence whose other half is already in flight is the exact failure
+    being fixed. It is bounded by a hard 15 s hold ceiling, so a detector wedged in "speaking"
+    cannot hold a turn forever.
+  - **Queue-merge stays the safety net** for fragments the rule set does not recognize: the
+    daemon coalesces consecutive arrivals into one waiting turn, and barge-in already silences a
+    reply to fragment one (`assistant.md`).
+  - **Two guards keep the false-positive rate low without a parser.** Questions strand
+    prepositions legitimately ("what is this for"), so a trailing `?` or an interrogative opener
+    disqualifies the preposition rule - never the article or conjunction rules, because nothing
+    ends on "the". And prepositions that double as verb particles ("I'm in", "come on") count
+    only in an utterance of at least five words, where they read as a clause rather than an idiom.
+    Words that are commonly sentence-final are absent from the lists on purpose ("yet", "though",
+    bare "then", "that", "some"), and the two idioms that survive are exempted on the *preceding*
+    token ("I think so", "it's been a while") rather than by loosening the word.
+  - **Every deferral is logged with its trigger token**, on resolution rather than at the
+    deferral, because the outcome is what judges it: `merged` caught a real trail-off while
+    `submitted` cost the operator one extension for nothing, and the ratio of the two is the
+    false-positive rate. Tune the lists from `POST /api/voice/deferral-diagnostic` records in
+    `daemon.log`, not from intuition.
+  - The chat panel shows the held fragment as an `unfinished · "and"` chip beside the phase, so a
+    turn that is waiting rather than ignored is legible at a glance.
 - **Push-to-talk** (hold `Ctrl`+`Alt`+`Space`) suspends endpointing entirely: the key release is
   the endpoint. It is the escape hatch for when detection is the problem rather than the fix — a
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
@@ -448,6 +552,9 @@ executed action — so that number is measured rather than estimated.
   Session launch accepts the Project name, the stable visible `Project N` address, or no Project qualifier for the selected Project, and the ordinary spawn path focuses the optimistic new tab immediately.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
+- **Clearing the assistant's context is one of those registry aliases.**
+  `assistant.newConversation` ("Mux, new conversation", "Mux, clear context") calls the same new-dialog path the panel's `new` button uses, deterministically and with no model call.
+  Alone among assistant acts it carries no confirmation, because the prior dialog is unremembered rather than deleted and stays readable in the panel; the spoken reply says both halves, which is what makes the missing confirmation honest (`assistant.md`).
 - **Safe Action rail items join that same registry only while a session is focused.**
   `railVoice.ts` resolves the focused Project's Action configuration for the current device and backend, deduplicates entries placed on the Rail or Drawer layout, and adapts only an explicit safe subset to registry commands.
   The shipped subset is terminal copy/paste plus non-destructive terminal keys: Escape, Enter, Tab, Ctrl+C, arrows, cursor navigation, restore input, newline, and the Markdown insertion helpers.
@@ -553,11 +660,26 @@ into mobile-voice setup instead.
 - **Read aloud remains session-scoped.** Each Agent pane header carries only its `tts:` chip (off / tap / auto).
   The player strip (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay) floats from the pane's zero-height `.voice-overlay-anchor`.
   It never changes terminal geometry.
-- **Conversation state is app-level and its primary view is pane-attached.** The Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
-  While Talk is on and an Agent pane is focused, the panel floats at the top of that pane in the same `.voice-overlay` stack as the read-aloud player strip.
-  The zero-height anchor keeps both surfaces out of terminal layout.
-  A fixed top `.conversation-layer` is used only when the active sink has no visible terminal pane, such as a note or Queue composer.
-  Capture, draft, target pin, and history stay mounted across Project, pane, and target changes.
+- **There is one voice surface, and it is app-level: the voice dock** (`.voice-dock`, `voiceDock.ts`).
+  It holds the dictation draft and the assistant conversation as two bodies behind the talk/chat tabs, and it is mounted **once**, at one fixed place in the tree, for the life of the app.
+  It hangs from `.voice-dock-anchor`, a zero-height grid item in the main stage's own cell, so it floats over the top of the workspace and never takes a track: a pane's row count *is* its PTY's row count, and a surface that took a row would resize a live agent's terminal every time it opened.
+  It used to move between the focused pane's `.voice-overlay` and a fixed `.conversation-layer` depending on where the sink was, which meant a focus change remounted the assistant view inside it - see the announced-card rule in `assistant.md` for why that is a correctness problem and not a cosmetic one.
+  Capture, draft, target pin, and history stay mounted across Project, pane, and target changes, as they always did.
+- **Three axes, deliberately separate: capture, addressee, and size.**
+  - *Capture* is the microphone. The Talk toggle sits directly before Run in the mobile toolbar and desktop app header and does nothing but start and stop listening.
+  - *Addressee* is the talk/chat tabs (`VoicePanelMode`): who plain speech reaches, and therefore which body the dock draws. With capture off there is no draft to dictate into, so the dock shows the assistant whatever the stored addressee says; the stored value is left alone.
+  - *Size* is the dock state: `full`, `peek`, or `chip`. It is presentation only.
+  They were one thing before, and the cost was concrete: the surface rendered only while capture ran and its close button appeared only while capture was stopped, so the sole way to clear the panel off the workspace mid-conversation was `stop mic`.
+- **Collapsing is not closing.** At `chip` the dock is `display:none` and the workspace is completely clear, while the dialog keeps streaming, speaking, and opening cards from the same mounted component.
+  Hiding rather than unmounting is load-bearing, not an optimisation: the set of cards this device has already announced lives in `AssistantPanel`, and a remount reads as a device that has never seen an open card and speaks its line again.
+  The way back is the **voice dock chip** beside the microphone in both top bars - a separate button, carrying a count while confirmation cards are open and a dot when a reply landed while collapsed.
+  The chip reopens into the size it was collapsed from, so a deliberate `peek` does not come back as a full panel.
+- **`peek` is one row: the newest line, plus every open confirmation card with its buttons and countdown, and no composer.**
+  The cards are the reason peek exists rather than a straight open/closed toggle - they are the only part of a conversation that expires, and a scheduled one runs on its own.
+  A card opening therefore raises the dock to at least `peek`, one-way and never further, because a countdown nobody can see is a decision made by timeout.
+- **The microphone may open the dictation draft, and only that.** Starting Talk from the chip opens the dock when the addressee is dictation, because the draft has no other surface; it is a loan, returned when capture stops, and any dock action by the operator clears the loan for good.
+  A chat-addressed microphone leaves a collapsed dock collapsed, which is the whole point of the chip: the assistant speaks its replies.
+  A spoken question routed to the assistant never reopens a collapsed dock either - the reply is spoken and the chip marks it unread.
 - **Talk keeps a reviewable conversation history.** Every recognized utterance and every final Mux outcome is stored in a device-local, app-wide 120-entry ring.
   Lists and help retain their line-broken display text while TTS receives the separately paced speech form.
   Last-reply requests retain the generated reply text, not only a playback status message.
@@ -575,12 +697,14 @@ into mobile-voice setup instead.
   `Ctrl`/`Cmd`+`Enter` sends from the textarea; `Escape` releases its keyboard focus.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- The player strip and Talk panel each expose a `? Commands` action backed by the complete live catalog shown in Settings, plus a gear into Settings → Voice.
+- The player strip and the voice dock each expose a `? Commands` action backed by the complete live catalog shown in Settings, plus a gear into Settings → Voice.
   The command catalog is a viewport modal and is not a utility-drawer tab.
   Spoken drawer aliases always open the named tab rather than toggling it closed.
   Spoken `open Notes` also claims the selected drawer note as the current text sink without raising the mobile keyboard; a later pointer or keyboard focus change overrides that claim normally.
   Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
+  So are the dock's own: `assistant.toggle` (chip ↔ last expanded size, keeping its id because it is reachable from saved keybindings and gesture slots), `voice.dockExpand`, and `voice.dockCollapse`.
+  None of them touches capture.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
 
 ## Session sounds (unrelated audio path)
@@ -617,6 +741,7 @@ and never touches the daemon or an LLM.
   record one browser-measured sample, start a fresh run.
 - `POST /api/voice/barge-in-diagnostic` - bounded confirmed/rejected playback probe diagnostics written to `daemon.log`.
 - `POST /api/voice/capture-diagnostic` - bounded stalled/recovered capture watchdog reports; a stall is written to `daemon.log` at WARNING because it is the durable evidence a dead microphone leaves.
+- `POST /api/voice/deferral-diagnostic` - one resolved unfinished-utterance deferral: the trigger token, its kind, the word count, how long it was held, and the outcome (`merged`, `submitted`, `held`, `discarded`) that judges it. Written to `daemon.log`, because the completeness heuristic is a word list and a word list is only tunable against a measured false-positive rate.
 - `POST /api/sessions/{sid}/voice/prepare-submit` - side-effect-free safety validation before Talk uses the mounted terminal path.
 - `POST /api/sessions/{sid}/voice/submit` - compatibility-only idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.
@@ -641,7 +766,8 @@ built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`
 `stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
 `stt_routing_model` (spoken commands; blank falls back to the dictation model);
 `voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases),
-`voice_chat_patience_ms` (extra endpoint patience while the assistant is the addressee).
+`voice_chat_patience_ms` (extra endpoint patience while the assistant is the addressee, and the
+size of the single extension an unfinished utterance earns - deliberately one number, not two).
 The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 
 ## Key files
@@ -657,15 +783,25 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `frontend/src/assistantSpeech.ts` — one speech stream per assistant turn (`assistant.md`).
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/voiceNavigation.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, canonical hierarchical indexes, and fleet speech projection.
 - `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
+- `frontend/src/voiceDock.ts` - the dock's size axis and the addressee type: the pure reducer (`reduceVoiceDock`), the loan rule for capture-opened docks, the card floor, `voiceBodyVariant`, and device-local persistence. Covered by `frontend/test/voiceDock.test.ts` and `frontend/test/renderer/voice-dock.spec.ts`.
 - `frontend/src/spokenListContext.ts` - validated five-minute device-local membership and paging context for recent spoken lists.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (toolbar control), `ConversationSurface` (pane placement or top fallback), and `DictationPanel` (draft and history surface).
+- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (the microphone, in both top bars), `VoiceDockChip` (the dock's control, beside it), and `VoiceDock` (the one voice surface: header, dictation body, assistant slot).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.
 - `frontend/src/audioFrames.ts` — streaming resampler and 512-sample framing.
 - `frontend/src/speechGate.ts` — the frame-counted endpointing state machine and both gate
   configurations.
+- `frontend/src/utteranceCompleteness.ts` - the pure completeness heuristic (dangling
+  conjunction, preposition, article), its two false-positive guards, and the patience/extension
+  arithmetic. No timers, no capture, no dialog: the whole rule set is unit-testable from a
+  string.
+- `frontend/src/utteranceDeferral.ts` - `DeferralPen`, the holding pen for the one unfinished
+  utterance. Clock-injected like `CaptureFrameWatchdog`, and deliberately effect-free: it never
+  dispatches a turn, posts a diagnostic, or owns a timer. It answers what should happen to an
+  utterance, whether a release is due, and who holds the fragment now, so the structural claim
+  (at most one deferral per utterance) is testable without a microphone.
 - `frontend/src/sileroVad.ts`, `frontend/src/voiceCaptureWorklet.ts` — the ONNX detector and the
   audio-thread capture worklet.
 - `frontend/src/voiceLatency.ts`, `frontend/src/VoiceLatencyReport.tsx` — the stage sample and its

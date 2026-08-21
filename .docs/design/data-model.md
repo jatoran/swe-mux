@@ -194,6 +194,10 @@
   failed provider call creates no semantic record.
   A call the provider billed for reaches the ledger even when local validation refused its output;
   the scan path previously discarded that usage entirely.
+  It also carries `cached_tokens` (schema 9): the prompt tokens the provider served from its
+  cache, a subset of `input_tokens` and never added to it, backfilled to 0 on an existing
+  database because every pre-migration row was billed by a request that carried no cache
+  breakpoint.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
   (re-copying promotes rather than duplicates), character/line counts, provenance
   (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here

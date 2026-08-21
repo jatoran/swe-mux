@@ -2,9 +2,9 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import type { Session, VoiceClip, VoiceContent, VoiceStatus } from './types'
 import {
-  autoplayEnabled, beginRequestedStream, cancelRequestedStream, getPlayback,
-  newVoiceStreamId, pausePlayback, playClip, playRequestedStreamFirst, seekTo,
-  setAutoplayEnabled, subscribePlayback, unlockPlayback,
+  autoplayEnabled, beginRequestedStream, cancelRequestedStream, dismissHeldClips, getPlayback,
+  heldClipsFor, newVoiceStreamId, pausePlayback, playClip, playHeldClips, playRequestedStreamFirst,
+  seekTo, sessionPlaysHere, setAutoplayEnabled, subscribePlayback, unlockPlayback,
 } from './voice'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
 import type { Command } from './commands'
@@ -80,6 +80,10 @@ export function VoicePlayer({ session, status, mode, commands, onSession, onOpen
       .then(onSession)
       .catch(cause => setError(cause instanceof Error ? cause.message : 'could not switch content'))
   }
+  // Re-read on every render: `subscribePlayback` fires when a clip is held or
+  // released, so the strip's count is never a frame behind the audio it describes.
+  const held = heldClipsFor(session.id)
+  const plays = sessionPlaysHere(session.id)
   const clipTitle = clip
     ? `${clip.content_mode} · ${clip.voice} · ${new Date(clip.created_at * 1000).toLocaleTimeString()}${clip.model ? ` · ${clip.model}` : ''}`
     : 'No clips yet'
@@ -112,11 +116,23 @@ export function VoicePlayer({ session, status, mode, commands, onSession, onOpen
     </button>
     <button class={`voice-autoplay ${autoplayEnabled() ? 'active' : ''}`} aria-pressed={autoplayEnabled()}
       title={autoplayEnabled()
-        ? 'New clips play automatically on this device (browser) · click to stop autoplaying here'
+        ? `New clips play automatically on this device (browser), for the session you are focused on${plays ? ' — that is this one' : ' — this one holds its clips instead'} · click to stop autoplaying here`
         : 'New clips will NOT play on this device (browser) · click to autoplay them here'}
       onClick={() => setAutoplayEnabled(!autoplayEnabled())}>
       {autoplayEnabled() ? '🔊 this device' : '🔇 this device'}
     </button>
+    {/* The held backlog. It exists because this session finished a reply while the
+        operator was somewhere else: the clip is durable on the daemon and was
+        deliberately not spoken over whatever had their attention, so the only thing
+        left to do is offer it. Right-click dismisses without listening — a stale
+        update from twenty minutes ago is not worth a play button forever. */}
+    {held.length > 0 && <button class="voice-held"
+      title={`${held.length} clip${held.length === 1 ? '' : 's'} finished while another session had focus · click to play ${held.length === 1 ? 'it' : 'them'} now · right-click to dismiss`}
+      aria-label={`Play ${held.length} held clip${held.length === 1 ? '' : 's'} for ${sessionDisplayName(session)}`}
+      onContextMenu={event => { event.preventDefault(); dismissHeldClips(session.id) }}
+      onClick={() => { unlockPlayback(); playHeldClips(session.id) }}>
+      ▶ {held.length} held
+    </button>}
     {mode === 'auto' && <span class="voice-flag" title="Every completed reply generates audio automatically">auto</span>}
     {clip?.status === 'failed' && <span class="voice-error" title={clip.error || 'generation failed'}>failed</span>}
     {error && <span class="voice-error" title={error}>{error.length > 42 ? `${error.slice(0, 42)}…` : error}</span>}
