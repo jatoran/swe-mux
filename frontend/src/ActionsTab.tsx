@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren } from 'preact'
 import { allRailBackends, isBuiltinRailId, railPayload, resolveRailRows, type RailBackend, type RailItem } from './commandRail'
 import { pinPrompt, pinSkill, pinnedPromptItem, pinnedSkillItem, removeScopedRailItem, resolveRail } from './railScope'
-import { activatePromptRailItem } from './promptRail'
+import { activatePromptRailItem, railItemLabel } from './promptRail'
+import { usePromptTitles } from './promptTitles'
 import { currentProfile, currentRailBlob, loadRailConfig, saveRailBlob } from './deviceSettings'
 import { api } from './api'
 import {
@@ -150,6 +151,12 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   // button in one tap (`railScope.ts`), scoped to the project when the skill or
   // template itself is project-scoped.
   const railResolved = useMemo(() => resolveRail(currentRailBlob(), session?.project_id), [session?.project_id, railRev])
+  // Live titles for prompt buttons pinned without a name of their own; skipped
+  // entirely when this device's Drawer layout carries none (`promptTitles.ts`).
+  const promptTitles = usePromptTitles(
+    session?.project_id,
+    rows.some(row => row.entries.some(entry => entry.item.type === 'prompt' && entry.item.autoLabel)),
+  )
   useEffect(() => {
     const on = (event: Event) => setKillArmed((event as CustomEvent<string | null>).detail === session?.id)
     window.addEventListener('mux:kill-armed', on)
@@ -291,22 +298,22 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     },
   }
 
-  // These built-ins are shortcuts *to* this drawer — Clipboard and Skills open a
-  // rail drop-up whose own first row lands on the section already rendered below,
-  // and Actions opens the drawer itself. Running any of them from in here is a
-  // round trip to where the reader is standing, so they are filtered out of every
+  // These built-ins are shortcuts *to* this drawer — Clipboard, Skills and Prompts
+  // open a rail drop-up whose own first row lands on the section already rendered
+  // below, and Actions opens the drawer itself. Running any of them from in here is
+  // a round trip to where the reader is standing, so they are filtered out of every
   // row entirely.
   const visibleRows = session ? rows
     .map(row => ({
       ...row,
-      entries: row.entries.filter(entry => !['clipboardHistory', 'skills', 'openActions'].includes(entry.item.action || '') && (entry.item.action !== 'attach' || isAgent)),
+      entries: row.entries.filter(entry => !['clipboardHistory', 'skills', 'prompts', 'openActions'].includes(entry.item.action || '') && (entry.item.action !== 'attach' || isAgent)),
     }))
     .filter(row => row.entries.length) : []
   const anyVisible = visibleRows.some(row => row.entries.length)
   const actionDisabled = (item: RailItem) => item.action === 'attach' && (session?.state === 'exited' || session?.state === 'crashed')
   const label = (item: RailItem) =>
     item.action === 'endSession' && killArmed ? 'Confirm ✓'
-      : item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : item.label
+      : item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : railItemLabel(item, promptTitles)
   const matched = inventory ? filterSkills(inventory.skills, query) : []
   const groups = groupSkills(matched)
   const disclosure = inventoryNote(inventory)

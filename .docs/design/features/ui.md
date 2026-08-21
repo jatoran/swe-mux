@@ -1539,6 +1539,12 @@ Its rules, and what each one is defending:
   It is the one item type whose activation is asynchronous because the body is fetched on click, and the one that can never submit, which is the library's own contract.
   Templates carrying `{{variables}}` have nothing to inject yet, so the button opens the Actions drawer with Prompt templates expanded and the template preselected rather than pasting a half-rendered body.
   Both hosts route through `promptRail.ts` and insert over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- **A prompt button's *name* is a pointer too, unless somebody typed one.**
+  Pinning takes no name, so the label it stores is the template's title at pin time - a snapshot of a name, which is exactly the kind of copy this item type exists to avoid.
+  An item carrying `autoLabel` therefore renders the template's live title and renames itself when the template is renamed; the stored copy stays as the fallback for before the library has been read and for a template that has gone.
+  A label the operator typed is never overridden, and neither is one saved before this rule existed - the flag's absence means "somebody's own name", so nothing that was deliberately named gets renamed under them.
+  Clearing the label field in the catalog editor is how an existing button opts in; the field shows the live title as its placeholder.
+  The titles come from one lazily filled cache shared by every surface (`promptTitles.ts`), and it is only read when the rows about to be drawn actually contain such a button, so a rail with no prompt buttons costs nothing.
 - Talk exposes a deliberately smaller rail-derived command set through `railVoice.ts` when a live session is focused.
   Built-in keys and Paste require explicit `voicePhrases`; non-submitting configured agent skills and slash commands derive aliases from their names.
   Submitted custom commands require their own explicit voice phrases.
@@ -1549,14 +1555,33 @@ Its rules, and what each one is defending:
   Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
 - A project relates to the shared Action config in one of three strengths, and the middle one is the default a project accumulates (`railScope.ts`, `commandRail.ts`).
   Plain **inheritance** is no override at all.
-  A **delta** overlays project-owned actions and project-owned rows *on the live global layout*: global edits keep flowing into the project, and only the additions are project state.
+  A **delta** overlays project-owned actions, project-owned rows, and the two shared-row overlays (splices and hides) *on the live global layout*: global edits keep flowing into the project, and only the overlay is project state.
   A **fork** is a detached full copy that stops tracking global edits; it is created only by the explicit Detach control, because the old fork-on-first-edit behavior deviated a project from every later global improvement the moment it added one button.
+  A fork can be reattached as a delta from the same toolbar (below), which is the way back for one made before splices and hides existed.
   Edits route by ownership rather than by a write-target switch: an edit to a shared row lands in the global scope (all projects, said in place by the scope note and per-row origin tags), while project rows and project actions stay project state.
   Reverting is symmetric — "Remove project additions" drops a delta, "Use global layout" drops a fork — and unpinning the last project addition returns the project to plain inheritance with no stray delta behind it.
-- A project-owned action may only occupy project rows.
-  A shared row is written to the global scope, where the project item's id does not exist, so a drop, a keyboard move, or a placement toggle that would put one there is refused (the drag previews it as "off every row") or routed into a project row created on demand.
-  The inverse is legal: a global item placed in a project row is a project-local placement of a shared action.
-  Surface copy ("Copy from *other device*") is hidden in delta scope for the same reason — the fresh-id copy would flatten project rows into global state.
+- **A shared row's *definition* never contains a project-owned action; only the resolved projection does.**
+  That is the invariant, and it is what a delta's two shared-row overlays are built to preserve.
+  A **splice** records "this project also places item X in shared row R, after item Y"; the row's definition stays global and keeps flowing through, and the splice is applied at resolve time, so a later global reorder, insert, or removal re-anchors it rather than breaking it.
+  Anchoring is by item id and never by index, because an index would quietly mean somewhere else the moment global gained a button; `null` is the head of the row, and an anchor that is gone falls back to its end.
+  A **hide** is the subtractive mirror - "this project does not render X in shared row R" - and it takes every occurrence, the way placement toggles already treat duplicates.
+  Together they remove the two things that used to force a fork: a project action on the shared strip, and "everything shared except that one button".
+  Editing the shared row's own items from a project view still round-trips to global exactly as it did before, so nothing about the existing behavior changed.
+- One rule makes that split decidable and is enforced in `resolveDeltaScope` rather than trusted: **within one row, an id is either the project's or the definition's, never both**.
+  A splice is applied only when its id cannot also arrive from the row's own definition - the action is project-owned, the definition does not carry it, or this project hides it from there (which is how a project-local *reorder* is said: hide plus splice).
+  That is what lets an arbitrarily dragged-about row be split back apart afterwards from the *ids* alone, with no index tracked through the edit, and it is why the resolution reports per-row ownership rather than positions.
+  Hidden occurrences are written back into the definition at the indices they held there: the project cannot see them, so it cannot have moved them, and dropping them would delete them for every project.
+- Consequently the drag refuses no target any more.
+  A project action dropped into a shared row becomes a splice; the inverse was always legal and still is, a global item in a project row being a project-local placement of a shared action.
+  In a project scope a shared row's chips read apart: the project's own placements are marked and their × removes only this project's copy, a shared entry's × still removes it for every project (the tooltip says so), and its ⊘ hides it here alone.
+  A hidden button is drawn back as a **ghost chip** in the slot the shared row still holds it in, because a hidden entry is in no row and nothing else could offer to restore it.
+  Surface copy ("Copy from *other device*") stays hidden in delta scope — the fresh-id copy would flatten project rows into global state.
+- **A fork can be reattached** (`railReattach.ts`), which is what rescues an arrangement that predates any of this rather than making somebody rebuild it by hand.
+  The tool diffs the fork against the *current* global config and emits the delta that reproduces it: project actions, project rows, splices for what the fork added to a shared row, hides for what it took out, and hide-plus-splice pairs for a shared button it merely moved.
+  It verifies itself - the candidate delta is resolved by the same function that will render it and compared row by row against the fork - so nothing is reported as reproduced on the strength of the diff that produced it.
+  What a delta cannot express is named on the plan with the global value that wins: a renamed shared row, a reordered set of shared rows, a project row interleaved between them, and an action whose definition the fork edited.
+  A row that survives none of that is redone with every id floated, which always reproduces it at the cost of no longer tracking global changes to that row.
+  It is user-invoked and never automatic: a fork is somebody's arrangement, and a migration that happens to you is one you could not review first.
 - **In-place rail editing** (`RailInlineEditor.tsx`) is the primary customization path: the rail gear flips the rail area into an editor showing the same rows as wrapping chips — real device, real backend, real scope — with drag to reorder, × to remove, and a per-row `+` opening a searchable picker over the catalog.
   Most rail edits are one reorder or one removal, and those should never cost a modal that also explains scopes and catalogs.
   Items another backend would hide render dimmed rather than hidden, because this is the one surface meant to answer "why is this button not on my shell rail".
@@ -1566,6 +1591,9 @@ Its rules, and what each one is defending:
   The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
   A dismissible first-open callout carries the three-line orientation (Rail vs Drawer, per-device layouts, the catalog) instead of a standing paragraph.
   A "Preview as" backend selector dims what a session of that type would not show, making the backend filter visible before a session surprises anyone.
+  It **opens on the Project the operator was standing in**, not on Global.
+  Global is a superset in rows but a subset in reach - a Project's own actions and its own prompt templates are listable from no other scope - so defaulting to Global made the editor look emptier than the rail it was opened beside.
+  At Global scope it names which Projects hold something of their own, and whether each is a fork or additions, because project-held items are otherwise invisible from the default view and "all actions" reads as though the fleet had none of them.
 - Four affordances are what keep two independent device layouts manageable, and none of them is a shared row.
   Adding a custom action places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone; in a project scope the add form offers "this project only" (the default there) or "all projects".
   The catalog's placement controls are four **labelled checkboxes** — Desktop rail, Desktop drawer, Mobile rail, Mobile drawer — inside an expandable per-action panel, with a plain-words summary ("Desktop rail + drawer · Mobile drawer") on the collapsed row; they replaced the abbreviated `Dr/Dp/Mr/Mp` badge code, which was a legend the user had to learn before the surface said anything.
@@ -1636,11 +1664,16 @@ Its rules, and what each one is defending:
   is, how old the replayed content is, and — when there is none — why not, since an empty
   recovered agent pane otherwise reads as a bug rather than the deliberate exclusion it is
   (`features/session-recovery.md`).
-- **`Clip` and `Skills` open a drop-up over the rail**, not the drawer.
-  Both surfaces already exist as sections of the Actions tab, and both are reached from the drop-up's sticky first row, so nothing became less reachable - what changed is that the two-tap jobs (paste the thing I copied a minute ago; type a skill name) no longer cost a drawer trip.
+- **`Clip`, `Skills` and `Prompts` open a drop-up over the rail**, not the drawer.
+  All three surfaces already exist as sections of the Actions tab, and all three are reached from the drop-up's sticky first row, so nothing became less reachable - what changed is that the two-tap jobs (paste the thing I copied a minute ago; type a skill name; insert a template) no longer cost a drawer trip.
+  `Prompts` is the *whole* library rather than the handful somebody remembered to pin: per-template pinning still exists and still earns a template its own dedicated button, but a library reachable only through pinning leaves everything unpinned three taps away.
+  It is deliberately not `agentOnly` - a template is text, and text suits a shell composer as readily as an agent's - and templates that mean something to one harness carry their own `backends` and are filtered by them.
+  Its rows are ordered favourites, then most recently used, then title, which is the library's own notion of relevant rather than a second one, and a template with `{{fields}}` says so on its row before the tap hands off to the drawer.
+  It carries a second sticky exit, `+ New`, which opens the prompt library already on a blank template, because "I want a template for this" is where a picker of existing ones most often ends.
+  Two exits share the sticky bar side by side rather than each taking one of the five list rows.
   The drop-up shows five rows and then scrolls; the cap is a height, never a slice, because capping by count would make the sticky link the only route to a sixth entry.
   It opens upward from its trigger through `anchoredPopoverStyle`, the same placement math the account and resource popovers use, and repositions on scroll with capture because the rail is itself a horizontal scroller.
-  A row does the one obvious thing and closes: Clipboard inserts the entry, Skills inserts the invocation without submitting.
+  A row does the one obvious thing and closes: Clipboard inserts the entry, Skills inserts the invocation without submitting, Prompts inserts the template body (also without submitting) or hands a template with fields to the drawer.
   Reading, searching, pinning and deleting stay in the drawer section - a drop-up that also expanded rows would rebuild the surface it is a shortcut past.
   Inserting from the ring never touches `navigator.clipboard`, which is what makes it the working paste path on a plain-HTTP tailnet client and on mobile Safari.
 - **Copy input reads the draft off the terminal grid.**
@@ -1662,9 +1695,13 @@ Its rules, and what each one is defending:
 - **Branch opens a point picker where the daemon honours one** (`BranchPicker.tsx`, gated on the
   published `branch_from_message`), and forks on the click where it does not — offering a choice
   the daemon would then refuse is worse than offering none. The picker is a dialog of its own
-  rather than controls added to the Transcript tab: that tab is deliberately inert, copy being its
-  only verb, because it is where somebody reviews what an agent already did and a stray tap there
-  must not start a session. Rows run newest first, since a branch is normally a recent regret; each
+  rather than controls added to the Transcript tab: that tab writes nothing back, because it is
+  where somebody reviews what an agent already did and a stray tap there must not start a session
+  or put words into one. The rule is about *what a tap can reach*, not about a count of buttons:
+  copy, select, and read-aloud playback all leave the conversation, the PTY, and the session
+  exactly as they were, which is why per-message playback could join them (`voice.md`) while
+  branching could not. The one thing playback does spend - a summary's model call - is stated on
+  the chip before it is pressed, and its verbatim twin spends nothing at all. Rows run newest first, since a branch is normally a recent regret; each
   states the cut it would make in the words of the act (a prompt is branched *before*, a reply
   *after*); and a row whose cut is illegal stays visible with its reason inline, because the reader
   can see the message and hiding why it is not offered leaves them guessing.

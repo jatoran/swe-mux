@@ -3,6 +3,7 @@ import { api } from './api'
 import {
   isActiveLand,
   landGateNote,
+  landKindNote,
   landStateLabel,
   landStateTone,
   verifyProgressLabel,
@@ -107,6 +108,10 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
     {!detached && !active && last && <div class={`git-land-last ${landStateTone(last.state)}`}>
       <p>
         <em class={`git-land-state ${landStateTone(last.state)}`}>{landStateLabel(last.state)}</em>
+        {/* A verify-only request that a session made from inside this worktree finishes
+            on this row too, and `Verified` beside a Land button is ambiguous without
+            saying which act it was. */}
+        {landKindNote(last) && <small class="git-land-kind-note">{landKindNote(last)}</small>}
         {last.reason && <span>{last.reason}</span>}
         {/* A land that went round the gate says so on the row it landed from, where the
             next person to press Land on this branch will read it. Without this, "Landed"
@@ -144,6 +149,10 @@ function LandProgress({ request, busy, onCancel }: {
   return <div class={`git-land-progress ${landStateTone(request.state)}`}>
     <div class="git-land-progress-head">
       <em class={`git-land-state ${landStateTone(request.state)}`}>{landStateLabel(request.state)}</em>
+      {/* `Verifying` under a Land button means one thing when a land is running and
+          another when the request will stop there, and the states cannot tell them
+          apart. */}
+      {landKindNote(request) && <small class="git-land-kind-note">{landKindNote(request)}</small>}
       {label && <span class="git-land-progress-detail">{label}</span>}
       {request.origin !== 'operator' && <small>requested by agent</small>}
       {cancellable && <button disabled={busy} onClick={onCancel}>Cancel</button>}

@@ -29,7 +29,10 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   const inline = source('RailInlineEditor.tsx')
 
   assert.ok(app.includes("id: 'actions.configure'"), 'command palette registry needs Configure Actions')
-  assert.ok(app.includes('<ActionEditorModal onClose='))
+  // It opens on the Project the operator was in: a Project's own actions and prompt
+  // templates are listable from no other scope, so defaulting to Global made the
+  // editor look emptier than the rail it was opened from.
+  assert.ok(app.includes('<ActionEditorModal projectId='))
   assert.ok(app.includes("runNamedCommand('actions.configure')"), 'main menu must use the shared command')
   // The rail gear opens the in-place editor; the full modal stays one click away
   // behind its "All options…" control, so a rail configured down to nothing
@@ -39,6 +42,36 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   assert.ok(inline.includes('onOpenFull'), 'the in-place editor must reach the full modal')
   assert.ok(actions.includes('run: onConfigureActions'), 'Quick actions must expose Configure')
   assert.doesNotMatch(settings, /RailEditor|commandrail:/)
+})
+
+// The rail's three pickers are one pattern, and a fourth surface would be a fourth
+// answer to "where do I find my prompts". Each opens a drop-up over the rail whose
+// sticky row lands on the drawer section it summarises, and each is filtered out of
+// that drawer's own grid so it never offers a round trip to where the reader stands.
+test('Prompts joins Clip and Skills as a rail picker, not as a fourth surface', () => {
+  const rail = source('commandRail.ts')
+  const terminal = source('TerminalPane.tsx')
+  const actions = source('ActionsTab.tsx')
+  const dropup = source('PromptsDropup.tsx')
+
+  assert.ok(rail.includes("id: 'prompts', type: 'action', action: 'prompts'"), 'Prompts must be a placeable built-in')
+  // Not agent-only: a template is text, and text suits a shell composer too.
+  assert.doesNotMatch(rail, /id: 'prompts', type: 'action', action: 'prompts'[^\n]*agentOnly/)
+  assert.ok(terminal.includes('<PromptsDropup'), 'the rail button opens the drop-up')
+  assert.ok(dropup.includes("runCommand") === false, 'the drop-up takes its exits as props, not as commands')
+  assert.ok(terminal.includes("runCommand('drawer.actions.prompts')"), 'its sticky row lands on the drawer section')
+  assert.ok(terminal.includes("runCommand('prompts.new')"), 'its second exit opens the library on a blank template')
+  assert.ok(actions.includes("'prompts', 'openActions'"), 'a shortcut to this drawer must not render inside it')
+})
+
+test('a new template opens the library already in create mode', () => {
+  const app = source('App.tsx')
+  const library = source('PromptLibrary.tsx')
+  assert.ok(app.includes("id:'prompts.new'"), 'the command must exist for the palette and the drop-up alike')
+  assert.ok(library.includes('startCreating'), 'the modal needs a start-in-create prop; creating is internal state')
+  assert.ok(library.includes('useState(!!startCreating)'))
+  // A property of the *opening*, so a later ordinary open does not inherit it.
+  assert.ok(app.includes('setPromptLibraryCreating(false)'))
 })
 
 test('the editor discloses progressively: layouts first, creation and catalog collapsed', () => {

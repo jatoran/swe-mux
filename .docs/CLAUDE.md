@@ -208,6 +208,21 @@
   `verify` step still present in the trail and the class persisted on the row, because a
   documentation-only land never enters `verifying` and would otherwise read exactly like
   one that passed three minutes of pytest.
+  A *second* way to skip it obeys the same audit rule: a request comes in one of two
+  **kinds**, and the kind decides exactly one thing - whether the fast-forward happens.
+  A `verify` request runs every earlier step identically, which is what makes its verdict
+  the verdict a land would have produced, and that verdict is kept against the git
+  **tree** it ran over and the **digest** of the command that ran (the tree, not the
+  commit: a reconcile over an unchanged trunk makes a new commit over identical content,
+  which is exactly the case a commit key would miss). A later land over the same content
+  skips the gate and records the reuse *with its key*, so it is checkable rather than
+  asserted; a moved trunk yields a new tree and the gate runs again, which is correct.
+  Only a run the queue executed is ever kept - an agent's own shell run is self-reported
+  and has a file-swap loophole (run modified bytes, restore the approved file) - and that
+  same asymmetry is why a green self-run does not let an agent land itself: the gate is
+  the expensive part, not the authoritative one, and landing outside the queue puts a
+  second writer on the primary checkout, skips the per-mutation preconditions, and leaves
+  the audit and provenance with a hole where that land was.
   A second rule governs what a *running* gate may say: every signal is observed or absent,
   never estimated. A step number counts markers the gate itself printed, a step *total*
   exists only where a byte-identical run has already passed and is withdrawn the moment a
@@ -446,7 +461,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`) because that clip *is* time-to-first-sound, and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
-  Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block.
+  Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block and owns the master; the voice panel's `tts` tab is the operational surface for layers 2 and 3 and for the global clip list, ordered by the *source message's* arrival (`voice_clips.source_ts`/`message_anchor`, schema 2) rather than by synthesis time.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
   **Silero VAD** (`sileroVad.ts`, lazy ~11 MB WASM runtime + ~2.3 MB ONNX model assets; energy detector as fallback) → the

@@ -65,6 +65,15 @@ export interface RailItem {
    *  *not* copied here — a rail button is a pointer at the template, so editing the
    *  template updates every button that references it. */
   promptKey?: string
+  /** 'prompt' items: this `label` was derived from the template's title rather than
+   *  typed by anyone, so the *live* title wins wherever one can be resolved and the
+   *  stored copy is only the offline/dangling fallback (`railItemLabel`).
+   *
+   *  Its absence means the label is the operator's own and is never overridden —
+   *  which is also what an item saved before this field existed means, so a name
+   *  deliberately set back then survives. Clearing the label in the editor is how
+   *  such an item opts in. */
+  autoLabel?: boolean
   /** Append Enter after a text/slash/skill payload to submit it. */
   submit?: boolean
   /** 'action' items: which built-in handler to run. */
@@ -150,6 +159,17 @@ export const BUILTIN_RAIL: RailItem[] = [
   // The session's own skills, as a drop-up. Next to Clip because they are the same
   // gesture — a short list of the recent/relevant, with a link to the full section.
   { id: 'skills', type: 'action', action: 'skills', label: 'Skills', agentOnly: true, title: 'Insert one of this session’s skills' },
+  // The prompt library, as a drop-up, beside Clip and Skills because it is the
+  // third picker with the same shape. It is the *whole* library rather than the
+  // handful of templates somebody remembered to pin: a per-template pin button
+  // still exists and still earns a template its own dedicated button, but a
+  // library reachable only through pinning means the templates nobody pinned are
+  // three taps away in a drawer.
+  //
+  // Not `agentOnly`: a template is text, and text goes into a shell composer as
+  // readily as into an agent's. Templates that mean something to only one harness
+  // carry their own `backends` in the library and are filtered by it.
+  { id: 'prompts', type: 'action', action: 'prompts', label: 'Prompts', title: 'Insert one of your prompt templates' },
   { id: 'actionsDrawer', type: 'action', action: 'openActions', label: 'Actions', title: 'Open Actions temporarily' },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
@@ -556,9 +576,13 @@ export function resolveRailItems(config: RailConfig, surface: RailSurface, ctx: 
 // additive overlay, and an object with `layouts` is a detached copy):
 //
 //  * a **delta** adds project-owned actions and rows *on top of the live global
-//    layout*. Global edits keep flowing into the project; only the additions are
+//    layout*, and overlays the shared rows with anchored **splices** and
+//    **hides**. Global edits keep flowing into the project; only the overlay is
 //    project state. This is the default a project accumulates, because the usual
 //    need is "the shared rail plus this project's skills", not a divorce.
+//    The invariant that survives all of it: a shared row's *definition* never
+//    contains a project-owned item — only the resolved projection does, so every
+//    other project renders that row exactly as it is written.
 //  * a **fork** replaces the global config wholesale. It is the escape hatch for
 //    a genuinely different layout, and the price is that global edits no longer
 //    reach the project. Forks are only ever created deliberately (Detach).
@@ -568,12 +592,49 @@ export interface RailScopeBlob {
   layouts?: RailLayouts
 }
 
-/** Additive project overlay: project-owned catalog items plus project-owned
- *  rows appended after the global rows of each device/surface. */
+/** A per-device, per-surface bag of delta records. */
+export type RailDeltaMap<T> = Partial<Record<RailDevice, Partial<Record<RailSurface, T[]>>>>
+
+/**
+ * An anchored insertion of one catalog item into a **shared** row.
+ *
+ * The shared row's *definition* stays global and keeps flowing through; the item
+ * is placed when the project's config is resolved, so a later global reorder,
+ * insert or removal re-anchors the splice rather than breaking it. That is the
+ * whole reason the anchor is an item id and not an index: an index would quietly
+ * mean somewhere else the moment global gained a button.
+ *
+ * `after` names the item this one follows in the row *as built so far*, so two
+ * splices may chain. `null` is the head of the row; an absent anchor, or one no
+ * longer in the row, falls back to its end.
+ */
+export interface RailSplice {
+  /** The shared row's id. Device and surface come from where this is stored. */
+  row: string
+  /** Catalog item to place: a project-owned action, or a global one the same
+   *  project hides from this row (which is how a project-local reorder is said). */
+  item: string
+  after?: string | null
+}
+
+/** The subtractive mirror of a splice: this project does not render `item` in
+ *  shared row `row`. Every occurrence goes, the way placement toggles already
+ *  treat duplicates, and every other project renders the row unchanged. */
+export interface RailHide {
+  row: string
+  item: string
+}
+
+/** Additive project overlay: project-owned catalog items, project-owned rows
+ *  appended after the global rows of each device/surface, and the two shared-row
+ *  overlays (splices and hides) that let a project place and unplace things in a
+ *  shared row without forking it. */
 export interface RailProjectDelta {
   mode: 'delta'
   items?: RailItem[]
-  layouts?: Partial<Record<RailDevice, Partial<Record<RailSurface, RailRow[]>>>>
+  layouts?: RailDeltaMap<RailRow>
+  splices?: RailDeltaMap<RailSplice>
+  hides?: RailDeltaMap<RailHide>
 }
 
 export type RailProjectScope = RailScopeBlob | LegacyRailItem[] | RailProjectDelta
@@ -615,30 +676,127 @@ function deltaItems(delta: RailProjectDelta, taken: Set<string>): RailItem[] {
   return items
 }
 
+/** One occurrence a hide removed, with the index it held in the shared row's own
+ *  definition — which is where the editors draw it back as a ghost, and where
+ *  `applyScopedRail` puts it when it reconstructs that definition. */
+export interface RailHiddenEntry {
+  item: string
+  index: number
+}
+
+/** Address of a row within a device layout. The editors' drag contract
+ *  (`data-rail-row`) and the splice/hide bookkeeping use the same spelling. */
+export const railRowKey = (device: RailDevice, surface: RailSurface, rowId: string): string =>
+  `${device}|${surface}|${rowId}`
+
 export interface ResolvedDeltaScope {
   config: RailConfig
   /** Row ids owned by the project delta (unique per surface by construction). */
   projectRowIds: Set<string>
   /** Catalog item ids owned by the project delta. */
   projectItemIds: Set<string>
+  /** What hides removed, by `railRowKey`. Only hides that actually applied are
+   *  recorded, so a hide naming an item global has since dropped self-prunes on
+   *  the next write. */
+  hiddenEntries: Map<string, RailHiddenEntry[]>
+  /** Per shared row (`railRowKey`): the catalog ids this project placed there
+   *  itself. Everything else in that row belongs to its global definition, which
+   *  is the split `applyScopedRail` writes back by. */
+  projectPlacements: Map<string, Set<string>>
 }
 
-/** Overlay a project delta on a resolved global config. Global rows come first
- *  on every surface; delta rows follow, so the additions read as a trailing
- *  "this project" section rather than interleaving with shared rows. */
+const deltaRecords = <T>(map: RailDeltaMap<T> | undefined, device: RailDevice, surface: RailSurface): unknown[] => {
+  if (!isRecord(map)) return []
+  const forDevice = (map as Record<string, unknown>)[device]
+  if (!isRecord(forDevice)) return []
+  const list = (forDevice as Record<string, unknown>)[surface]
+  return Array.isArray(list) ? list : []
+}
+
+/**
+ * Overlay a project delta on a resolved global config.
+ *
+ * Global rows come first on every surface; delta rows follow, so the project's
+ * own rows read as a trailing "this project" section rather than interleaving
+ * with shared ones. Within a shared row, hides are applied before splices — so a
+ * splice anchored after an item this project also hides falls back to the end of
+ * the row rather than vanishing with its anchor.
+ *
+ * One rule is enforced here rather than trusted, because everything downstream
+ * reads ownership off it: **within one row, an id is either the project's or the
+ * definition's, never both.** So a splice is applied only when its id cannot also
+ * be arriving from that row's own definition — because the action is
+ * project-owned, because the definition does not carry it, or because this
+ * project hides it from there (which is how a project-local *move* is said).
+ * That is what makes "whose entry is this?" answerable from the id alone, at any
+ * position, which is in turn what lets `applyScopedRail` split an arbitrarily
+ * dragged-about row back apart without tracking indices through the edit.
+ */
 export function resolveDeltaScope(global: RailConfig, delta: RailProjectDelta): ResolvedDeltaScope {
   const taken = new Set(global.items.map(item => item.id))
   const added = deltaItems(delta, taken)
   const items = [...global.items.map(item => ({ ...item })), ...added]
   const known = new Set(items.map(item => item.id))
   const projectRowIds = new Set<string>()
+  const hiddenEntries = new Map<string, RailHiddenEntry[]>()
+  const projectPlacements = new Map<string, Set<string>>()
+  const globalItemIds = new Set(global.items.map(item => item.id))
   const layouts = {} as RailLayouts
   for (const device of RAIL_DEVICES) {
     const deviceRows = isRecord(delta.layouts) ? delta.layouts[device] : undefined
     layouts[device] = {} as RailDeviceLayout
     for (const surface of RAIL_SURFACES) {
-      const base = (global.layouts[device]?.[surface] || []).map(row => ({ ...row, items: [...row.items] }))
-      const seen = new Set(base.map(row => row.id))
+      const baseRows = global.layouts[device]?.[surface] || []
+      const baseIds = new Set(baseRows.map(row => row.id))
+      // A splice or hide may only name a *shared* row: a project row is wholly
+      // owned, so it says the same thing by simply holding (or not holding) the id.
+      const hides = deltaRecords(delta.hides, device, surface)
+        .filter((raw): raw is RailHide =>
+          isRecord(raw) && typeof raw.row === 'string' && typeof raw.item === 'string' && baseIds.has(raw.row))
+      const splices = deltaRecords(delta.splices, device, surface)
+        .filter((raw): raw is RailSplice =>
+          isRecord(raw) && typeof raw.row === 'string' && typeof raw.item === 'string'
+          && baseIds.has(raw.row) && known.has(raw.item))
+      const base = baseRows.map(row => {
+        const key = railRowKey(device, surface, row.id)
+        const drop = new Set(hides.filter(hide => hide.row === row.id).map(hide => hide.item))
+        const removed: RailHiddenEntry[] = []
+        const slots: string[] = []
+        row.items.forEach((id, index) => {
+          if (drop.has(id)) { removed.push({ item: id, index }); return }
+          slots.push(id)
+        })
+        if (removed.length) hiddenEntries.set(key, removed)
+        // A hidden id is this project's business in this row even before a splice
+        // puts it back: that is what makes unhiding reachable and the write-back
+        // able to tell the two apart.
+        const mine = new Set(removed.map(entry => entry.item))
+        return { row, key, slots, mine, defined: new Set(row.items) }
+      })
+      const byId = new Map(base.map(entry => [entry.row.id, entry]))
+      for (const splice of splices) {
+        const target = byId.get(splice.row)
+        if (!target) continue
+        // The one-owner-per-id rule, enforced rather than trusted.
+        if (globalItemIds.has(splice.item) && target.defined.has(splice.item) && !target.mine.has(splice.item)) continue
+        target.mine.add(splice.item)
+        // The *last* matching anchor, not the first. Splices chain — each one's
+        // anchor is the entry it followed when it was recorded, which may be an
+        // earlier splice of the same id — and anchoring on the first occurrence
+        // walks a run of duplicates backwards, reversing the run it is rebuilding.
+        const at = splice.after === null ? 0
+          : splice.after === undefined ? target.slots.length
+            : (() => {
+              const found = target.slots.lastIndexOf(splice.after)
+              return found < 0 ? target.slots.length : found + 1
+            })()
+        target.slots.splice(at, 0, splice.item)
+      }
+      const resolvedBase: RailRow[] = base.map(({ row, key, slots, mine }) => {
+        if (mine.size) projectPlacements.set(key, mine)
+        return { ...row, items: slots }
+      })
+      const seen = new Set(resolvedBase.map(row => row.id))
       const extra: RailRow[] = []
       const rawRows: unknown = deviceRows?.[surface]
       for (const raw of Array.isArray(rawRows) ? rawRows : []) {
@@ -648,10 +806,16 @@ export function resolveDeltaScope(global: RailConfig, delta: RailProjectDelta): 
         projectRowIds.add(row.id)
         extra.push(row)
       }
-      layouts[device][surface] = [...base, ...extra]
+      layouts[device][surface] = [...resolvedBase, ...extra]
     }
   }
-  return { config: { items, layouts }, projectRowIds, projectItemIds: new Set(added.map(item => item.id)) }
+  return {
+    config: { items, layouts },
+    projectRowIds,
+    projectItemIds: new Set(added.map(item => item.id)),
+    hiddenEntries,
+    projectPlacements,
+  }
 }
 
 const scopeConfig = (scope: unknown): RailConfig => normalizeRailConfig(scope)

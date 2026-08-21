@@ -34,6 +34,24 @@ export function promptTemplateVariables(body:string):string[]{
   return [...names].sort()
 }
 
+/**
+ * "Most relevant first", for a picker with room for a handful: favourites, then
+ * recency of use, then title.
+ *
+ * It is the library's own notion of relevance rather than a second one — the
+ * drawer section already badges `favorite` and records `last_used_at` — and the
+ * title tiebreak is what stops two equally cold templates trading places between
+ * renders.
+ */
+export function orderPromptTemplates(items: readonly PromptTemplate[]): PromptTemplate[] {
+  return [...items].sort((a, b) => {
+    if (a.favorite !== b.favorite) return a.favorite ? -1 : 1
+    const used = (b.last_used_at || 0) - (a.last_used_at || 0)
+    if (used) return used
+    return a.title.localeCompare(b.title)
+  })
+}
+
 /** Single-line drawer preview. Templates keep their exact body everywhere else. */
 export function promptTemplateExcerpt(body:string,maximum=140):string{
   const compact=body.replace(/\s+/g,' ').trim()

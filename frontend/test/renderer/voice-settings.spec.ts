@@ -119,3 +119,85 @@ test('reference sections fold away, and no deep-linkable control folds with them
     await expect(page.locator(`[data-setting="${setting}"]`)).toBeVisible()
   }
 })
+
+
+test('Kokoro\'s long bodies fold, and folding one never hides a deep link', async ({ page }) => {
+  await open(page)
+  // Two controls in this tab are long rather than rarely read: the fifty-odd Kokoro
+  // voice chips and the pronunciation editor with its spelled-word history. Both are
+  // only drawn under Kokoro, and both buried the controls beneath them - the speed
+  // field, the cache limit, the whole rest of the tab - behind a wall of chips.
+  const engine = page.locator('[data-setting="tts_engine"]')
+  await engine.locator('select').selectOption('kokoro')
+
+  const voices = page.locator('details.kokoro-voice-disclosure')
+  await expect(voices).toHaveCount(1)
+  // Closed, it still answers which voice is selected: a fold that hides the current
+  // value makes the reader open it to learn nothing they wanted to change.
+  await expect(voices.locator('summary')).toContainText('Kokoro voice')
+  // The picker is INSIDE the fold, and the fold is shut. Counting DOM nodes would
+  // prove nothing: a closed `<details>` in current Chromium hides its body with
+  // `content-visibility`, so the chips are still in the tree and still report client
+  // rects (the same engine detail `settingReveal.ts` is written around).
+  await expect(voices.locator('.kokoro-voice-picker')).toHaveCount(1)
+  expect(await voices.evaluate(node => (node as HTMLDetailsElement).open)).toBe(false)
+  await voices.locator('summary').click()
+  expect(await voices.evaluate(node => (node as HTMLDetailsElement).open)).toBe(true)
+  await expect(page.locator('.kokoro-voice-chip').first()).toBeVisible()
+
+  const pronunciation = page.locator('.settings-content > section', { has: page.locator('h3', { hasText: 'Pronunciation' }) })
+  const lexicon = pronunciation.locator('details.settings-disclosure')
+  await expect(lexicon).toHaveCount(1)
+  expect(await lexicon.evaluate(node => (node as HTMLDetailsElement).open)).toBe(false)
+  await expect(lexicon.locator('.tts-lexicon')).toHaveCount(1)
+  // The section itself does not fold - it keeps its heading and therefore its rail
+  // entry, exactly as the three reference sections do.
+  await expect(pronunciation.locator('h3')).toHaveText('Pronunciation')
+
+  // And the rule that matters more than either: nothing a deep link aims at ends up
+  // inside a closed disclosure because of this.
+  const folded = await page.locator('.settings-content [data-setting]').evaluateAll(nodes =>
+    nodes.filter(node => node.closest('details.settings-disclosure:not([open])'))
+      .map(node => node.getAttribute('data-setting')))
+  expect(folded).toEqual([])
+})
+
+test('the budget control is a row of chips on a phone, not a stack of form rows', async ({ page }) => {
+  await open(page)
+  await page.setViewportSize({ width: 390, height: 780 })
+  const budget = page.locator('.budget-control[data-setting="tts_daily_budget"]')
+  await expect(budget).toBeVisible()
+
+  // The reported defect: `.settings-content label:not(.check)` is (0,2,1) and re-grids
+  // every label in the panel into a two-column form row, out-specifying both
+  // `.budget-axis` and the `.budget-control .budget-mode` scoping that was meant to
+  // protect these. So the three mode radios rendered as tall two-column rows and each
+  // axis put its one word in a 38%-wide label column beside a stranded input.
+  const layout = await budget.evaluate(node => {
+    const mode = node.querySelector<HTMLElement>('.budget-mode')!
+    const axis = node.querySelector<HTMLElement>('.budget-axis')!
+    return {
+      modeDisplay: getComputedStyle(mode).display,
+      modeHeight: Math.round(mode.getBoundingClientRect().height),
+      axisColumns: getComputedStyle(axis).gridTemplateColumns.split(' ').length,
+      // The mode chips share one row's baseline; a re-gridded label breaks that first.
+      modeTops: [...node.querySelectorAll<HTMLElement>('.budget-mode')]
+        .map(item => Math.round(item.getBoundingClientRect().top)),
+    }
+  })
+  // `flex`, not `grid`: `.budget-modes` is a flex container, so a flex item's
+  // `inline-flex` is blockified to `flex` - which is the fix landing, not missing.
+  expect(layout.modeDisplay).toBe('flex')
+  expect(layout.modeHeight).toBeLessThanOrEqual(40)
+  expect(layout.axisColumns).toBe(1)
+  expect(new Set(layout.modeTops).size).toBe(1)
+
+  // And the axis label sits above its input rather than beside it, so the pair reads as
+  // one field at this width instead of two misaligned columns.
+  const stacked = await budget.evaluate(node => {
+    const axis = node.querySelector<HTMLElement>('.budget-axis')!
+    const input = axis.querySelector<HTMLElement>('input')!
+    return input.getBoundingClientRect().top > axis.getBoundingClientRect().top + 4
+  })
+  expect(stacked).toBe(true)
+})

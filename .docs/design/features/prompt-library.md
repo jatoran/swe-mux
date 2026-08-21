@@ -35,7 +35,9 @@ Two unfocused Projects holding copies of one file are not ambiguous, and are not
 The Actions drawer contains a Prompt templates section for browsing, inserting, and authoring templates beside Quick actions and Skills.
 Each row shows a bounded two-line excerpt of the body so templates remain distinguishable at a glance.
 The section is expanded by default, remembers its disclosure state on the device, and its Manage button opens the full responsive library.
-The command palette, main menu, session context menu, and that Manage button all open that same library.
+The command palette, main menu, and that Manage button all open that same library.
+The session context menu no longer does: it opened a whole surface of its own from a menu whose every other row acts on the session and closes, and the library is a palette command and a drawer tab away from wherever you already are (`ui.md`).
+A separate `prompts.new` command opens it on a blank template, scoped to the focused session's Project, and is what the rail's Prompts drop-up uses for its `+ New` exit; starting in create mode is a property of the *opening*, so an ordinary open afterwards still lands on the list.
 
 Templates are created and edited where they are used.
 The drawer's New control and each row's Edit control open the form in place of the list, and the full library selects straight into the same form with no Edit mode to enter first.
@@ -43,12 +45,20 @@ Both surfaces render one shared editor (`PromptTemplateEditor.tsx`), so the two 
 Placeholder fields are derived from the body being typed, before any save, so a new `{{variable}}` gets a field immediately.
 Saving stays explicit rather than automatic, because the revision contract means a write can be refused and an autosaving field would have nowhere to report that without discarding what was typed.
 The drawer is dismissed by Escape, by a back gesture, and by a tap outside, none of which it can intercept the way a modal's close button can, so an open draft is mirrored on the device and restored when the editor reopens; a mirror whose revision no longer matches the file is dropped rather than replayed over someone else's save.
+The whole library is also one tap from any terminal, through the rail's **Prompts** drop-up (`ui.md`), which lists what the focused session's scope admits in favourites-then-recency order and inserts without submitting.
+That is the surface for the templates nobody pinned; pinning remains the way to give one template its own dedicated button.
+Its second exit opens this library already on a blank template, because a picker of existing templates is where "I want one for this" is most often realised.
+
 A template can also be pinned to the Action rail or Quick actions (`ui.md`).
 A `prompt` action item stores only the template's `scope:id` key and resolves the body from the library at click time, so editing a template updates every button that points at it and a button can never inject a stale copy.
+Its **name** is a pointer on the same terms: a button pinned without a typed label carries `autoLabel` and renders the template's live title, so renaming a template renames its buttons, while a label somebody typed is never overridden.
+The label stored beside the flag is the fallback for before the library has been read and for a template that has gone; the dangling case is reported when the button is pressed, where there is room to name it.
 A template with no `{{variables}}` inserts directly and never submits.
 A template with variables opens the Actions drawer with Prompt templates expanded and the template preselected, because there is nothing valid to inject until its fields are filled.
 A key that no longer resolves, because the template was deleted or a Project scope was switched off, names the offending button instead of failing silently.
 Scope confinement is structural: listing with no project returns global templates only, so a global Action layout cannot pin a Project template.
+The Action editor keeps that confinement rather than warning about it, and answers the reachability problem the other way round - it opens on the Project the operator was standing in, whose listing is global plus that Project's own, and says in place why the Global scope lists fewer.
+Each row in its template picker names the library it is in, so the two scopes are never told apart by title alone.
 Search covers title, tags, and body and filters by the focused backend.
 A template can be favorited, copied, edited, or filled through its `{{variable}}` fields with a read-only preview.
 Successful local creates, edits, deletes, favorites, and uses invalidate every open prompt list.

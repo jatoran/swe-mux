@@ -175,10 +175,27 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Under the default `draft` grant it writes an inert approval instead of acting |
 | `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
+| `request_verify` | the same pipeline stopped before its last step: reconcile, run the repository's verification command, report the verdict back, move no trunk. A pass is kept against the exact (git tree, command digest) it ran over, so a later `request_land` of that content skips the gate; a trunk that moved in between produces different content and the gate runs again. Gated on the same automation, and the `draft` grant **enqueues** it rather than drafting it - it moves nothing there is anything to approve in advance (`land-queue.md`) |
 
-`request_land` deliberately takes no target. The checkout comes from the caller's own live
-cwd, so "an agent lands the checkout it is working in, and no other" holds by construction
-rather than by a check that could be routed around. There is nothing in the call to forge.
+`request_land` and `request_verify` deliberately take no target. The checkout comes from the
+caller's own live cwd, so "an agent acts on the checkout it is working in, and no other"
+holds by construction rather than by a check that could be routed around. There is nothing
+in either call to forge.
+
+They are **two tools rather than one tool with a flag**, and the reason is which call ends up
+being the default spelling. A flag would make the request that moves a repository's trunk the
+plain form of the request that moves nothing, so a caller that omitted it would land; and it
+would put both under one grant, when the grant exists for the trunk. Two tools make the safe
+call the short one, and let `land_grant` say different things about each: `off` refuses both,
+`draft` drafts a land for a human and enqueues a verify, `granted` enqueues both
+(`land-queue.md`).
+
+`request_verify` is also the only way an agent's gate run counts for anything later. A green
+result is kept against the (git tree, command digest) it ran over, and a later `request_land`
+over that same content skips the gate; a run the agent did in its own shell is never accepted,
+because it is self-reported and a self-report can be produced by running modified bytes and
+restoring the approved file. So the pattern the tool is for is: iterate with targeted tests,
+and let the queue own the full gate.
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is

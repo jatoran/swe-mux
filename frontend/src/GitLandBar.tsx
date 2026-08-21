@@ -5,6 +5,7 @@ import {
   formatDuration,
   landGateNote,
   landHistoryOrder,
+  landKindNote,
   landQueueOrder,
   landStateLabel,
   landStateTone,
@@ -404,10 +405,14 @@ function LandRow({ request, busy, onCancel, position }: {
   // gate has to still say so after it finishes: the row's own states cannot, having gone
   // from merging the trunk to fast-forwarding without ever passing through `Verifying`.
   const gateNote = landGateNote(request)
+  // Beside the branch rather than after the state, because a verify-only row narrates
+  // itself in a landing's exact words until it stops one step early.
+  const kindNote = landKindNote(request)
   return <article class={`git-land-row ${landStateTone(request.state)}`}>
     <div class="git-land-row-head">
       {position !== undefined && <span class="git-land-position">{position}</span>}
       <strong>{request.branch}</strong>
+      {kindNote && <small class="git-land-kind-note">{kindNote}</small>}
       <em class={`git-land-state ${landStateTone(request.state)}`}>{landStateLabel(request.state)}</em>
       {progress && <span class="git-land-progress-detail">{progress}</span>}
       {gateNote && <small class="git-land-gate-note">{gateNote}</small>}

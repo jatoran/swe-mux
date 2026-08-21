@@ -43,6 +43,7 @@ class FakeConfig:
     land_hourly_budget = 12
     land_hold_timeout_seconds = 1800.0
     land_retry_verification = False
+    land_verify_memo_seconds = 24 * 3600.0
 
 
 class FakeQueue:
@@ -1525,5 +1526,532 @@ async def test_an_open_request_is_reply_window_evidence_and_a_finished_one_is_no
 
         assert (await service.tick())[0]["state"] == "landed"
         assert await service.origin_windows(["sess_1"], 0.0) == {}
+    finally:
+        store.close()
+
+
+# -- verify without landing, and never running one gate twice -----------------
+#
+# The economy here is measurable rather than aesthetic: the gate is minutes long in this
+# repository, and the observed waste was a session running it by hand and the queue
+# immediately running the identical bytes over the identical tree.
+#
+# Every test that claims a gate was *not* run proves it by counting executions, because
+# no state can tell "the gate was skipped" apart from "the gate ran and was quick".
+
+
+def write_counting_verify(worktree: Path, counter: Path, *, exit_code: int = 0) -> None:
+    """A gate that records each execution outside both checkouts.
+
+    Outside on purpose: a counter written inside either tree would change the very tree
+    hash the verdict is keyed on, so the instrument would destroy what it measures.
+    """
+    script = worktree / ".worktree-verify"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo run >> '{counter.as_posix()}'\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    script.chmod(0o755)
+    git(worktree, "add", ".worktree-verify")
+    git(worktree, "commit", "-m", "add verification")
+
+
+def gate_runs(counter: Path) -> int:
+    return len(counter.read_text(encoding="utf-8").splitlines()) if counter.exists() else 0
+
+
+def gate_digest(worktree: Path, approvals: VerifyApprovalStore, trunk_root: Path) -> str:
+    return describe_verify_command(
+        worktree, {}, approvals, project_root=str(trunk_root)
+    ).digest or ""
+
+
+async def test_a_verify_only_request_runs_the_gate_and_moves_no_trunk(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The whole of what a verify-only request promises, and the whole of what it does not."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    before = git(trunk, "rev-parse", "HEAD")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        assert row["kind"] == "verify"
+        results = await service.tick()
+        assert results[0]["state"] == "verified"
+        # Not `landed`, and not a moved trunk. That is the whole of the kind.
+        assert git(trunk, "rev-parse", "HEAD") == before
+        steps = [item["step"] for item in await store.events(row["id"])]
+        assert steps == ["request", "reconcile", "classify", "verify", "verify"]
+        stored = await store.get(row["id"])
+        assert stored is not None
+        assert stored["verify_gate"] == "full"
+        assert stored["verified_oid"] == git(worktree, "rev-parse", "HEAD")
+    finally:
+        store.close()
+
+
+async def test_a_verify_only_failure_hands_back_and_still_moves_nothing(
+    tmp_path: Path, trunk: Path
+) -> None:
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, exit_code=3, noise="boom")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    before = git(trunk, "rev-parse", "HEAD")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        results = await service.tick()
+        assert results[0]["id"] == row["id"]
+        assert results[0]["state"] == "handed_back"
+        assert "exit code 3" in results[0]["reason"]
+        assert git(trunk, "rev-parse", "HEAD") == before
+        # The template speaks in the requester's own vocabulary: this session asked for
+        # a verification, not for a land.
+        assert "The verification of `worktree-alpha` stopped" in queue.messages[0]["body"]
+        assert "boom" in queue.messages[0]["body"]
+        # And nothing stands afterwards: only a *pass* is a verdict worth reusing.
+        tree = git(worktree, "rev-parse", "HEAD^{tree}")
+        digest = gate_digest(worktree, approvals, trunk)
+        # Keyed by the root the pipeline recorded, which is the one Git resolved rather
+        # than the one the test typed; a lookup under the other silently misses.
+        assert await store.verify_memo(row["project_root"], tree, digest) is None
+    finally:
+        store.close()
+
+
+async def test_a_land_reuses_a_verify_only_green_over_the_same_tree(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The saving, proven by counting: two requests, one gate execution.
+
+    The reuse is also *in the trail with its key*, because a skipped gate that left no
+    trace is indistinguishable from one that ran - the same rule the documentation fast
+    path is held to.
+    """
+    counter = tmp_path / "gate-runs.log"
+    worktree = add_worktree(trunk, "alpha")
+    write_counting_verify(worktree, counter)
+    tip = commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    tree = git(worktree, "rev-parse", "HEAD^{tree}")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        assert gate_runs(counter) == 1
+
+        landing = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+        assert git(trunk, "rev-parse", "HEAD") == tip
+        # The gate did not run a second time.
+        assert gate_runs(counter) == 1
+
+        stored = await store.get(landing["id"])
+        assert stored is not None
+        assert stored["verify_gate"] == "reused"
+        reused = next(
+            item for item in await store.events(landing["id"]) if item["step"] == "verify"
+        )
+        assert reused["outcome"] == "reused"
+        assert reused["detail"]["tree"] == tree
+        assert reused["detail"]["source_kind"] == "verify"
+        assert reused["detail"]["digest"] == gate_digest(worktree, approvals, trunk)
+    finally:
+        store.close()
+
+
+async def test_a_moved_trunk_makes_the_land_verify_again(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A new tree is a miss, and that is correct rather than a miss to fix.
+
+    The reconcile produced content nothing has ever verified, so the verdict standing
+    against the old tree says nothing about it.
+    """
+    counter = tmp_path / "gate-runs.log"
+    worktree = add_worktree(trunk, "alpha")
+    write_counting_verify(worktree, counter)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        assert gate_runs(counter) == 1
+
+        commit(trunk, "trunk.txt", "moved\n", "trunk moved")
+        landing = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+        assert gate_runs(counter) == 2
+        stored = await store.get(landing["id"])
+        assert stored is not None
+        assert stored["verify_gate"] == "full"
+    finally:
+        store.close()
+
+
+async def test_a_verdict_is_keyed_to_the_bytes_that_produced_it(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The digest is half the key, so different bytes have nothing standing at all."""
+    counter = tmp_path / "gate-runs.log"
+    worktree = add_worktree(trunk, "alpha")
+    write_counting_verify(worktree, counter)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    tree = git(worktree, "rev-parse", "HEAD^{tree}")
+    service, store, approvals = build_service(tmp_path, trunk)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        digest = gate_digest(worktree, approvals, trunk)
+        root = row["project_root"]
+        assert await store.verify_memo(root, tree, digest) is not None
+        assert await store.verify_memo(root, tree, "some-other-digest") is None
+    finally:
+        store.close()
+
+
+async def test_a_stale_verdict_is_not_reused(tmp_path: Path, trunk: Path) -> None:
+    """The freshness bound is real: a tree hash is a claim about content, not a machine.
+
+    An installed dependency, a toolchain, an OS update - none of them changes the tree,
+    and any of them can change what the gate says. So a verdict expires.
+    """
+    store = LandStore(tmp_path / "land.sqlite3")
+    try:
+        await store.record_verify_memo(
+            project_root=str(trunk),
+            tree_oid="t" * 40,
+            digest="d" * 64,
+            request_id="lnd_1",
+            request_kind="verify",
+            branch="worktree-alpha",
+            worktree_root=str(trunk),
+            commit_oid="c" * 40,
+            duration_ms=1000.0,
+            now=1000.0,
+        )
+        fresh = await store.verify_memo(str(trunk), "t" * 40, "d" * 64, not_before=900.0)
+        assert fresh is not None
+        assert fresh["request_kind"] == "verify"
+        assert await store.verify_memo(
+            str(trunk), "t" * 40, "d" * 64, not_before=1100.0
+        ) is None
+        # Half a key identifies nothing, so it is never a hit.
+        assert await store.verify_memo(str(trunk), "", "d" * 64) is None
+        assert await store.verify_memo(str(trunk), "t" * 40, "") is None
+    finally:
+        store.close()
+
+
+async def test_reuse_switched_off_runs_the_gate_every_time(
+    tmp_path: Path, trunk: Path
+) -> None:
+    counter = tmp_path / "gate-runs.log"
+    worktree = add_worktree(trunk, "alpha")
+    write_counting_verify(worktree, counter)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+
+    class NoReuse(FakeConfig):
+        land_verify_memo_seconds = 0.0
+
+    service, store, approvals = build_service(tmp_path, trunk, config=NoReuse())
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+        assert gate_runs(counter) == 2
+    finally:
+        store.close()
+
+
+async def test_a_documentation_only_verify_reports_the_skip_and_records_nothing(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Nothing ran, so there is nothing to reuse - and the row still says which gate."""
+    docs_trunk(trunk)
+    worktree = add_worktree(trunk, "docs")
+    commit(worktree, "README.md", "# docs\n", "docs work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        stored = await store.get(row["id"])
+        assert stored is not None
+        assert stored["verify_gate"] == "docs_only"
+        tree = git(worktree, "rev-parse", "HEAD^{tree}")
+        assert await store.verify_memo(
+            row["project_root"], tree, gate_digest(worktree, approvals, trunk)
+        ) is None
+        assert "documentation only" in queue.messages[0]["body"]
+    finally:
+        store.close()
+
+
+async def test_a_verify_result_arms_for_the_session_that_asked(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A land announces itself by the trunk moving; a verify has only the message.
+
+    So the pass is reported over the same solicited-reply authority a handback uses,
+    under every one of the same bounds, and it spends the same single armed reply.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        assert queue.messages[0]["target_session_id"] == "sess_1"
+        assert queue.messages[0]["armed"] is True
+        assert queue.messages[0]["solicited_by"] == row["id"]
+        assert "Nothing was landed" in queue.messages[0]["body"]
+        reported = next(
+            item for item in await store.events(row["id"]) if item["outcome"] == "reported"
+        )
+        assert reported["detail"]["armed"] is True
+        # One request, one bounded answer. The cap is per request, not per outcome.
+        stored = await store.get(row["id"])
+        assert stored is not None
+        assert stored["armed_replies"] == 1
+    finally:
+        store.close()
+
+
+async def test_an_operator_verify_writes_no_message(tmp_path: Path, trunk: Path) -> None:
+    """No session asked, so there is nobody the answer is owed to.
+
+    An operator's verify is started from a surface they are already looking at, and its
+    result is on the row there. Nothing about it authorizes a write into a terminal.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        assert (await service.tick())[0]["state"] == "verified"
+        assert queue.messages == []
+    finally:
+        store.close()
+
+
+async def test_a_draft_grant_enqueues_a_verify_but_still_drafts_a_land(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The grant is about moving a trunk, and a verify-only run cannot move one.
+
+    Drafting it would put the cheap half of the pipeline behind the approval the
+    expensive half exists to protect, which is how a gate ends up being run by hand.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    drafted: list[dict[str, Any]] = []
+
+    async def draft_request(**kwargs: Any) -> dict[str, Any]:
+        drafted.append(kwargs)
+        return {"observation_id": "obs_1"}
+
+    store = LandStore(tmp_path / "land.sqlite3")
+    service = LandQueueService(
+        store=store,
+        approvals=VerifyApprovalStore(tmp_path / "data"),
+        config=FakeConfig(),
+        grant_field=lambda _root: "draft",
+        draft_request=draft_request,
+    )
+    try:
+        verified = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+            origin="agent",
+            origin_session_id="sess_1",
+        )
+        assert verified["state"] == "queued"
+        assert verified["kind"] == "verify"
+        assert drafted == []
+        # And the land the grant *is* about is still drafted, on the same branch.
+        await store.transition(
+            verified["id"], expect=("queued",), state="cancelled", reason="test"
+        )
+        landing = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+        )
+        assert landing["state"] == "drafted"
+        assert len(drafted) == 1
+    finally:
+        store.close()
+
+
+async def test_an_off_grant_refuses_a_verify_too(tmp_path: Path, trunk: Path) -> None:
+    """`off` is the operator saying agents do not drive this machinery here."""
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, _ = build_service(tmp_path, trunk, grant="off")
+    try:
+        with pytest.raises(LandRefusal) as caught:
+            await service.request(
+                project_id="p",
+                project_root=str(trunk),
+                worktree_root=str(worktree),
+                kind="verify",
+                origin="agent",
+                origin_session_id="sess_1",
+            )
+        assert caught.value.code == "land_denied"
+    finally:
+        store.close()
+
+
+async def test_one_branch_cannot_be_verified_and_landed_at_once(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """One branch, one request, whatever the two asked for.
+
+    Both kinds reconcile the same worktree and run the same gate, so a second in-flight
+    request would be two pipelines over one checkout - which is exactly what the active
+    index has always refused.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, _ = build_service(tmp_path, trunk)
+    try:
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            kind="verify",
+        )
+        with pytest.raises(LandRefusal) as caught:
+            await service.request(
+                project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+            )
+        assert caught.value.code == "already_queued"
+    finally:
+        store.close()
+
+
+async def test_a_verify_only_request_ignores_a_dirty_trunk(trunk: Path) -> None:
+    """The trunk's own uncommitted work is not a hazard a verify-only run can reach.
+
+    Holding on it would make the cheap request wait for something it cannot cause, and a
+    hold nothing the requester does can clear is a stall rather than a guard.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    # An operator edit to a file the land *would* overwrite, which is the only shape
+    # that holds a land at all.
+    (trunk / "alpha.txt").write_text("conflicting operator edit\n", encoding="utf-8")
+    git(trunk, "add", "alpha.txt")
+    facts = await read_repository_facts(str(worktree), str(trunk))
+    landing = evaluate_preconditions(facts, branch="worktree-alpha")
+    assert landing.disposition == "hold"
+    verifying = evaluate_preconditions(facts, branch="worktree-alpha", lands=False)
+    assert verifying.ready
+
+
+async def test_an_already_landed_branch_has_nothing_to_verify(
+    tmp_path: Path, trunk: Path
+) -> None:
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    git(trunk, "merge", "--ff-only", "worktree-alpha")
+    service, store, _ = build_service(tmp_path, trunk)
+    try:
+        with pytest.raises(LandRefusal) as caught:
+            await service.request(
+                project_id="p",
+                project_root=str(trunk),
+                worktree_root=str(worktree),
+                kind="verify",
+            )
+        assert caught.value.code == "already_landed"
+        assert "nothing to verify" in caught.value.message
     finally:
         store.close()

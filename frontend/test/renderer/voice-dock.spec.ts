@@ -29,7 +29,7 @@ const bounds = () => {
   return {
     pane: box('.terminal-pane')!, bar: box('.pane-bar')!, surface: box('.terminal-surface')!,
     host: box('.terminal-host')!, stage: box('.main-stage')!,
-    dock: box('.voice-dock'), chip: box('.voice-dock-chip')!,
+    dock: box('.voice-dock'), control: box('.conversation-talk-toggle')!,
   }
 }
 
@@ -62,15 +62,12 @@ test('collapsed to the chip, nothing of the panel is left over the workspace', a
   await expect(page.locator('.voice-dock')).toBeHidden()
   const geometry = await page.evaluate(bounds)
   expect(geometry.dock).toBe(null)
-  // The way back is in the top bar, beside the microphone and never inside it.
-  await expect(page.locator('.app-identity .voice-dock-chip')).toBeVisible()
-  const separate = await page.evaluate(() => {
-    const chip = document.querySelector('.voice-dock-chip')!
-    const mic = document.querySelector('.conversation-talk-toggle')!
-    return { nested: chip.contains(mic) || mic.contains(chip), siblings: chip.parentElement === mic.parentElement }
-  })
-  expect(separate.nested).toBe(false)
-  expect(separate.siblings).toBe(true)
+  // The way back is the one voice control in the top bar - there is exactly one, and
+  // it is the same button that reaches capture behind ctrl+click.
+  const control = page.locator('.app-identity .conversation-talk-toggle')
+  await expect(control).toBeVisible()
+  await expect(control).toHaveAttribute('aria-expanded', 'false')
+  expect(await page.locator('.conversation-talk-toggle').count()).toBe(1)
 })
 
 test('the peek is one thin row with no composer', async ({ page }) => {
@@ -105,26 +102,44 @@ test('an open confirmation card stays answerable at the peek', async ({ page }) 
   await expect(page.locator('.voice-dock-badge')).toHaveText('1')
 })
 
-test('the size controls and the microphone controls are different buttons', async ({ page }) => {
+test('the size controls and the capture control are different buttons', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 })
   await page.goto('/voice-dock-harness.html?dock=full')
-  // Capture is running, and it is the mic toggle that says so.
+  // Capture is running, and both microphones say so - the top-bar control and the
+  // panel's own, which is the primary capture control on touch.
   await expect(page.locator('.conversation-talk-toggle.active')).toBeVisible()
+  await expect(page.locator('.voice-dock-mic.active')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Stop listening' })).toBeVisible()
   const collapse = page.getByRole('button', { name: 'Collapse the voice panel one step' })
   const expand = page.getByRole('button', { name: 'Expand the voice panel one step' })
   await expect(collapse).toBeEnabled()
   // Full is the top of the range, so only one direction is offered.
   await expect(expand).toBeDisabled()
-  // The dock's only capture control is named for what it does to the microphone, rather
-  // than being a "close" that stops listening as a side effect.
-  await expect(page.getByRole('button', { name: 'stop mic' })).toBeVisible()
 
   await page.goto('/voice-dock-harness.html?dock=chip')
   // Capture is unaffected by the collapse: the mic is still lit with the dock gone.
   await expect(page.locator('.conversation-talk-toggle.active')).toBeVisible()
 })
 
-test('the chip fits the phone toolbar without wrapping it', async ({ page }) => {
+test('the read-aloud tab is a third body and fits without moving the terminal', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 })
+  await page.goto('/voice-dock-harness.html?dock=full&mode=read')
+  await expect(page.locator('.voice-dock.read-mode')).toBeVisible()
+  const open = await page.evaluate(bounds)
+  await expect(page.locator('.voice-read-controls')).toBeVisible()
+  await expect(page.locator('.voice-read-clip')).toHaveCount(3)
+  // The clip list scrolls inside the panel rather than growing it past its bound.
+  const overflow = await page.evaluate(() =>
+    getComputedStyle(document.querySelector<HTMLElement>('.voice-read-clips')!).overflowY)
+  expect(overflow).toBe('auto')
+  // Same floating contract as every other body: the terminal is untouched.
+  await page.goto('/voice-dock-harness.html?dock=chip')
+  const collapsed = await page.evaluate(bounds)
+  expect(open.surface).toEqual(collapsed.surface)
+  expect(open.host).toEqual(collapsed.host)
+})
+
+test('the voice control fits the phone toolbar without wrapping it', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
   await page.goto('/voice-dock-harness.html?dock=chip&mobile=1')
   const bar = page.locator('.mobile-toolbar')
@@ -140,8 +155,8 @@ test('the chip fits the phone toolbar without wrapping it', async ({ page }) => 
       right: Math.round(Math.max(...boxes.map(box => box.right))),
       barRight: Math.round(toolbar.getBoundingClientRect().right),
       barHeight: Math.round(toolbar.getBoundingClientRect().height),
-      chip: (() => {
-        const { width, height } = toolbar.querySelector('.voice-dock-chip')!.getBoundingClientRect()
+      control: (() => {
+        const { width, height } = toolbar.querySelector('.conversation-talk-toggle')!.getBoundingClientRect()
         return { width: Math.round(width), height: Math.round(height) }
       })(),
     }
@@ -151,24 +166,50 @@ test('the chip fits the phone toolbar without wrapping it', async ({ page }) => 
   expect(new Set(row.centres).size).toBe(1)
   expect(row.right).toBeLessThanOrEqual(row.barRight + 1)
   expect(row.barHeight).toBeLessThan(60)
-  // And it is a thumb target, not the 21px desktop box.
-  expect(row.chip.width).toBeGreaterThanOrEqual(36)
-  expect(row.chip.height).toBeGreaterThanOrEqual(36)
+  // And it is a thumb target, not the 21px desktop box. On touch this button is also
+  // the capture shortcut (a hold), so it has to be comfortably holdable.
+  expect(row.control.width).toBeGreaterThanOrEqual(36)
+  expect(row.control.height).toBeGreaterThanOrEqual(36)
 })
 
-test('the dock stays below modal overlays', async ({ page }) => {
+test('nothing in the workspace draws over the dock, and every overlay still does', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 })
   await page.goto('/voice-dock-harness.html?dock=full')
   const bands = await page.evaluate(() => {
     const anchor = document.querySelector<HTMLElement>('.voice-dock-anchor')!
-    const modal = document.createElement('div')
-    modal.className = 'palette-layer'
-    document.body.append(modal)
-    const result = { dock: Number(getComputedStyle(anchor).zIndex), modal: Number(getComputedStyle(modal).zIndex) }
-    modal.remove()
-    return result
+    const probe = (className: string) => {
+      const element = document.createElement('div')
+      element.className = className
+      document.body.append(element)
+      const value = Number(getComputedStyle(element).zIndex)
+      element.remove()
+      return value
+    }
+    return {
+      dock: Number(getComputedStyle(anchor).zIndex),
+      palette: probe('palette-layer'),
+      modal: probe('modal-layer'),
+      menu: probe('context-menu'),
+      // The pane tab strip's scroll arrows. These are the reported defect: the strip sat
+      // under the panel while its own left/right buttons drew on top of it.
+      railEdge: probe('overflow-rail-edge'),
+      paneRing: (() => {
+        const stack = document.createElement('div')
+        stack.className = 'pane-stack'
+        document.body.append(stack)
+        const value = Number(getComputedStyle(stack, '::after').zIndex)
+        stack.remove()
+        return value
+      })(),
+    }
   })
+  expect(bands.dock).toBeGreaterThan(bands.railEdge)
+  expect(bands.dock).toBeGreaterThan(bands.paneRing)
+  // A dialog the dock paints over is a dialog whose own header swallows taps, so every
+  // overlay band still outranks it.
+  expect(bands.dock).toBeLessThan(bands.menu)
   expect(bands.dock).toBeLessThan(bands.modal)
+  expect(bands.dock).toBeLessThan(bands.palette)
 })
 
 test('Talk history collapses inside the dock without moving the terminal', async ({ page }) => {

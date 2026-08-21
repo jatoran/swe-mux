@@ -20,6 +20,15 @@ permitted outside a worktree.
 What the pipeline never does is decide. A conflict and a verification failure both need
 intelligence, and both belong to the branch's own agent, which holds the context; they
 leave here as a bounded deterministic message through the Phase 5 queue.
+
+A request comes in one of two **kinds**, and the kind decides exactly one thing: whether
+the last step happens. A `land` runs the whole pipeline. A `verify` stops after the gate,
+moves no trunk, and reports the verdict back to the session that asked. Every step before
+that is identical, which is what makes a verify-only verdict worth keeping: it is the
+verdict a land would have produced. Kept, it is - keyed by the git **tree** the gate ran
+over and the **digest** of the command that ran, so a later land over the same content
+under the same approved bytes skips the gate and records that it did.
+Only a run this queue executed is ever recorded that way (`land-queue.md`).
 """
 
 from __future__ import annotations
@@ -67,7 +76,11 @@ GRANTS = ("off", "draft", "granted")
 #: message to the same session would be an unsolicited write wearing this authority.
 #: Stated as a number and claimed atomically (`LandStore.claim_armed_reply`) rather
 #: than left to the state machine, which happens to allow only one handback today.
+#: A verify-only request spends the same one, on whichever of its two outcomes happens.
 ARMED_REPLIES_PER_REQUEST = 1
+
+#: How long a queue-executed green verdict stands, when the config says nothing.
+DEFAULT_VERIFY_MEMO_SECONDS = 24 * 3600.0
 
 
 class LandRefusal(Exception):
@@ -267,6 +280,13 @@ class LandQueueService:
         that loops is worse than one that stops."""
         return 1 if bool(getattr(self._config, "land_retry_verification", False)) else 0
 
+    def _memo_seconds(self) -> float:
+        """How long a queue-executed green verdict stands. Zero disables reuse."""
+        return max(
+            0.0,
+            float(getattr(self._config, "land_verify_memo_seconds", DEFAULT_VERIFY_MEMO_SECONDS)),
+        )
+
     # -- requesting -----------------------------------------------------------
 
     async def request(
@@ -275,16 +295,30 @@ class LandQueueService:
         project_id: str,
         project_root: str,
         worktree_root: str,
+        kind: str = "land",
         origin: str = "operator",
         origin_session_id: str = "",
         origin_run_id: str = "",
         reason: str = "",
     ) -> dict[str, Any]:
-        """Enqueue a land, or draft it for a human, or refuse it.
+        """Enqueue a land or a verify-only run, or draft it for a human, or refuse it.
 
         An operator request bypasses the grant because the operator *is* the authority
         the grant defers to; it still passes every precondition the pipeline checks.
+
+        **The grant means something narrower for a verify-only request, and the reason
+        is what the grant is about.** `off` refuses both, because it is the operator
+        saying agents do not drive this machinery here. `draft` drafts a *land* - a
+        human decides before a trunk moves - and enqueues a *verify*, because a
+        verify-only run moves nothing: it merges the trunk into the requester's own
+        branch, in the requester's own worktree, and runs bytes a human already
+        approved. There is nothing for a human to decide in advance about that, and
+        drafting it would put the cheap half of the pipeline behind the approval the
+        expensive half exists to protect.
         """
+        if kind not in ("land", "verify"):
+            raise LandRefusal("unknown_kind", f"unknown request kind: {kind}")
+        lands = kind == "land"
         if origin == "agent":
             if not await self._enabled(project_root):
                 raise LandRefusal(
@@ -293,18 +327,26 @@ class LandQueueService:
                 )
             grant = self._grant(project_root)
             if grant == "off":
-                raise LandRefusal("land_denied", "agent-initiated landing is off for this Project")
+                raise LandRefusal(
+                    "land_denied",
+                    "agent-initiated landing is off for this Project"
+                    if lands
+                    else "agent-initiated use of the land queue is off for this Project",
+                )
             budget = self._hourly_budget()
             if budget and origin_session_id:
                 used = await self._store.origin_count_since(
                     origin_session_id, self._clock() - _BUDGET_WINDOW_SECONDS
                 )
                 if used >= budget:
+                    # Verify-only requests count against the same budget, because the
+                    # budget bounds wall-clock rather than trunk movements and a gate
+                    # costs the same minutes whichever step follows it.
                     raise LandRefusal(
                         "budget_exhausted",
-                        f"this session has made {used} land requests in the last hour",
+                        f"this session has made {used} land-queue requests in the last hour",
                     )
-            if grant == "draft":
+            if grant == "draft" and lands:
                 return await self._draft(
                     project_id=project_id,
                     project_root=project_root,
@@ -324,6 +366,14 @@ class LandQueueService:
             raise LandRefusal(
                 "detached_head",
                 "the worktree is on a detached HEAD; create a named branch before landing",
+            )
+        if facts.already_landed and not lands:
+            # A verify-only run over a branch the trunk already contains would verify
+            # the trunk. Refused for the same reason a land of it is: there is nothing
+            # here the gate has not already been asked about.
+            raise LandRefusal(
+                "already_landed",
+                f"{facts.worktree_branch} is already on the trunk; there is nothing to verify",
             )
         if facts.already_landed:
             # Answered here rather than one sweep later, so pressing Land on a branch
@@ -346,6 +396,7 @@ class LandQueueService:
                 branch=facts.worktree_branch,
                 requested_oid=facts.worktree_head,
                 trunk_ref=trunk_ref or facts.trunk_branch,
+                kind=kind,
                 origin=origin,
                 origin_session_id=origin_session_id,
                 origin_run_id=origin_run_id,
@@ -359,7 +410,12 @@ class LandQueueService:
             project_id=project_id,
             step="request",
             outcome="queued",
-            detail={"origin": origin, "branch": row["branch"], "oid": row["requested_oid"]},
+            detail={
+                "origin": origin,
+                "kind": kind,
+                "branch": row["branch"],
+                "oid": row["requested_oid"],
+            },
             now=self._clock(),
         )
         await self._emit("land_changed", row)
@@ -454,6 +510,15 @@ class LandQueueService:
         finally:
             self._roots_in_flight.discard(project_root)
 
+    @staticmethod
+    def _lands(row: dict[str, Any]) -> bool:
+        """Whether this request ends by moving a trunk.
+
+        Read from the row rather than carried in a parallel field, and defaulting to
+        `True`, so a row written before the column existed is what it always was.
+        """
+        return str(row.get("kind") or "land") == "land"
+
     async def _process(self, row: dict[str, Any]) -> dict[str, Any]:
         request_id = row["id"]
         gate = await self._check(row)
@@ -465,6 +530,11 @@ class LandQueueService:
         verified = await self._verify(reconciled)
         if verified is None:
             return await self._reload(request_id)
+        # The only step a verify-only request does not take. Everything above it is
+        # identical, which is the point: the verdict a verify-only run produces is the
+        # verdict a land would have produced, or it would not be worth reusing.
+        if not self._lands(verified):
+            return verified
         return await self._land(verified)
 
     async def _reload(self, request_id: str) -> dict[str, Any]:
@@ -481,7 +551,12 @@ class LandQueueService:
             except Exception:  # noqa: BLE001 - an unknown answer holds rather than proceeds
                 log.warning("land_busy_probe_failed request_id=%s", row["id"])
                 busy = ("unknown",)
-        result = evaluate_preconditions(facts, branch=row["branch"], busy_sessions=busy)
+        result = evaluate_preconditions(
+            facts,
+            branch=row["branch"],
+            busy_sessions=busy,
+            lands=self._lands(row),
+        )
         if result.ready:
             return None
         if result.disposition == "already_landed":
@@ -494,7 +569,8 @@ class LandQueueService:
                 row,
                 step="precondition",
                 summary=(
-                    f"the land could not start for {int(waited // 60)} minutes: {result.reason}"
+                    f"the {'land' if self._lands(row) else 'verification'} could not start"
+                    f" for {int(waited // 60)} minutes: {result.reason}"
                 ),
             )
         if row["state"] != "waiting" or row["reason"] != result.reason:
@@ -619,31 +695,58 @@ class LandQueueService:
         )
         return choice
 
-    async def _skip_verification(
-        self, row: dict[str, Any], head: str, choice: GateChoice
+    async def _clear_gate(
+        self,
+        row: dict[str, Any],
+        head: str,
+        *,
+        expect: tuple[str, ...],
+        gate: str | None,
+        summary: str,
+        digest: str = "",
+        duration_ms: float = 0.0,
+        bump_attempts: bool = False,
     ) -> dict[str, Any] | None:
-        """Move a documentation-only change set straight to the fast-forward.
+        """Move a request past the gate - to the fast-forward, or to its own terminal green.
 
-        The row never enters `verifying`, because it never verifies: a state that says
-        otherwise for a second and a half is a small lie in the one place the queue is
-        read for what actually happened. `verified_oid` is still set, and still means
-        what it always meant - the OID this request cleared its gate at - so the
-        branch-moved-after-clearing check in `_land` keeps working unchanged.
+        The one place that decides where a cleared gate leads, so the three ways of
+        clearing it (the gate ran, the change set was documentation, a queue-executed
+        verdict already stood) cannot drift apart about it.
+
+        `verified_oid` is set on every path and still means what it always meant - the
+        OID this request cleared its gate at - so the branch-moved-after-clearing check
+        in `_land` keeps working unchanged.
         """
+        lands = self._lands(row)
         try:
             updated = await self._store.transition(
                 row["id"],
-                expect=("reconciling",),
-                state="landing",
-                reason="",
+                expect=expect,
+                state="landing" if lands else "verified",
+                reason="" if lands else summary,
                 reconciled_oid=head,
                 verified_oid=head,
-                verify_digest="",
-                verify_gate="docs_only",
+                verify_digest=digest,
+                verify_gate=gate,
+                bump_verify_attempts=bump_attempts,
                 now=self._clock(),
             )
         except LandConflict:
             return None
+        if not lands:
+            await self._report_verified(updated, summary=summary, duration_ms=duration_ms)
+        await self._emit("land_changed", updated)
+        return updated
+
+    async def _skip_verification(
+        self, row: dict[str, Any], head: str, choice: GateChoice
+    ) -> dict[str, Any] | None:
+        """Move a documentation-only change set straight past the gate.
+
+        The row never enters `verifying`, because it never verifies: a state that says
+        otherwise for a second and a half is a small lie in the one place the queue is
+        read for what actually happened.
+        """
         await self._store.record_event(
             request_id=row["id"],
             project_id=row["project_id"],
@@ -653,8 +756,95 @@ class LandQueueService:
             detail={"gate": "docs_only", "paths": list(choice.paths), "oid": head},
             now=self._clock(),
         )
-        await self._emit("land_changed", updated)
-        return updated
+        return await self._clear_gate(
+            row,
+            head,
+            expect=("reconciling",),
+            gate="docs_only",
+            summary=choice.reason,
+        )
+
+    async def _reuse_verification(
+        self, row: dict[str, Any], head: str, tree: str, memo: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Accept a verdict this queue already produced over these exact bytes and content.
+
+        The saving the whole feature exists for: an agent asks the queue to verify, the
+        queue runs the gate, and the `request_land` that follows finds the same tree
+        under the same approved command and does not spend the minutes again.
+
+        **A skipped gate is never silent** (`no silent caps`), so the reuse is written to
+        the trail *with its key* before the row moves. The key is what makes the record
+        auditable rather than a claim: a reader can ask which run produced the verdict
+        and check that the tree it names is the tree that landed.
+        """
+        await self._store.record_event(
+            request_id=row["id"],
+            project_id=row["project_id"],
+            step="verify",
+            outcome="reused",
+            reason=(
+                "these exact bytes already passed on this exact tree in this queue"
+            ),
+            detail={
+                "gate": "reused",
+                "tree": tree,
+                "digest": memo["digest"],
+                "source_request_id": memo["request_id"],
+                "source_kind": memo["request_kind"],
+                "source_branch": memo["branch"],
+                "observed_at": memo["observed_at"],
+                "duration_ms": memo["duration_ms"],
+                "oid": head,
+            },
+            now=self._clock(),
+        )
+        log.info(
+            "land_gate_reused request_id=%s branch=%s tree=%s source=%s",
+            row["id"],
+            row["branch"],
+            tree[:12],
+            memo["request_id"],
+        )
+        return await self._clear_gate(
+            row,
+            head,
+            expect=("reconciling",),
+            gate="reused",
+            digest=str(memo["digest"]),
+            duration_ms=float(memo["duration_ms"]),
+            summary="verification was already passed on these exact bytes and this exact tree",
+        )
+
+    async def _standing_verdict(self, row: dict[str, Any], head: str) -> dict[str, Any] | None:
+        """Clear the gate for a request whose own recorded verdict still stands.
+
+        The branch already contained the trunk, so the reconcile moved nothing and the
+        OID that cleared the gate before is the OID standing now. It goes through
+        `_clear_gate` rather than short-circuiting to the next step, because the row is
+        in `reconciling` at this point and every later step expects it to have moved -
+        a request that reached here after a restart used to fall through in `reconciling`
+        and be refused by its own next transition.
+        """
+        await self._store.record_event(
+            request_id=row["id"],
+            project_id=row["project_id"],
+            step="verify",
+            outcome="standing",
+            reason="the branch already contained the trunk; its recorded verdict still stands",
+            detail={"oid": head, "gate": row.get("verify_gate") or ""},
+            now=self._clock(),
+        )
+        return await self._clear_gate(
+            row,
+            head,
+            expect=("reconciling",),
+            # Unchanged rather than restated: whichever gate cleared this OID is still
+            # the gate that cleared it, and overwriting the column here would relabel it.
+            gate=None,
+            digest=str(row.get("verify_digest") or ""),
+            summary="the branch already contained the trunk and its verdict still stands",
+        )
 
     async def _verify(self, row: dict[str, Any]) -> dict[str, Any] | None:
         request_id = row["id"]
@@ -662,13 +852,33 @@ class LandQueueService:
         # The one case where re-running the gate proves nothing: the branch already
         # contained the trunk, so the OID that passed before is the OID standing now.
         if row.get("_already_current") and row.get("verified_oid") == head:
-            return {**row, "verified_oid": head}
+            return await self._standing_verdict(row, head)
         # The other case, and the only one decided from the change set itself: every
         # path this land would add to the trunk is documentation, so the gate would
         # spend minutes proving that markdown does not fail pytest.
         choice = await self._classify(row, head)
         if choice.skips_verification:
             return await self._skip_verification(row, head, choice)
+        values = await self._values(row["project_root"])
+        # The bytes about to run, resolved once so the memo, the plan, and the run all
+        # speak of the same digest. A gate that was edited has a different digest and
+        # therefore neither a standing verdict nor a plan, which is the honest answer:
+        # both describe a script that is no longer there.
+        info = describe_verify_command(
+            Path(row["worktree_root"]),
+            values,
+            self._approvals,
+            project_root=row["project_root"],
+        )
+        digest = info.digest or ""
+        # And the third way to clear the gate: this queue already ran these exact bytes
+        # over this exact tree and watched them pass. Looked up *after* classify so the
+        # classification is recorded on both outcomes exactly as before, and only on the
+        # full-gate path, because a change set that skips the gate has nothing to reuse.
+        tree = await self._tree(row["worktree_root"])
+        memo = await self._standing_memo(row["project_root"], tree, digest)
+        if memo is not None:
+            return await self._reuse_verification(row, head, tree, memo)
         try:
             current = await self._store.transition(
                 request_id,
@@ -682,19 +892,7 @@ class LandQueueService:
         except LandConflict:
             return None
         await self._emit("land_changed", current)
-        values = await self._values(row["project_root"])
         attempts = 1 + self._verify_retries()
-        # The bytes about to run, resolved once so the plan is looked up under the same
-        # digest the run will report. A gate that was edited has a different digest and
-        # therefore no plan, which is the honest answer: the old step list describes a
-        # script that is no longer there.
-        info = describe_verify_command(
-            Path(row["worktree_root"]),
-            values,
-            self._approvals,
-            project_root=row["project_root"],
-        )
-        digest = info.digest or ""
         plan = await self._store.verify_plan(row["project_root"], digest)
         expected = tuple(sanitize_plan((plan or {}).get("steps") or []))
         outcomes = []
@@ -725,6 +923,29 @@ class LandQueueService:
                     project_root=row["project_root"],
                     digest=outcome.digest or digest,
                     steps=outcome.steps,
+                    duration_ms=outcome.duration_ms,
+                    now=self._clock(),
+                )
+            if outcome.passed:
+                # The verdict, keyed by what decided it. Written here rather than at the
+                # end of the pipeline because the fact being recorded is "this queue ran
+                # these bytes over this tree and they passed", which is complete now and
+                # is unchanged by whether the fast-forward that follows succeeds.
+                #
+                # **Only a run this queue executed reaches this line.** There is no other
+                # writer, and that is the trust boundary rather than an accident of where
+                # the call sits: an agent's own shell run is self-reported and has a
+                # file-swap loophole - run modified bytes, restore the approved file - so
+                # a result it hands over proves nothing about the approved gate.
+                await self._store.record_verify_memo(
+                    project_root=row["project_root"],
+                    tree_oid=tree,
+                    digest=outcome.digest or digest,
+                    request_id=request_id,
+                    request_kind=str(row.get("kind") or "land"),
+                    branch=row["branch"],
+                    worktree_root=row["worktree_root"],
+                    commit_oid=head,
                     duration_ms=outcome.duration_ms,
                     now=self._clock(),
                 )
@@ -775,18 +996,16 @@ class LandQueueService:
                 output=final.output,
             )
             return None
-        updated = await self._store.transition(
-            request_id,
+        return await self._clear_gate(
+            row,
+            head,
             expect=("verifying",),
-            state="landing",
-            reason="",
-            verified_oid=head,
-            verify_digest=final.digest or "",
-            bump_verify_attempts=True,
-            now=self._clock(),
+            gate="full",
+            digest=final.digest or "",
+            duration_ms=final.duration_ms,
+            bump_attempts=True,
+            summary=f"verification passed in {final.duration_ms / 1000:.0f}s",
         )
-        await self._emit("land_changed", updated)
-        return updated
 
     async def _land(self, row: dict[str, Any]) -> dict[str, Any]:
         request_id = row["id"]
@@ -937,30 +1156,7 @@ class LandQueueService:
         press send for the answer it asked for.
         """
         body = self._handback_body(row, step=step, summary=summary, paths=paths, output=output)
-        message_id = ""
-        armed = False
-        arming_reason = "no origin session"
-        if self._queue_message is not None and row.get("origin_session_id"):
-            armed, arming_reason = await self._reply_arming(row)
-            try:
-                message = await self._queue_message(
-                    target_session_id=row["origin_session_id"],
-                    body=body,
-                    armed=armed,
-                    solicited_by=row["id"] if armed else None,
-                    sender_kind="rule",
-                    sender_id="land_queue",
-                    sender_label="Land queue",
-                    correlation_id=row["correlation_id"] or row["id"],
-                )
-                message_id = str((message or {}).get("id") or "")
-                # Read the arming back off the row rather than reporting what was
-                # asked for: a retry dedupes into the message it already created,
-                # which may have been staged under different conditions.
-                armed = str((message or {}).get("state") or "") == "armed"
-            except Exception:  # noqa: BLE001 - a failed handback must not lose the row
-                log.warning("land_handback_failed request_id=%s", row["id"])
-                armed = False
+        message_id, armed, arming_reason = await self._solicited_reply(row, body)
         updated = await self._store.transition(
             row["id"],
             expect=("queued", "waiting", "reconciling", "verifying", "landing"),
@@ -992,6 +1188,80 @@ class LandQueueService:
         await self._fact(updated, "land_handed_back", {"step": step, "reason": summary})
         await self._emit("land_changed", updated)
         return updated
+
+    async def _solicited_reply(
+        self, row: dict[str, Any], body: str
+    ) -> tuple[str, bool, str]:
+        """Put one bounded answer to this request into its author's prompt queue.
+
+        The single place the queue writes to a session, so a handback and a verify-only
+        result cannot differ about who may be answered or how the answer is armed. What
+        it returns is the message id, whether the row really arrived armed, and - when it
+        did not - why not: a draft nobody delivered otherwise reads, from the trail
+        alone, exactly like an answer that arrived.
+        """
+        if self._queue_message is None or not row.get("origin_session_id"):
+            return "", False, "no origin session"
+        armed, arming_reason = await self._reply_arming(row)
+        try:
+            message = await self._queue_message(
+                target_session_id=row["origin_session_id"],
+                body=body,
+                armed=armed,
+                solicited_by=row["id"] if armed else None,
+                sender_kind="rule",
+                sender_id="land_queue",
+                sender_label="Land queue",
+                correlation_id=row["correlation_id"] or row["id"],
+            )
+            # Read the arming back off the row rather than reporting what was asked
+            # for: a retry dedupes into the message it already created, which may have
+            # been staged under different conditions.
+            return (
+                str((message or {}).get("id") or ""),
+                str((message or {}).get("state") or "") == "armed",
+                arming_reason,
+            )
+        except Exception:  # noqa: BLE001 - a failed reply must not lose the row
+            log.warning("land_reply_failed request_id=%s", row["id"])
+            return "", False, "the message could not be staged"
+
+    async def _report_verified(
+        self, row: dict[str, Any], *, summary: str, duration_ms: float
+    ) -> None:
+        """Tell a verify-only request's author what the gate said.
+
+        A land announces itself by the trunk moving; a verify-only run has no such
+        evidence, so the message *is* the result. It rides the same solicited-reply
+        authority as a handback and for the same reason - it is the bounded,
+        deterministic, daemon-authored answer to a request this very session made - and
+        it spends the same single armed reply, which is why a verify-only request that
+        passed cannot then also hand back.
+        """
+        message_id, armed, arming_reason = await self._solicited_reply(
+            row, self._verified_body(row, summary=summary, duration_ms=duration_ms)
+        )
+        await self._store.record_event(
+            request_id=row["id"],
+            project_id=row["project_id"],
+            step="verify",
+            outcome="reported",
+            reason=summary,
+            detail={
+                "message_id": message_id,
+                "armed": armed,
+                "arming_reason": arming_reason,
+            },
+            now=self._clock(),
+        )
+        await self._fact(row, "land_verified", {"gate": row.get("verify_gate") or ""})
+        log.info(
+            "land_verify_only_completed request_id=%s branch=%s gate=%s armed=%s",
+            row["id"],
+            row["branch"],
+            row.get("verify_gate") or "",
+            armed,
+        )
 
     async def _reply_arming(self, row: dict[str, Any]) -> tuple[bool, str]:
         """Whether this request's answer may reach its author without a human press.
@@ -1048,7 +1318,7 @@ class LandQueueService:
     async def origin_windows(
         self, session_ids: Sequence[str], since: float
     ) -> dict[str, dict[str, Any]]:
-        """Sessions whose own land request is still open, for the reply window.
+        """Sessions whose own queue request is still open, for the reply window.
 
         The other half of the same consent, and the half without which arming would
         not be enough: a session that asks to land then goes quiet *by definition* -
@@ -1057,6 +1327,11 @@ class LandQueueService:
         This is the same shape `auto-delivery.md` already gives a delivered agent
         message, with the land request in place of the message: bounded by the
         exchange's own end (a terminal request opens nothing) and by ``since``.
+
+        A verify-only request waits in exactly the same way and is covered by exactly
+        the same window. The evidence keeps the pipe's name (`kind: "land"`) and carries
+        the request's own `request_kind` beside it, rather than growing a second kind
+        for one queue.
         """
         found = await self._store.open_origin_requests(session_ids, since)
         return {
@@ -1074,8 +1349,9 @@ class LandQueueService:
         output: bytes | None,
     ) -> str:
         """A fixed template. No model writes any part of this message."""
+        what = "land" if self._lands(row) else "verification"
         lines = [
-            f"The land of `{row['branch']}` stopped at {step}: {summary}.",
+            f"The {what} of `{row['branch']}` stopped at {step}: {summary}.",
             "",
             f"Worktree: `{row['worktree_root']}`",
             f"Target: `{row['project_root']}` ({row['trunk_ref'] or 'HEAD'})",
@@ -1092,10 +1368,48 @@ class LandQueueService:
         lines.extend(
             [
                 "",
-                "Resolve this in your worktree, then request the land again. "
+                f"Resolve this in your worktree, then request the {what} again. "
                 "The worktree was left as it was found; nothing was committed for you.",
             ]
         )
+        return "\n".join(lines)
+
+    def _verified_body(
+        self, row: dict[str, Any], *, summary: str, duration_ms: float
+    ) -> str:
+        """A fixed template for a verify-only request that cleared its gate.
+
+        It states what was proven, what was *not* done, and - because that is the whole
+        economy of the feature - that a land of this exact tree will not spend the gate
+        again. No model writes any part of it.
+        """
+        gate = str(row.get("verify_gate") or "")
+        proven = {
+            "full": "The verification command passed.",
+            "docs_only": (
+                "The change set is documentation only, so the gate was skipped - "
+                "a land of it would skip the gate for the same reason."
+            ),
+            "reused": (
+                "These exact bytes had already passed on this exact tree in this "
+                "queue, so the gate was not run again."
+            ),
+        }.get(gate, summary)
+        lines = [
+            f"`{row['branch']}` cleared verification. **Nothing was landed.**",
+            "",
+            proven,
+            "",
+            f"Worktree: `{row['worktree_root']}`",
+            f"Target: `{row['project_root']}` ({row['trunk_ref'] or 'HEAD'})",
+            f"Verified at: `{(row.get('verified_oid') or '')[:12]}`"
+            + (f" · {duration_ms / 1000:.0f}s" if duration_ms > 0 else ""),
+            "",
+            "The trunk was merged into your branch to verify it, so your branch now "
+            "contains that merge. Request the land when you are ready: while this tree "
+            "and this verification command both stand, the land will reuse this result "
+            "rather than run the gate again.",
+        ]
         return "\n".join(lines)
 
     # -- collaborators --------------------------------------------------------
@@ -1105,6 +1419,45 @@ class LandQueueService:
 
         code, output = await read_git(cwd, "rev-parse", "HEAD")
         return output.strip() if code == 0 else ""
+
+    async def _tree(self, cwd: str) -> str:
+        """The content hash of this checkout's committed state.
+
+        The tree rather than the commit, because the gate's verdict is about *content*
+        and two commits routinely carry one tree: a reconcile that merged an unchanged
+        trunk produces a new commit over identical content, which is exactly the case a
+        commit-keyed memo would miss.
+
+        An unreadable answer is `''`, which the memo store rejects as half a key - so a
+        repository that cannot be read runs the gate rather than reusing something.
+        """
+        from .git_monitor import read_git
+
+        code, output = await read_git(cwd, "rev-parse", "HEAD^{tree}")
+        return output.strip() if code == 0 else ""
+
+    async def _standing_memo(
+        self, project_root: str, tree: str, digest: str
+    ) -> dict[str, Any] | None:
+        """A green verdict this queue produced over this exact content, if one stands.
+
+        Bounded by `land_verify_memo_seconds`, which is a real bound rather than
+        hygiene: a tree hash is a claim about content, and the gate's verdict also
+        depends on the machine underneath - an installed dependency, a toolchain, an OS
+        update, none of which changes the tree. Outside the bound the gate runs, which
+        is the fail-closed direction (a needless run costs minutes; a wrongly reused
+        verdict costs a trunk).
+        """
+        window = self._memo_seconds()
+        if window <= 0 or not tree or not digest:
+            return None
+        try:
+            return await self._store.verify_memo(
+                project_root, tree, digest, not_before=self._clock() - window
+            )
+        except Exception:  # noqa: BLE001 - a memo that cannot be read is a memo that is absent
+            log.warning("land_verify_memo_unreadable root=%s tree=%s", project_root, tree[:12])
+            return None
 
     async def _values(self, project_root: str) -> dict[str, Any]:
         if self._project_values is None:

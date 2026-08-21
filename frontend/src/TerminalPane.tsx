@@ -38,7 +38,8 @@ import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
-import { activatePromptRailItem } from './promptRail'
+import { activatePromptRailItem, railItemLabel } from './promptRail'
+import { usePromptTitles } from './promptTitles'
 import { AttachIcon, BranchIcon, CopyIcon, CopyInputIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { RailInlineEditor } from './RailInlineEditor'
@@ -125,11 +126,12 @@ import {
 import { composerIsReadable, readComposerText } from './composerText'
 import { ClipboardDropup } from './ClipboardDropup'
 import { SkillsDropup } from './SkillsDropup'
+import { PromptsDropup } from './PromptsDropup'
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 
 /** Which rail drop-up is open, and the button it hangs from. */
-type RailDropupState = { kind: 'clipboard' | 'skills'; anchor: HTMLElement }
+type RailDropupState = { kind: 'clipboard' | 'skills' | 'prompts'; anchor: HTMLElement }
 
 /**
  * The pane's normal font size at 100% chrome scale. A letterboxed pane renders below
@@ -3437,6 +3439,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       ?acceptsTerminalAttachments(session)?'Read/select mode. Tap for persistent Draft.':'Read/select mode. Tap for live input.'
       :'Persistent Draft. Tap for live input; text stays saved.'
   const railRows=resolveRailRows(loadRailConfig(session.project_id),'strip',{device:currentProfile(),backend:session.backend as RailBackend})
+  // Only a rail that actually carries an auto-labelled prompt button reads the
+  // library; every other rail costs nothing (`promptTitles.ts`).
+  const promptTitles=usePromptTitles(session.project_id,railRows.some(row=>row.entries.some(entry=>entry.item.type==='prompt'&&entry.item.autoLabel)))
   // Mobile agent Enter is reserved for composing a newline. The ordinary Enter
   // item therefore moves to the fixed end-cap instead of remaining as a second,
   // scrollable submit target. The fixed action is intentionally not configurable:
@@ -3483,6 +3488,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       case 'clipboardHistory':return <button key={key} class={dropup?.kind==='clipboard'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='clipboard'} title="Recent clipboard — tap an entry to insert it here" onClick={event=>toggleDropup('clipboard',event.currentTarget as HTMLElement)}>Clip</button>
       // `agentOnly` already keeps this off shells, where the endpoint 409s.
       case 'skills':return <button key={key} class={dropup?.kind==='skills'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='skills'} title={item.title||'Insert one of this session’s skills'} onClick={event=>toggleDropup('skills',event.currentTarget as HTMLElement)}>Skills</button>
+      // Every template, not only the pinned ones. Pinning still exists and still
+      // gives a template its own button; this is the route to the rest of them.
+      case 'prompts':return <button key={key} class={dropup?.kind==='prompts'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='prompts'} title={item.title||'Insert one of your prompt templates'} onClick={event=>toggleDropup('prompts',event.currentTarget as HTMLElement)}>Prompts</button>
       case 'copyInput':{
         // Disabled rather than absent on an unmeasured harness: a button that is
         // simply missing reads as "not built", while one that says why reads as
@@ -3508,7 +3516,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(item.type==='action')return null
     // Prompt templates resolve over the network at click time (see promptRail.ts), so
     // they cannot go through the synchronous payload path below.
-    if(item.type==='prompt')return <button key={key} class={item.className||''} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{item.label}</button>
+    if(item.type==='prompt')return <button key={key} class={item.className||''} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{railItemLabel(item,promptTitles)}</button>
     const payload=railPayload(item,session.backend as RailBackend)
     return <button key={key} class={item.className||''} title={item.title||payload} onClick={()=>{void injectText(payload,item.submit).catch(cause=>reportError(cause instanceof Error?cause.message:String(cause)))}}>{item.label}</button>
   }
@@ -3578,7 +3586,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
     if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,session,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>

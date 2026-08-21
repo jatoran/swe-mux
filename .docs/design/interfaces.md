@@ -1303,7 +1303,8 @@ It does not change tailnet policy or make swe-mux public.
 
 ```text
 GET    /voice
-POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim, stream_id?: UUID}
+POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim, stream_id?: UUID,
+                                         message_id?: string, regenerate?: bool}
 POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
 POST   /voice/transcribe                 same body and headers, no session
 POST   /sessions/{id}/voice/prepare-submit  {text}
@@ -1317,7 +1318,7 @@ DELETE /voice/stt-latency
 POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
 POST   /voice/capture-diagnostic         bounded stalled/recovered capture watchdog report
 POST   /voice/deferral-diagnostic        one resolved unfinished-utterance deferral
-GET    /voice/clips[?session=&run=&limit=]
+GET    /voice/clips[?session=&run=&anchor=&kind=summary|verbatim&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
 GET    /voice/models/kokoro               pinned-download state
@@ -1397,6 +1398,20 @@ so a speculative routing decode cannot queue a real utterance behind it. The res
 The session-free transcribe form exists for the wake-word tester: choosing a trigger word is a
 recognition question, not a dictation one, and requiring a live agent to ask it would have forced
 a parallel implementation of the decoder and the matcher.
+
+`/sessions/{id}/voice/generate` speaks the session's newest reply by default. `message_id` names
+one reply in the reader instead, which is how the Transcript tab plays any message through the
+same pipeline. Naming the message is also what makes the request cheap the second time: an
+existing ready clip for the same (run, message, kind) is returned as-is, with `reused: true`, so
+the reader's play button does not spend a summary call on audio that already exists. `regenerate`
+is the deliberate override for a clip whose text the operator no longer trusts, and is never the
+default - the default request is "let me hear this". A `message_id` that is not an assistant
+message in the readable window is a 409, not a silent fall back to the newest reply.
+
+`/voice/clips` returns clips newest-first by the arrival of the message each one speaks, falling
+back to synthesis time for application speech and for rows written before the anchor existed.
+`anchor` and `kind` narrow it to one message's audio, which is the lookup the transcript's
+per-message markers do in one request for a whole run.
 
 `/voice/stt-latency` is the end-of-speech-to-action stage breakdown. Only the browser can measure
 the whole path, so it posts the merged sample; every field is clamped on arrival rather than
@@ -1632,7 +1647,7 @@ POST   /git/worktrees
 POST   /git/worktrees/session
 DELETE /git/worktrees
 GET    /land[?project_id=]
-POST   /land                         {project_id, worktree_root}
+POST   /land                         {project_id, worktree_root, kind?}
 DELETE /land/{request_id}
 GET    /land/{request_id}/events
 GET    /land/verify-command          ?project_id=&worktree_root=
@@ -1659,7 +1674,8 @@ anything**: `POST /land` enqueues a request and the daemon's own sweep is the on
 moves a trunk, so a client that gets `201` has been told the request was accepted, not that the
 branch is on the trunk. `GET /land` returns the queue plus its bounds (`hourly_budget`,
 `hold_timeout_seconds`, `retry_verification`); `409 already_queued` names an active request for
-that branch, and `DELETE` refuses with `409 not_cancellable` once a step is in flight.
+that branch - one branch holds one request whatever kind it asked for - and `DELETE` refuses with
+`409 not_cancellable` once a step is in flight.
 
 A row that is `verifying` **under this daemon** additionally carries `verify_progress`; every other
 row carries `null`. The payload is `{step_index, step_name, expected_step_count, expected_steps,
@@ -1672,15 +1688,25 @@ percentage in it by design: `step_index` counts the `=== name ===` markers the g
 rendered. The reading is in memory and dies with the process; a restart that returns a row to
 `queued` reports none rather than a stale snapshot. See `features/land-queue.md`.
 
-Every row carries `verify_gate`: `""` until the pipeline classified its change set, then `"full"`
-or `"docs_only"`. It answers **which gate that land ran**, decided from the incoming paths against
-a closed documentation allowlist, and it exists because a documentation-only land never enters
-`verifying` and would otherwise be indistinguishable from one that passed the full gate. `""` is
-not collapsed into `"full"` at either end, and a client reads any value it does not recognise as
-`""` rather than as a skip. `GET /land/{id}/events` carries the same decision as a `classify` step
-recorded on **both** outcomes, with the reason, the matched paths, and whatever disqualified them;
-on the fast path the `verify` step is still present, with outcome `skipped`. See
-`features/land-queue.md`.
+Every row carries `verify_gate`: `""` until the pipeline classified its change set, then `"full"`,
+`"docs_only"`, or `"reused"`. It answers **which gate that land ran** - `"docs_only"` decided from
+the incoming paths against a closed documentation allowlist, `"reused"` meaning a queue-executed
+verdict already stood over this exact tree with these exact bytes - and it exists because neither
+of those two ever enters `verifying` and both would otherwise be indistinguishable from a land
+that passed the full gate. `""` is not collapsed into `"full"` at either end, and a client reads
+any value it does not recognise as `""` rather than as a skip. `GET /land/{id}/events` carries the
+same decision as a `classify` step recorded on **both** outcomes, with the reason, the matched
+paths, and whatever disqualified them; on either skipping path the `verify` step is still present,
+with outcome `skipped` or `reused` - and a `reused` row carries the key it reused (tree, digest,
+and the request whose run produced the verdict), so the reuse is checkable rather than asserted.
+See `features/land-queue.md`.
+
+Every row also carries `kind`: `"land"` or `"verify"`. `POST /land` accepts it and defaults it to
+`"land"`, so a caller written before verify-only existed asks for what it always asked for; an
+unrecognised value is `400`. A `"verify"` request runs every step except the fast-forward and
+settles as `verified` - its own terminal state, because nothing moved. A client reads an
+unrecognised `kind` as `"land"`: a verify-only run drawn as a land under-claims, while a land
+drawn as a verify-only run would tell a reader a trunk did not move when it did.
 
 `GET /land/verify-command` reports the command a land would run, its digest, whether those exact
 bytes are approved, and both the approved and current text so the prompt can show a diff. It also

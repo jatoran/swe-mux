@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { findPromptTemplate, promptItemSummary, splitPromptKey } from '../src/promptRail.ts'
+import { findPromptTemplate, promptItemSummary, railItemLabel, splitPromptKey } from '../src/promptRail.ts'
 import { normalizeRailConfig, railPayload, type RailItem } from '../src/commandRail.ts'
+import { orderPromptTemplates } from '../src/promptTemplates.ts'
 
 // The library's own identity is `scope:id`; template ids are UUIDs, so the first
 // colon is the seam and the rest is the id verbatim.
@@ -35,6 +36,45 @@ test('a dangling prompt item is described as dangling, not as blank', () => {
   // Templates not loaded yet is not the same as deleted.
   assert.equal(promptItemSummary(item, null), 'global:abc')
   assert.equal(promptItemSummary({ ...item, promptKey: undefined }, []), 'no template attached')
+})
+
+// A pinned button with no name of its own follows the template's name. The stored
+// label is a snapshot taken at pin time, and a snapshot of a name is exactly the
+// copy a `prompt` item exists to avoid — the body is a pointer, so the name is too.
+test('an auto-labelled prompt button renders the template’s live title', () => {
+  const auto: RailItem = { id: 'pin:prompt:abc', type: 'prompt', label: 'Ship it', autoLabel: true, promptKey: 'global:abc' }
+  const renamed = [template({ title: 'Ship it properly' })]
+  assert.equal(railItemLabel(auto, renamed), 'Ship it properly')
+  // Until the library is read, and if the template is gone, the stored copy stands:
+  // the dangling case is reported on the press, where there is room to say which.
+  assert.equal(railItemLabel(auto, null), 'Ship it')
+  assert.equal(railItemLabel(auto, []), 'Ship it')
+})
+
+test('a typed label is never overridden, and neither is one saved before the flag existed', () => {
+  const renamed = [template({ title: 'Ship it properly' })]
+  const typed: RailItem = { id: 'p', type: 'prompt', label: 'Ship', autoLabel: false, promptKey: 'global:abc' }
+  assert.equal(railItemLabel(typed, renamed), 'Ship')
+  // No flag at all is what every item saved before this rule looks like. Treating
+  // those as auto would rename buttons somebody deliberately named.
+  const legacy: RailItem = { id: 'p', type: 'prompt', label: 'Ship', promptKey: 'global:abc' }
+  assert.equal(railItemLabel(legacy, renamed), 'Ship')
+  // Nothing but a prompt item resolves a title, whatever the flag says.
+  assert.equal(railItemLabel({ id: 's', type: 'skill', label: 'commit', text: 'commit', autoLabel: true }, renamed), 'commit')
+})
+
+test('the picker orders by favourite, then recency, then title', () => {
+  const items = [
+    template({ id: 'c', key: 'global:c', title: 'Cold b' }),
+    template({ id: 'a', key: 'global:a', title: 'Cold a' }),
+    template({ id: 'r', key: 'global:r', title: 'Recent', last_used_at: 500 }),
+    template({ id: 'o', key: 'global:o', title: 'Older', last_used_at: 100 }),
+    template({ id: 'f', key: 'global:f', title: 'Zeta', favorite: true }),
+  ]
+  assert.deepEqual(orderPromptTemplates(items).map(item => item.title), ['Zeta', 'Recent', 'Older', 'Cold a', 'Cold b'])
+  // Pure: sorting for the picker must not reorder the caller's own list.
+  assert.deepEqual(orderPromptTemplates(items).map(item => item.id).length, 5)
+  assert.deepEqual(items.map((item: { id: string }) => item.id), ['c', 'a', 'r', 'o', 'f'])
 })
 
 test('prompt items survive a save round-trip and carry no local payload', () => {

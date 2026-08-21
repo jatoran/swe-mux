@@ -6,9 +6,14 @@ import {
 } from './commandRail'
 import { insertRailItem, removeRailEntry, moveRailEntry, type RailDropTarget, type RailRef } from './railLayout'
 import { beginRailDrag, railRefKey, type RailDragHost, type RailDragPreview } from './railDrag'
-import { applyScopedRail, type ResolvedRail } from './railScope'
+import {
+  applyScopedRail, hideScopedRailEntry, isProjectRailPlacement, unhideScopedRailEntry,
+  type ResolvedRail,
+} from './railScope'
 import { currentProfile, currentRailBlob, loadResolvedRail, saveRailBlob } from './deviceSettings'
 import { harnessDisplayName } from './harnessRegistry'
+import { railItemLabel } from './promptRail'
+import { usePromptTitles } from './promptTitles'
 
 // In-place rail customization: the gear on a terminal's Action rail flips the
 // rail area into this editor, so the arrangement is edited where it is used —
@@ -19,9 +24,17 @@ import { harnessDisplayName } from './harnessRegistry'
 //
 // It edits the same effective config the rail renders (`railScope.ts` routes
 // each change to the scope that owns it — shared rows to the global layout,
-// project rows to the project). Items another backend would hide stay visible
-// here but dimmed, because hiding them would make "why is this button not on my
-// shell rail" undiagnosable from the one surface meant to answer it.
+// project rows and project placements to the project). Items another backend
+// would hide stay visible here but dimmed, because hiding them would make "why is
+// this button not on my shell rail" undiagnosable from the one surface meant to
+// answer it.
+//
+// In a project scope, three things a shared row's chip can be are drawn apart,
+// because they are three different acts: an entry the project placed there itself
+// (marked, and removable here alone), an entry of the shared row (whose × removes
+// it for everybody, and whose ⊘ hides it here only), and a ghost — something this
+// project hides, drawn where the shared row still holds it, because a hidden
+// button is in no row and nothing else could offer to bring it back.
 
 interface Props {
   projectId?: string
@@ -65,13 +78,16 @@ export function RailInlineEditor({ projectId, backend, onOpenFull, onClose }: Pr
     config: () => resolvedRef.current.config,
     setPreview: setDrag,
     commit: commitConfig,
-    canDrop: (target, itemId) => !resolvedRef.current.projectItemIds.has(itemId)
-      || resolvedRef.current.projectRowIds.has(target.rowId),
+    // No refused targets: a project action dropped into a shared row is recorded
+    // as a splice, so the row's definition stays global (`railScope.ts`).
   }
 
   const shown = drag.config || resolved.config
   const byId = useMemo(() => new Map(shown.items.map(item => [item.id, item])), [shown])
   const rows = shown.layouts[device].strip
+  // Live titles for prompt buttons pinned without a name of their own; free unless
+  // this rail actually carries one (`promptTitles.ts`).
+  const promptTitles = usePromptTitles(projectId, shown.items.some(item => item.type === 'prompt' && item.autoLabel))
   const scopeNote = resolved.kind === 'fork'
     ? 'this project only'
     : 'the shared layout (all projects); rows marked "project" stay here'
@@ -80,17 +96,14 @@ export function RailInlineEditor({ projectId, backend, onOpenFull, onClose }: Pr
     const payload = item.type === 'skill' || item.type === 'slash' ? railPayload(item, backend) : ''
     return `${isBuiltinRailId(item.id) ? item.type : `custom ${item.type}`}${payload ? ` · ${payload}` : item.type === 'text' ? ` · "${(item.text || '').slice(0, 24)}"` : ''}`
   }
+  const chipLabel = (item: RailItem): string => railItemLabel(item, promptTitles)
 
   const onChipKey = (event: JSX.TargetedKeyboardEvent<HTMLElement>, ref: RailRef) => {
     const config = resolvedRef.current.config
     const stripRows = config.layouts[device].strip
     const rowIndex = stripRows.findIndex(row => row.id === ref.rowId)
     if (rowIndex < 0) return
-    const itemId = stripRows[rowIndex].items[ref.index]
-    const allowed = (rowId: string) => !resolvedRef.current.projectItemIds.has(itemId)
-      || resolvedRef.current.projectRowIds.has(rowId)
     const move = (to: RailDropTarget) => {
-      if (!allowed(to.rowId)) return
       event.preventDefault()
       commitConfig(moveRailEntry(config, ref, to))
       const next = `[data-reorder-id="${railRefKey(to)}"]`
@@ -121,15 +134,13 @@ export function RailInlineEditor({ projectId, backend, onOpenFull, onClose }: Pr
     setPickerQuery('')
   }
 
-  /** What the picker offers for a row: the whole catalog (duplicates are legal),
-   *  minus project-owned actions when the row is shared — a shared row is global
-   *  state that cannot reference them. */
-  const pickerItems = (rowId: string): RailItem[] => {
-    const shared = !resolved.projectRowIds.has(rowId)
+  /** What the picker offers for a row: the whole catalog, duplicates included.
+   *  Project-owned actions used to be withheld from shared rows; a delta now
+   *  records that placement as a splice, so nothing is withheld any more. */
+  const pickerItems = (): RailItem[] => {
     const needle = pickerQuery.trim().toLowerCase()
     return resolved.config.items.filter(item =>
-      (!shared || !resolved.projectItemIds.has(item.id)) &&
-      (!needle || `${item.label} ${item.id} ${itemMeta(item)}`.toLowerCase().includes(needle)))
+      !needle || `${chipLabel(item)} ${item.id} ${itemMeta(item)}`.toLowerCase().includes(needle))
   }
 
   return <div class="rail-inline-editor" ref={rootRef}>
@@ -141,6 +152,7 @@ export function RailInlineEditor({ projectId, backend, onOpenFull, onClose }: Pr
     </header>
     {rows.map(row => {
       const projectRow = resolved.projectRowIds.has(row.id)
+      const hiddenHere = resolved.hiddenEntries.get(`${device}|strip|${row.id}`) || []
       return <div class={`rail-inline-row${projectRow ? ' project-owned' : ''}`} key={row.id}>
         {projectRow && <span class="rail-origin project" title="Only this project has this row">project</span>}
         <div class="rail-chips" data-rail-row={`${device}|strip|${row.id}`} role="group" aria-label={row.label || 'Rail row'}>
@@ -148,31 +160,63 @@ export function RailInlineEditor({ projectId, backend, onOpenFull, onClose }: Pr
             const ref: RailRef = { device, surface: 'strip', rowId: row.id, index }
             const key = railRefKey(ref)
             const item = byId.get(itemId)
-            const label = item?.label || itemId
-            const hidden = !!item && !railItemVisible(item, backend)
+            const label = item ? chipLabel(item) : itemId
+            const filtered = !!item && !railItemVisible(item, backend)
+            // Whose chip is this? In a shared row, the project's own placement edits
+            // the delta while the row's own entries edit the shared layout.
+            const mine = !projectRow && resolved.kind === 'delta'
+              && isProjectRailPlacement(resolved, device, 'strip', row.id, itemId)
+            const canHide = !projectRow && !!projectId && resolved.kind !== 'fork' && !mine
             return <div
               key={key}
-              class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}${hidden ? ' filtered' : ''}`}
+              class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}${filtered ? ' filtered' : ''}${mine ? ' project-owned' : ''}`}
               data-reorder-id={key}
               tabIndex={0}
               role="button"
-              title={`${label}${item ? ` — ${itemMeta(item)}` : ''}${hidden ? `\nNot shown in ${harnessDisplayName(backend)} sessions (still on other rails).` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
+              title={`${label}${item ? ` — ${itemMeta(item)}` : ''}${mine ? '\nOnly this project has it here.' : ''}${filtered ? `\nNot shown in ${harnessDisplayName(backend)} sessions (still on other rails).` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
               onPointerDown={event => { dragCancelRef.current = beginRailDrag(event, dragHost, { kind: 'chip', ref }, label) }}
               onKeyDown={event => onChipKey(event, ref)}
             >
               <span class="rail-chip-label">{label}</span>
+              {canHide && <button
+                type="button"
+                class="rail-chip-hide"
+                tabIndex={-1}
+                aria-label={`Hide ${label} in this project only`}
+                title="Hide it in this project only. The shared rail keeps it everywhere else."
+                onPointerDown={event => event.stopPropagation()}
+                onClick={() => { void saveRailBlob(hideScopedRailEntry(currentRailBlob(), projectId!, itemId, device, 'strip', row.id)); refresh() }}
+              >⊘</button>}
               <button
                 type="button"
                 class="rail-chip-remove"
                 tabIndex={-1}
                 aria-label={`Remove ${label} from the rail`}
-                title="Remove from the rail"
+                title={mine ? 'Remove from this project’s copy of the rail'
+                  : !projectRow && !!projectId ? 'Remove from the shared rail — every project loses it'
+                    : 'Remove from the rail'}
                 onPointerDown={event => event.stopPropagation()}
                 onClick={() => commitConfig(removeRailEntry(resolvedRef.current.config, ref))}
               >×</button>
             </div>
           })}
-          {!row.items.length && <span class="rail-chips-empty">drag actions here</span>}
+          {/* The only way back from a hide: a hidden button is in no row, so nothing
+              else could offer to restore it. */}
+          {hiddenHere.map(entry => {
+            const item = byId.get(entry.item)
+            const label = item ? chipLabel(item) : entry.item
+            return <div key={`ghost:${row.id}:${entry.index}:${entry.item}`} class="rail-chip ghost" title={`${label} — hidden in this project. The shared rail still has it everywhere else.`}>
+              <span class="rail-chip-label">{label}</span>
+              <button
+                type="button"
+                class="rail-chip-hide"
+                aria-label={`Show ${label} here again`}
+                title="Show it here again"
+                onClick={() => { void saveRailBlob(unhideScopedRailEntry(currentRailBlob(), projectId!, entry.item, device, 'strip', row.id)); refresh() }}
+              >+</button>
+            </div>
+          })}
+          {!row.items.length && !hiddenHere.length && <span class="rail-chips-empty">drag actions here</span>}
         </div>
         <button
           type="button"
@@ -196,17 +240,17 @@ export function RailInlineEditor({ projectId, backend, onOpenFull, onClose }: Pr
         <button type="button" aria-label="Close the action picker" onClick={() => setPickerRow(null)}>×</button>
       </div>
       <div class="rail-inline-picker-list">
-        {pickerItems(pickerRow).map(item => <button
+        {pickerItems().map(item => <button
           type="button"
           key={item.id}
           class={railItemVisible(item, backend) ? '' : 'filtered'}
-          title={`${item.label} — ${itemMeta(item)}${railItemVisible(item, backend) ? '' : `\nNot shown in ${harnessDisplayName(backend)} sessions.`}`}
+          title={`${chipLabel(item)} — ${itemMeta(item)}${railItemVisible(item, backend) ? '' : `\nNot shown in ${harnessDisplayName(backend)} sessions.`}`}
           onClick={() => addToRow(pickerRow, item.id)}
         >
-          <span>{item.label}</span>
+          <span>{chipLabel(item)}</span>
           <small>{itemMeta(item)}</small>
         </button>)}
-        {!pickerItems(pickerRow).length && <p class="rail-add-note">No action matches “{pickerQuery}”.</p>}
+        {!pickerItems().length && <p class="rail-add-note">No action matches “{pickerQuery}”.</p>}
       </div>
     </div>}
     <p class="rail-inline-hint">

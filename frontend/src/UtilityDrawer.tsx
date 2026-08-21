@@ -173,6 +173,11 @@ type Props = {
    *  purpose — it answers "is anything waiting anywhere", which is the question you have
    *  while looking at some other session, and it labels the way to go find out. */
   queuePending: number
+  /** `tts_enabled`. The Transcript tab draws its per-message read-aloud markers only
+   *  while it is on: a per-item surface repeated once per reply carries no gate of its
+   *  own, and the one gate for the master switch lives in the voice panel's `tts` tab
+   *  (`design/features/setting-links.md`). */
+  readAloud?: boolean
   announcement: string
   /** Desktop only: pointer-drag handle for the column width. Typed as the plain
    *  DOM event so this module needs no `JSX` import for it (which would shadow the
@@ -361,7 +366,7 @@ export function UtilityDrawer(props: Props) {
         // No `onDone`. Every other session-scoped tab closes the mobile drawer once
         // it has acted, because it acted on the terminal underneath; this one is
         // read there, and closing it after each copy would end the reading.
-        return <TranscriptTab session={session} />
+        return <TranscriptTab session={session} readAloud={props.readAloud} />
       case 'activity':
         // Three readings of one run. None takes `onDone`: like Transcript, these are read
         // beside the terminal rather than acted on, and popping the drawer shut after each

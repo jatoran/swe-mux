@@ -213,7 +213,7 @@ Two rules about matching are not conveniences:
 
 ## UI
 
-- **The `appr:` chip** (`ApprovalChip.tsx`), in the pane bar directly beside `tts:`. Both chips
+- **The `appr:` chip** (`ApprovalChip.tsx`), the pane bar's one remaining standing chip since the per-session `tts:` control moved into the voice panel's `tts` tab (`voice.md`). It
   answer the same class of question — what mux does for this session without being asked each
   time — so they belong in the same row at the same weight, and the pane bar is the one surface
   visible for as long as the pane is. A brake reachable only through an overlay is a brake
@@ -222,7 +222,7 @@ Two rules about matching are not conveniences:
   `n/a`) because it shares a bar with the session state, the path, and the tools; on a glance
   its only job is "is authority standing here", and every number, reason, and expiry lives in
   the drop-down. It reads the **effective** mode, so a lapsed or superseded grant shows `wait`.
-  Unlike `tts:` it does not cycle on click. The three positions are not a ladder you want to
+  It does not cycle on click. The three positions are not a ladder you want to
   pass *through* — `allow_all` is not a step on the way back to `wait` — so it opens a menu and
   each mode is chosen directly, with the reason a blocked mode is blocked shown under it.
   Rendered for every agent pane, **including ones where no mode can be selected** — a control

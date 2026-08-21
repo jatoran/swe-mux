@@ -24,9 +24,13 @@ type Library = {
   diagnostics: Array<{ path: string; error: string }>
 }
 
-export function PromptLibrary({ project, backend, onInsert, onClose }: {
+export function PromptLibrary({ project, backend, startCreating, onInsert, onClose }: {
   project?: Project
   backend?: ProjectBackend
+  /** Open straight on a blank template. The rail's Prompts drop-up arrives here
+   *  from "+ New", and landing on somebody else's template first would make the
+   *  one act it came to do a second click. */
+  startCreating?: boolean
   onInsert: (text: string) => void
   onClose: () => void
 }) {
@@ -34,7 +38,7 @@ export function PromptLibrary({ project, backend, onInsert, onClose }: {
   const [query, setQuery] = useState('')
   const [fleet, setFleet] = useState(false)
   const [selectedRef, setSelectedRef] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(!!startCreating)
   const [createNonce, setCreateNonce] = useState(0)
   const [variables, setVariables] = useState<Record<string, string>>({})
   const [confirmClose, setConfirmClose] = useState(false)
@@ -60,7 +64,9 @@ export function PromptLibrary({ project, backend, onInsert, onClose }: {
       })
       .catch(cause => { if (mine === generation.current) setNote(cause instanceof Error ? cause.message : String(cause)) })
   }
-  useEffect(() => { void load(); search.current?.focus() }, [project?.id, fleet])
+  // The search box is where a visit that came to *find* something starts; a visit
+  // that came to write one starts in the draft, so it keeps its own focus.
+  useEffect(() => { void load(); if (!startCreating) search.current?.focus() }, [project?.id, fleet])
   // A write from anywhere else (the drawer's inline editor, an Action pin) must
   // land here too, the same way this panel's own writes reach the drawer.
   useEffect(() => subscribeToPromptLibraryChanges(() => { void load() }), [project?.id, fleet])
