@@ -330,6 +330,103 @@ export const GroupIcon = () => <svg {...stroke}>
   <path d="M8 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" />
 </svg>
 
+// Context-menu marks. The Project and session right-click menus used to be pure text rows
+// under the terminal skin's one `> ` prefix, which says "this is a menu row" fifteen times
+// and distinguishes nothing — the same problem the app menu solved above, in the two menus
+// people open most. Each mark below names one act. They share the stroke weight of the set
+// above so a concept drawn in both places (history, notes, groups, settings) is one drawing.
+
+/** A pencil: rename the thing this menu is about. */
+export const RenameIcon = () => <svg {...stroke}>
+  <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z" />
+  <line x1="14.5" y1="6.5" x2="17.5" y2="9.5" />
+</svg>
+
+/** A bin: the thing is removed from swe-mux, not merely closed. */
+export const TrashIcon = () => <svg {...stroke}>
+  <path d="M4 7h16" />
+  <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  <path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
+  <line x1="10" y1="11" x2="10" y2="17" />
+  <line x1="14" y1="11" x2="14" y2="17" />
+</svg>
+
+/** An eye struck through: still registered, just not drawn in the sidebar. Deliberately not
+ *  the bin — hiding a Project loses nothing, and a mark that suggested otherwise would make
+ *  the safe act look like the destructive one directly below it. */
+export const HideIcon = () => <svg {...stroke}>
+  <path d="M2.5 12S6 5.5 12 5.5c1.6 0 3 .45 4.2 1.1M21.5 12S18 18.5 12 18.5c-1.6 0-3-.45-4.2-1.1" />
+  <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+  <line x1="3" y1="3" x2="21" y2="21" />
+</svg>
+
+/** A folder with an arrow leaving it: hand this directory to the OS file manager. */
+export const RevealIcon = () => <svg {...stroke}>
+  <path d="M3 8a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.7.9L11.5 9H19a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  <path d="M12 16v-4.5M12 11.5 9.8 13.7M12 11.5l2.2 2.2" />
+</svg>
+
+/** A tick: accept the request this session is holding. */
+export const CheckIcon = () => <svg {...stroke}>
+  <polyline points="4 12.5 9.5 18 20 6" />
+</svg>
+
+/** A shield struck through: stop standing in for the human on approvals here. */
+export const ShieldOffIcon = () => <svg {...stroke}>
+  <path d="M5.5 6.4 12 3.5l6.5 2.9v5.2c0 3.4-2.5 6.4-6.5 8-1.3-.5-2.4-1.2-3.3-2" />
+  <line x1="3" y1="3" x2="21" y2="21" />
+</svg>
+
+/** An envelope: the read/unread mark this session carries. */
+export const MailIcon = () => <svg {...stroke}>
+  <rect x="3" y="5" width="18" height="14" rx="2" />
+  <polyline points="3.5 7 12 13 20.5 7" />
+</svg>
+
+/** A play triangle over a fresh line: start this conversation again as a new session. */
+export const ResumeIcon = () => <svg {...stroke}>
+  <path d="m9 7 8 5-8 5z" />
+  <line x1="4" y1="4" x2="4" y2="20" />
+</svg>
+
+/** A small starburst: something the model generates rather than something you type. */
+export const SparkleIcon = () => <svg {...stroke}>
+  <path d="M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9z" />
+  <path d="M18.5 16.5 19.2 18.5 21 19.2 19.2 20 18.5 22 17.8 20 16 19.2 17.8 18.5z" />
+</svg>
+
+/** A circle with a slash: clear the standing mark, without ending anything. */
+export const ClearIcon = () => <svg {...stroke}>
+  <circle cx="12" cy="12" r="8.5" />
+  <line x1="6.5" y1="17.5" x2="17.5" y2="6.5" />
+</svg>
+
+/** The power glyph: end this process. Paired with `TrashIcon`, which the same control wears
+ *  once the session has already ended and only its row is left to remove. */
+export const PowerIcon = () => <svg {...stroke}>
+  <path d="M7.8 6.6a7.5 7.5 0 1 0 8.4 0" />
+  <line x1="12" y1="3" x2="12" y2="12" />
+</svg>
+
+/** A speaker with one wave: spoken replies for this session. */
+export const SpeakerIcon = () => <svg {...stroke}>
+  <path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z" />
+  <path d="M16 9.2a4 4 0 0 1 0 5.6" />
+</svg>
+
+/** The copy mark over a folder: copy the *path*, not the session's identifier. Split from
+ *  `CopyIcon` for the same reason `CopyInputIcon` was — the two sit adjacent in one menu. */
+export const CopyPathIcon = () => <svg {...stroke}>
+  <path d="M3 8a2 2 0 0 1 2-2h2.6a2 2 0 0 1 1.7.9L10.2 8H13a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  <rect x="11" y="11" width="10" height="10" rx="2" />
+</svg>
+
+/** A cross: back out of the confirmation this menu just opened. */
+export const CloseIcon = () => <svg {...stroke}>
+  <line x1="6" y1="6" x2="18" y2="18" />
+  <line x1="18" y1="6" x2="6" y2="18" />
+</svg>
+
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   actions: ActionsIcon,

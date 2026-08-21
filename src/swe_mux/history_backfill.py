@@ -11,7 +11,7 @@ from typing import Any
 from .git_projects import resolve_project
 from .history import HistoryIndex
 from .projects import ProjectManager
-from .reconcile import scan_external_transcripts, summarize_transcript
+from .reconcile import scan_external_transcripts_async, summarize_transcript
 
 
 def _normalized_path(value: str | Path) -> str:
@@ -140,8 +140,10 @@ class HistoryBackfillManager:
             def _progress(count: int) -> None:
                 job.scanned = count
 
-            transcripts = await asyncio.to_thread(
-                scan_external_transcripts,
+            # Through the async seam rather than a bare `to_thread`: `stop()`
+            # cancels this task, and only that seam turns the cancellation into
+            # something the walking worker thread can see.
+            transcripts = await scan_external_transcripts_async(
                 self.home,
                 limit=None,
                 roots=[project.root],
