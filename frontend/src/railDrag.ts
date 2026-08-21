@@ -38,9 +38,13 @@ export interface RailDragHost {
   setPreview: (state: RailDragPreview) => void
   commit: (next: RailConfig) => void
   /** Refuse a target for this item. A refused target previews (and drops) as
-   *  "off every row" rather than as an error. Scoped editors use this to keep a
-   *  project-owned action out of shared rows, where its id would not survive
-   *  the global write. */
+   *  "off every row" rather than as an error.
+   *
+   *  Nothing sets it today: the scoped editors used it to keep a project-owned
+   *  action out of shared rows, and a delta can now say "this project's, in that
+   *  shared row" outright (`commandRail.ts`, splices). The hook stays because the
+   *  refusal it implements — preview as off-every-row rather than as an error —
+   *  is the drag's own vocabulary, not the scope rule that happened to need it. */
   canDrop?: (target: RailDropTarget, itemId: string) => boolean
   /** Called once per drag session that activated; `committed` says whether a drop landed. */
   onEnd?: (committed: boolean) => void

@@ -726,6 +726,10 @@ export function App() {
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
   const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
+  // Whether this opening of the library lands on a blank template. It is a property
+  // of the *opening*, not of the panel, so it is cleared on close rather than read
+  // once — otherwise a later "Prompt library" would still arrive in create mode.
+  const [promptLibraryCreating,setPromptLibraryCreating]=useState(false)
   // The session whose branch point is being chosen. Held by id rather than by object
   // so a session update under the dialog cannot leave it rendering a stale snapshot,
   // and so the dialog closes by itself if that session disappears.
@@ -4994,8 +4998,11 @@ export function App() {
     // a resolved gesture has — and it makes the drawer reachable from the palette too.
     { id: SETTINGS_NAV_TOGGLE, label: 'Toggle Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(value => !value) },
     { id: SETTINGS_NAV_CLOSE, label: 'Close Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(false) },
-    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
-    { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
+    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryCreating(false);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
+    { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryCreating(false);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
+    // Scoped to the focused session's Project, because a template written from a
+    // pane is nearly always about the thing that pane is doing.
+    { id:'prompts.new',label:'New prompt template',category:'input',available:true,run:()=>{setPromptScope(projects.find(project=>project.id===active?.project_id)||null);setPromptTargetId(activeId);setPromptLibraryCreating(true);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'queue.fleet',label:'Open fleet queue (every session’s queued messages)',category:'input',available:true,run:()=>openFleetQueue() },
     { id:'queue.fleetProject',label:'Open fleet queue for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>commandProject&&openFleetQueue(commandProject.id) },
     // The emergency stop, reachable with nothing open. Its label names the act, not the
@@ -6802,7 +6809,7 @@ export function App() {
         onOpenHistoryEntry={historyId=>{if(mobileWorkspace)setClipboardOpen(false);showHistoryEntry(historyId)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
         onConfigureActions={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);openActionEditor()}}
-        onManagePrompts={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
+        onManagePrompts={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryCreating(false);setPromptLibraryOpen(true)}}
         onOpenFile={path=>{
           // The drag ghost's pointer-up also fires a click on the row it started from.
           if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}
@@ -6995,7 +7002,7 @@ export function App() {
           Rename and Kill. Same actions, same commands, one surface. */}
       {contextMenu.source==='pane'&&<>
         <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
-        <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
+        <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryCreating(false);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
         <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       </>}
       {/* No context menu touches tab order or pane geometry on any platform — not split,
@@ -7322,13 +7329,13 @@ export function App() {
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
-    {actionEditorOpen && <ActionEditorModal onClose={() => setActionEditorOpen(false)} />}
+    {actionEditorOpen && <ActionEditorModal projectId={active?.project_id || activeProject?.id} onClose={() => setActionEditorOpen(false)} />}
 
     {/* Resolved from the live list each render, so a session that ends or is removed
         under the dialog closes it instead of leaving it aimed at a pane that is gone. */}
     {(()=>{const target=branchPickerId?sessions.find(item=>item.id===branchPickerId):null
       return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
-    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
+    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 
     {resourcesOpen&&<ResourcesModal
       initial={resourcesOpen}

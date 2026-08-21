@@ -3,7 +3,7 @@ import type { JSX } from 'preact'
 import { api } from './api'
 import {
   allRailBackends, defaultRailConfig, isBuiltinRailId, railItemVisible, railPayload,
-  railProjectScopeKind,
+  railProjectScopeKind, railRowKey,
   RAIL_DEVICES, RAIL_SURFACES,
   type RailBackend, type RailBlob, type RailConfig, type RailDevice, type RailItem,
   type RailItemType, type RailRow, type RailSurface,
@@ -16,12 +16,14 @@ import {
 import { beginRailDrag, railRefKey, type RailDragHost, type RailDragPreview, type RailDragSource } from './railDrag'
 import {
   addProjectRailRow, addScopedRailItem, applyScopedRail, detachProjectRail,
-  removeScopedRailItem, toggleScopedPlacement,
+  hideScopedRailEntry, isProjectRailPlacement, removeScopedRailItem, toggleScopedPlacement,
+  unhideScopedRailEntry,
   type RailAddTarget, type ResolvedRail,
 } from './railScope'
+import { applyForkReattach, planForkReattach, type ForkReattachPlan } from './railReattach'
 import { clearProjectRail, currentProfile, currentRailBlob, loadResolvedRail, saveRailBlob } from './deviceSettings'
 import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
-import { fetchPromptTemplates, promptItemSummary } from './promptRail'
+import { fetchPromptTemplates, findPromptTemplate, promptItemSummary, railItemLabel } from './promptRail'
 import type { PromptTemplate } from './promptTemplates'
 import type { Project } from './types'
 
@@ -64,12 +66,18 @@ function introSeen(): boolean {
   try { return localStorage.getItem(INTRO_KEY) === '1' } catch { return true }
 }
 
-export function RailEditor() {
+export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}) {
   const backends = allRailBackends()
   const rootRef = useRef<HTMLElement>(null)
   // '' = the shared global config; a project id shows that project's effective
   // layout (shared rows + project additions, or its fork).
-  const [scope, setScope] = useState('')
+  //
+  // It opens on the Project the operator was in when they asked to configure, not
+  // on Global. Global is a superset in rows but a *subset* in what it can reach —
+  // a Project's own actions and prompt templates are only listable from its own
+  // scope — so defaulting to Global made the surface look like it had less in it
+  // than the rail the operator was standing next to.
+  const [scope, setScope] = useState(initialScope)
   const [projects, setProjects] = useState<Project[]>([])
   const [resolved, setResolved] = useState<ResolvedRail>(() => loadResolvedRail())
   const [prompts, setPrompts] = useState<PromptTemplate[]>([])
@@ -80,6 +88,9 @@ export function RailEditor() {
   const [catalogQuery, setCatalogQuery] = useState('')
   const [note, setNote] = useState('')
   const [showIntro, setShowIntro] = useState(() => !introSeen())
+  /** A computed fork→delta plan awaiting the operator's decision. Held rather than
+   *  applied on the click, because what it *cannot* carry is the part worth reading. */
+  const [reattach, setReattach] = useState<ForkReattachPlan | null>(null)
 
   const resolvedRef = useRef(resolved)
   resolvedRef.current = resolved
@@ -97,8 +108,12 @@ export function RailEditor() {
     return () => window.removeEventListener('mux:settings-changed', refresh)
   }, [scope])
   useEffect(() => { void api<Project[]>('GET', '/api/projects').then(setProjects).catch(() => {}) }, [])
-  // Prompt templates the rail can point at. Scoped like the config being edited, so
-  // a project's rail can carry that project's own templates as well as the global ones.
+  // Prompt templates the rail can point at, scoped like the layout being edited: a
+  // Project scope lists global plus that Project's own, and the Global scope lists
+  // global alone. The confinement is structural rather than a warning, because a
+  // Project template pinned to the shared layout is a button that inserts nothing
+  // in every other Project (`prompt-library.md`) — which is also why this editor
+  // *opens* on the Project the operator came from rather than on Global.
   useEffect(() => {
     void fetchPromptTemplates(scope || undefined).then(setPrompts).catch(() => setPrompts([]))
   }, [scope])
@@ -126,10 +141,10 @@ export function RailEditor() {
     config: () => resolvedRef.current.config,
     setPreview: setDrag,
     commit: commitConfig,
-    // A project-owned action may only occupy project rows: a shared row is
-    // written to the global scope, where the project item's id does not exist.
-    canDrop: (target, itemId) => !resolvedRef.current.projectItemIds.has(itemId)
-      || resolvedRef.current.projectRowIds.has(target.rowId),
+    // Every target is legal. A project-owned action dropped into a *shared* row
+    // used to be refused, because the row is written to the global scope where
+    // its id does not exist; a delta now records that placement as a splice
+    // instead, leaving the row's definition global (`railScope.ts`).
     onEnd: () => { dragEndedAt.current = performance.now() },
   }
   const startDrag = (event: JSX.TargetedPointerEvent<HTMLElement>, source: RailDragSource, label: string) => {
@@ -144,12 +159,26 @@ export function RailEditor() {
   const shown = drag.config || resolved.config
   const kind = scope ? resolved.kind : 'global'
   const projectName = scope ? (projects.find(project => project.id === scope)?.name || 'this project') : ''
+  /** Projects that hold something of their own. Recomputed with the resolution so
+   *  it follows an edit that creates or empties an override. */
+  const scopedProjects = useMemo(() => {
+    const blob = currentRailBlob()
+    return projects
+      .map(project => ({ name: project.name, kind: railProjectScopeKind(blob, project.id) }))
+      .filter(entry => entry.kind !== 'global')
+  }, [projects, resolved])
   const catalogById = useMemo(() => new Map(shown.items.map(item => [item.id, item])), [shown])
 
   const dismissIntro = () => {
     setShowIntro(false)
     try { localStorage.setItem(INTRO_KEY, '1') } catch { /* device preference is best effort */ }
   }
+
+  /** The name a prompt button carries when it has none of its own: the template's
+   *  live title, falling back to the stored label while the library is unread. */
+  const promptTitleOf = (item: RailItem): string =>
+    (item.promptKey ? findPromptTemplate(prompts, item.promptKey)?.title : '') || item.label
+  const chipLabel = (item: RailItem): string => railItemLabel(item, prompts)
 
   const itemMeta = (item: RailItem): string => {
     const builtin = isBuiltinRailId(item.id)
@@ -195,10 +224,7 @@ export function RailEditor() {
     const rows = config.layouts[ref.device][ref.surface]
     const rowIndex = rows.findIndex(row => row.id === ref.rowId)
     if (rowIndex < 0) return
-    const itemId = rows[rowIndex].items[ref.index]
-    const allowed = (rowId: string) => !resolved.projectItemIds.has(itemId) || resolved.projectRowIds.has(rowId)
     const move = (to: RailDropTarget) => {
-      if (!allowed(to.rowId)) return
       event.preventDefault()
       commitConfig(moveRailEntry(config, ref, to))
       // Follow the chip so a run of arrow presses keeps moving the same one.
@@ -233,33 +259,76 @@ export function RailEditor() {
     const ref: RailRef = { device, surface, rowId, index }
     const key = railRefKey(ref)
     const item = catalogById.get(itemId)
-    const label = item?.label || itemId
+    const label = item ? chipLabel(item) : itemId
     const filtered = !!previewBackend && !!item && !railItemVisible(item, previewBackend)
+    // In a shared row, whose chip is this? A project's own placement writes to the
+    // delta; the row's own entries write to global, which is every project.
+    const sharedRow = !resolved.projectRowIds.has(rowId)
+    const mine = sharedRow && kind === 'delta' && isProjectRailPlacement(resolved, device, surface, rowId, itemId)
+    const canHide = sharedRow && kind !== 'fork' && !!scope && !mine
+    const removeTitle = mine ? `Remove from ${projectName}’s copy of this row`
+      : sharedRow && !!scope ? 'Remove from the shared row — every project loses it'
+        : 'Remove from this row'
     return <div
       key={key}
-      class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}${filtered ? ' filtered' : ''}`}
+      class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}${filtered ? ' filtered' : ''}${mine ? ' project-owned' : ''}`}
       data-reorder-id={key}
       tabIndex={0}
       role="button"
-      title={`${label}${item ? ` — ${itemMeta(item)}` : ''}${filtered ? `\nHidden in ${previewBackend} sessions.` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
+      title={`${label}${item ? ` — ${itemMeta(item)}` : ''}${mine ? `\nOnly ${projectName} has it here.` : ''}${filtered ? `\nHidden in ${previewBackend} sessions.` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
       onPointerDown={event => startDrag(event, { kind: 'chip', ref }, label)}
       onKeyDown={event => onChipKey(event, ref)}
     >
       <span class="rail-chip-label">{label}</span>
+      {/* Hiding is the subtractive half of a splice, and it is a *separate* control
+          from × on purpose: × on a shared row still means what the origin tag says
+          it means — gone for everybody. */}
+      {canHide && <button
+        type="button"
+        class="rail-chip-hide"
+        tabIndex={-1}
+        aria-label={`Hide ${label} in ${projectName} only`}
+        title={`Hide it in ${projectName} only. The shared row keeps it for every other project.`}
+        onPointerDown={event => event.stopPropagation()}
+        onClick={() => commitBlob(hideScopedRailEntry(currentRailBlob(), scope, itemId, device, surface, rowId))}
+      >⊘</button>}
       <button
         type="button"
         class="rail-chip-remove"
         tabIndex={-1}
         aria-label={`Remove ${label} from this row`}
-        title="Remove from this row"
+        title={removeTitle}
         onPointerDown={event => event.stopPropagation()}
         onClick={() => commitConfig(removeRailEntry(resolved.config, ref))}
       >×</button>
     </div>
   }
 
+  /** A button this project hides, drawn where the shared row still holds it. It is
+   *  the only route back: a hidden entry is in no row, so nothing else could offer
+   *  to restore it. */
+  const renderGhost = (surface: RailSurface, rowId: string, entry: { item: string; index: number }) => {
+    const item = catalogById.get(entry.item)
+    const label = item ? chipLabel(item) : entry.item
+    return <div
+      key={`ghost:${rowId}:${entry.index}:${entry.item}`}
+      class="rail-chip ghost"
+      title={`${label} — hidden in ${projectName}. The shared row still has it for every other project.`}
+    >
+      <span class="rail-chip-label">{label}</span>
+      <button
+        type="button"
+        class="rail-chip-hide"
+        aria-label={`Show ${label} in ${projectName} again`}
+        title="Show it here again"
+        onClick={() => commitBlob(unhideScopedRailEntry(currentRailBlob(), scope, entry.item, device, surface, rowId))}
+      >+</button>
+    </div>
+  }
+
   const renderRow = (surface: RailSurface, row: RailRow, indexInGroup: number, group: RailRow[]) => {
     const projectRow = resolved.projectRowIds.has(row.id)
+    const hidden = resolved.hiddenEntries.get(railRowKey(device, surface, row.id)) || []
     return <article class={`rail-row-editor${projectRow ? ' project-owned' : ''}`} key={row.id}>
       <div class="rail-row-head">
         {scope && kind !== 'fork' && <span class={`rail-origin${projectRow ? ' project' : ''}`} title={projectRow ? `Only ${projectName} has this row` : 'Shared with every project — edits here change all of them'}>{projectRow ? 'this project' : 'shared'}</span>}
@@ -275,7 +344,8 @@ export function RailEditor() {
       </div>
       <div class="rail-chips" data-rail-row={rowKey(device, surface, row.id)} role="group" aria-label={`${DEVICE_LABEL[device]} ${SURFACE_LABEL[surface]} row ${indexInGroup + 1}`}>
         {row.items.map((itemId, index) => renderChip(surface, row.id, itemId, index))}
-        {!row.items.length && <span class="rail-chips-empty">drag actions here</span>}
+        {hidden.map(entry => renderGhost(surface, row.id, entry))}
+        {!row.items.length && !hidden.length && <span class="rail-chips-empty">drag actions here</span>}
       </div>
     </article>
   }
@@ -307,7 +377,7 @@ export function RailEditor() {
 
   const query = catalogQuery.trim().toLowerCase()
   const catalogItems = query
-    ? shown.items.filter(item => `${item.label} ${item.id} ${itemMeta(item)}`.toLowerCase().includes(query))
+    ? shown.items.filter(item => `${chipLabel(item)} ${item.id} ${itemMeta(item)}`.toLowerCase().includes(query))
     : shown.items
 
   const renderCatalogRow = (item: RailItem) => {
@@ -324,13 +394,13 @@ export function RailEditor() {
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        title={`${item.label || item.id} — ${meta}\nClick for placement and session options. Drag into a row above to place it exactly.`}
-        onPointerDown={event => startDrag(event, { kind: 'catalog', itemId: item.id }, item.label || item.id)}
+        title={`${chipLabel(item) || item.id} — ${meta}\nClick for placement and session options. Drag into a row above to place it exactly.`}
+        onPointerDown={event => startDrag(event, { kind: 'catalog', itemId: item.id }, chipLabel(item) || item.id)}
         onClick={() => { if (!justDragged()) setExpandedItem(expanded ? null : item.id) }}
         onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpandedItem(expanded ? null : item.id) } }}
       >
         <div class="rail-id">
-          <span class="rail-name">{item.label || item.id}{projectItem && <i class="rail-origin project" title={`Only ${projectName} has this action`}>this project</i>}</span>
+          <span class="rail-name">{chipLabel(item) || item.id}{projectItem && <i class="rail-origin project" title={`Only ${projectName} has this action`}>this project</i>}</span>
           <small class="rail-meta" title={meta}>{meta}</small>
         </div>
         <small class={`rail-placement-summary${placed ? '' : ' off'}`}>{placementSummary(item.id)}</small>
@@ -364,7 +434,21 @@ export function RailEditor() {
         </fieldset>
         {custom && <fieldset class="rail-detail-group rail-detail-edit">
           <legend>Edit</legend>
-          <label>Button label<input value={item.label} onChange={event => editCustomItem(item.id, { label: event.currentTarget.value.trim() || item.label })} /></label>
+          {/* A prompt button may have no name of its own: clearing the field hands
+              the name back to the template, and it then follows every rename.
+              Every other type needs a label, so an empty one is refused there. */}
+          <label>Button label<input
+            value={item.type === 'prompt' && item.autoLabel ? '' : item.label}
+            placeholder={item.type === 'prompt' ? promptTitleOf(item) : undefined}
+            title={item.type === 'prompt' ? 'Leave empty to use the template’s own title, which then follows it when the template is renamed' : undefined}
+            onChange={event => {
+              const typed = event.currentTarget.value.trim()
+              if (item.type !== 'prompt') { editCustomItem(item.id, { label: typed || item.label }); return }
+              editCustomItem(item.id, typed
+                ? { label: typed, autoLabel: false }
+                : { label: promptTitleOf(item), autoLabel: true })
+            }}
+          /></label>
           {item.type !== 'prompt' && <label>{item.type === 'text' ? 'Text to insert' : 'Name'}<input value={item.text || ''} onChange={event => editCustomItem(item.id, { text: event.currentTarget.value })} /></label>}
           {item.type !== 'prompt' && <label class="check"><input type="checkbox" checked={!!item.submit} onChange={event => editCustomItem(item.id, { submit: event.currentTarget.checked })} /><span>Press Enter after inserting</span></label>}
           <button
@@ -390,7 +474,7 @@ export function RailEditor() {
       <button type="button" onClick={dismissIntro}>Got it</button>
     </div>}
     <div class="rail-toolbar">
-      <label class="rail-scope">Editing<select value={scope} onChange={event => { setScope(event.currentTarget.value); setExpandedItem(null); setNote('') }}>
+      <label class="rail-scope">Editing<select value={scope} onChange={event => { setScope(event.currentTarget.value); setExpandedItem(null); setNote(''); setReattach(null) }}>
         <option value="">Global (all projects)</option>
         {projects.map(project => {
           const projectKind = railProjectScopeKind(currentRailBlob(), project.id)
@@ -410,6 +494,11 @@ export function RailEditor() {
         {backends.map(backend => <option value={backend}>{backend === 'shell' ? 'Shell' : harnessDisplayName(backend)}</option>)}
       </select></label>
       <span class="rail-toolbar-gap" />
+      {scope && kind === 'fork' && <button
+        type="button"
+        title="Work out how much of this detached copy the shared layout can carry, and reattach it so global edits reach this project again."
+        onClick={() => { setReattach(planForkReattach(currentRailBlob(), scope)); setNote('') }}
+      >Reattach to global…</button>}
       {scope && kind !== 'fork' && <button
         type="button"
         title="Freeze this project’s current layout as its own copy. It stops following global edits; “Use global layout” undoes it (dropping project changes)."
@@ -425,9 +514,47 @@ export function RailEditor() {
               : 'This project has nothing project-specific yet'}
       >{!scope ? 'Restore defaults' : kind === 'fork' ? 'Use global layout' : 'Remove project additions'}</button>
     </div>
+    {/* The default view is Global, where a project's own rows, actions, splices and
+        hides are simply not drawn — so a reader can look straight at "all actions"
+        and conclude the fleet has none of them. This names where the rest is. */}
+    {!scope && !!scopedProjects.length && <p class="rail-scope-note">
+      {scopedProjects.length} {scopedProjects.length === 1 ? 'Project has' : 'Projects have'} their own version of this
+      layout: {scopedProjects.map(entry => `${entry.name} (${entry.kind === 'fork' ? 'detached' : 'additions'})`).join(', ')}.
+      Pick one above to see and edit it.
+    </p>}
     {scope && <p class="rail-scope-note">{kind === 'fork'
       ? `${projectName} has a detached copy. Edits here change only this project.`
       : `Showing the shared layout${kind === 'delta' ? ` plus ${projectName}’s additions` : ''}. Edits to shared rows change every project; rows and actions marked “this project” stay here.`}</p>}
+
+    {reattach && <section class="rail-reattach" role="group" aria-label="Reattach this project to the shared layout">
+      <h5>Reattach {projectName} to the shared layout</h5>
+      <p>
+        {reattach.exact
+          ? 'The shared layout can carry this arrangement exactly. Nothing about the rail changes; what changes is that later shared edits reach this project again.'
+          : 'The shared layout carries most of this arrangement. What it cannot carry is listed below — read it before deciding.'}
+      </p>
+      <p class="rail-add-note">
+        Kept as this project’s own: {reattach.counts.items} action{reattach.counts.items === 1 ? '' : 's'},{' '}
+        {reattach.counts.rows} row{reattach.counts.rows === 1 ? '' : 's'},{' '}
+        {reattach.counts.splices} button{reattach.counts.splices === 1 ? '' : 's'} placed in shared rows,{' '}
+        {reattach.counts.hides} hidden from them.
+      </p>
+      {!!reattach.issues.length && <ul class="rail-reattach-issues">
+        {reattach.issues.map((issue, index) => <li key={`${issue.kind}-${index}`}><b>{issue.subject}</b> — {issue.detail}</li>)}
+      </ul>}
+      <div class="rail-reattach-actions">
+        <button
+          type="button"
+          class="primary"
+          onClick={() => {
+            commitBlob(applyForkReattach(currentRailBlob(), scope, reattach))
+            setReattach(null)
+            setNote(`${projectName} now follows the shared layout again, keeping its own additions.`)
+          }}
+        >Reattach</button>
+        <button type="button" onClick={() => setReattach(null)}>Keep it detached</button>
+      </div>
+    </section>}
 
     <div class="rail-device">
       {RAIL_SURFACES.map(surface => renderSurface(surface))}
@@ -437,6 +564,7 @@ export function RailEditor() {
       items={resolved.config.items}
       prompts={prompts}
       projectName={scope && kind !== 'fork' ? projectName : ''}
+      scopeName={projectName}
       onAdd={(item, target) => {
         commitBlob(addScopedRailItem(currentRailBlob(), scope || undefined, item, target))
         setNote(`Added “${item.label}” to the ${item.defaultSurface === 'strip' ? 'Rail' : 'Drawer'} on both devices.`)
@@ -470,11 +598,14 @@ type AddDraft = { type: RailItemType; name: string; label: string; submit: boole
  *  must remember to add twice is a button that never reaches the phone. In a
  *  project scope it can be added for that project alone (the default there) or
  *  for every project. */
-function RailAddForm({ items, prompts, projectName, onAdd }: {
+function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
   items: readonly RailItem[]
   prompts: PromptTemplate[]
   /** Non-empty enables the project-scope choice (named for the note). */
   projectName: string
+  /** The Project whose layout is open, forks included; '' for the global layout.
+   *  Only used to tell a template from somewhere else apart from one from here. */
+  scopeName: string
   onAdd: (item: RailItem, target: RailAddTarget) => void
 }) {
   const backends = allRailBackends()
@@ -501,10 +632,14 @@ function RailAddForm({ items, prompts, projectName, onAdd }: {
       // Templates declare their compatible backends; carry that through instead of
       // making the user re-pick it, but only when it is actually a restriction.
       const restricted = template.backends.length === backends.length ? undefined : [...template.backends]
+      // An empty label field means "call it what the template is called", which is
+      // a live answer rather than a copy taken now (`railItemLabel`).
+      const typed = draft.label.trim()
       onAdd({
         id: uniqueId(`custom:prompt:${template.id}`),
         type: 'prompt',
-        label: draft.label.trim() || template.title,
+        label: typed || template.title,
+        ...(typed ? {} : { autoLabel: true }),
         promptKey: template.key,
         defaultSurface: draft.surface,
         backends: restricted,
@@ -533,7 +668,9 @@ function RailAddForm({ items, prompts, projectName, onAdd }: {
       {draft.type === 'prompt'
         ? <label>Template<select value={draft.name} onChange={event => setDraft({ ...draft, name: event.currentTarget.value })}>
           <option value="">Choose a template…</option>
-          {prompts.map(template => <option value={template.key}>{template.favorite ? '★ ' : ''}{template.title}{template.scope === 'project' ? ' (project)' : ''}{template.variables.length ? ` · ${template.variables.length} field${template.variables.length === 1 ? '' : 's'}` : ''}</option>)}
+          {/* Every row says which library it is in, because a Project template
+              only resolves inside that Project and the title alone cannot say so. */}
+          {prompts.map(template => <option value={template.key}>{template.favorite ? '★ ' : ''}{template.title} · {template.scope === 'project' ? (template.project_name || 'project') : 'global'}{template.variables.length ? ` · ${template.variables.length} field${template.variables.length === 1 ? '' : 's'}` : ''}</option>)}
         </select></label>
         : <label>{draft.type === 'text' ? 'Text to insert' : 'Name'}<input value={draft.name} placeholder={draft.type === 'skill' ? 'commit' : draft.type === 'slash' ? 'new' : 'literal text'} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
       <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>
@@ -549,8 +686,15 @@ function RailAddForm({ items, prompts, projectName, onAdd }: {
       <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add action</button>
     </div>
     {draft.type === 'prompt' && <p class="rail-add-note">{prompts.length
-      ? 'A prompt button points at the template, so editing the template updates the button. It inserts without sending - templates with {{fields}} open Prompt templates in Actions to be filled in first.'
+      ? 'A prompt button points at the template, so editing the template updates the button - including its name, unless you give the button one here. It inserts without sending; templates with {{fields}} open Prompt templates in Actions to be filled in first.'
       : 'No prompt templates yet. Create one from Actions → Prompt templates → Manage, then it appears here.'}</p>}
+    {/* Why a Project's templates are absent here, said in place. Structural rather
+        than a warning, because the alternative is a button that inserts nothing in
+        every other Project (`prompt-library.md`). */}
+    {draft.type === 'prompt' && !scopeName && <p class="rail-add-note">
+      Only global templates are listed while the shared layout is open. A Project’s own templates
+      belong on that Project’s layout — pick it in “Editing” above.
+    </p>}
     <p class="rail-add-note">
       Tip: skills and prompt templates can also be pinned straight from their lists in the Actions tab.
       Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands

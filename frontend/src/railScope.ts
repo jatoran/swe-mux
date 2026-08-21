@@ -24,10 +24,11 @@
 
 import {
   isProjectRailDelta, newRailRowId, railConfigFromBlob, railItemVisible, railProjectScopeKind,
-  resolveDeltaScope, writeRailConfigBlob,
+  railRowKey, resolveDeltaScope, writeRailConfigBlob,
   RAIL_BLOB_VERSION, RAIL_DEVICES, RAIL_SURFACES,
-  type RailBlob, type RailConfig, type RailDevice, type RailItem, type RailProjectDelta,
-  type RailRow, type RailScopeKind, type RailSurface,
+  type RailBlob, type RailConfig, type RailDeltaMap, type RailDevice, type RailHide,
+  type RailHiddenEntry, type RailItem, type RailProjectDelta, type RailRow, type RailScopeKind,
+  type RailSplice, type RailSurface,
 } from './commandRail.ts'
 import { addRailCatalogItem, deleteRailCatalogItem, toggleRailPlacement } from './railLayout.ts'
 
@@ -39,9 +40,36 @@ export interface ResolvedRail {
   projectRowIds: ReadonlySet<string>
   /** Catalog item ids owned by the project delta; empty for global and fork. */
   projectItemIds: ReadonlySet<string>
+  /** What this project hides from each shared row, by `railRowKey`. The editors
+   *  render these as ghost chips, which is the only way back from a hide. */
+  hiddenEntries: ReadonlyMap<string, readonly RailHiddenEntry[]>
+  /** Ids this project placed into each shared row itself, by `railRowKey`. */
+  projectPlacements: ReadonlyMap<string, ReadonlySet<string>>
+}
+
+/**
+ * Is this entry of this shared row the project's own placement, or the row's
+ * definition?
+ *
+ * The one rule both the editors and `applyScopedRail` route by, and it answers
+ * from the *id* rather than the position — which is what lets an arbitrarily
+ * dragged-about row be split back apart afterwards. `resolveDeltaScope` enforces
+ * the one-owner-per-id rule that makes it exact.
+ */
+export function isProjectRailPlacement(
+  resolved: ResolvedRail,
+  device: RailDevice,
+  surface: RailSurface,
+  rowId: string,
+  itemId: string,
+): boolean {
+  return resolved.projectItemIds.has(itemId)
+    || !!resolved.projectPlacements.get(railRowKey(device, surface, rowId))?.has(itemId)
 }
 
 const EMPTY: ReadonlySet<string> = new Set()
+const EMPTY_HIDDEN: ReadonlyMap<string, readonly RailHiddenEntry[]> = new Map()
+const EMPTY_PLACEMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map()
 
 const projectDelta = (blob: RailBlob | undefined, projectId: string): RailProjectDelta | null => {
   const override = blob?.projects?.[projectId]
@@ -54,12 +82,16 @@ export function resolveRail(blob: RailBlob | undefined, projectId?: string): Res
   const kind = railProjectScopeKind(blob, projectId)
   if (kind === 'delta' && projectId) {
     const delta = projectDelta(blob, projectId)
-    if (delta) {
-      const { config, projectRowIds, projectItemIds } = resolveDeltaScope(railConfigFromBlob(blob), delta)
-      return { kind, config, projectRowIds, projectItemIds }
-    }
+    if (delta) return { kind, ...resolveDeltaScope(railConfigFromBlob(blob), delta) }
   }
-  return { kind, config: railConfigFromBlob(blob, projectId), projectRowIds: EMPTY, projectItemIds: EMPTY }
+  return {
+    kind,
+    config: railConfigFromBlob(blob, projectId),
+    projectRowIds: EMPTY,
+    projectItemIds: EMPTY,
+    hiddenEntries: EMPTY_HIDDEN,
+    projectPlacements: EMPTY_PLACEMENTS,
+  }
 }
 
 function writeDelta(blob: RailBlob | undefined, projectId: string, delta: RailProjectDelta | null): RailBlob {
@@ -69,22 +101,64 @@ function writeDelta(blob: RailBlob | undefined, projectId: string, delta: RailPr
   return { ...(blob || {}), version: RAIL_BLOB_VERSION, projects }
 }
 
-/** True when a delta carries nothing — no items and no rows with content. An
- *  empty project row is kept: it is the drop target the user just created. */
+/** True when a delta carries nothing — no items, no rows with content, and no
+ *  shared-row overlay. An empty project row is kept: it is the drop target the
+ *  user just created. */
 function deltaIsEmpty(delta: RailProjectDelta): boolean {
   if (delta.items?.length) return false
   for (const device of RAIL_DEVICES) {
     for (const surface of RAIL_SURFACES) {
       if (delta.layouts?.[device]?.[surface]?.length) return false
+      if (delta.splices?.[device]?.[surface]?.length) return false
+      if (delta.hides?.[device]?.[surface]?.length) return false
     }
   }
   return true
 }
 
 /**
+ * Split one edited **shared** row back into its global definition and this
+ * project's overlay.
+ *
+ * The classification is a rule rather than a diff, which is what makes it total:
+ * an entry is project-local exactly when the resolution said that id was this
+ * project's in this row. Everything else is the row's own definition and
+ * round-trips to global, so editing a shared row from a project view behaves
+ * precisely as it did before splices existed.
+ *
+ * The hidden occurrences are written back into the definition at the indices they
+ * held there — the project cannot see them, so it cannot have moved them, and
+ * dropping them would delete them for every project.
+ */
+function unresolveSharedRow(
+  edited: readonly string[],
+  hidden: readonly RailHiddenEntry[],
+  placements: ReadonlySet<string>,
+  projectItemIds: ReadonlySet<string>,
+  rowId: string,
+): { items: string[]; splices: RailSplice[]; hides: RailHide[] } {
+  const hiddenIds = new Set(hidden.map(entry => entry.item))
+  const isProjectLocal = (id: string) => projectItemIds.has(id) || placements.has(id)
+  const items: string[] = []
+  const splices: RailSplice[] = []
+  edited.forEach((id, index) => {
+    if (!isProjectLocal(id)) { items.push(id); return }
+    // The anchor is whatever the operator left this chip sitting behind, so a move
+    // is recorded as a new anchor rather than as an index that global will shift.
+    splices.push({ row: rowId, item: id, after: index > 0 ? edited[index - 1] : null })
+  })
+  for (const entry of [...hidden].sort((a, b) => a.index - b.index)) {
+    items.splice(Math.max(0, Math.min(entry.index, items.length)), 0, entry.item)
+  }
+  // A hide is (row, item) and takes every occurrence, so several hidden entries
+  // for one id collapse to the single record that produced them.
+  return { items, splices, hides: [...hiddenIds].map(item => ({ row: rowId, item })) }
+}
+
+/**
  * Write an edited effective config back to the blob, splitting by ownership.
  * `resolved` must be the resolution the edit was applied against — its ownership
- * sets are what route each row and item.
+ * sets, splice positions and hidden entries are what route each row and item.
  */
 export function applyScopedRail(
   blob: RailBlob | undefined,
@@ -99,18 +173,37 @@ export function applyScopedRail(
   const ownItems = next.items.filter(item => resolved.projectItemIds.has(item.id))
   const globalLayouts = {} as RailConfig['layouts']
   const deltaLayouts: RailProjectDelta['layouts'] = {}
+  const deltaSplices: RailProjectDelta['splices'] = {}
+  const deltaHides: RailProjectDelta['hides'] = {}
   for (const device of RAIL_DEVICES) {
     globalLayouts[device] = { strip: [], panel: [] }
     for (const surface of RAIL_SURFACES) {
       const shared: RailRow[] = []
       const own: RailRow[] = []
+      const splices: RailSplice[] = []
+      const hides: RailHide[] = []
       for (const row of next.layouts[device]?.[surface] || []) {
-        ;(resolved.projectRowIds.has(row.id) ? own : shared).push({ ...row, items: [...row.items] })
+        if (resolved.projectRowIds.has(row.id)) { own.push({ ...row, items: [...row.items] }); continue }
+        const key = railRowKey(device, surface, row.id)
+        const hidden = resolved.hiddenEntries.get(key) || []
+        const placements = resolved.projectPlacements.get(key) || EMPTY
+        const split = unresolveSharedRow(row.items, hidden, placements, resolved.projectItemIds, row.id)
+        shared.push({ ...row, items: split.items })
+        splices.push(...split.splices)
+        hides.push(...split.hides)
       }
       globalLayouts[device][surface] = shared
       if (own.length) {
         deltaLayouts[device] = deltaLayouts[device] || {}
         deltaLayouts[device]![surface] = own
+      }
+      if (splices.length) {
+        deltaSplices[device] = deltaSplices[device] || {}
+        deltaSplices[device]![surface] = splices
+      }
+      if (hides.length) {
+        deltaHides[device] = deltaHides[device] || {}
+        deltaHides[device]![surface] = hides
       }
     }
   }
@@ -118,6 +211,8 @@ export function applyScopedRail(
     mode: 'delta',
     ...(ownItems.length ? { items: ownItems } : {}),
     ...(Object.keys(deltaLayouts).length ? { layouts: deltaLayouts } : {}),
+    ...(Object.keys(deltaSplices).length ? { splices: deltaSplices } : {}),
+    ...(Object.keys(deltaHides).length ? { hides: deltaHides } : {}),
   }
   const withGlobal = writeRailConfigBlob(blob, { items: globalItems, layouts: globalLayouts })
   return writeDelta(withGlobal, projectId, deltaIsEmpty(delta) ? null : delta)
@@ -138,6 +233,81 @@ export function addProjectRailRow(
   deviceRows[surface] = [...(deviceRows[surface] || []), { id: newRailRowId(), ...(label ? { label } : {}), items: [] }]
   layouts[device] = deviceRows
   return writeDelta(blob, projectId, { ...current, layouts })
+}
+
+/** Replace one device/surface list inside a delta map, dropping the entry when
+ *  the list is empty so an undone overlay leaves nothing behind. */
+function writeDeltaRecords<T>(
+  map: RailDeltaMap<T> | undefined,
+  device: RailDevice,
+  surface: RailSurface,
+  records: T[],
+): RailDeltaMap<T> | undefined {
+  const next: RailDeltaMap<T> = { ...(map || {}) }
+  const forDevice = { ...(next[device] || {}) }
+  if (records.length) forDevice[surface] = records
+  else delete forDevice[surface]
+  if (Object.keys(forDevice).length) next[device] = forDevice
+  else delete next[device]
+  return Object.keys(next).length ? next : undefined
+}
+
+const deltaList = <T>(map: RailDeltaMap<T> | undefined, device: RailDevice, surface: RailSurface): T[] =>
+  [...(map?.[device]?.[surface] || [])]
+
+/**
+ * Hide one shared-row button in this project only.
+ *
+ * The subtractive mirror of a splice, and the thing that removes the other common
+ * reason to fork: without it, "everything shared except that one button" costs a
+ * detached copy that no later global improvement reaches. The shared row keeps the
+ * button for every other project, and unhiding restores it because the definition
+ * was never touched.
+ *
+ * Refused on a fork (which owns its rows outright and should just delete the
+ * entry) and creates the delta on a project that had no override yet.
+ */
+export function hideScopedRailEntry(
+  blob: RailBlob | undefined,
+  projectId: string,
+  itemId: string,
+  device: RailDevice,
+  surface: RailSurface,
+  rowId: string,
+): RailBlob {
+  if (railProjectScopeKind(blob, projectId) === 'fork') return blob || {}
+  const current = projectDelta(blob, projectId) || { mode: 'delta' as const }
+  const hides = deltaList(current.hides, device, surface)
+  if (hides.some(hide => hide.row === rowId && hide.item === itemId)) return blob || {}
+  hides.push({ row: rowId, item: itemId })
+  // A splice of the same id into the same row is what a project-local *move*
+  // looks like, so hiding an item the project already spliced back keeps both.
+  return writeDelta(blob, projectId, { ...current, hides: writeDeltaRecords(current.hides, device, surface, hides) })
+}
+
+/** Undo a hide: the shared row's own definition supplies the button again. */
+export function unhideScopedRailEntry(
+  blob: RailBlob | undefined,
+  projectId: string,
+  itemId: string,
+  device: RailDevice,
+  surface: RailSurface,
+  rowId: string,
+): RailBlob {
+  const current = projectDelta(blob, projectId)
+  if (!current) return blob || {}
+  const hides = deltaList(current.hides, device, surface).filter(hide => !(hide.row === rowId && hide.item === itemId))
+  // Any splice of that id into that row was the project-local move the hide made
+  // room for; without the hide it would render as a duplicate, so it goes too.
+  const splices = deltaList(current.splices, device, surface).filter(splice => !(splice.row === rowId && splice.item === itemId))
+  const next: RailProjectDelta = {
+    ...current,
+    hides: writeDeltaRecords(current.hides, device, surface, hides),
+    splices: writeDeltaRecords(current.splices, device, surface, splices),
+  }
+  if (!next.hides) delete next.hides
+  if (!next.splices) delete next.splices
+  return writeDelta(blob, projectId, deltaIsEmpty(next) ? null : next)
 }
 
 export type RailAddTarget = 'global' | 'project'
@@ -178,34 +348,44 @@ export function addScopedRailItem(
   return writeDelta(blob, projectId, { ...current, items, layouts })
 }
 
-/** Remove a custom item — wherever it lives — and every button pointing at it.
- *  Project rows the removal empties are pruned, so pinning and unpinning a
- *  project action leaves no stray delta behind and the project returns to plain
- *  inheritance. */
+/** Remove a custom item — wherever it lives — and every button pointing at it,
+ *  including the splices that placed it into shared rows. Project rows the
+ *  removal empties are pruned, so pinning and unpinning a project action leaves
+ *  no stray delta behind and the project returns to plain inheritance. */
 export function removeScopedRailItem(blob: RailBlob | undefined, projectId: string | undefined, itemId: string): RailBlob {
   const resolved = resolveRail(blob, projectId)
   if (projectId && resolved.projectItemIds.has(itemId)) {
     const current = projectDelta(blob, projectId)
     if (!current) return blob || {}
     const layouts: RailProjectDelta['layouts'] = {}
+    const splices: RailProjectDelta['splices'] = {}
     for (const device of RAIL_DEVICES) {
-      const deviceRows = current.layouts?.[device]
-      if (!deviceRows) continue
       for (const surface of RAIL_SURFACES) {
-        const rows = deviceRows[surface]
-        if (!rows) continue
-        const kept = rows
-          .map(row => ({ ...row, items: row.items.filter(id => id !== itemId) }))
-          .filter((row, index) => row.items.length || rows[index].items.every(id => id !== itemId))
-        if (!kept.length) continue
-        layouts[device] = layouts[device] || {}
-        layouts[device]![surface] = kept
+        const rows = current.layouts?.[device]?.[surface]
+        if (rows) {
+          const kept = rows
+            .map(row => ({ ...row, items: row.items.filter(id => id !== itemId) }))
+            .filter((row, index) => row.items.length || rows[index].items.every(id => id !== itemId))
+          if (kept.length) {
+            layouts[device] = layouts[device] || {}
+            layouts[device]![surface] = kept
+          }
+        }
+        // A splice naming a deleted action would resolve to nothing anyway; dropping
+        // it here is what keeps the delta from accumulating dead records.
+        const remaining = deltaList(current.splices, device, surface).filter(splice => splice.item !== itemId)
+        if (remaining.length) {
+          splices[device] = splices[device] || {}
+          splices[device]![surface] = remaining
+        }
       }
     }
     const delta: RailProjectDelta = {
       mode: 'delta',
       ...(current.items?.length ? { items: current.items.filter(item => item.id !== itemId) } : {}),
       ...(Object.keys(layouts).length ? { layouts } : {}),
+      ...(Object.keys(splices).length ? { splices } : {}),
+      ...(current.hides ? { hides: current.hides } : {}),
     }
     if (!delta.items?.length) delete delta.items
     return writeDelta(blob, projectId, deltaIsEmpty(delta) ? null : delta)
@@ -344,7 +524,11 @@ export function pinPrompt(blob: RailBlob | undefined, projectId: string | undefi
   const item: RailItem = {
     id: uniquePinId(effective, `pin:prompt:${pin.id}`),
     type: 'prompt',
+    // Nobody typed this name — the pin toggle takes no input — so it is the
+    // template's title and follows it. `autoLabel` is what says so; without it a
+    // rename would leave the button announcing the old name forever.
     label: pin.title,
+    autoLabel: true,
     promptKey: pin.key,
     defaultSurface: 'panel',
     ...(restricted ? { backends: restricted } : {}),

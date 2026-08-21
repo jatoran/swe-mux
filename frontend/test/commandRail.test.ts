@@ -28,7 +28,7 @@ test('the default layout seeds one row per surface, identical on both devices', 
 
 test('default rail groups editing helpers after Down and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
-    'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'skills', 'actionsDrawer', 'kbdToggle',
+    'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'skills', 'prompts', 'actionsDrawer', 'kbdToggle',
     'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down',
     'markdownDivider', 'markdownCodeFence', 'copyInput', 'ctrlU', 'restoreInput',
     'left', 'right', 'attach',
@@ -50,7 +50,7 @@ test('desktop and mobile layouts are edited independently', () => {
   config.layouts.mobile.strip[0].items = ['esc', 'enter']
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
-  assert.equal(ids(config, 'strip').length, 25)
+  assert.equal(ids(config, 'strip').length, 26)
 })
 
 test('an item placed in no row is simply absent from that device', () => {

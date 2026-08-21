@@ -39,18 +39,24 @@ function sameStyle(a: Record<string, string>, b: Record<string, string>): boolea
   return keys.length === Object.keys(a).length && keys.every(key => a[key] === b[key])
 }
 
+/** One entry in the sticky bar: a way out of the shortcut and into a full surface. */
+export type RailDropupAction = { label: string; title: string; run: () => void }
+
 type Props = {
   /** Accessible name for the dialog. */
   label: string
   /** The rail button this hangs from. */
   anchor: HTMLElement | null
   onClose: () => void
-  /** The sticky first row: the way out to the full surface this summarises. */
-  sticky: { label: string; title: string; run: () => void }
+  /** The sticky first row: the way out to the full surface this summarises. More
+   *  than one shares that row side by side, which is what keeps a second exit
+   *  (say, "new template") from costing a whole row of the five-row list. */
+  sticky: RailDropupAction | readonly RailDropupAction[]
   children: ComponentChildren
 }
 
 export function RailDropup({ label, anchor, onClose, sticky, children }: Props) {
+  const actions: readonly RailDropupAction[] = Array.isArray(sticky) ? sticky : [sticky as RailDropupAction]
   const root = useRef<HTMLDivElement>(null)
   const [style, setStyle] = useState<Record<string, string>>({})
 
@@ -111,9 +117,19 @@ export function RailDropup({ label, anchor, onClose, sticky, children }: Props) 
     onMouseDown={holdSoftKeyboard}
     onKeyDown={walk}
   >
-    <button type="button" class="rail-dropup-open" title={sticky.title} onClick={() => { onClose(); sticky.run() }}>
-      {sticky.label}
-    </button>
+    {actions.length === 1
+      ? <button type="button" class="rail-dropup-open" title={actions[0].title} onClick={() => { onClose(); actions[0].run() }}>
+        {actions[0].label}
+      </button>
+      : <div class="rail-dropup-sticky">
+        {actions.map(action => <button
+          key={action.label}
+          type="button"
+          class="rail-dropup-open"
+          title={action.title}
+          onClick={() => { onClose(); action.run() }}
+        >{action.label}</button>)}
+      </div>}
     <div class="rail-dropup-list">{children}</div>
   </div>
 }

@@ -55,9 +55,67 @@ export function promptItemSummary(item: RailItem, templates: PromptTemplate[] | 
   return findPromptTemplate(templates, item.promptKey)?.title || 'missing template'
 }
 
+/**
+ * What a button is called.
+ *
+ * For a prompt item pinned without a name of its own, that is the template's
+ * *live* title: the stored `label` was a snapshot taken at pin time, and a
+ * snapshot of a name is exactly the kind of copy this item type exists to avoid —
+ * the body is a pointer, so the name should be one too. Renaming a template
+ * therefore renames its buttons.
+ *
+ * A label somebody typed (`autoLabel` absent) is never overridden, and the stored
+ * copy remains the fallback while the library has not been read yet or the
+ * template has gone missing — the dangling case is reported when the button is
+ * *pressed*, where there is room to say which template it wanted.
+ */
+export function railItemLabel(item: RailItem, templates: PromptTemplate[] | null): string {
+  if (item.type !== 'prompt' || !item.autoLabel || !item.promptKey || !templates) return item.label
+  return findPromptTemplate(templates, item.promptKey)?.title || item.label
+}
+
+/** Read the library for one scope: global alone, or global plus that Project's own.
+ *
+ *  Deliberately never the widened management listing (`all_projects=1`). This is
+ *  the read an Action layout resolves a pin against, and confining it is what stops
+ *  a *global* layout pinning a Project template — a button that would insert
+ *  nothing in every other Project (`prompt-library.md`). */
 export function fetchPromptTemplates(projectId?: string): Promise<PromptTemplate[]> {
   const scope = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
   return api<PromptLibraryResponse>('GET', `/api/prompts${scope}`).then(library => library.items || [])
+}
+
+/** Record a use. Bounded library state, never the point of the click: a failure
+ *  to count must not read as a failed insert. */
+export function recordPromptUse(template: PromptTemplate, projectId?: string): void {
+  void api('POST', `/api/prompts/${template.scope}/${template.id}/use`, {
+    project_id: template.project_id || projectId,
+  }).catch(() => {})
+}
+
+/**
+ * Run one template against a session: insert it, or hand off to the fields UI.
+ *
+ * `insert` is how the text reaches the terminal. Inside the pane that is the
+ * pane's own handle; from the drawer it is the `mux:terminal-action` bus, which
+ * is the same thing one hop further out — either way the pane stays the single
+ * owner of terminal writes.
+ */
+export async function activatePromptTemplate(
+  template: PromptTemplate,
+  ctx: { projectId?: string; insert: (text: string) => void | Promise<void> },
+): Promise<PromptRailActivation> {
+  if (template.variables.length) {
+    window.dispatchEvent(new CustomEvent(PROMPT_RAIL_EVENT, { detail: { key: template.key } }))
+    return { status: 'fields' }
+  }
+  try {
+    await ctx.insert(template.body)
+  } catch (cause) {
+    return { status: 'error', message: cause instanceof Error ? cause.message : String(cause) }
+  }
+  recordPromptUse(template, ctx.projectId)
+  return { status: 'inserted' }
 }
 
 /** Run a prompt rail item, distinguishing insertion from a variable-field handoff. */
@@ -77,15 +135,12 @@ export async function activatePromptRailItem(
   // A template can be deleted, or its Project scope switched off, long after a rail
   // button was made. Say which button is dangling rather than failing silently.
   if (!template) return { status: 'error', message: `“${item.label}” points at a prompt template that is no longer available.` }
-  if (template.variables.length) {
-    window.dispatchEvent(new CustomEvent(PROMPT_RAIL_EVENT, { detail: { key } }))
-    return { status: 'fields' }
-  }
-  window.dispatchEvent(new CustomEvent('mux:terminal-action', {
-    detail: { sessionId: ctx.sessionId, action: 'insertText', text: template.body },
-  }))
-  // Recency/use counts are the library's own bounded state; a failure to record one
-  // must not look like a failed insert.
-  void api('POST', `/api/prompts/${template.scope}/${template.id}/use`, { project_id: ctx.projectId }).catch(() => {})
-  return { status: 'inserted' }
+  return activatePromptTemplate(template, {
+    projectId: ctx.projectId,
+    insert: text => {
+      window.dispatchEvent(new CustomEvent('mux:terminal-action', {
+        detail: { sessionId: ctx.sessionId, action: 'insertText', text },
+      }))
+    },
+  })
 }
