@@ -2927,6 +2927,13 @@ class SessionManager:
             "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
             "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
             "MUX_HOOK_SECRET": hook_secret,
+            # Where an injected extension publishes a runtime inventory (its live
+            # MCP tool list). Separate from the hook URL because it is not a
+            # lifecycle event: nothing about session status, history, or the
+            # prompt queue may depend on it, and routing it through hook ingress
+            # would put a drawer feature on the path Claude blocks a user's turn
+            # on. Same per-session secret, so it needs no second credential.
+            "MUX_RUNTIME_URL": f"{self.ingress_url}/api/sessions/{sid}/runtime-inventory",
             "MUX_MCP_URL": f"{self.ingress_url}/mcp",
             "MUX_MCP_TOKEN": mcp_token,
             **({"MUX_HOOK_SPOOL": hook_spool} if hook_spool is not None else {}),

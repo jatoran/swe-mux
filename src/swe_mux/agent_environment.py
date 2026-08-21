@@ -326,7 +326,15 @@ def _section(
     }
 
 
-def _safe_endpoint(raw: Any) -> str:
+def safe_endpoint(raw: Any) -> str:
+    """An MCP endpoint reduced to scheme, host, port, and path.
+
+    Userinfo, query string, and fragment are dropped rather than trimmed, because
+    every one of them is a place a bearer token is routinely parked. Public
+    because the tool-catalog fetch (`mcp_tools.py`) must sanitize the same values
+    by the same rule; a second implementation would eventually differ, and the
+    direction it would differ in is "leaks a credential".
+    """
     if not isinstance(raw, str) or not raw:
         return ""
     try:
@@ -396,7 +404,14 @@ def _runtime(backend: str, executable: str, args: list[str], model: str | None) 
     }
 
 
-def _probe_version(backend: str, executable: str, *, refresh: bool) -> str | None:
+def probe_cli_version(backend: str, executable: str, *, refresh: bool = False) -> str | None:
+    """The cached `--version` string for a harness binary.
+
+    Public because the CLI's identity is part of an MCP tool catalog's cache key
+    as well as of the inventory header: a CLI upgrade can change which servers a
+    session has and what they publish, and a fingerprint that ignored it would
+    keep serving the old catalog after the upgrade.
+    """
     name = Path(executable).name.casefold()
     if backend not in name:
         return None
@@ -931,14 +946,34 @@ def _omp_extension_hook_items(args: Sequence[str]) -> list[dict[str, Any]]:
     return items
 
 
-def _mcp_from_data(
+@dataclass(frozen=True, slots=True)
+class McpServerConfig:
+    """One configured MCP entry, with the raw configuration kept beside the row.
+
+    The row is what the drawer renders and is sanitized for it. `config` is the
+    unsanitized table the CLI itself would use - command, argv, environment,
+    URL, headers - and exists for exactly one caller: the explicit tool-catalog
+    fetch (`mcp_tools.py`), which cannot dial or fingerprint a server without it.
+    It is never serialized into an API response, and the fetch reduces it to a
+    one-way digest before anything is retained.
+    """
+
+    name: str
+    scope: Scope
+    origin: str
+    source_label: str
+    enabled: bool
+    config: dict[str, Any]
+
+
+def _mcp_entries_from_data(
     backend: Backend,
     data: dict[str, Any],
     source: ConfigSource,
     *,
     origin: str,
     cwd: Path,
-) -> list[dict[str, Any]]:
+) -> list[tuple[dict[str, Any], McpServerConfig]]:
     tables: list[tuple[dict[str, Any], Scope]] = []
     if backend == "claude":
         key = "mcpServers"
@@ -967,7 +1002,7 @@ def _mcp_from_data(
             )
             if matches and isinstance(project_servers, dict):
                 tables.append((project_servers, "local"))
-    items: list[dict[str, Any]] = []
+    entries: list[tuple[dict[str, Any], McpServerConfig]] = []
     for table, scope in tables:
         for server_name, raw in table.items():
             config = raw if isinstance(raw, dict) else {}
@@ -975,7 +1010,7 @@ def _mcp_from_data(
                 config.get("enabled", True) is not False
                 and config.get("disabled", False) is not True
             )
-            endpoint = _safe_endpoint(config.get("url"))
+            endpoint = safe_endpoint(config.get("url"))
             command = _command_name(config.get("command"))
             transport = (
                 "http"
@@ -995,19 +1030,31 @@ def _mcp_from_data(
                 meta.append(("Enabled tools", str(len(enabled_tools))))
             if isinstance(disabled_tools, list):
                 meta.append(("Disabled tools", str(len(disabled_tools))))
-            items.append(
-                _item(
-                    "mcp_server",
-                    str(server_name),
-                    scope=scope,
-                    origin=origin,
-                    state="configured" if enabled else "disabled",
-                    description="Configured passively; connection and tool health are not probed.",
-                    source=source,
-                    meta=meta,
+            entries.append(
+                (
+                    _item(
+                        "mcp_server",
+                        str(server_name),
+                        scope=scope,
+                        origin=origin,
+                        state="configured" if enabled else "disabled",
+                        description=(
+                            "Configured passively; connection and tool health are not probed."
+                        ),
+                        source=source,
+                        meta=meta,
+                    ),
+                    McpServerConfig(
+                        name=str(server_name),
+                        scope=scope,
+                        origin=origin,
+                        source_label=source.label,
+                        enabled=enabled,
+                        config=config,
+                    ),
                 )
             )
-    return items
+    return entries
 
 
 def _mcp_inventory(
@@ -1016,17 +1063,29 @@ def _mcp_inventory(
     sources: list[ConfigSource],
     plugin_roots: list[tuple[Path, str, Scope]],
     loaded_at: float,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, McpServerConfig]]:
+    """Rows in layer order, plus the *winning* configuration per server name.
+
+    Both come out of one walk because the shadowing rule that decides which row
+    reads `shadowed` is the same rule that decides which configuration a fetch
+    would actually dial. Two walks would eventually disagree, and the way they
+    would disagree is by probing a server the CLI does not use.
+    """
     items: list[dict[str, Any]] = []
     winners: dict[str, int] = {}
-    for source in sources:
-        found = _mcp_from_data(backend, source.data, source, origin=source.label, cwd=cwd)
-        for item in found:
+    configs: dict[str, McpServerConfig] = {}
+
+    def absorb(found: list[tuple[dict[str, Any], McpServerConfig]]) -> None:
+        for item, entry in found:
             key = item["name"].casefold()
             if key in winners and items[winners[key]]["state"] != "disabled":
                 items[winners[key]]["state"] = "shadowed"
             winners[key] = len(items)
+            configs[key] = entry
             items.append(item)
+
+    for source in sources:
+        absorb(_mcp_entries_from_data(backend, source.data, source, origin=source.label, cwd=cwd))
     for root, plugin_id, scope in plugin_roots:
         source = _load_source(
             root / ".mcp.json",
@@ -1037,15 +1096,36 @@ def _mcp_inventory(
         )
         if source.status == "ready":
             _source_once(sources, source)
-            for item in _mcp_from_data(
-                backend, source.data, source, origin=f"plugin: {plugin_id}", cwd=cwd
-            ):
-                key = item["name"].casefold()
-                if key in winners and items[winners[key]]["state"] != "disabled":
-                    items[winners[key]]["state"] = "shadowed"
-                winners[key] = len(items)
-                items.append(item)
-    return items
+            absorb(
+                _mcp_entries_from_data(
+                    backend, source.data, source, origin=f"plugin: {plugin_id}", cwd=cwd
+                )
+            )
+    return items, configs
+
+
+def resolve_mcp_servers(
+    *,
+    backend: str,
+    cwd: Path | str,
+    args: list[str],
+    loaded_at: float,
+) -> dict[str, McpServerConfig]:
+    """The configuration a fetch would dial, keyed by casefolded server name.
+
+    Deliberately a separate entry point rather than a field on the inventory
+    payload: the raw configuration carries the credentials the inventory exists
+    to keep out of a response, so it never travels with one. This runs the same
+    bounded source scan, which is cheap and already cached at the request layer.
+    """
+    resolved = require_backend(backend)
+    if not is_agent_harness(resolved):
+        raise ValueError("agent environment is available only for registered agent sessions")
+    root = Path(cwd).resolve()
+    sources = _config_sources(resolved, root, args, loaded_at)
+    _, plugin_roots = _plugin_inventory(resolved, root, sources, loaded_at)
+    _, configs = _mcp_inventory(resolved, root, sources, plugin_roots, loaded_at)
+    return configs
 
 
 def _markdown_agents(
@@ -1430,7 +1510,7 @@ def discover_agent_environment(
     # table; it leads the section because for OMP it is the section.
     if backend == "omp":
         hooks = _omp_extension_hook_items(args) + hooks
-    mcp_servers = _mcp_inventory(backend, root, sources, plugin_roots, loaded_at)
+    mcp_servers, _ = _mcp_inventory(backend, root, sources, plugin_roots, loaded_at)
     agents = _agent_inventory(backend, root, sources, plugin_roots, loaded_at)
     policies = _policy_inventory(backend, sources)
     features = _feature_inventory(backend, sources)
@@ -1438,7 +1518,7 @@ def discover_agent_environment(
     runtime = _runtime(backend, executable, args, model)
     runtime.update(
         {
-            "version": _probe_version(backend, executable, refresh=refresh),
+            "version": probe_cli_version(backend, executable, refresh=refresh),
             "loaded_at": loaded_at,
             "run_started_at": run_started_at,
         }
@@ -1485,7 +1565,9 @@ def discover_agent_environment(
                 mcp_servers,
                 "Passive inventory only. Opening this tab never starts servers or performs "
                 "authentication and therefore does not claim connection health or a complete "
-                "tool list.",
+                "tool list. A row the CLI would actually use can fetch its published tools on "
+                "request; that action is the only thing here that reaches a server, and its "
+                "result is labelled with the evidence it came from.",
             ),
             _section(
                 "plugins",

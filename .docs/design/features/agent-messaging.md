@@ -67,8 +67,15 @@ its own is the default and nothing widens implicitly.
   draft, and the requesting session idled unaware until a human pressed send. Its five bounds
   are stated there and are the pattern any later one must match - only the requester, only a
   fixed daemon-authored template, only the run that asked, capped per request, and off with the
-  authority that accepted the request. `watch_session` (`mux-mcp.md`) is the same shape and is
-  not yet wired in.
+  authority that accepted the request. The second user is the **settle-watch notice**
+  (`mux-mcp.md`): `watch_session` arms a read-only watch on a sibling and one fixed template
+  goes back to the session that armed it, named in `solicited_by` by the watch id. It matches
+  the pattern with four of the five bounds holding by construction - the tool has no recipient
+  argument, the body is a daemon template, an operator cannot arm a watch, and one watch
+  matures into exactly one notice - leaving the run binding and the feature's own
+  `session_watch_enabled` switch to be re-read when the notice is written. Nothing in the floor
+  knows what a land request or a watch is: it reads `solicited_by`, which is why the second
+  caller needed no second exception.
   Arming is still not delivery: an armed solicited reply waits for head-of-line order, delivery
   readiness, and the receiver's own auto-delivery grant like everything else, and refusing to
   arm one never refuses the message - it is enqueued as a draft a human can send.
