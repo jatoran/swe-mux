@@ -25,12 +25,16 @@ from .git_monitor import (
     COMMIT_RANGE_LIMIT,
     GitCommitChange,
     GitCommitMetadata,
+    parse_combined_changes,
     parse_raw_changes,
 )
 from .git_provenance import (
+    BRANCH_AUTHOR_RANK,
+    BRANCH_LINE_LIMIT,
     COMMIT_TIME_SLACK_SECONDS,
     COMMITTER_EXACT_RANK,
     CONTRIBUTOR_LOOKBACK_SECONDS,
+    MERGE_PARENT_READS,
     MONITOR_AUTHORSHIP_WINDOW_SECONDS,
     MONITOR_OBSERVED_RANK,
     candidate_writes,
@@ -38,7 +42,15 @@ from .git_provenance import (
     resolve_contributors,
 )
 from .harness import transcript_dialect
-from .history import HistoryIndex, canonical_worktree_root
+from .history import (
+    AUTHORING_ROLES,
+    ROLE_BRANCH_AUTHOR,
+    ROLE_COMMITTER,
+    ROLE_CONTRIBUTOR,
+    ROLE_INTEGRATOR,
+    HistoryIndex,
+    canonical_worktree_root,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +93,9 @@ _EMPTY_REPORT_COUNTS = (
     "records_planned",
     "records_written",
     "committer_records",
+    "integrator_records",
     "contributor_records",
+    "branch_author_records",
     "exact_records",
     "correlated_records",
     "ambiguous_records",
@@ -622,22 +636,32 @@ def _blob_digest(root: Path, blob: str) -> str | None:
     return hashlib.sha256(data).hexdigest() if data else None
 
 
-def _commit_changes(root: Path, oid: str) -> tuple[GitCommitChange, ...]:
+def _commit_changes(root: Path, oid: str, *, merge: bool = False) -> tuple[GitCommitChange, ...]:
+    """The files one commit is answerable for, by the same rule as the live path.
+
+    A merge is asked with `-c`, so it reports the conflict resolution its author
+    decided rather than either side's whole branch. Without that a merge reports
+    nothing, and every hour a session spent resolving a landing is invisible.
+    """
     result = _git(
         root,
         "diff-tree",
         "--no-commit-id",
+        *(("-c",) if merge else ()),
         "-r",
         "-z",
-        "--root",
-        "--find-renames",
+        *(() if merge else ("--root", "--find-renames")),
         "--no-ext-diff",
         "--no-textconv",
         "--raw",
         oid,
         timeout=20,
     )
-    return parse_raw_changes(result.stdout) if result.returncode == 0 else ()
+    if result.returncode:
+        return ()
+    return (
+        parse_combined_changes(result.stdout) if merge else parse_raw_changes(result.stdout)
+    )
 
 
 def _is_ancestor(catalog: dict[str, CommitObject], ancestor: str, commit: str) -> bool:
@@ -776,6 +800,7 @@ def _plan_repairs(
     # restored exactly the rows it should have kept withdrawn.
     first_seen: dict[str, dict[str, float]] = defaultdict(dict)
     committers: dict[str, set[str]] = defaultdict(set)
+    branch_authors: dict[str, set[str]] = defaultdict(set)
     for row in existing:
         oid = str(row.get("commit_oid") or "")
         if not oid:
@@ -787,8 +812,10 @@ def _plan_repairs(
             seen[root_key] = observed
         if row.get("retracted_at"):
             continue
-        if str(row.get("role") or "") == "committer" and not row.get("ambiguous"):
+        if str(row.get("role") or "") in AUTHORING_ROLES and not row.get("ambiguous"):
             committers[oid].add(str(row.get("session_id") or ""))
+        if str(row.get("role") or "") == ROLE_BRANCH_AUTHOR and not row.get("retracted_at"):
+            branch_authors[oid].add(str(row.get("session_id") or ""))
     for row in existing:
         if str(row.get("source") or "") != "git_monitor":
             continue
@@ -801,6 +828,14 @@ def _plan_repairs(
         previous = str(row.get("previous_head") or "")
         if oid not in catalog:
             stats["repair_commit_missing"] += 1
+            continue
+        if str(row.get("session_id") or "") in branch_authors.get(oid, set()):
+            # Not a bystander to this merge: this session wrote the branch the
+            # merge carries, and the branch-author pass is promoting this very
+            # row to say so. Both name one (session, run, checkout, commit) row,
+            # and a retraction is written last — so withdrawing it here would
+            # undo the promotion a moment after it landed.
+            stats["repair_branch_author"] += 1
             continue
         commit = catalog[oid]
         root = canonical_worktree_root(str(row.get("worktree_root") or project["root"]))
@@ -952,15 +987,25 @@ def _reattribute_committers(
         if not rooted:
             stats["reattribution_unrooted"] += 1
             continue
+        commit = catalog[oid]
+        # A merge commit's creator integrated it; a non-merge commit's creator
+        # wrote it. The same tool evidence answers both, and this pass is where a
+        # row recorded before the distinction existed is moved onto the right one
+        # — which is why the "already correct" test reads the role it is about to
+        # write rather than the word `committer`.
+        merge = len(commit.parents) > 1
+        role = ROLE_INTEGRATOR if merge else ROLE_COMMITTER
+        if merge and relationship == "created":
+            relationship = "merged"
         already = (
-            str(row.get("role") or "") == "committer"
+            str(row.get("role") or "") == role
+            and str(row.get("relationship") or "") == relationship
             and str(row.get("confidence") or "") == "exact"
             and not row.get("ambiguous")
         )
         if already:
             stats["reattribution_current"] += 1
             continue
-        commit = catalog[oid]
         records.append(
             {
                 "session_id": str(row.get("session_id") or ""),
@@ -983,12 +1028,140 @@ def _reattribute_committers(
                 "tool_call_id": row.get("tool_call_id"),
                 "evidence_rank": COMMITTER_EXACT_RANK,
                 "observed_at": row.get("observed_at") or commit.committed_at,
-                "role": "committer",
+                "role": role,
                 "match_method": "reattributed_ancestry",
                 "contributed_paths": row.get("contributed_paths") or (),
             }
         )
-        stats["reattributed"] += 1
+        stats["reattributed_integrator" if merge else "reattributed"] += 1
+    return records, stats
+
+
+def _branch_side(
+    catalog: dict[str, CommitObject], commit: CommitObject, *, limit: int = BRANCH_LINE_LIMIT
+) -> list[str]:
+    """The commits a merge's own side had that no other side did.
+
+    `git rev-list p0 ^p1...` answered from the catalog already in memory, so it
+    costs no subprocess. The first parent is the side deliberately: it is the
+    merge's own line of development, and for the landing shape this exists to fix
+    — `git merge master` run inside a branch's worktree — it is exactly that
+    branch's work.
+    """
+    if len(commit.parents) < 2:
+        return []
+    excluded: set[str] = set()
+    for parent in commit.parents[1:MERGE_PARENT_READS]:
+        excluded |= _ancestors(catalog, parent, limit=ANCESTRY_WALK_LIMIT * 10)
+    side: list[str] = []
+    queue = [commit.parents[0]]
+    seen: set[str] = set()
+    while queue and len(side) < limit:
+        current = queue.pop(0)
+        if not current or current in seen or current in excluded:
+            continue
+        seen.add(current)
+        node = catalog.get(current)
+        if node is None:
+            continue
+        side.append(current)
+        queue.extend(node.parents)
+    return side
+
+
+def _plan_branch_authors(
+    project: dict[str, str], existing: list[dict[str, Any]], catalog: dict[str, CommitObject]
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Name, on every merge commit, the sessions whose branch it unified.
+
+    Purely a re-reading of the ledger's own answers: git says which commits the
+    merge's side had, and the rows already written say whose those are. It adds no
+    path claim and no confidence of its own — a session that appears here appears
+    because it is already recorded as having committed or contributed to a commit
+    the merge carries.
+
+    Occupancy is excluded, because "had the checkout open" is not authorship of a
+    branch; ambiguous and retracted rows are excluded, because a claim that was
+    not an answer for the commit it was written about does not become one here.
+    """
+    stats: Counter[str] = Counter()
+    rank = {"exact": 2, "correlated": 1, "ambiguous": 0}
+    authors: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    merges: dict[str, tuple[str, CommitObject]] = {}
+    for row in existing:
+        oid = str(row.get("commit_oid") or "")
+        commit = catalog.get(oid)
+        if commit is None:
+            continue
+        role = str(row.get("role") or "")
+        if len(commit.parents) > 1 and role in AUTHORING_ROLES and not row.get("retracted_at"):
+            merges.setdefault(
+                oid, (canonical_worktree_root(str(row.get("worktree_root") or "")), commit)
+            )
+        if row.get("retracted_at") or row.get("ambiguous"):
+            continue
+        if role not in AUTHORING_ROLES and role != ROLE_CONTRIBUTOR:
+            continue
+        session_id = str(row.get("session_id") or "")
+        if not session_id:
+            continue
+        confidence = str(row.get("confidence") or "correlated")
+        entry = authors[oid].get(session_id)
+        if entry is not None and rank.get(confidence, 0) <= rank.get(
+            str(entry["confidence"]), 0
+        ):
+            continue
+        authors[oid][session_id] = {
+            "session_name": str(row.get("session_name") or ""),
+            "agent_run_id": str(row.get("agent_run_id") or ""),
+            "confidence": confidence,
+        }
+    integrators: dict[str, set[str]] = defaultdict(set)
+    for row in existing:
+        if str(row.get("role") or "") == ROLE_INTEGRATOR and not row.get("retracted_at"):
+            integrators[str(row.get("commit_oid") or "")].add(str(row.get("session_id") or ""))
+    records: list[dict[str, Any]] = []
+    for oid, (root, commit) in merges.items():
+        side = _branch_side(catalog, commit)
+        if not side:
+            stats["branch_side_empty"] += 1
+            continue
+        credited: dict[str, dict[str, Any]] = {}
+        for node in side:
+            for session_id, entry in authors.get(node, {}).items():
+                held = credited.get(session_id)
+                if held is None or rank.get(str(entry["confidence"]), 0) > rank.get(
+                    str(held["confidence"]), 0
+                ):
+                    credited[session_id] = entry
+        for session_id, entry in credited.items():
+            if session_id in integrators.get(oid, set()):
+                # The session that ran the merge already holds the stronger row.
+                continue
+            records.append(
+                {
+                    "session_id": session_id,
+                    "session_name": entry["session_name"] or session_id,
+                    "agent_run_id": entry["agent_run_id"],
+                    "project_id": project["id"],
+                    "worktree_root": root or project["root"],
+                    "commit_oid": oid,
+                    "parent_oids": commit.parents,
+                    "subject": commit.subject,
+                    "committed_at": commit.committed_at,
+                    "previous_head": commit.parents[0],
+                    "relationship": "authored_branch",
+                    "confidence": entry["confidence"],
+                    "ambiguous": False,
+                    "source": "ledger_branch_line",
+                    "evidence_rank": BRANCH_AUTHOR_RANK,
+                    "observed_at": commit.committed_at,
+                    "role": ROLE_BRANCH_AUTHOR,
+                    "match_method": "merge_branch_line",
+                    "contributed_paths": (),
+                }
+            )
+            stats["branch_author"] += 1
     return records, stats
 
 
@@ -1016,16 +1189,23 @@ def _plan_contributors(
             if not root.is_dir():
                 stats["contributor_root_missing"] += 1
                 continue
-        changes = _commit_changes(root, commit.oid)
+        merge = len(commit.parents) > 1
+        changes = _commit_changes(root, commit.oid, merge=merge)
         if not changes:
             stats["contributor_no_changes"] += 1
             continue
         floor = commit.committed_at - CONTRIBUTOR_LOOKBACK_SECONDS
         # The parent commit's time is the real floor: work committed before it is
         # in that commit, not this one. The lookback bounds the case where the
-        # parent is unreadable (a root commit, a shallow clone).
-        parent = catalog.get(commit.parents[0]) if commit.parents else None
-        since = max(floor, parent.committed_at) if parent else floor
+        # parent is unreadable (a root commit, a shallow clone). A merge takes the
+        # newest parent, because every side already existed when its conflicts
+        # were resolved.
+        parents = [
+            found
+            for parent in commit.parents[:MERGE_PARENT_READS]
+            if (found := catalog.get(parent)) is not None
+        ]
+        since = max([floor, *(parent.committed_at for parent in parents)])
         window = [
             fact
             for fact in inputs.write_facts
@@ -1076,7 +1256,7 @@ def _plan_contributors(
                     "source": "tier0_write",
                     "evidence_rank": contributor.evidence_rank,
                     "observed_at": commit.committed_at,
-                    "role": "contributor",
+                    "role": ROLE_CONTRIBUTOR,
                     "match_method": contributor.method,
                     "contributed_paths": contributor.paths,
                 }
@@ -1198,6 +1378,13 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
         relationship = "rewrote" if re.search(
             r"(?:^|\s)--amend(?:\s|$)", item.call.command
         ) else "created"
+        # The same split the live path makes, on the same fact: a commit with two
+        # parents was merged rather than written. An import that called it
+        # `committer` would re-introduce, from history, exactly the claim the live
+        # capture no longer makes.
+        merge = len(item.commit.parents) > 1
+        if merge and relationship == "created":
+            relationship = "merged"
         records.append(
             {
                 "session_id": item.session_id,
@@ -1227,7 +1414,7 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
                 "tool_call_id": item.call.call_id,
                 "evidence_rank": item.evidence_rank,
                 "observed_at": item.call.observed_at or item.commit.committed_at,
-                "role": "committer",
+                "role": ROLE_INTEGRATOR if merge else ROLE_COMMITTER,
                 "match_method": f"transcript_{item.method}",
             }
         )
@@ -1258,11 +1445,29 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
     records.extend(contributor_records)
     stats.update(contributor_stats)
 
-    # Pass four: reclassify the occupancy the monitor recorded before it could
+    # Pass four: name the branch each merge commit unified. It reads what the
+    # earlier passes decided — a merge reclassified to an integration in pass two,
+    # and a branch commit whose only evidence is a contributor row from pass
+    # three, are both inputs here.
+    branch_records, branch_stats = _plan_branch_authors(
+        project, [*inputs.existing, *records], catalog
+    )
+    records.extend(branch_records)
+    stats.update(branch_stats)
+
+    # Pass five: reclassify the occupancy the monitor recorded before it could
     # tell a commit being written from a commit arriving. This is the only pass
     # that *withdraws* rows, and it withdraws exactly two kinds: a session that
     # merely had a checkout open when someone else's work landed in it, and a
     # bystander to a commit whose author is already known.
+    #
+    # It runs *after* branch authorship on purpose, and is handed those records.
+    # A retraction is written last and names a row id, while a branch-author
+    # record promotes the very same (session, run, checkout, commit) row — so
+    # planning the withdrawal from a snapshot without them withdrew the promotion
+    # a moment after it landed. Measured on this repository's own ledger: the
+    # voice-dock landing named its branch's agent and then immediately retracted
+    # it as a bystander to the merge it wrote the branch for.
     promotions, moves, retractions, restorations, repair_stats = _plan_repairs(
         project, [*inputs.existing, *records], catalog
     )
@@ -1284,8 +1489,12 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
         "exact_records": sum(record["confidence"] == "exact" for record in records),
         "correlated_records": sum(record["confidence"] == "correlated" for record in records),
         "ambiguous_records": sum(record["confidence"] == "ambiguous" for record in records),
-        "committer_records": sum(record["role"] == "committer" for record in records),
-        "contributor_records": sum(record["role"] == "contributor" for record in records),
+        "committer_records": sum(record["role"] == ROLE_COMMITTER for record in records),
+        "integrator_records": sum(record["role"] == ROLE_INTEGRATOR for record in records),
+        "contributor_records": sum(record["role"] == ROLE_CONTRIBUTOR for record in records),
+        "branch_author_records": sum(
+            record["role"] == ROLE_BRANCH_AUTHOR for record in records
+        ),
         "ref_moves_planned": len(moves),
         "retractions_planned": len(retractions),
         "restorations_planned": len(restorations),
@@ -1349,15 +1558,17 @@ async def _backfill_project(
             history.close()
     log.info(
         "git provenance backfill project project_id=%s dry_run=%s commands=%d planned=%d "
-        "written=%d committer=%d contributor=%d exact=%d correlated=%d ambiguous=%d "
-        "moves=%d retracted=%d",
+        "written=%d committer=%d integrator=%d contributor=%d branch_author=%d "
+        "exact=%d correlated=%d ambiguous=%d moves=%d retracted=%d",
         inputs.project["id"],
         not apply,
         report["commands"],
         report["records_planned"],
         report["records_written"],
         report["committer_records"],
+        report["integrator_records"],
         report["contributor_records"],
+        report["branch_author_records"],
         report["exact_records"],
         report["correlated_records"],
         report["ambiguous_records"],
@@ -1396,7 +1607,11 @@ async def backfill_git_provenance(
             "records_planned": sum(item["records_planned"] for item in reports),
             "records_written": sum(item["records_written"] for item in reports),
             "committer_records": sum(item["committer_records"] for item in reports),
+            "integrator_records": sum(item["integrator_records"] for item in reports),
             "contributor_records": sum(item["contributor_records"] for item in reports),
+            "branch_author_records": sum(
+                item["branch_author_records"] for item in reports
+            ),
             "exact_records": sum(item["exact_records"] for item in reports),
             "correlated_records": sum(item["correlated_records"] for item in reports),
             "ambiguous_records": sum(item["ambiguous_records"] for item in reports),

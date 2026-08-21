@@ -1674,8 +1674,10 @@ Each item is additionally decorated on read with `display_name`, the session's c
 The stored `session_name` is left untouched: it is evidence of what the session was called at capture time, while `display_name` is what it is called now.
 `history_id` is absent when neither a live session nor a History row exists, so a caller can tell "no conversation to open" from one it could open.
 Rows are newest-first by their first observation time.
-`commits` rolls the same rows up per commit into `{commit_oid, subject, committed_at, worktree_root, committer, contributors[], attribution}`, so a reader gets who made a commit and whose work is in it without a second request.
-`attribution` is `exact` when a committer was isolated, `correlated` when only contributions or occupancy are known, and `ambiguous` for a commit whose work mux never observed.
+`commits` rolls the same rows up per commit into `{commit_oid, subject, committed_at, worktree_root, committer, integrator, branch_authors[], contributors[], attribution}`, so a reader gets who made a commit and whose work is in it without a second request.
+`committer` and `integrator` are mutually exclusive and at most one is present: a commit either continues a line of development or unifies two, and a merge commit's creator merged it rather than wrote it.
+`branch_authors` is empty except on a merge commit, where it names the sessions the ledger already credits for the commits the merge's own side had - so a landing reads as one session merging and another having written the branch, instead of crediting the merger with both.
+`attribution` is `exact` when a committer or integrator was isolated, `correlated` when only contributions, branch authorship, or occupancy are known, and `ambiguous` for a commit whose work mux never observed.
 `items` stays one row per session per commit because that is what each piece of evidence is about; the set is assembled for the reader rather than denormalized into every row.
 Retracted rows are absent from `items` and from the rollup: a withdrawn row is evidence the ledger no longer stands behind, and a reader asking who made a commit must not be handed one.
 `ref_moves` carries `{id, project_id, worktree_root, commit_oid, previous_head, kind, commit_count, authored_count, subject, committed_at, observed_at}` for the checkout reference movements in scope, newest first.

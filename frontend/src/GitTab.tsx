@@ -474,7 +474,12 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         return <article key={group.commitOid}>
           <div><strong>{shortSha(group.commitOid)}</strong><span>{group.subject||'Commit observed without readable metadata'}</span></div>
           {group.committer&&claim(group.committer)}
-          {group.contributors.map(claim)}
+          {/* A landing merge names two sessions in two roles: the one that ran
+              the merge, and the one whose branch it carries. Both are true, and
+              drawing only the first is what made a land read as authorship. */}
+          {group.integrator&&claim(group.integrator)}
+          {group.branchAuthors.map(claim)}
+          {group.contributors.filter(item=>item.id!==group.integrator?.id).map(claim)}
           {group.observers.length>0&&<p class="git-provenance-occupancy"><span class="git-provenance-role observer">{occupancyLabel(group)}</span>{group.observers.slice(0,6).map(item=>provenanceSessionButton(item))}{group.observers.length>6&&<small>{`+${group.observers.length-6} more`}</small>}</p>}
           <small>{group.worktreeRoot} · observed {new Date(group.observedAt*1000).toLocaleString()}</small>
         </article>

@@ -305,13 +305,120 @@ def parse_raw_changes(
     return tuple(changes)
 
 
+def parse_combined_changes(
+    output: str, *, limit: int = COMMIT_CHANGE_LIMIT
+) -> tuple[GitCommitChange, ...]:
+    """Parse `diff-tree -c --raw -z` into the files a merge itself decided.
+
+    The combined raw format is not the ordinary one and cannot be read by the same
+    expression: it carries one leading colon *per parent*, then N+1 modes, then
+    N+1 object ids, then one status letter per parent. Reading it with the
+    single-parent regex silently yields nothing, which would look exactly like the
+    "a merge changed no files" answer this exists to replace.
+
+    The last object id is the merge's own post-image, which is the blob a write
+    fact can be compared against. Renames are absent by construction — `-c` does
+    not detect them — so every record carries exactly one path.
+    """
+    changes: list[GitCommitChange] = []
+    tokens = output.split("\0")
+    index = 0
+    while index + 1 < len(tokens) and len(changes) < limit:
+        record = tokens[index].strip()
+        index += 1
+        if not record.startswith(":"):
+            continue
+        parents = len(record) - len(record.lstrip(":"))
+        fields = record.split()
+        # 1 mode-with-colons + N further modes + N+1 object ids + 1 status run.
+        if parents < 2 or len(fields) != 2 * parents + 3:
+            continue
+        status = fields[-1]
+        blob = fields[-2]
+        if len(status) != parents or not status.isalpha() or not status.isupper():
+            continue
+        path = tokens[index]
+        index += 1
+        if not path:
+            continue
+        changes.append(
+            GitCommitChange(
+                path=path,
+                status=status,
+                blob=None if _EMPTY_OID.fullmatch(blob) else blob.lower(),
+            )
+        )
+    return tuple(changes)
+
+
+async def read_merge_resolution_changes(
+    cwd: str, oid: str, *, limit: int = COMMIT_CHANGE_LIMIT
+) -> tuple[GitCommitChange, ...]:
+    """Files a merge commit holds that match **none** of its parents.
+
+    This is `git diff-tree -c`, and the choice of `-c` over `-m`/`--first-parent`
+    is the whole scoping rule. A first-parent diff of a landing merge is every
+    change the trunk brought in, and a `-m` diff is that plus the entire branch —
+    so either one would attribute the whole of one session's branch to whoever ran
+    the merge. The combined diff lists exactly the paths the merge *resolved*: a
+    file taken wholesale from either side never appears in it, and a file whose
+    conflict someone settled by hand always does.
+    """
+    if not _FULL_OID.fullmatch(oid):
+        return ()
+    code, output = await _git(
+        cwd,
+        "diff-tree",
+        "--no-commit-id",
+        "-c",
+        "-r",
+        "-z",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--raw",
+        oid,
+    )
+    if code:
+        return ()
+    return parse_combined_changes(output, limit=limit)
+
+
+async def read_excluded_range(
+    cwd: str, include: str, exclude: tuple[str, ...], *, limit: int = COMMIT_RANGE_LIMIT
+) -> tuple[str, ...]:
+    """Commits reachable from `include` and from none of `exclude`, newest first.
+
+    `git rev-list include ^e1 ^e2`. For a merge commit this answers "what did this
+    side have that the other side did not", which is the branch a merge unified
+    rather than the history under it.
+    """
+    if not _FULL_OID.fullmatch(include) or any(
+        not _FULL_OID.fullmatch(item) for item in exclude
+    ):
+        return ()
+    code, output = await _git(
+        cwd,
+        "rev-list",
+        f"--max-count={max(1, limit)}",
+        include,
+        *(f"^{item}" for item in exclude),
+    )
+    if code:
+        return ()
+    return tuple(
+        line.strip().lower() for line in output.splitlines() if _FULL_OID.fullmatch(line.strip())
+    )
+
+
 async def read_commit_changes(
     cwd: str, oid: str, *, limit: int = COMMIT_CHANGE_LIMIT
 ) -> tuple[GitCommitChange, ...]:
     """Files one commit changed against its first parent, post-image objects.
 
     A merge produces no output here by design: `diff-tree` without `-c`/`-m` says
-    nothing about a merge, and a merge is not work any session wrote.
+    nothing about a merge. That is right for this question — none of these bytes
+    are a merge's own decision — and `read_merge_resolution_changes` asks the
+    question a merge *does* have an answer to.
     """
     if not _FULL_OID.fullmatch(oid):
         return ()
