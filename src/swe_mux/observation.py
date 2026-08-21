@@ -296,6 +296,10 @@ def _event_timestamp(event: dict[str, Any]) -> float | None:
     return None
 
 
+#: Bound on a normalized tool target. The same bound Tier 0's `target` column
+#: applies, kept here so the digest that survives truncation is computed against
+#: the exact limit that caused it.
+TOOL_TARGET_LIMIT = 512
 _TOOL_TARGET_FIELDS = (
     "file_path",
     "path",
@@ -364,12 +368,34 @@ def _patch_apply_evidence(
     return target, content_hash
 
 
-def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
-    """Extract a normalized target and a parse-time content hash from a tool call.
+def _target_digest(raw: str) -> str | None:
+    """A discriminator for a target the stored column cannot hold whole.
+
+    A `target` is bounded to `TOOL_TARGET_LIMIT` characters, and a long shell
+    command is exactly the case where the *prefix* is the shared part: three
+    iterations of the same heredoc-written probe script agree for 512 characters
+    and differ only after it. The truncated prefix therefore collapses distinct
+    actions onto one fingerprint (observed live, 2026-08-21: 227 command facts in
+    one day sat at exactly the bound). This digest of the untruncated text is
+    what keeps them apart, and it is computed here because this is the last place
+    the whole string exists — the event payload carries the bounded copy.
+
+    None when nothing was lost, so an untruncated target keeps a fingerprint that
+    depends on the target alone.
+    """
+    if len(raw) <= TOOL_TARGET_LIMIT:
+        return None
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None, str | None]:
+    """Normalized target, parse-time content hash, and full-target digest.
 
     Runs at the adapter boundary while the native input is still in hand, so the
     hash is of the exact bytes the agent wrote — race-free, unlike reading the
     file back off disk after the event has queued. Native shapes never leave here.
+    The third element is the discriminator for a target too long to store whole
+    (`_target_digest`), and is None whenever the target survived intact.
     """
     if isinstance(tool_input, str):
         raw_text = tool_input
@@ -383,14 +409,17 @@ def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
             content = (
                 hashlib.sha256(raw_text.encode("utf-8")).hexdigest() if raw_text else None
             )
-            return patched, content
+            return patched, content, None
     if not isinstance(tool_input, dict):
-        return None, None
+        return None, None, None
     target: str | None = None
+    digest: str | None = None
     for key in _TOOL_TARGET_FIELDS:
         value = tool_input.get(key)
         if isinstance(value, str) and value.strip():
-            target = value.strip()[:512]
+            raw = value.strip()
+            target = raw[:TOOL_TARGET_LIMIT]
+            digest = _target_digest(raw)
             break
     # A patch may arrive wrapped in a dict (`{"input": "*** Begin Patch..."}`); mine
     # its file path when no explicit target key carried one.
@@ -415,7 +444,7 @@ def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
     content_hash = (
         hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest() if parts else None
     )
-    return target, content_hash
+    return target, content_hash, digest
 
 
 # Bound for the `detail` string carried on a normalized tool_result event.
@@ -3777,12 +3806,26 @@ async def apply_hook_observation(
         await _transition(
             session, events, "working", tool, source="hook", evidence="hook:PreToolUse"
         )
+        # The same evidence the transcript path emits, from the `tool_input` the
+        # hook already carries. Without it every Bash call fingerprinted as
+        # `(tool_use, command, bash, "", "", "", "")` — one constant for the whole
+        # fleet — and the loop detector read 25,362 unrelated shell calls as one
+        # action repeating (measured 2026-08-21). The call id is what lets Tier 0
+        # fold this shadow and the transcript's record of the same call into one
+        # fact instead of two.
+        target, content_hash, target_digest = tool_call_evidence(payload.get("tool_input"))
+        tool_use_id = str(payload.get("tool_use_id") or "") or None
+        _remember_tool_call(session, tool_use_id or "", tool, target)
         await events.emit(
             "tool_use",
             session_id=session.record.id,
             source="hook",
             scope="root",
             tool=tool,
+            call_id=tool_use_id,
+            target=target,
+            target_digest=target_digest,
+            content_hash=content_hash,
         )
     elif event_type in {"PostToolUse", "PostToolUseFailure"}:
         # Before the authority check, not after. A tool that ran to completion is
@@ -3803,6 +3846,11 @@ async def apply_hook_observation(
         # the result payload this hook does not; emitting here as well would double
         # count them.
         if "transcript" not in descriptor(session.record.backend).state_sources:
+            # The call's target, recalled by id from the `PreToolUse` that opened
+            # it. A result carries only the opaque id, so without this every
+            # result of a transcript-less harness fingerprints on the empty
+            # target and collapses onto one value per tool.
+            _, result_target = _recall_tool_call(session, tool_use_id or "")
             await events.emit(
                 "tool_result",
                 session_id=session.record.id,
@@ -3810,6 +3858,7 @@ async def apply_hook_observation(
                 scope="root",
                 tool=str(payload.get("tool_name") or payload.get("name") or "tool"),
                 call_id=tool_use_id,
+                target=result_target,
                 success=event_type != "PostToolUseFailure",
             )
         if _transcript_authoritative(session):
@@ -4317,7 +4366,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             elif isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name") or "tool")
                 tool_use_id = str(block.get("id") or "")
-                target, content_hash = tool_call_evidence(block.get("input"))
+                target, content_hash, target_digest = tool_call_evidence(block.get("input"))
                 _remember_tool_call(session, tool_use_id, name, target)
                 await _transition(
                     session, events, "working", name, evidence="tool_use_record"
@@ -4330,6 +4379,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                     tool=name,
                     call_id=tool_use_id or None,
                     target=target,
+                    target_digest=target_digest,
                     content_hash=content_hash,
                     parser_version=OBSERVATION_SCHEMA_VERSION,
                 )
@@ -4516,7 +4566,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
     elif payload_type in {"function_call", "custom_tool_call"}:
         name = str(payload.get("name") or "tool")
         call_id = str(payload.get("call_id") or payload.get("id") or "")
-        target, content_hash = tool_call_evidence(
+        target, content_hash, target_digest = tool_call_evidence(
             payload.get("arguments") or payload.get("input")
         )
         _remember_tool_call(session, call_id, name, target)
@@ -4534,6 +4584,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             tool=name,
             call_id=call_id or None,
             target=target,
+            target_digest=target_digest,
             content_hash=content_hash,
             parser_version=OBSERVATION_SCHEMA_VERSION,
         )
@@ -4959,7 +5010,7 @@ async def _omp_tool_call(
     call_id = str(block.get("id") or block.get("toolCallId") or "")
     arguments = block.get("arguments")
     arguments = arguments if isinstance(arguments, dict) else {}
-    target, content_hash = tool_call_evidence(arguments)
+    target, content_hash, target_digest = tool_call_evidence(arguments)
     _remember_tool_call(session, call_id, name, target)
     emitted = _observation_state(session).setdefault("omp_emitted_tool_calls", set())
     if call_id and call_id in emitted:
@@ -4975,6 +5026,7 @@ async def _omp_tool_call(
         tool=name,
         call_id=call_id or None,
         target=target,
+        target_digest=target_digest,
         content_hash=content_hash,
         parser_version=OBSERVATION_SCHEMA_VERSION,
     )

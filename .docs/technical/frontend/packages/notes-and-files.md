@@ -8,7 +8,7 @@ Design: `../../../design/features/project-resources.md`.
 `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `DelimitedTextViewer.tsx`, `ImageViewer.tsx`,
 `delimitedText.ts`, `projectResourceCreate.ts`, `noteSaveQueue.ts`, `noteEditGuard.ts`,
 `noteEditorSettings.ts`, `noteFind.ts`,
-`noteOutline.ts`, `noteScroll.ts`, `layoutBox.ts`, `fileClipboard.ts`
+`noteOutline.ts`, `noteScroll.ts`, `layoutBox.ts`, `fileClipboard.ts`, `recentFiles.ts`
 
 - Project notes plus the `global-note:scratchpad` editor, and canonical and exact-worktree file editors.
 - Right-click and guarded-long-press exclusive canonical creation, with pure destination selection.
@@ -17,6 +17,14 @@ Design: `../../../design/features/project-resources.md`.
 - Continuity rail clipboard actions with versioned leading-order migration.
 - The pure config to editor-configuration resolution: element props versus `--continuity-*` properties, with chord-overlay sanitizing.
 - Shared path, reveal, and clipboard actions across the Files tree and opened-file tabs.
+- The Files tab's three mutually exclusive bodies - the lazy tree, the flat search results, and the Recent list - with search winning over Recent because typing a query is an explicit act.
+
+### Recent is Git's answer, phrased
+
+`recentFiles.ts` is pure and clock-injected, and turns one Recent row into the line beside its name.
+The two row kinds answer "when" in two different currencies, which is the whole reason the module exists rather than one format string: an uncommitted change has no timestamp Git records (and the file's mtime is exactly the filesystem reading the view exists to avoid), so it states *what* changed, while a committed path has a committer date and states how long ago.
+The age is coarse on purpose - it is a sort key made readable, and a precise one invites reading it as authoritative when it is the committer's clock rather than this machine's - and it clamps at zero, because a committer clock ahead of this browser's must not render as a future age.
+The list itself is read whole from `GET /api/projects/{id}/files/recent` (see `recent_files.py`); nothing is derived from the filesystem here.
 
 ### What makes a commit a save
 

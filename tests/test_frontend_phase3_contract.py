@@ -493,10 +493,14 @@ def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> 
 
     assert "source: 'sidebar'|'tab'|'pane'" in app
     assert "openSessionMenu(session,event.clientX,event.clientY,'tab')" in app
-    assert (
-        "contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>"
-        in app
-    )
+    # `Open in focused pane` is gone from the menu on every source, sidebar included.
+    # It was the sidebar's own compensation for a menu opened *instead of* clicking the
+    # row - but clicking the row is what opens the session, from the same list the menu
+    # was opened on, so the row only said so a second time. The palette keeps
+    # `session.open`, which is what makes it bindable.
+    session_menu = app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
+    assert "runNamedCommand('session.open')" not in session_menu
+    assert "{ id: 'session.open'" in app
     assert "id: 'pane.detach'" not in app
     assert "runNamedCommand('pane.detach')" not in app
 

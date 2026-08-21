@@ -346,9 +346,15 @@ It is recorded rather than inferred, because arming must never be the sender's c
 The handback's `land_events` row carries `armed` and, when it is false, the `arming_reason` - a draft nobody delivered otherwise reads, from the trail alone, exactly like an answer that arrived.
 
 **The same authority is available to any bounded reply a session solicited**, and is not land-specific.
-`watch_session` (`mux-mcp.md`) is the other one in the tree: a watch is likewise an explicit request whose single bounded notice goes back to the session that armed it, and it currently lands as the same inert draft for the same reason.
-Wiring it in is one call site - pass `armed=True` and `solicited_by=<watch id>` - under its own equivalents of the bounds above (the watcher is the target by construction, the notice template is fixed, the run must still be the one that armed the watch, and one watch matures into exactly one notice, so its cap is already 1).
-That is deliberately left as a separate change rather than done blind from here.
+`watch_session` (`mux-mcp.md`) is the other one in the tree and is now wired in on exactly this authority: a watch is likewise an explicit request whose single bounded notice goes back to the session that armed it, and until it was wired it landed as the same inert draft for the same reason.
+It is one call site passing `armed=True` and `solicited_by=<watch id>`, under its own equivalents of the five bounds above.
+Four of them it satisfies by construction rather than by checking: the watcher is the target because `watch_session` has no recipient argument, the body is a fixed `session_watch` template, an operator has no way to arm a watch at all so there is no non-agent case, and one watch matures into exactly one notice - the service pops it from its register before staging - so the cap is 1 structurally and there is nothing to claim atomically.
+What it re-checks at write time is the run binding and the feature's own switch: `session_watch_enabled`, which is install-wide and has no per-Project half, read when the notice is written rather than trusted from arming, for the same reason the Project's `land_queue` opt-in is.
+The notice's resolution carries `armed` and, when it is false, the `arming_reason`, and the service counts `armed_notices` beside `resolved` - the two diverging is what a queue full of undelivered notices looks like from the outside.
+
+One half of the land pattern is deliberately not copied yet: a watching session gets no `reply_windows` entry.
+A watcher that arms a watch and idles keeps its grant through the 60-minute idle TTL, which covers the 30-minute default timeout, so the common case delivers; a watch configured past the TTL still lapses precisely while it waits, exactly as a land request did before `origin_windows`.
+That is the same failure with the same fix and is worth doing, but it widens `set_solicited_requests` from one evidence source to several and is a separate change.
 
 ### A session that asked to land does not lapse while it waits
 
@@ -391,6 +397,11 @@ A handback additionally records whether its message was **armed**, and when it w
 `classify` is written on both of its outcomes and `verify` is written even when it was skipped - as `skipped` for a documentation-only change set, and as `reused` *with its key* (the tree, the digest, and the request whose run produced the verdict) when a standing verdict was accepted - so "which gate ran" is answerable from the trail alone for every request that reached the gate, and a reused verdict is checkable rather than merely asserted.
 A verify-only request's result additionally records a `verify`/`reported` row carrying whether its answer reached its author armed, for the same reason a handback does.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
+
+**A gate that ran is recorded as a `test_result` fact**, not only as a land event.
+The gate is the only test run most branches ever get and it runs out-of-band - the daemon executes it, so no tool call and no transcript records it - which left the substrate holding one `test_result` fact against 4,485 `command_result` facts in a measured 24-hour window and made declared-vs-verified a statement about capture rather than about an agent (`tier0-facts.md`, `deterministic-consumers.md`).
+Only `passed` and `failed` become facts: `not_configured`, `unapproved` and `timed_out` are statements about the setup or about a run that never finished, and recording them as a failed test run would put a verdict on the branch that nothing ever tested.
+A failed gate states a failure count and **omits** `failing_tests` unless the output named tests, because an empty list reads everywhere as "nothing is failing".
 
 ## Surface
 

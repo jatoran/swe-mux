@@ -31,6 +31,11 @@ type Finding = {
   project_id?: string | null
   resolved_model?: string | null
   created_at: number
+  /** Set by the daemon when a stored finding's own evidence no longer supports it
+   *  (`server._mark_unsupported`). The row is never rewritten — a finding is a
+   *  record of what a detector concluded — so the retraction happens at the read. */
+  unsupported?: boolean
+  unsupported_reason?: string
 }
 type FindingsResponse = { items: Finding[]; tag_counts: Record<string, number> }
 type Scope = 'session' | 'project'
@@ -143,8 +148,13 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
   // whether a model wrote them.
   const rows = (data?.items || [])
     .filter(item => selectedTag ? true : item.tag !== PROVENANCE_TAG)
+    .filter(item => !item.unsupported)
     .filter(item => source === 'all'
       || (source === 'deterministic') === isDeterministic(item.provenance))
+  // Withheld, not deleted, and never silently: the row still exists and the reason
+  // is stated, because "no findings" and "findings that no longer stand" are
+  // different answers and the chip counts still include the second.
+  const withheld = (data?.items || []).filter(item => item.unsupported)
   const sourceCounts = (data?.items || []).reduce((totals, item) => {
     if (isDeterministic(item.provenance)) totals.deterministic += 1
     else totals.observer += 1
@@ -218,6 +228,9 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
     </div>}
     {selectedTag === null && provenanceCount > 0 && <p class="findings-hint">
       Provenance edges ({provenanceCount}) are hidden here by volume. Open the Provenance chip to read them.
+    </p>}
+    {withheld.length > 0 && <p class="findings-hint findings-withheld">
+      {withheld.length} loop {withheld.length === 1 ? 'finding is' : 'findings are'} withheld: {withheld[0].unsupported_reason}
     </p>}
     {/* The second half of "off vs quiet" on this pane. The four detectors above are
         per-Project and model-free; the observer notes beside them come from the

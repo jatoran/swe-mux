@@ -261,7 +261,16 @@ async def test_the_daemon_answers_its_phase_while_the_runtime_is_still_building(
 
     monkeypatch.setattr("swe_mux.server.prepare_database", blocking_prepare)
     loop = asyncio.get_running_loop()
-    app = create_app(Config(data_dir=tmp_path / "data", pty_supervisor_enabled=False))
+    # `reconcile_external_history=False` keeps this in-process daemon off the
+    # developer's real `~/.claude/projects`: the startup scan is on by default,
+    # reads the real user home, and has nothing to do with the startup gate.
+    app = create_app(
+        Config(
+            data_dir=tmp_path / "data",
+            pty_supervisor_enabled=False,
+            reconcile_external_history=False,
+        )
+    )
     client = TestClient(TestServer(app))
     await client.start_server()
     try:

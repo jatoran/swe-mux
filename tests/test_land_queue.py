@@ -125,6 +125,7 @@ def build_service(
     grant: str = "granted",
     automations: set[str] | None = None,
     session_runs: dict[str, str] | None = None,
+    facts: list[dict[str, Any]] | None = None,
 ) -> tuple[LandQueueService, LandStore, VerifyApprovalStore]:
     store = LandStore(tmp_path / "land.sqlite3")
     approvals = VerifyApprovalStore(tmp_path / "data")
@@ -145,6 +146,11 @@ def build_service(
 
     runs = {"sess_1": "run_1"} if session_runs is None else session_runs
 
+    async def record_fact(**fact: Any) -> str:
+        if facts is not None:
+            facts.append(fact)
+        return "fact_1"
+
     service = LandQueueService(
         store=store,
         approvals=approvals,
@@ -156,6 +162,7 @@ def build_service(
         busy_sessions=busy_sessions,
         session_run=lambda session_id: runs.get(session_id, ""),
         queue_message=queue,
+        record_fact=record_fact,
     )
     return service, store, approvals
 
@@ -493,6 +500,62 @@ async def test_a_clean_branch_reconciles_verifies_and_fast_forwards(
         assert (await store.get(row["id"]))["verify_gate"] == "full"
     finally:
         store.close()
+
+
+async def test_the_gate_result_becomes_a_tier0_test_fact(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The land gate is the only test run most branches ever get.
+
+    It runs out-of-band, so no tool call and no transcript records it: one
+    `test_result` fact stood against 4,485 `command_result` facts in a measured
+    24-hour window (2026-08-21), and declared-vs-verified could only ever answer
+    "nothing verified" about a substrate rather than about an agent.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    facts: list[dict[str, Any]] = []
+    service, store, approvals = build_service(tmp_path, trunk, facts=facts)
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        await service.tick()
+        verified = [item for item in facts if item["kind"] == "test_result"]
+        assert len(verified) == 1
+        outcome = verified[0]["detail"]["test_outcome"]
+        assert verified[0]["agent_run_id"] == "run_1"
+        assert outcome["failed"] == 0
+        assert outcome["failing_tests"] == []  # a green gate names no failures
+    finally:
+        store.close()
+
+
+async def test_a_failed_gate_never_records_an_empty_failing_set(
+    tmp_path: Path, trunk: Path
+) -> None:
+    # `failing_tests: []` is read by every consumer as "nothing is failing". A gate
+    # that fell over on ruff or tsc names no tests, so it must omit the key and
+    # state a failure count instead — the distinction between "no failures" and
+    # "failures not enumerated" is the whole value of the field.
+    from swe_mux.land_queue import verify_test_outcome
+
+    class _Outcome:
+        passed = False
+        status = "failed"
+        exit_code = 1
+        output = b"ruff: 3 errors\n"
+
+    outcome = verify_test_outcome(_Outcome())
+    assert outcome["failed"] >= 1
+    assert "failing_tests" not in outcome
 
 
 async def test_a_second_branch_reconciles_against_the_first_result(

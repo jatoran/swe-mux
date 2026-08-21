@@ -96,6 +96,15 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     "agent_context.py::AgentContextService._codex_provider": "one harness's memory provider",
     "agent_context.py::AgentContextService._source_descriptor": "memory source-id prefix contract",
     "agent_environment.py::_runtime": "one harness's version-probe argv",
+    # One collector per harness, each speaking that harness's own protocol. Which
+    # of them runs is decided by `HarnessDescriptor.mcp_tool_source` in
+    # `mcp_tools._collect`, which is `assert_never` anchored, so a new harness
+    # cannot silently fall into one of these.
+    "mcp_tools.py::codex_probe": "one harness's own app-server protocol",
+    "mcp_tools.py::_codex_entry_catalog": "one harness's own server-status shape",
+    "mcp_tools.py::claude_probe": "one harness's own MCP configuration shapes",
+    "mcp_tools.py::_claude_list": "labels the catalog it collected for one harness",
+    "mcp_tools.py::omp_live_catalog": "one harness's own runtime tool-name convention",
     "agent_environment.py::_hook_inventory": "additively prepends one harness's extension items",
     "agent_environment.py::discover_agent_environment": "orders one harness's extension section",
     "launchers.py::resolve_codex_pty_command": "resolves one npm package's JS entrypoint",

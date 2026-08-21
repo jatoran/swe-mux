@@ -163,6 +163,11 @@
   pass/fail counts and failing-test ids inside the bounded detail. Command text is never
   stored beyond bounded detail, and that detail is bounded per value so the row always
   re-parses. Per-project opt-in and gated; see `features/tier0-facts.md`.
+  `call_id` plus `call_side` (`call` | `result`) is the identity of **one tool call**, and one
+  call is one fact per side however many observers report it: a hook and a transcript both
+  see the same call, and the richer record wins whichever arrives first.
+  Both columns are additive migrations (schema version 2) and are NULL for facts recorded
+  before them and for facts that are not tool calls.
 - Project context has no SQLite entity.
   Its source of truth is the bounded user-owned `<project>/.swe-mux/project-context.md` file with content-derived revisions (`features/project-card.md`).
 - `project_cards` is a retained legacy table from the retired generated-card implementation.

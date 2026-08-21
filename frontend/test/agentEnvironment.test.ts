@@ -7,6 +7,8 @@ import {
   agentStateLabel,
   filterAgentEnvironmentSections,
   groupAgentEnvironmentItems,
+  mcpEvidenceLabel,
+  mcpStatusLabel,
   type AgentEnvironmentItem,
   type AgentEnvironmentSection,
 } from '../src/agentEnvironment.ts'
@@ -82,4 +84,23 @@ test('a section with no groups stays one unlabelled run', () => {
   const runs = groupAgentEnvironmentItems(sections[0].items)
   assert.deepEqual(runs.map(run => run.key), [''])
   assert.equal(runs[0].items.length, 2)
+})
+
+test('every evidence tier renders as a distinct label', () => {
+  // The tiers exist because a sidecar's health is not the running CLI's, so
+  // collapsing any two of them into one word defeats the whole point.
+  const labels = (['swe_mux_owned', 'live_process', 'parallel_probe', 'not_supported'] as const)
+    .map(mcpEvidenceLabel)
+  assert.equal(new Set(labels).size, labels.length)
+  assert.equal(mcpEvidenceLabel('live_process'), 'Live session')
+  assert.equal(mcpEvidenceLabel('parallel_probe'), 'Runtime probe')
+})
+
+test('a fetch that reached nothing says which kind of nothing it was', () => {
+  // "auth required" and "not reported" mean opposite things and would otherwise
+  // both render as an empty tool list.
+  assert.equal(mcpStatusLabel('ok'), '')
+  assert.equal(mcpStatusLabel('auth_required'), 'auth required · not probed')
+  assert.equal(mcpStatusLabel('unavailable'), 'not reported')
+  assert.notEqual(mcpStatusLabel('unsupported'), mcpStatusLabel('unavailable'))
 })

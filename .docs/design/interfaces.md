@@ -277,6 +277,8 @@ PUT     /projects/{project_id}/notes/{note_id}            {markdown, revision}
 PATCH   /projects/{project_id}/notes/{note_id}            {title, revision}
 DELETE  /projects/{project_id}/notes/{note_id}            {revision}
 GET     /projects/{project_id}/files?path=RELATIVE
+GET     /projects/{project_id}/files/tree?path=RELATIVE&path=…   the root plus each expanded folder
+GET     /projects/{project_id}/files/recent   {items[{name,path,kind,origin,status,committed_at}], available, reason?}
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
 GET     /projects/{project_id}/search?q=&mode=names|contents|both
 GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]
@@ -659,6 +661,8 @@ GET    /sessions/{id}/last-reply
 GET    /sessions/{id}/transcript[?limit=]
 GET    /sessions/{id}/skills[?refresh=1]
 GET    /sessions/{id}/agent-environment[?refresh=1]
+POST   /sessions/{id}/agent-environment/mcp-tools   {server, refresh?}
+POST   /sessions/{id}/runtime-inventory             X-Mux-Hook-Secret; loopback-only
 ```
 
 `GET /sessions/{id}/branch-points` lists where this conversation can be forked. Every "nothing to
@@ -1215,6 +1219,39 @@ interface AgentEnvironmentInventory {
 Hook items set `group` to the lifecycle event and name the handler target: the program and the one script or module its command runs, resolved structurally as described in `features/agent-environment.md`.
 The response never includes hook command lines, their arguments or inline shell bodies, environment values, credentials, or unredacted MCP URLs.
 Configured MCP entries intentionally have no connection-health claim because the route never starts a server.
+
+`POST /sessions/{id}/agent-environment/mcp-tools` fetches one configured server's published tools.
+It is a POST rather than a GET because it is the one Agent Environment call that reaches a server: it may start a short-lived probe process and open a network connection, which is exactly what a GET promises not to do.
+The body is `{server, refresh?}`; an unknown server is `404`, a blank one `400`, and a shell or non-local terminal boundary is `409` on the same shapes the inventory route uses.
+Rate limited to 20 fetches per session per minute on top of the cache, because the cost is entirely in what a burst of clicks would spawn.
+
+```ts
+interface McpToolCatalog {
+  server: string
+  backend: string
+  evidence: 'swe_mux_owned' | 'live_process' | 'parallel_probe' | 'not_supported'
+  status: 'ok' | 'auth_required' | 'unsupported' | 'unavailable' | 'error'
+  tools: Array<{name: string; description: string; read_only?: boolean}>
+  total: number
+  truncated: boolean
+  note: string          // what this evidence tier does and does not prove
+  diagnostic: string    // why an empty catalog is empty, or why a probe failed
+  observed_at: number
+  ttl_ms: number
+  cache_scope: 'public' | 'private'
+  server_version: string
+  fingerprint: string   // one-way config-content digest this reading is keyed by
+  cached: boolean
+}
+```
+
+`evidence` is never collapsed into an unqualified "connected": a `parallel_probe` describes a separate runtime and says nothing about the CLI in the terminal.
+A failure is a `200` with `status: "error"` and a sanitized `diagnostic`, not an HTTP error, because one unreachable server must not read as a broken drawer.
+The response carries only server name, tool name, description, and safe metadata; input schemas, headers, environment, and endpoints with credentials are all dropped before anything is retained.
+
+`POST /sessions/{id}/runtime-inventory` is where an injected extension publishes its live MCP tool list (`{tools: [{name, description}], reason}`).
+Loopback-only and authenticated with the session's own `X-Mux-Hook-Secret`, like hook ingress, but on its own route: it is not a lifecycle event and must never touch status detection, history, or the prompt queue.
+The body is whitelisted to `mcp__*` names and descriptions, bounded, and held only in memory for the session's current process generation.
 
 ## Voice and Conversation mode
 
@@ -2056,6 +2093,9 @@ plus the registry, `recommended_project_automations`, and `llm`, and is the cont
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).
 `session_id` is resolved to the session's run-id set — its live run plus its superseded runs from history — and matched against `agent_run_id`, because the annotation's own `session_id` column is populated by one detector alone; a Project-anchored finding with a null run (doc-debt, provenance) is therefore absent from a session scope by construction.
 The response carries `items` and `tag_counts`, the per-tag totals in the current scope (project/session/since honoured, the tag chip ignored) so a quiet scope reads apart from one buried under provenance edges.
+An item may carry `unsupported: true` with an `unsupported_reason`, which means the stored finding's own evidence no longer supports it under the detector's current rule.
+The row is never rewritten or deleted - it is a record of what a detector concluded - so the retraction happens at the read, and `tag_counts` still counts the stored row.
+Today this marks `loop-detected` findings whose every evidence fact carries neither a target nor a content hash (`features/deterministic-consumers.md`).
 The dashboard payload's `recent_annotations` key is unchanged; this endpoint is the filtered surface the Findings pane points at.
 
 ## Attention ranking

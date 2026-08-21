@@ -255,6 +255,46 @@ async def test_orphans_and_god_nodes(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_orphans_exclude_paths_the_graph_could_never_link(tmp_path: Path) -> None:
+    # Every one of the 76 `dead-code` findings in a measured 24-hour window
+    # (2026-08-21) was a path the graph could not have drawn an inbound edge to:
+    # 51 agent scratchpad scripts outside the Project root, 11 hashed bundle
+    # assets, 14 test modules and Playwright harnesses. Their volume also starved
+    # the accurate structural rules, because the per-pass budget is spent in path
+    # order.
+    from swe_mux.code_graph import is_dead_code_candidate
+
+    for path in (
+        "c:/users/j/appdata/local/temp/claude/run/scratchpad/probe.py",
+        "/tmp/scratch/probe.py",
+        "src/swe_mux/static/assets/gitdiffview-bqv1fpqq.js",
+        "src/swe_mux/static/sw.js",
+        ".claude/worktrees/other/src/swe_mux/session.py",
+        "tests/test_mcp_scan_timeline.py",
+        "frontend/test/renderer/rail-dropup.spec.ts",
+        "frontend/test/renderer/paneharness.tsx",
+        "src/pkg/helper.test.ts",
+        "tests/conftest.py",
+    ):
+        assert is_dead_code_candidate(path) is False, path
+    # Ordinary project source is still a candidate.
+    for path in ("src/swe_mux/session.py", "frontend/src/app.tsx", "pkg/helper.py"):
+        assert is_dead_code_candidate(path) is True, path
+
+
+async def test_orphans_query_applies_the_admission_rule(tmp_path: Path) -> None:
+    store, pid = await _seed(tmp_path)
+    # A test module in the graph is discovered by a runner, never imported: "no
+    # inbound edge" is how it is supposed to look, so it is not a candidate.
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
+    await maintain_files(store, pid, str(tmp_path), ["tests/test_app.py"])
+    orphan_paths = {o["path"] for o in await store.orphans(pid)}
+    assert "app.py" in orphan_paths
+    assert "tests/test_app.py" not in orphan_paths
+    store.close()
+
+
 async def test_subgraph_bounded(tmp_path: Path) -> None:
     store, pid = await _seed(tmp_path)
     sub = await store.subgraph(pid, ["pkg/helper.py"], hops=2)

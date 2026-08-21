@@ -812,6 +812,33 @@ async def test_a_solicited_reply_delivers_without_a_human_press(
 
 
 @pytest.mark.asyncio
+async def test_a_settle_watch_notice_delivers_on_the_same_authority(
+    harness: Harness,
+) -> None:
+    """The narrowing is per-request, not per-feature, and this is the proof.
+
+    A settle-watch notice is the second user of the same field: an explicit
+    `watch_session` call whose single bounded template goes back to the session
+    that armed it (`mux-mcp.md`). Nothing about the floor knows what a land
+    request or a watch is - it reads `solicited_by`, so the second caller needs
+    no second exception.
+    """
+    await harness.auto.tick()
+    notice = await harness.service.enqueue(
+        target_session_id="s1",
+        body="Watch on `worker-3` resolved: it left working and held idle.",
+        armed=True,
+        sender_kind="rule",
+        sender_id="session_watch",
+        solicited_by="watch_abc123",
+    )
+    assert notice["state"] == "armed"
+    assert notice["solicited_by"] == "watch_abc123"
+    await harness.settle()
+    assert await harness.auto.tick() == [notice["id"]]
+
+
+@pytest.mark.asyncio
 async def test_an_unsolicited_rule_message_is_still_an_inert_draft(
     harness: Harness,
 ) -> None:

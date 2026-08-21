@@ -27,19 +27,35 @@ test('tab context-menu openers target without activating',()=>{
 
   const menu=section('{contextMenu && <div', '{projectMenu && <div')
   assert.doesNotMatch(menu,/runNamedCommand\('pane\.stackNew'\)|spawnTerminal\(/, 'no session menu spawns a terminal: new work is the Run button, and a menu opened on some other session makes the landing pane a guess')
-  assert.match(menu,/setPromptTargetId\(target\.id\)/, 'secondary prompt UI must retain the menu target after the menu closes')
 })
 
-test('session menus keep pane-only plumbing off sidebar rows and tab titles',()=>{
+test('session menus act on the session and never open another surface',()=>{
   const menu=section('{contextMenu && <div', '{projectMenu && <div')
-  // One gate, three rows. Sidebar, desktop-tab and mobile-tab menus are opened to
-  // rename or kill; the ⋯ menu in a session's own header keeps the full set.
-  const gated=menu.slice(menu.indexOf("{contextMenu.source==='pane'&&<>"),menu.indexOf('</>}',menu.indexOf("{contextMenu.source==='pane'&&<>")))
-  assert.ok(gated.length>0,'pane-only group is missing')
-  for(const item of ['session.copyCwd','setPromptLibraryOpen(true)','processes.open']){
-    assert.ok(gated.includes(item),`${item} must sit inside the pane-only group`)
-    assert.equal(menu.split(item).length-1,1,`${item} must appear once, gated`)
-  }
+  // Copy working directory is the one pane-only row left, and it stays gated: sidebar,
+  // desktop-tab and mobile-tab menus are opened to rename or kill.
+  assert.match(menu,/\{contextMenu\.source==='pane'&&<button[^]*?session\.copyCwd/, 'copy-cwd must stay behind the pane gate')
+  assert.equal(menu.split('session.copyCwd').length-1,1,'copy-cwd must appear once, gated')
+
+  // Every remaining row does something to this session immediately. The two that opened
+  // a whole surface of their own instead — the prompt library and the Resources dialog —
+  // left, because both are a command and a drawer tab away from where you already are.
+  assert.doesNotMatch(menu,/setPromptLibraryOpen/, 'the session menu must not open the prompt library')
+  assert.doesNotMatch(menu,/processes\.open/, 'the session menu must not open the Resources dialog')
+  // Clicking the row already opens the session; a row saying so was a second way to click.
+  assert.doesNotMatch(menu,/runNamedCommand\('session\.open'\)/)
+  // Boot timing is a fact about how the session started, read from the startup
+  // diagnostics — not from the menu you open to rename or kill it.
+  assert.doesNotMatch(menu,/startupSummary|startupTimingTitle|startup-chip/)
+
+  // Every top-level row carries a mark of its own; the terminal skin's one `> ` per row
+  // said the same thing on all of them and so distinguished none. The voice group's own
+  // rows are excluded deliberately: three of them are a radio set already marked with a
+  // `✓`, and an icon column beside a check column draws two marks for one fact.
+  const top=menu.slice(0,menu.indexOf('<MenuGroup'))+menu.slice(menu.indexOf('</MenuGroup>'))
+  const rows=top.match(/<button[^>]*onClick=/g)||[]
+  const marked=top.match(/<button[^>]*class="menu-row[^"]*"[^>]*onClick=/g)||[]
+  assert.ok(rows.length>8,'the session menu should still have its rows')
+  assert.equal(rows.length,marked.length,'every session-menu row must be a menu-row with an icon')
 
   // Read state is one row whose label states the action, not a pair the reader
   // has to disambiguate.
@@ -53,6 +69,42 @@ test('session menus keep pane-only plumbing off sidebar rows and tab titles',()=
 
   const tabMenu=section('{tabMenu&&<div', 'Close tab</button>')
   assert.doesNotMatch(tabMenu,/spawnTerminal\(/, 'resource tab menus do not spawn terminals either')
+})
+
+test('the Project menu acts on this Project, each row with its own mark',()=>{
+  const menu=section('{projectMenu && <div', '{sidebarMenu&&<div')
+
+  // Four surfaces left because each is a drawer tab or a dialog that already opens on the
+  // selected Project: right-clicking a Project row to reach them was a second route to a
+  // place one click away.
+  for(const gone of ['openNotesBrowser(target)','processes.project','queue.fleetProject','openProjectFiles(']){
+    assert.ok(!menu.includes(gone),`${gone} must not be a Project-menu row`)
+  }
+  // Clicking a Project header is the fold, and long-press drag is the reorder path.
+  assert.doesNotMatch(menu,/toggleProjectCollapsed/)
+  assert.doesNotMatch(menu,/project\.moveUp|project\.moveDown/)
+  // Category headers labelled three rows apiece in a menu of nine; the icons say it now.
+  assert.doesNotMatch(menu,/context-subtitle">BROWSE THIS PROJECT|context-subtitle">PROJECT</)
+
+  // A Group is a list, so it is the same pop-out the Maintenance and Run menus use — not
+  // a native `<select>`, whose options a phone renders in a system sheet with none of this
+  // menu's styling or keyboard walk.
+  assert.doesNotMatch(menu,/context-select/)
+  assert.match(menu,/<MenuGroup id="project-group"/)
+  assert.match(menu,/Create new group/)
+  // Creating from here moves this Project into what it creates, or the row is a detour.
+  assert.match(menu,/setGroupEdit\(\{name:'',adoptProjectId:target\.id\}\)/)
+
+  assert.match(menu,/>Rename</, 'the row says Rename; the menu already names the Project')
+  assert.doesNotMatch(menu,/>Rename project</)
+  // A trailing ellipsis on most of a menu says "this opens something" about rows that all
+  // open something, so it stopped distinguishing them.
+  assert.doesNotMatch(menu,/…<\/span>/)
+
+  const rows=menu.match(/<button[^>]*onClick=/g)||[]
+  const marked=menu.match(/<button[^>]*class="menu-row[^"]*"[^>]*onClick=/g)||[]
+  assert.ok(rows.length>5,'the Project menu should still have its rows')
+  assert.equal(rows.length,marked.length,'every Project-menu row must be a menu-row with an icon')
 })
 
 test('mobile long-press consumes its follow-up click and background close preserves selection',()=>{

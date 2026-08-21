@@ -109,6 +109,39 @@ def handback_excerpt(output: bytes, *, limit: int = MAX_HANDBACK_OUTPUT_BYTES) -
     return "\n".join(kept).strip()
 
 
+def verify_test_outcome(outcome: Any) -> dict[str, Any]:
+    """The gate's verdict in the Tier 0 test-outcome shape.
+
+    Two rules keep this honest. The counts come from parsing the gate's own
+    output where it printed a runner summary, so a real failing-test list is
+    carried rather than invented. And a **failed gate never reports an empty
+    failing set**: `failing_tests: []` is read by every consumer as "nothing is
+    failing", so a gate that fell over on ruff or tsc — steps that name no tests —
+    omits the key entirely and states a failure count instead. The distinction
+    between "no failures" and "failures not enumerated" is the whole value of the
+    field.
+    """
+    from .observation import parse_test_outcome
+
+    text = bytes(getattr(outcome, "output", b"") or b"").decode("utf-8", "replace")
+    parsed = parse_test_outcome(text) or {}
+    result: dict[str, Any] = {
+        "framework": "worktree-verify",
+        "parsed_framework": parsed.get("framework"),
+        "passed": int(parsed.get("passed") or 0),
+        "skipped": int(parsed.get("skipped") or 0),
+        "status": getattr(outcome, "status", ""),
+    }
+    if outcome.passed:
+        return {**result, "failed": 0, "errors": 0, "failing_tests": []}
+    failing = [str(name) for name in (parsed.get("failing_tests") or [])]
+    result["failed"] = max(int(parsed.get("failed") or 0), 1)
+    result["errors"] = int(parsed.get("errors") or 0)
+    if failing:
+        result["failing_tests"] = failing
+    return result
+
+
 async def unmerged_paths(cwd: str) -> tuple[str, ...]:
     """The paths Git currently holds unmerged, asked of the index rather than parsed.
 
@@ -925,6 +958,12 @@ class LandQueueService:
                 detail={**outcome.public_dict(), "attempt": attempt + 1, "oid": head},
                 now=self._clock(),
             )
+            if outcome.status in {"passed", "failed"}:
+                # Only a gate that actually ran is a test fact. `not_configured`
+                # and `unapproved` are statements about the setup, and recording
+                # them as a failed test run would put a verdict on the branch that
+                # nothing ever tested.
+                await self._verify_fact(row, outcome, attempt + 1)
             if outcome.passed:
                 break
             if outcome.status in {"not_configured", "unapproved"}:
@@ -1428,6 +1467,43 @@ class LandQueueService:
         except Exception:  # noqa: BLE001 - an unreadable config configures nothing
             log.warning("land_project_values_failed root=%s", project_root)
             return {}
+
+    async def _verify_fact(self, row: dict[str, Any], outcome: Any, attempt: int) -> None:
+        """Record the gate's verdict as a Tier 0 `test_result` fact.
+
+        The gate is the only test run most branches ever get, and it runs
+        out-of-band: the daemon executes it, so no tool call and no transcript
+        record it, and the substrate saw one `test_result` fact against 4,485
+        `command_result` facts in a measured 24-hour window (2026-08-21). With
+        nothing to read, declared-vs-verified could only ever say "nothing
+        verified", which is a statement about capture rather than about the agent
+        — so it now says nothing at all for a run with no test facts, and this is
+        what puts them there.
+
+        Attributed to the session that asked for the land, like every other land
+        fact: an operator-initiated land has no session and records nothing.
+        """
+        if self._record_fact is None or not row.get("origin_session_id"):
+            return
+        try:
+            await self._record_fact(
+                session_id=row["origin_session_id"],
+                kind="test_result",
+                target=row["branch"],
+                agent_run_id=row.get("origin_run_id") or None,
+                project_id=row.get("project_id") or None,
+                detail={
+                    "request_id": row["id"],
+                    "worktree": row["worktree_root"],
+                    "tool": "worktree-verify",
+                    "attempt": attempt,
+                    "success": bool(outcome.passed),
+                    "exit_code": outcome.exit_code,
+                    "test_outcome": verify_test_outcome(outcome),
+                },
+            )
+        except Exception:  # noqa: BLE001 - audit must never break the pipeline
+            log.warning("land_verify_fact_failed request_id=%s", row["id"])
 
     async def _fact(self, row: dict[str, Any], kind: str, detail: dict[str, Any]) -> None:
         """Mirror a step into Tier 0 when the request has a session to attribute it to.

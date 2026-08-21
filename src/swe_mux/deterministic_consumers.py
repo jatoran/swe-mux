@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import json
 import re
+import shlex
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .background_tasks import background
+from .tier0_store import MAX_TARGET_CHARS
 from .transcript_view import conversation_is_readable, parse_transcript_cached
 
 
@@ -49,17 +51,48 @@ LOOP_REPEAT_THRESHOLD = 3
 # Claim language that asserts completion. Deliberately narrow and literal: this
 # is the *declared* half of declared-vs-verified, and a loose pattern turns every
 # ordinary summary into a claim.
+#
+# The copula is **required** in the it/this/that alternative. Optional, it matched
+# ordinary English rather than a claim — "this working tree", "is it working,
+# awaiting input", "leave it fixed and unexposed" — and that one alternative
+# produced 27 of 42 lifetime findings, every sampled one of them false (measured
+# 2026-08-21).
 CLAIM_PATTERN = re.compile(
     r"\b("
     r"all (?:the )?tests? (?:now )?pass(?:es|ing)?"
     r"|tests? (?:are |now )?(?:all )?green"
-    r"|(?:it|this|that|everything)(?:'s| is| are)? (?:now )?(?:working|fixed|done)"
+    r"|(?:it|this|that|everything)(?:'s| is| are) (?:now )?(?:working|fixed|done)"
     r"|(?:i|we) (?:have )?(?:fixed|completed|finished|resolved) (?:it|this|that|the)"
     r"|(?:the )?(?:fix|change|implementation) is (?:complete|done)"
     r"|should (?:now )?be (?:fixed|working)"
     r")\b",
     re.IGNORECASE,
 )
+
+# A failure word immediately before the claim inverts it: "once shipped a failing
+# test green" is a report of a defect, not a completion claim, and it fired the
+# `tests … green` alternative verbatim. The window is deliberately short — the
+# preceding few words, not the preceding sentence — because "I fixed the failing
+# tests and all tests pass" is a real claim whose sentence also contains
+# "failing".
+_CLAIM_NEGATION_WINDOW = 16
+_CLAIM_NEGATION = re.compile(
+    r"\b(?:not|never|no|failing|failed|fails|red|broken|unless|until|without"
+    r"|isn't|aren't|wasn't|don't|doesn't)\b\W*$",
+    re.IGNORECASE,
+)
+
+# Code spans and fenced blocks are quotation, not assertion. Both anti-overclaim
+# findings in the lifetime corpus fired on a message *quoting the requirement*
+# ("Anti-overclaim (`all tests pass`) can fire when the model is quoting your
+# requirement") — the pattern read the quoted rule as a claim of its own.
+_FENCED_BLOCK = re.compile(r"```.*?```", re.DOTALL)
+_CODE_SPAN = re.compile(r"`[^`\n]*`")
+
+# A completion claim is made in the closing summary. Searching an entire
+# multi-thousand-word report reads its body — an audit quoting patterns, a plan
+# describing a future state — as a verdict about the work just done.
+CLAIM_SCOPE_CHARS = 1000
 
 _WRITE_KINDS = frozenset({"file_write", "file_write_result"})
 _READ_KINDS = frozenset({"file_read", "file_read_result"})
@@ -78,6 +111,121 @@ _TEST_KINDS = frozenset({"test_result"})
 # state, so identical repeats mean the same failures kept happening.
 _LOOP_CANDIDATE_KINDS = frozenset({"command", "file_write", "test", "test_result"})
 
+#: Kinds whose target is a shell command line rather than a path.
+_SHELL_KINDS = frozenset({"command", "command_result", "test", "test_result"})
+
+# Shell verbs that only *look*. A `command` fact is change-attempting by kind, but
+# `grep`, `ls` and `git status` attempt nothing, so the no-progress gate is
+# vacuously true for them exactly as it is for the `tool` and `file_read` kinds
+# already excluded — and an agent polling a background task's output five times
+# was flagged as looping (observed live 2026-08-21). This extends that same
+# exclusion to the shell.
+_READ_ONLY_VERBS = frozenset(
+    {
+        "grep", "rg", "ls", "dir", "find", "cat", "head", "tail", "wc", "less",
+        "file", "stat", "du", "df", "netstat", "ps", "whoami", "hostname", "date",
+        "echo", "which", "where", "sqlite3", "jq", "diff", "tree", "printenv", "env",
+    }
+)
+#: `git` subcommands that only read. Anything else on `git` is not read-only.
+_READ_ONLY_GIT = frozenset(
+    {"status", "log", "diff", "show", "branch", "rev-parse", "blame", "describe",
+     "ls-files", "worktree", "remote", "config", "stash"}
+)
+#: `curl` flags that make a request a write, either of the server's state or of a
+#: local file. Case matters: `-F` is a form upload while `-f` is `--fail`.
+_CURL_WRITE_FLAGS = ("-X", "-d", "--data", "-T", "--upload-file", "-F", "--form", "-o", "--output")
+#: Shell operators that can turn a reading command into a writing one, matched as
+#: whole tokens so a `|` inside a quoted regex is not read as a pipeline.
+_PIPE_TOKENS = frozenset({"|"})
+_EFFECT_TOKENS = frozenset({";", "&", "&&", "||", ">", ">>", "2>", "&>"})
+#: Substitution, which can run anything at all inside an otherwise-reading command.
+_SUBSTITUTION_MARKERS = ("$(", "`")
+
+
+def _stage_is_read_only(tokens: list[str]) -> bool:
+    verb = tokens[0].casefold().rsplit("/", 1)[-1].removesuffix(".exe")
+    if verb == "git":
+        # `git -C <dir> status` puts a flag *and its value* before the subcommand,
+        # so the subcommand is not at a fixed position; accept it at either of the
+        # first two non-flag tokens and refuse anything else.
+        rest = [token for token in tokens[1:] if not token.startswith("-")]
+        return any(token in _READ_ONLY_GIT for token in rest[:2])
+    if verb == "curl":
+        return not any(
+            token.split("=", 1)[0] in _CURL_WRITE_FLAGS for token in tokens[1:]
+        )
+    return verb in _READ_ONLY_VERBS
+
+
+def is_read_only_command(command: str) -> bool:
+    """Whether a shell command line only reads.
+
+    Conservative by construction, in the direction that preserves the detector: an
+    unrecognised verb, a redirection, a substitution, an unparseable line, or a
+    command the stored target had to truncate is **not** read-only, so it can
+    still seed a loop. Only a command whose every pipeline stage begins with a
+    known reading verb is excluded.
+
+    Tokenised with `shlex` rather than split on characters, because the live case
+    this exists for — `grep -nE '^(=== |verification passed)' …` — carries a `|`
+    *inside a quoted regex*, and a character split reads its second half as a
+    pipeline stage running a command named `verification`.
+    """
+    text = (command or "").strip()
+    if not text or len(text) >= MAX_TARGET_CHARS:
+        # Truncated: what was cut off is unknown, and a `> out.txt` past the bound
+        # would make this a write. Unknown is not read-only.
+        return False
+    try:
+        tokens = shlex.split(text, posix=True)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    stage: list[str] = []
+    for token in tokens:
+        if token in _EFFECT_TOKENS or token.startswith((">", "1>", "2>")):
+            return False
+        if any(marker in token for marker in _SUBSTITUTION_MARKERS):
+            return False
+        if token in _PIPE_TOKENS:
+            if not stage or not _stage_is_read_only(stage):
+                return False
+            stage = []
+            continue
+        stage.append(token)
+    return bool(stage) and _stage_is_read_only(stage)
+
+
+def has_loop_discriminator(fact: dict[str, Any]) -> bool:
+    """Whether a fact says *which* action it was.
+
+    A fingerprint over an empty target, an empty content hash and an empty state
+    is one constant for every call of that tool, so a window of it counts distinct
+    actions as repeats of one. This is fail-closed on purpose: 25,362 Bash facts
+    in one day shared the fingerprint of `{"scope":"root","tool":"Bash"}`, and 390
+    of 397 lifetime loop findings rested on six such fingerprints (measured
+    2026-08-21). A fact that cannot name its action does not seed a loop, and the
+    capture fix that gives it a target is the other half of the same repair.
+    """
+    if fact.get("target") or fact.get("content_hash"):
+        return True
+    # A test result names itself by its failing set, which the fingerprint carries.
+    return isinstance(_detail(fact).get("test_outcome"), dict)
+
+
+def can_seed_loop(fact: dict[str, Any]) -> bool:
+    """Whether one fact may *start* a loop finding. Every fact still feeds the gate."""
+    kind = str(fact.get("kind") or "")
+    if kind not in _LOOP_CANDIDATE_KINDS:
+        return False
+    if not has_loop_discriminator(fact):
+        return False
+    if kind in _SHELL_KINDS and is_read_only_command(str(fact.get("target") or "")):
+        return False
+    return True
+
 # A source file claimed by more than this many docs is infrastructure — a
 # composition root like `server.py` (15 claimants) or `App.tsx` (8) — not a
 # subject any single doc owns, and it carries no ownership signal: touching it
@@ -87,6 +235,13 @@ _LOOP_CANDIDATE_KINDS = frozenset({"command", "file_write", "test", "test_result
 # (`tier0_store.py`, `ProviderAccounts.tsx`), then a clean break to the ≥5 tail
 # which is exactly the composition roots and cross-cutting infra modules.
 DOC_HUB_OWNER_LIMIT = 4
+
+# The same rule one level out, for the Phase 7.9 dependency-reach refinement: a
+# changed file reaching more than this many dependents is a hub by reach, and the
+# docs owning those dependents are no more "the owners" of the change than the 15
+# claimants of `server.py` are. `server.py` reaches 19-20 files at ≤2 hops, which
+# is exactly how a 3-file edit produced 21 dirty docs.
+DOC_REACH_DEPENDENT_LIMIT = 8
 
 
 def normalize_target(target: str | None, project_root: str | None = None) -> str | None:
@@ -143,12 +298,19 @@ def _failing_set(fact: dict[str, Any]) -> frozenset[str] | None:
 
 
 def _evidence(facts: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fact references an annotation carries so a reader can re-check it."""
+    """Fact references an annotation carries so a reader can re-check it.
+
+    `content_hash` is part of the reference, not decoration: it is half of the
+    discriminator that says a repeat was the *same* action, and a reader holding
+    only targets cannot tell a finding that rests on evidence from one that rests
+    on nothing (`loop_finding_unsupported`).
+    """
     return [
         {
             "fact_id": fact.get("id"),
             "kind": fact.get("kind"),
             "target": fact.get("target"),
+            "content_hash": fact.get("content_hash"),
             "fingerprint": fact.get("fingerprint"),
             "source_seq": fact.get("source_seq"),
             "created_at": fact.get("created_at"),
@@ -197,7 +359,7 @@ def detect_loop(facts: Sequence[dict[str, Any]]) -> LoopFinding | None:
     ordered = sorted(facts, key=lambda fact: (fact.get("created_at") or 0.0))
     groups: dict[str, list[dict[str, Any]]] = {}
     for fact in ordered:
-        if str(fact.get("kind") or "") not in _LOOP_CANDIDATE_KINDS:
+        if not can_seed_loop(fact):
             continue
         fingerprint = fact.get("fingerprint")
         if isinstance(fingerprint, str) and fingerprint:
@@ -219,6 +381,43 @@ def detect_loop(facts: Sequence[dict[str, Any]]) -> LoopFinding | None:
                 evidence=_evidence(group),
             )
     return best
+
+
+#: Why a stored loop finding does not stand when it is read back.
+LOOP_UNSUPPORTED_REASON = (
+    "Every fact behind this finding was recorded without a target or a content "
+    "hash, so the repeat it rests on cannot be told apart from any other call of "
+    "the same tool. Recorded before the capture fix; withheld rather than deleted."
+)
+
+
+def loop_finding_unsupported(evidence: Any) -> bool:
+    """Whether a stored `loop-detected` finding still stands, judged at read time.
+
+    The capture and detection fixes stop new findings like this from being
+    written, but 390 of 397 already-stored ones rest on target-less facts and
+    would go on being read as real. They are invalidated **here**, by the same
+    rule the detector now applies, rather than by rewriting or deleting the rows:
+    a stored finding is a record of what was concluded and stays exactly as it was
+    concluded. Retracting it is the reader's job, and it is done in the open.
+
+    Evidence recorded before this change carries no `content_hash` key at all; an
+    absent key reads as absent evidence, which is the honest reading — nothing in
+    the row asserts a discriminator was ever seen.
+    """
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence or "[]")
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    for item in evidence:
+        if not isinstance(item, dict):
+            return False
+        if item.get("target") or item.get("content_hash"):
+            return False
+    return True
 
 
 def _progress_in_window(
@@ -286,32 +485,88 @@ class VerificationFinding:
         return f"claims done · {ran} · {passed} — claim: {self.claim}"
 
 
+def claim_scope(text: str, *, limit: int = CLAIM_SCOPE_CHARS) -> str:
+    """The closing part of a message, with quotation removed.
+
+    Two reductions, both aimed at the same error — reading text *about* work as a
+    verdict *on* it. Fenced blocks and code spans are replaced by whitespace of
+    the same shape, because a message quoting `all tests pass` is discussing the
+    phrase; and the search is bounded to a whole number of trailing paragraphs
+    within `limit`, because a claim is made in a summary, not on page four of a
+    report.
+    """
+    stripped = _FENCED_BLOCK.sub(lambda m: " " * len(m.group(0)), text or "")
+    stripped = _CODE_SPAN.sub(lambda m: " " * len(m.group(0)), stripped)
+    if len(stripped) <= limit:
+        return stripped
+    cut = len(stripped) - limit
+    boundary = stripped.find("\n\n", cut)
+    return stripped[boundary + 2 :] if boundary != -1 else stripped[cut:]
+
+
+def _claim_negated(text: str, start: int) -> bool:
+    """Whether a failure word sits immediately before the claim."""
+    window = text[max(0, start - _CLAIM_NEGATION_WINDOW) : start]
+    return _CLAIM_NEGATION.search(window) is not None
+
+
+def claim_match(text: str) -> tuple[str, re.Match[str]] | None:
+    """The completion claim in a message, with its scoped text, or None.
+
+    One place, so every reader of "did this text claim done" applies the same
+    three reductions: quotation removed, closing paragraphs only, and a claim
+    whose immediately preceding words invert it is not a claim.
+    """
+    scoped = claim_scope(text or "")
+    match = CLAIM_PATTERN.search(scoped)
+    while match is not None and _claim_negated(scoped, match.start()):
+        match = CLAIM_PATTERN.search(scoped, match.end())
+    return (scoped, match) if match is not None else None
+
+
 def detect_declared_vs_verified(
-    claim_text: str, facts: Sequence[dict[str, Any]]
+    claim_text: str,
+    facts: Sequence[dict[str, Any]],
+    *,
+    claim_evidence: dict[str, Any] | None = None,
 ) -> VerificationFinding | None:
     """Keep "declared done", "tests passed", and "correct" strictly apart.
 
     Only a *claim without matching verification* is a finding: an agent that says
     it is done after a green run is reporting accurately and deserves no
     annotation. Passing tests are still never reported as correctness.
+
+    **A run with no test facts at all produces nothing.** With zero `test_result`
+    facts the detector cannot tell "this agent verified nothing" from "this
+    install captured nothing", and the two mean opposite things about the agent —
+    one `test_result` fact stood against 4,485 `command_result` facts in a 24-hour
+    window, so the second reading was almost always the true one and every finding
+    said "nothing verified" about a substrate rather than about a claim (measured
+    2026-08-21). What remains is the checkable case: tests ran, they did not all
+    pass, and the agent said it was done anyway.
     """
-    match = CLAIM_PATTERN.search(claim_text or "")
-    if not match:
+    found = claim_match(claim_text or "")
+    if found is None:
         return None
+    scoped, match = found
     tests = [fact for fact in facts if str(fact.get("kind") or "") in _TEST_KINDS]
-    tests_ran = bool(tests)
-    latest = max(tests, key=lambda fact: fact.get("created_at") or 0.0) if tests else None
-    failing = _failing_set(latest) if latest is not None else None
-    tests_passed = bool(latest is not None and failing is not None and not failing)
-    if tests_ran and tests_passed:
+    if not tests:
         return None
-    excerpt = claim_text[max(0, match.start() - 80) : match.end() + 80].strip()
+    latest = max(tests, key=lambda fact: fact.get("created_at") or 0.0)
+    failing = _failing_set(latest)
+    tests_passed = bool(failing is not None and not failing)
+    if tests_passed:
+        return None
+    excerpt = scoped[max(0, match.start() - 80) : match.end() + 80].strip()
     return VerificationFinding(
         declared=True,
-        tests_ran=tests_ran,
-        tests_passed=tests_passed,
+        tests_ran=True,
+        tests_passed=False,
         claim=excerpt[:240],
-        evidence=_evidence(tests),
+        # The claim's own pointer first, so a reader can open the turn that made
+        # it. Without it every finding in the lifetime corpus carried an empty
+        # evidence set and broke the "evidence is a set" contract outright.
+        evidence=[*( [claim_evidence] if claim_evidence else [] ), *_evidence(tests)],
     )
 
 
@@ -389,14 +644,36 @@ def _reach_owners(
     target: str,
     ownership: dict[str, tuple[str, ...]],
     dependents: dict[str, tuple[str, ...]] | None,
+    *,
+    hub_owner_limit: int = DOC_HUB_OWNER_LIMIT,
+    dependent_limit: int = DOC_REACH_DEPENDENT_LIMIT,
 ) -> tuple[str, ...]:
-    """Docs owning a *dependent* of ``target`` — the Phase 7.9 reach refinement."""
+    """Docs owning a *dependent* of ``target`` — the Phase 7.9 reach refinement.
+
+    The hub rule applies to reach exactly as it applies to direct ownership, and
+    for the same reason. `build_doc_ownership` drops a file more than four docs
+    claim because it carries no ownership signal; reach re-admitted that
+    explosion through the back door by unioning the owners of *every* dependent,
+    and one window's finding read "21 doc(s) owe an update for 3 changed source
+    file(s)" — very nearly the whole `.docs` tree (measured 2026-08-21).
+
+    So a file whose reverse reach exceeds `dependent_limit` is a hub by reach and
+    contributes no owners, and a reach set resolving to more than
+    `hub_owner_limit` docs is dropped whole. Both are the same statement: a
+    signal that points at everything points at nothing. Truncating to the first N
+    instead would report an arbitrary subset as *the* owners.
+    """
     if not dependents:
         return ()
+    reached = dependents.get(target, ())
+    if len(reached) > dependent_limit:
+        return ()
     owners: dict[str, None] = {}
-    for dependent in dependents.get(target, ()):
+    for dependent in reached:
         for owner in ownership.get(dependent, ()):
             owners.setdefault(owner, None)
+    if len(owners) > hub_owner_limit:
+        return ()
     return tuple(owners)
 
 
@@ -450,6 +727,15 @@ def detect_doc_debt(
         dirty=remaining,
         changed=tuple(changed),
         evidence=_evidence(contributing),
+    )
+
+
+def doc_debt_content(doc: str, changed: Sequence[str], *, shown: int = 8) -> str:
+    """One doc's debt, stated as the files it owes an update for."""
+    listed = ", ".join(changed[:shown])
+    more = f" (+{len(changed) - shown} more)" if len(changed) > shown else ""
+    return (
+        f"{doc} owes an update for {len(changed)} changed source file(s): {listed}{more}"
     )
 
 
@@ -608,8 +894,14 @@ def verification_dedupe_key(agent_run_id: str, finding: VerificationFinding) -> 
     )
 
 
-def doc_debt_dedupe_key(project_id: str, finding: DocDebtFinding) -> str:
-    return _dedupe_key("doc-debt", project_id, "\x1f".join(sorted(finding.dirty)))
+def doc_debt_dedupe_key(project_id: str, doc: str) -> str:
+    # Per doc, not per dirty *set* — the same correction provenance made below,
+    # for the same reason. A set hash changed whenever one more doc went dirty, so
+    # every evaluation minted a new row restating all the others: 137 rows carried
+    # 137 distinct keys, and one window's 8-doc set was a strict subset of the
+    # 9-doc set beside it (measured 2026-08-21). Keyed on the doc, one dirty doc
+    # is one row forever and its changed-file list lives in the content.
+    return _dedupe_key("doc-debt", project_id, doc)
 
 
 def provenance_dedupe_key(project_id: str, edge: ProvenanceEdge) -> str:
@@ -669,6 +961,11 @@ CLAIM_TRANSCRIPT_BYTES = 256 * 1024
 # busy window; later passes pick up the remainder because per-edge dedupe skips
 # everything already recorded.
 PROVENANCE_MAX_NEW_PER_PASS = 50
+# The same bound for doc debt, now that it writes one row per dirty doc rather
+# than one row per dirty *set*. Not truncation: a doc past the cap keeps its debt
+# and lands on the next turn boundary, because the per-doc key makes an
+# already-recorded doc a no-op.
+DOC_DEBT_MAX_NEW_PER_PASS = 20
 # Code-graph (Phase 7.9) thresholds. A blast-radius finding fires only when an
 # edit reaches at least this many dependents — a change with a handful of callers
 # is not worth a human's attention, and the noise floor is what keeps the signal
@@ -836,10 +1133,10 @@ class DeterministicConsumerService:
     async def _declared(
         self, context: ConsumerContext, session_id: str, facts: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        text = await self._last_assistant_text(session_id)
+        text, claim_evidence = await self._last_assistant_text(session_id)
         if not text:
             return []
-        finding = detect_declared_vs_verified(text, facts)
+        finding = detect_declared_vs_verified(text, facts, claim_evidence=claim_evidence)
         if finding is None:
             return []
         written = await self._annotate(
@@ -863,22 +1160,38 @@ class DeterministicConsumerService:
         # a *dependent* of a changed file also owes an update (dependency reach, not
         # only direct ownership). Off when the graph is absent — behaviour unchanged.
         dependents = await self._doc_debt_dependents(context, facts)
-        finding = detect_doc_debt(
+        debt = build_doc_debt_map(
             facts, ownership, project_root=context.project_root, dependents=dependents
         )
-        if finding is None:
+        if not debt:
             return []
-        written = await self._annotate(
-            context,
-            tag="doc-debt",
-            content=finding.content,
-            evidence=finding.evidence,
-            dedupe_key=doc_debt_dedupe_key(context.project_id, finding),
-            # Project-scoped: doc debt is a property of the repository, not of the
-            # run that happened to incur the latest slice of it.
-            run_scoped=False,
-        )
-        return [written] if written else []
+        # One row per dirty doc. The finding used to be one row listing the whole
+        # dirty set, which is the shape whose key could not be stable.
+        writes: dict[str, list[dict[str, Any]]] = {}
+        for fact in facts:
+            if str(fact.get("kind") or "") not in _WRITE_KINDS:
+                continue
+            target = normalize_target(fact.get("target"), context.project_root)
+            if target:
+                writes.setdefault(target, []).append(fact)
+        written: list[dict[str, Any]] = []
+        for doc, changed in sorted(debt.items()):
+            if len(written) >= DOC_DEBT_MAX_NEW_PER_PASS:
+                break
+            contributing = [fact for path in changed for fact in writes.get(path, ())]
+            annotation = await self._annotate(
+                context,
+                tag="doc-debt",
+                content=doc_debt_content(doc, changed),
+                evidence=_evidence(contributing),
+                dedupe_key=doc_debt_dedupe_key(context.project_id, doc),
+                # Project-scoped: doc debt is a property of the repository, not of
+                # the run that happened to incur the latest slice of it.
+                run_scoped=False,
+            )
+            if annotation:
+                written.append(annotation)
+        return written
 
     async def _doc_debt_dependents(
         self, context: ConsumerContext, facts: Sequence[dict[str, Any]]
@@ -1095,8 +1408,10 @@ class DeterministicConsumerService:
                 "dead-code",
                 orphan["path"],
                 f"{orphan['path']} has no inbound import or call in the graph — a "
-                "dead-code candidate. Guarded against nothing: an entry point or a "
-                "dynamic caller (test discovery, plugin registry) is a false positive.",
+                "dead-code candidate. Paths the graph could never draw an edge to "
+                "(outside the root, generated or served output, tests) are already "
+                "excluded; an entry point or a dynamic caller (plugin registry, "
+                "CLI dispatch) is still a false positive.",
                 [orphan],
             )
         for god in await self.code_graph.god_nodes(pid, min_fan_in=GOD_NODE_MIN_FAN_IN):
@@ -1120,14 +1435,22 @@ class DeterministicConsumerService:
             )
         return written
 
-    async def _last_assistant_text(self, session_id: str) -> str:
+    async def _last_assistant_text(
+        self, session_id: str
+    ) -> tuple[str, dict[str, Any] | None]:
+        """The last assistant turn's text, and a pointer back to it.
+
+        The pointer is what makes a claim finding checkable: the transcript and
+        the message's own timestamp, so a reader can open the turn the claim was
+        read from rather than trusting the excerpt.
+        """
         session = self.sessions.sessions.get(session_id)
         if session is None:
-            return ""
+            return "", None
         path = getattr(session, "transcript_path", None)
         native_id = session.record.native_session_id
         if not conversation_is_readable(path, session.record.backend, native_id):
-            return ""
+            return "", None
         try:
             messages = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -1136,17 +1459,27 @@ class DeterministicConsumerService:
                 timeout=2,
             )
         except (OSError, TimeoutError):
-            return ""
+            return "", None
         assistant = next(
             (item for item in reversed(messages) if item.get("role") == "assistant"), None
         )
         if not assistant:
-            return ""
-        return " ".join(
+            return "", None
+        # Blocks are joined as paragraphs, not with a space: `claim_scope` reads
+        # the closing paragraphs, and a space would fuse the whole turn into one.
+        text = "\n\n".join(
             str(block.get("text") or "")
             for block in assistant.get("content") or []
             if isinstance(block, dict) and block.get("type") == "text"
         )
+        pointer = {
+            "kind": "claim",
+            "session_id": session_id,
+            "agent_run_id": session.record.agent_run_id,
+            "transcript": str(path) if path else None,
+            "message_ts": assistant.get("ts"),
+        }
+        return text, pointer
 
     def status(self) -> dict[str, Any]:
         loops = background.health().get("loops", [])
