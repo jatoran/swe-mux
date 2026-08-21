@@ -668,6 +668,24 @@ Its rules, and what each one is defending:
   On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
   rather than growing into the content. It stays a rail on both layouts — it is per-tab and
   short, unlike the seventeen-entry section list that became a drawer beside it.
+- **A section is one `<section>`, and a section that is reference may fold its body.** The rail
+  is built from headings, so a tab can satisfy it while still rendering as one unbroken column;
+  the borders between concerns come from the section boxes, and Automation, Remote, and Voice all
+  draw one box per heading. Where a section is *reference* rather than a control someone came to
+  change — a full command catalog, a diagnostic readout, a one-time setup — its body goes behind
+  a `<details class="settings-disclosure">` while its `<h3>` stays outside. That split is what
+  keeps the rail entry, the search index, and the scroll-spy intact while the tab stops paying
+  screen for something read twice a year. `data-setting` marks stay outside a collapsed
+  disclosure by convention: `revealSetting` opens the disclosures above its target, but a switch
+  a gate just promised should be on screen when the panel lands, not behind one more state change.
+- **Voice is the worked example, because it was the worst case.** One `<section>` carried eight
+  headings — read-aloud policy, engine, budgets, microphone, seventeen phrase rows, the whole
+  spoken-command catalog, a latency readout, a tester, mobile setup — with the pronunciation
+  lexicon buried as an `<h4>` inside the engine block's Kokoro branch. It is ten sections now, in
+  reading order, three of them folded, with the lexicon owning one; the read-aloud policy stays
+  one numbered block because its three layers are only useful read together. The full list and
+  the rules are in `features/voice.md`, and `frontend/test/renderer/voice-settings.spec.ts` pins
+  them.
 - Opening loads one `GET /api/settings/bundle` (config, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
@@ -685,7 +703,8 @@ Its rules, and what each one is defending:
   HTTPS address, and a phone setup checklist (Use Tailscale DNS on, Android Private DNS off or
   automatic). The Voice tab's Mobile voice section deliberately repeats the connection state,
   secure-address button, and phone checklist: someone setting up dictation should not have to
-  leave the tab, and Remote remains the canonical copy. Both tabs read the phone checklist from
+  leave the tab, and Remote remains the canonical copy. It is the copy that folds, because it is
+  done once; Remote's own sections stay open, since that whole tab is setup. Both tabs read the phone checklist from
   static copy because the daemon cannot detect the phone's DNS state. The firewall and WSL panels
   render nothing off a supported host, and because each now owns a heading, Settings states the
   unsupported case rather than leaving a heading with nothing under it.
@@ -803,7 +822,7 @@ Its rules, and what each one is defending:
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
   the editor package rather than hand-listed, so it cannot drift from what the editor binds.
-- Voice lists the full spoken control surface in collapsible groups.
+- Voice lists the full spoken control surface in collapsible groups, in a Command reference section that is itself folded away by default.
   Fixed query and navigation grammar comes from the same reference used by spoken help, while current Project, session, panel, launch, status, and approval aliases come from the live command registry.
   Guarded aliases remain listed while unavailable and name the state they require.
 - Appearance exposes one palette picker for the shared browser chrome and xterm theme.

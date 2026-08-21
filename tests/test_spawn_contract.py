@@ -6,10 +6,13 @@ import pytest
 
 from swe_mux.spawn_contract import (
     MAX_SPAWN_ENV,
+    MAX_SPAWN_MODEL_CHARS,
     SpawnRequest,
+    apply_spawn_model,
     base_session_env,
     resolve_contained_cwd,
     resolve_listed_cwd,
+    resolve_spawn_model,
     scrub_claude_session_markers,
 )
 
@@ -203,6 +206,95 @@ def test_spawn_contract_rejects_bad_stage_text(body: dict[str, object], field: s
     with pytest.raises(ValueError) as error:
         SpawnRequest.parse(body)
     assert field in error.value.args[0]
+
+
+def test_spawn_contract_carries_a_requested_model() -> None:
+    request = SpawnRequest.parse(
+        {"backend": "claude", "project_id": "dev", "model": "  opus  "}
+    )
+    assert request.model == "opus"
+    assert SpawnRequest.parse({"backend": "claude", "project_id": "dev"}).model is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"backend": "claude", "project_id": "dev", "model": "   "},
+        {"backend": "claude", "project_id": "dev", "model": 7},
+        {
+            "backend": "claude",
+            "project_id": "dev",
+            "model": "x" * (MAX_SPAWN_MODEL_CHARS + 1),
+        },
+        # A shell has no model to choose, and the contract knows that much without
+        # the Project defaults the spawn handler resolves.
+        {"backend": "shell", "project_id": "dev", "model": "opus"},
+    ],
+)
+def test_spawn_contract_rejects_a_bad_model(body: dict[str, object]) -> None:
+    with pytest.raises(ValueError) as error:
+        SpawnRequest.parse(body)
+    assert "model" in error.value.args[0]
+
+
+def test_a_model_resolves_to_the_spelling_its_cli_is_given() -> None:
+    """Speech arrives as words; the CLI is handed one canonical token.
+
+    Both directions matter: an alias the CLI accepts is passed through untouched,
+    and a spoken family-plus-version becomes the harness's own id, so the card the
+    operator confirms and the argv the CLI receives say the same thing.
+    """
+    assert resolve_spawn_model("claude", "Opus") == "opus"
+    assert resolve_spawn_model("claude", "opus 5") == "claude-opus-5"
+    assert resolve_spawn_model("claude", "claude opus 5") == "claude-opus-5"
+    assert resolve_spawn_model("codex", "GPT-5.1-Codex") == "gpt-5.1-codex"
+
+
+def test_a_model_meant_for_another_harness_is_refused_by_name() -> None:
+    """The failure this exists to prevent: `codex --model opus`, a dead pane.
+
+    Codex declares no aliases precisely because it has none, so a Claude family
+    name reaching it is recognizable as wrong before anything spawns - and the
+    refusal names what Codex does take, so the next attempt can be right.
+    """
+    with pytest.raises(ValueError) as error:
+        resolve_spawn_model("codex", "opus")
+    message = error.value.args[0]["model"]
+    assert "does not recognize" in message and "gpt-" in message
+
+
+def test_a_harness_with_no_measured_model_argument_refuses_and_says_where_to_set_one() -> None:
+    for harness in ("omp", "pi", "opencode"):
+        with pytest.raises(ValueError) as error:
+            resolve_spawn_model(harness, "anything")
+        assert "launch profile" in error.value.args[0]["model"]
+
+
+def test_a_model_that_would_read_as_a_flag_is_never_accepted() -> None:
+    """The value becomes an argv token beside a flag; it must not become a flag."""
+    for hostile in ("--dangerously-skip-permissions", "-m", "--model", "--settings x"):
+        with pytest.raises(ValueError):
+            resolve_spawn_model("claude", hostile)
+
+
+def test_the_requests_model_replaces_the_one_the_earlier_slots_set() -> None:
+    """"The request wins" has to be a fact, not two flags and a coin toss.
+
+    Both spellings a profile could have used are replaced: the flag-with-value
+    pair, and Codex's generic `-c model=…` config override, whose introducing
+    flag would otherwise be left dangling with no value behind it.
+    """
+    assert apply_spawn_model(
+        "claude", ["--model", "sonnet", "--verbose"], "opus"
+    ) == ["--verbose", "--model", "opus"]
+    assert apply_spawn_model("claude", ["--model=sonnet"], "opus") == ["--model", "opus"]
+    assert apply_spawn_model(
+        "codex", ["-c", "model=gpt-4", "--sandbox", "read-only"], "gpt-5.1"
+    ) == ["--sandbox", "read-only", "--model", "gpt-5.1"]
+    # A neighbouring config key that merely starts the same way is left alone.
+    assert apply_spawn_model(
+        "codex", ["-c", "model_reasoning_effort=high"], "gpt-5.1"
+    ) == ["-c", "model_reasoning_effort=high", "--model", "gpt-5.1"]
 
 
 def test_spawn_contract_env_is_bounded() -> None:

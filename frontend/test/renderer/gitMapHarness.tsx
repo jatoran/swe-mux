@@ -54,6 +54,21 @@ globalThis.fetch=async input=>{
       match_method:'tier0_write',contributed_paths:['frontend/src/style.css'],source:'tier0_write',observed_at:1786800002,
     },
   ]})
+  // Landing is drawn on the Map row now, so the tab reads the queue and this checkout's
+  // verification gate. Nothing is queued here: this page is about the row offering the
+  // act, and `git-land-harness.html` is about the queue reporting a running one.
+  if(url.startsWith('/api/land/verify-command'))return response({
+    configured:true,source:'convention',display:'.worktree-verify',digest:'d1',
+    approved:true,previously_approved:true,approved_source:'#!/usr/bin/env bash\nexit 0\n',
+    current_source:'#!/usr/bin/env bash\nexit 0\n',
+    config_command:'',config_revision:'r1',config_status:'ready',
+    config_path:'D:\\PROJECTS\\swe-mux\\.swe-mux\\config.toml',
+    script_name:'.worktree-verify',script_present:true,plan:null,
+  })
+  if(url.startsWith('/api/land'))return response({
+    requests:[],hourly_budget:12,hold_timeout_seconds:1800,retry_verification:false,
+    installed_enabled:true,project_enabled:true,agent_grant:'draft',
+  })
   throw new Error(`Unexpected harness request: ${url}`)
 }
 

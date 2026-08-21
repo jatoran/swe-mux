@@ -769,6 +769,7 @@ interface SpawnRequest {
   completion_mode?: 'interactive' | 'one_shot'
   seed_text?: string                // agent backends only; ≤ 500k chars; the agent RUNS it
   stage_text?: string               // agent backends only; ≤ 500k chars; parked unsent
+  model?: string                    // agent backends only; ≤ 100 chars; the CLI's own spelling
 }
 ```
 
@@ -806,6 +807,18 @@ prompt that reads the staged file — which also removes the quoting-inflation r
 Windows command line carries.
 Because the seed rides argv, the agent runs it: `seed_text` submits by construction and can
 never leave text waiting for review.
+
+`model` names the model the new session's CLI should run, in that CLI's own spelling (an
+alias like `opus`, or a full id).
+It is a name rather than argv because whether a model can be chosen at all - and which names
+are accepted - is a per-harness declaration (`features/backends.md`), so the daemon maps it
+and refuses before anything spawns: an explicit `backend: 'shell'` is refused at parse, and a
+harness that declares no model argument, or a name it would not recognize, is refused once
+the backend has resolved through the Project's defaults.
+The request's model **replaces** any the global harness arguments or the launch profile set
+rather than joining it, because two `--model` flags on one command line is a per-CLI coin
+toss (`features/launch-profiles.md`).
+The refusal is a 400, not a session that starts and dies with the flag echoed back at it.
 
 `stage_text` is the stage-without-send counterpart, mutually exclusive with `seed_text`.
 The daemon spawns the session, waits up to 15 s for it to read `idle` (a fresh Claude
@@ -1549,6 +1562,7 @@ POST   /land                         {project_id, worktree_root}
 DELETE /land/{request_id}
 GET    /land/{request_id}/events
 GET    /land/verify-command          ?project_id=&worktree_root=
+PUT    /land/verify-command          {project_id, command, revision, worktree_root?}
 POST   /land/verify-command/approve  {project_id, worktree_root, digest}
 GET    /processes[?session=&include_ended=1&unique_memory=1&summary=1]
 POST   /processes/action             {session_id, pid, identity_id, action}
@@ -1573,8 +1587,31 @@ branch is on the trunk. `GET /land` returns the queue plus its bounds (`hourly_b
 `hold_timeout_seconds`, `retry_verification`); `409 already_queued` names an active request for
 that branch, and `DELETE` refuses with `409 not_cancellable` once a step is in flight.
 
+A row that is `verifying` **under this daemon** additionally carries `verify_progress`; every other
+row carries `null`. The payload is `{step_index, step_name, expected_step_count, expected_steps,
+beyond_plan, completed_steps[], lines, started_at, elapsed_ms, step_started_at, step_elapsed_ms,
+attempt, attempts, finished}`. Each field is observed rather than estimated, and the shape has no
+percentage in it by design: `step_index` counts the `=== name ===` markers the gate itself printed
+(`0` means it announced none, which is not "on its first step"), and `expected_step_count` is
+`null` unless a byte-identical run has already **passed** and recorded its steps - it returns to
+`null`, with `beyond_plan: true`, the moment a run overruns that plan, so "step 8 of 7" cannot be
+rendered. The reading is in memory and dies with the process; a restart that returns a row to
+`queued` reports none rather than a stale snapshot. See `features/land-queue.md`.
+
 `GET /land/verify-command` reports the command a land would run, its digest, whether those exact
-bytes are approved, and both the approved and current text so the prompt can show a diff.
+bytes are approved, and both the approved and current text so the prompt can show a diff. It also
+carries the editable half (`config_command`, `config_revision`, `config_status`, `config_path`),
+which convention applies (`script_name`, `script_present`), and the `plan` a byte-identical passing
+run recorded (`{steps, duration_ms, observed_at}`) or `null`.
+
+`PUT /land/verify-command` sets `[worktree] verify_command` in the Project's `.swe-mux/config.toml`,
+or clears it when `command` is empty, falling back to the `.worktree-verify` convention. It writes
+exactly that one key under the config's own revision guard: `409 revision_conflict` on a stale
+revision, `409 project_config_malformed` on a config it cannot parse, `400` on a command over 4096
+characters, and it writes nothing when it refuses. **It never approves**, and cannot: approval is a
+digest over the bytes, so a write invalidates it without this route touching approval at all -
+which is what keeps an agent from approving the command its own land runs.
+
 `POST /land/verify-command/approve` requires the digest the caller was shown: `409
 digest_mismatch` means the bytes moved between the prompt and the click and returns the new
 digest, and `409 not_configured` means the repository declares no gate.

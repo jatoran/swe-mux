@@ -1672,6 +1672,23 @@ body {
 .settings-content label.check>span{grid-column:1}.settings-content label.check>input{grid-column:2;justify-self:start;margin:2px 0 0}
 .settings-content input:not([type=checkbox]),.settings-content select,.settings-content textarea{min-height:calc(31px*var(--ui-scale));border:1px solid var(--line);border-radius:0;padding:6px 8px;background:var(--bg);color:var(--text);font:inherit}
 .settings-content textarea{min-height:calc(82px*var(--ui-scale));resize:vertical}.settings-content p{max-width:82ch;margin:8px 0;color:var(--muted);line-height:1.5!important}
+/* A section whose body is reference rather than a control someone came to change:
+   the full spoken-command catalog, the wake-word tester and latency readout, the
+   one-time mobile setup. The `<h3>` stays outside the disclosure so the section
+   rail still indexes it and the search jump still lands on it; only the body
+   folds. The summary is deliberately a full-width row rather than a bare arrow —
+   it has to read as "there is more here", not as decoration.
+   `revealSetting` opens the disclosures above its target, so a marked control inside
+   one is still reachable; the convention is nonetheless to keep `data-setting` marks
+   above the fold, because a switch a deep link promised should be on screen when the
+   panel lands rather than behind one more state change. */
+.settings-content .settings-disclosure{margin:8px 0;border:1px solid var(--line);background:var(--bg)}
+.settings-content .settings-disclosure>summary{padding:8px 10px;color:var(--text);cursor:pointer;list-style-position:inside}
+.settings-content .settings-disclosure>summary:hover{background:var(--panel2)}
+.settings-content .settings-disclosure[open]>summary{border-bottom:1px solid var(--line);color:var(--green)}
+.settings-content .settings-disclosure>:not(summary){margin-left:10px;margin-right:10px}
+.settings-content .settings-disclosure>h4{margin:12px 10px 0}
+.settings-content .settings-disclosure>:last-child{margin-bottom:10px}
 /* "Which of these two values this window is actually using." Set apart from the
    surrounding help text because it is a statement about *this device*, and the
    two scale selects are otherwise indistinguishable in effect from here. */
@@ -4175,11 +4192,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Approved and current bytes are read side by side, so the block scrolls inside
    itself rather than widening the drawer. */
 .git-land-source{max-height:220px;margin:0;padding:8px;overflow:auto;border-radius:4px;background:var(--bg-alt,#11141a);color:var(--fg);font-size:9px;white-space:pre}
-.git-land-actions{display:grid;gap:4px}
 .git-land-launch{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 0}
-.git-land-branch{display:flex;flex-direction:column;min-width:0;flex:1}
-.git-land-branch strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.git-land-branch small{overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
 .git-land-list{display:grid;border-top:1px solid var(--line)}
 .git-land-row{display:grid;gap:4px;padding:8px 0;border-bottom:1px solid var(--line);min-width:0}
 .git-land-row-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
@@ -4195,6 +4208,42 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-paths{display:grid;gap:2px;margin:0;padding-left:14px;font-size:9px}
 .git-land-paths code{overflow-wrap:anywhere}
 .git-land-history summary{cursor:pointer;color:var(--muted);font-size:9px}
+.git-land-list h4,.git-land-row-section h4{display:flex;align-items:baseline;gap:8px;margin:0;padding:6px 0;color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.git-land-list h4 small,.git-land-row-section h4 small{font-weight:400;letter-spacing:0;text-transform:none}
+/* Queue order is read top-down, so the position is a numeral rather than a bullet:
+   "3rd in line" is the fact a reader wants and a list marker cannot state. */
+.git-land-position{min-width:16px;color:var(--muted);font-size:9px;text-align:right;font-variant-numeric:tabular-nums}
+.git-land-command-editor{display:grid;gap:6px;padding-top:6px;border-top:1px dashed var(--line)}
+.git-land-command-editor label{display:grid;gap:4px}
+.git-land-command-editor label span{color:var(--muted);font-size:9px}
+.git-land-command-editor input{width:100%;padding:5px 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg-alt,#11141a);color:var(--fg);font-family:inherit;font-size:10px}
+.git-land-command-editor>div{display:flex;flex-wrap:wrap;gap:6px}
+.git-land-command-editor small.warn{color:var(--amber);font-size:9px}
+.git-land-plan{margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
+.git-land-plan small{display:block;color:var(--muted);opacity:.75}
+
+/* Landing, on the Map row of the worktree it acts on. Set apart from the row's change
+   groups by a rule rather than a box: it is another reading of the same checkout, not a
+   panel that happens to be parked here. */
+.git-land-row-section{display:grid;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid var(--line);min-width:0}
+.git-land-row-section .git-land-launch{flex-wrap:wrap}
+.git-land-row-section .git-land-launch small{color:var(--muted);font-size:8px}
+.git-land-last{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
+.git-land-last code{font-size:8px}
+
+/* A running gate's own reading of itself. Deliberately no bar and no percentage: the
+   steps of a real gate take 175s and 3s in one run, so any denominator drawn as a
+   proportion would be fiction. What is shown is the step, its name, and elapsed time. */
+.git-land-progress{display:grid;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;min-width:0}
+.git-land-progress.busy{border-color:var(--accent)}
+.git-land-progress.warn{border-color:var(--amber)}
+.git-land-progress-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
+.git-land-progress-head button{margin-left:auto}
+.git-land-progress-detail{color:var(--fg);font-size:9px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.git-land-steps{display:grid;gap:2px;margin:0;padding:0;list-style:none}
+.git-land-steps li{display:flex;align-items:baseline;gap:8px;color:var(--muted);font-size:9px}
+.git-land-steps li small{margin-left:auto;font-variant-numeric:tabular-nums}
+.git-land-note{color:var(--muted);font-size:8px}
 .git-review-backdrop{position:fixed;inset:0;z-index:120;display:grid;place-items:center;background:#050608c7;backdrop-filter:blur(5px)}
 .git-review-modal{width:min(1500px,calc(100vw - 32px));height:min(940px,calc(100vh - 32px));display:flex;flex-direction:column;border:1px solid #3a424c;border-radius:10px;background:var(--bg);box-shadow:0 30px 100px #000;overflow:hidden}
 .git-review-header{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}

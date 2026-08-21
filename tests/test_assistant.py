@@ -1541,6 +1541,40 @@ async def test_spawn_with_a_client_goes_through_the_device_pane(tmp_path: Path) 
         service.store.close()
 
 
+async def test_a_client_spawn_carries_the_model_as_a_name(tmp_path: Path) -> None:
+    """The device posts the model back; it never composes the flag.
+
+    Keeping the per-harness mapping daemon-side is what stops a harness name (or a
+    harness's argv grammar) being compiled into the browser.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps(
+                {"project": "pixel lab", "backend": "claude", "model": "opus"}
+            ),
+        },
+    }
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Spawned.")], trust="auto"
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "open an opus session", {"client_id": "tab-1"})
+        event = await wait_for_dispatched(emitted, "spawn_session")
+        assert event.payload["model"] == "opus"
+        service.report_ui_result(
+            str(event.payload["id"]), {"ok": True, "detail": "spawned into the active pane"}
+        )
+        task = service._turn_tasks.get(dialog["id"])
+        assert task is not None
+        await asyncio.wait_for(task, timeout=10)
+    finally:
+        service.store.close()
+
+
 def test_new_kinds_classify_under_the_trust_policy() -> None:
     assert AssistantService._classify("type_into_session", {}) == "reversible"
     assert AssistantService._classify("submit_session_composer", {}) == "consequential"
@@ -1635,6 +1669,117 @@ async def test_spawn_refuses_seed_and_stage_together(tmp_path: Path) -> None:
         service.store.close()
 
 
+async def test_spawn_with_a_model_reaches_the_spawn_body_in_the_clis_spelling(
+    tmp_path: Path,
+) -> None:
+    """"Open an opus session" has to arrive as something the CLI will accept.
+
+    The daemon does the argv mapping, so what travels is a model *name* - but the
+    canonical one, resolved at preflight, because the card the operator confirmed
+    said that spelling and the launch must not quietly differ from it.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps(
+                {"project": "pixel lab", "backend": "claude", "model": "opus 5"}
+            ),
+        },
+    }
+    service, _emitted, _queue, effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Spawned.")], trust="auto"
+    )
+    try:
+        await run_turn(service, "open an opus 5 session in pixel lab")
+        assert effects["spawned"] == [
+            {"project_id": "p1", "backend": "claude", "model": "claude-opus-5"}
+        ]
+    finally:
+        service.store.close()
+
+
+async def test_a_model_the_harness_cannot_take_is_refused_before_a_card_opens(
+    tmp_path: Path,
+) -> None:
+    """The refusal is the whole feature: no card, no spawn, no pane that dies.
+
+    Two shapes of it, because they fail for different reasons and the operator
+    needs to hear which: a name that harness does not know, and a harness mux has
+    measured no model argument for at all.
+    """
+    service, _emitted, _queue, effects = make_service(tmp_path)
+    try:
+        unknown = await service._preflight_mutation(
+            "spawn_session", {"project": "pixel lab", "backend": "codex", "model": "opus"}
+        )
+        assert unknown is not None and "does not recognize" in unknown["error"]
+        unmeasured = await service._preflight_mutation(
+            "spawn_session", {"project": "pixel lab", "backend": "pi", "model": "opus"}
+        )
+        assert unmeasured is not None and "launch profile" in unmeasured["error"]
+        assert effects["spawned"] == []
+    finally:
+        service.store.close()
+
+
+async def test_a_model_without_a_resolvable_harness_asks_for_one(tmp_path: Path) -> None:
+    """Validating against a guessed harness would defeat the check it is doing.
+
+    This Project declares no default backend, so the answer to "does that CLI take
+    that model" is unknowable here; asking costs a round, guessing costs the card
+    its meaning.
+    """
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        refusal = await service._preflight_mutation(
+            "spawn_session", {"project": "pixel lab", "model": "opus"}
+        )
+        assert refusal is not None and "backend" in refusal["error"]
+    finally:
+        service.store.close()
+
+
+async def test_a_spawn_without_a_model_keeps_the_daemons_default_chain(
+    tmp_path: Path,
+) -> None:
+    """Only a model request pins the harness.
+
+    Pinning unconditionally would make every assistant spawn bypass the Project's
+    committed `preferred_backend`, which this layer cannot read.
+    """
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        arguments: dict[str, Any] = {"project": "pixel lab"}
+        assert await service._preflight_mutation("spawn_session", arguments) is None
+        assert "backend" not in arguments
+        # An empty model is the model saying "none"; it must not become `--model ''`.
+        blank: dict[str, Any] = {"project": "pixel lab", "model": "  "}
+        assert await service._preflight_mutation("spawn_session", blank) is None
+        assert "model" not in blank and "backend" not in blank
+    finally:
+        service.store.close()
+
+
+async def test_spawn_card_names_the_model_when_one_was_asked_for() -> None:
+    from swe_mux.assistant import restate_action
+
+    with_model = restate_action(
+        "spawn_session", {"project": "pixel lab", "backend": "claude", "model": "opus"}
+    )
+    assert "on opus" in with_model
+    # Spoken too: the model is the difference between the session they wanted and
+    # an ordinary one, and it costs three words to say.
+    assert "on opus" in restate_action(
+        "spawn_session",
+        {"project": "pixel lab", "backend": "claude", "model": "opus", "seed_text": "go"},
+        spoken=True,
+    )
+    plain = restate_action("spawn_session", {"project": "pixel lab", "backend": "claude"})
+    assert " on " not in plain
+
+
 async def test_spawn_schema_says_which_parameter_submits(tmp_path: Path) -> None:
     # seed_text was documented as staging while actually submitting; the schema
     # must now state the split so the model cannot repeat the 2026-08-20 mistake.
@@ -1648,6 +1793,10 @@ async def test_spawn_schema_says_which_parameter_submits(tmp_path: Path) -> None
         assert "RUNNING" in properties["seed_text"]["description"]
         assert "WITHOUT" in properties["stage_text"]["description"]
         assert "stage_text" in properties["seed_text"]["description"]
+        # The model parameter has to be visible in the catalog: a capability the
+        # model cannot see is one it denies having, which is the exact failure
+        # `seed_text`'s invisibility caused.
+        assert "per harness" in properties["model"]["description"]
     finally:
         service.store.close()
 

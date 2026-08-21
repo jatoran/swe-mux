@@ -522,6 +522,56 @@ def test_conversation_id_argv_is_declared_rather_than_matched() -> None:
     assert resume_command("claude", "") is None
 
 
+def test_choosing_a_model_at_launch_is_declared_per_harness() -> None:
+    """Whether a CLI takes a model - and which names - is a declaration, not a guess.
+
+    Guessing fails silently and totally: the flag is handed to a CLI that does not
+    know it, the CLI exits during startup, and the operator gets a pane that
+    appears and dies. Every harness answers, including with `None`, which is what
+    makes "this harness cannot be launched on a model" a sentence rather than an
+    omission. A declared selection has to be usable, so the flag and namespace it
+    claims are asserted rather than trusted.
+    """
+    from swe_mux.harness import model_launch_args, model_selection, resolve_launch_model
+
+    for name, harness in HARNESSES.items():
+        selection = harness.model_selection
+        if selection is None:
+            assert resolve_launch_model(name, "anything") is None, name
+            assert model_launch_args(name, "anything") == (), name
+            continue
+        assert selection.argv and selection.id_prefixes, name
+        # The canonical flag is what a launch is built from, and every declared
+        # spelling has to be one the CLI would actually read.
+        assert all(flag.startswith("-") for flag in selection.argv), name
+        sample = f"{selection.id_prefixes[0]}sample"
+        assert model_launch_args(name, sample) == (selection.argv[0], sample), name
+
+    # Non-harnesses fail closed rather than composing an argument for nobody.
+    assert model_selection("shell") is None
+    assert model_selection(None) is None
+    assert resolve_launch_model("shell", "opus") is None
+
+
+def test_a_model_flag_is_not_reserved_argv() -> None:
+    """A launch profile pinning a model is supported, so the flag stays available.
+
+    Reserving it would refuse the profile that keeps a "Claude (opus)" entry in the
+    Run menu. What a request-level model does instead is replace what the profile
+    set, which is why `strip_model_args` exists and why this pair has to stay
+    consistent: reserve the flag and the profile becomes unsavable, drop the strip
+    and two `--model` flags reach the CLI.
+    """
+    from swe_mux.harness import reserved_launch_arg_conflict
+
+    for name, harness in HARNESSES.items():
+        selection = harness.model_selection
+        if selection is None:
+            continue
+        for flag in selection.argv:
+            assert reserved_launch_arg_conflict(name, [flag, "x"]) is None, (name, flag)
+
+
 def test_a_command_line_is_matched_to_a_harness_from_the_registry() -> None:
     """Recognizing an already-launched agent must cover every harness.
 

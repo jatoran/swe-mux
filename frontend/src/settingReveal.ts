@@ -124,13 +124,24 @@ export function revealSetting(container: ParentNode, setting: string, options: R
     if (frame) { cancelAnimationFrame(frame); frame = 0 }
   }
 
-  const arrive = (target: HTMLElement) => {
-    stop()
-    // A control inside a closed disclosure is present but unreachable; the reveal opens the
-    // way in rather than scrolling to a summary and calling it arrival.
+  // A control inside a closed disclosure is present but unreachable; the reveal opens the
+  // way in rather than scrolling to a summary and calling it arrival.
+  //
+  // Opened *before* the layout-box test rather than after it, because how a closed
+  // `<details>` hides its body is an engine detail this must not depend on. Current Chromium
+  // skips it with `content-visibility`, which still reports client rects, so the check passes
+  // either way there; a `display:none` implementation reports none, and the wait below would
+  // then observe a control that is already in the DOM until its deadline expired. Opening
+  // first is correct under both, and is what lets a settings section fold its body away
+  // (`.settings-disclosure`) without stranding anything marked inside it.
+  const openDisclosures = (target: HTMLElement): void => {
     for (let node = target.parentElement; node; node = node.parentElement) {
       if (node instanceof HTMLDetailsElement) node.open = true
     }
+  }
+
+  const arrive = (target: HTMLElement) => {
+    stop()
     // One frame later: opening those disclosures reflows everything below them, and a scroll
     // measured against the pre-reflow layout lands short.
     frame = requestAnimationFrame(() => {
@@ -147,7 +158,9 @@ export function revealSetting(container: ParentNode, setting: string, options: R
 
   const attempt = (): boolean => {
     const target = container.querySelector<HTMLElement>(settingSelector(setting))
-    if (!target || !hasLayoutBox(target)) return false
+    if (!target) return false
+    openDisclosures(target)
+    if (!hasLayoutBox(target)) return false
     arrive(target)
     return true
   }
