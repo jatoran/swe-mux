@@ -396,3 +396,77 @@ export function landStateTone(state: LandState): 'ok' | 'warn' | 'busy' | 'idle'
   if (state === 'reconciling' || state === 'verifying' || state === 'landing') return 'busy'
   return 'idle'
 }
+
+export type LandingSummary = {
+  /** The gate's standing, in five words or so. */
+  gate: string
+  gateTone: 'ok' | 'warn' | 'idle'
+  /** What the queue is doing, right now, including a running gate's own step. */
+  queue: string
+  tone: 'ok' | 'warn' | 'busy' | 'idle'
+  /**
+   * Nothing on this tab can land until a human acts here.
+   *
+   * Exactly two causes, and both have their remedy inside the landing strip: the
+   * install-wide sweep is off, or the bytes a land would run are not approved. It is
+   * what opens the strip by default, because a surface that cannot work must not render
+   * as merely quiet (`setting-links.md`).
+   */
+  blocked: boolean
+}
+
+/**
+ * The one line the landing strip shows without being opened.
+ *
+ * It exists because the strip sits above a map and must not turn the map into a panel:
+ * a reader who is not landing anything should be able to ignore it after reading one
+ * line, and a reader who *is* should not have to open it to see that a gate is running.
+ *
+ * Both halves are stated even when they are boring. "Nothing queued" is a fact worth
+ * reading; leaving it blank would make a quiet queue and an unread one look the same,
+ * which is the same conflation the `installed_enabled` reporting exists to prevent.
+ */
+export function landingSummary(
+  queue: LandQueue | null,
+  gate: LandVerifyCommand | null,
+): LandingSummary {
+  const installStopped = queue !== null && !queue.installedEnabled
+  const gateBlocked = gate !== null && (!gate.configured || !gate.approved)
+  const blocked = installStopped || gateBlocked
+  const gateText = gate === null ? 'verification unread'
+    : !gate.configured ? 'no verification command'
+      : gate.approved ? `verification approved · ${gate.display}`
+        : 'verification not approved'
+  const gateTone: 'ok' | 'warn' | 'idle' = gate === null ? 'idle'
+    : gate.configured && gate.approved ? 'ok' : 'warn'
+
+  const active = landQueueOrder(queue?.requests || [])
+  const running = active.find(request => landStateTone(request.state) === 'busy') || null
+  const attention = landHistoryOrder(queue?.requests || [])
+    .find(request => request.state === 'handed_back' || request.state === 'refused') || null
+
+  let queueText: string
+  let tone: LandingSummary['tone']
+  if (installStopped) {
+    // Loudest, because it is the one state where a queue can look busy and be inert.
+    queueText = 'the sweep is switched off — nothing will move'
+    tone = 'warn'
+  } else if (running) {
+    const progress = verifyProgressLabel(running.verifyProgress)
+    const behind = active.length - 1
+    queueText = `${running.branch} · ${landStateLabel(running.state).toLowerCase()}`
+      + (progress ? ` · ${progress}` : '')
+      + (behind > 0 ? ` · ${behind} behind` : '')
+    tone = 'busy'
+  } else if (active.length) {
+    queueText = `${active.length} queued · next ${active[0].branch}`
+    tone = 'idle'
+  } else if (attention) {
+    queueText = `${attention.branch} · ${landStateLabel(attention.state).toLowerCase()}`
+    tone = 'warn'
+  } else {
+    queueText = 'nothing queued'
+    tone = gateTone === 'warn' ? 'warn' : 'idle'
+  }
+  return { gate: gateText, gateTone, queue: queueText, tone, blocked }
+}

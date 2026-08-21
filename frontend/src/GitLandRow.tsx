@@ -1,6 +1,5 @@
 import { useState } from 'preact/hooks'
 import { api } from './api'
-import { GrantGate } from './GrantGate'
 import {
   isActiveLand,
   landStateLabel,
@@ -9,45 +8,45 @@ import {
   type LandQueue,
   type LandRequest,
 } from './gitLand'
-import { landErrorText, useVerifyCommand } from './landState'
+import { landErrorText } from './landState'
 import { normalizePath, shortSha } from './gitWorktrees'
 import type { Project } from './types'
 
 /**
  * Landing, inside the Map row of the worktree being landed.
  *
- * Landing a branch is an act on a checkout you are already looking at, and it used to
- * live on a separate segment with its own list of the same worktrees. Two lists of one
- * thing is how a reader ends up finding a branch twice, and it put the button furthest
- * from the diff that decides whether to press it.
+ * **Only what is true of this checkout.** The button, what its request is doing right
+ * now, and what stopped it last time - a conflict's paths, a refusal's reason. Nothing
+ * here is a property of the Project, because a Project-wide fact drawn on a row is drawn
+ * once per worktree: the verification command's approval block shipped that way first,
+ * and reading the same paragraph about approved bytes under each of eight expansions is
+ * what sent it to the landing strip above the map (`GitLandBar.tsx`).
  *
- * What stayed behind on the Land segment is everything that is *not* about one
- * checkout: the queue's order, its history, the Project's verification command and who
- * besides the operator may start a land. This component holds only what is true of this
- * row, plus the one gate that makes this row's own button inert.
+ * That leaves the row with a real question when landing is blocked, since it can no
+ * longer offer the switch itself. It answers it by *sending the reader to the control*:
+ * one press opens the strip, which holds the grant and the approval. Naming a switch
+ * still obliges offering it (`setting-links.md`); pointing one section up on the same
+ * pane is offering it, and is the thing that rule was written against overlays for.
  *
  * Nothing here moves a trunk. The button enqueues a request and the daemon's supervised
  * sweep is the only thing that reconciles, verifies, and fast-forwards, which is why
  * there is no "land now" to look for.
  */
-export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onChanged }: {
+export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onChanged, onShowLanding }: {
   project: Project
   worktreeRoot: string
   /** `null` for a detached HEAD, which cannot be landed and says so rather than failing. */
   branch: string | null
   detached: boolean
-  /** The shared queue read (`landState.useLandQueue`), so this row and the Land segment
+  /** The shared queue read (`landState.useLandQueue`), so this row and the landing strip
    *  cannot disagree about which request is running. */
   queue: LandQueue | null
   onChanged: () => void | Promise<void>
+  /** Open the landing strip, which owns every Project-wide control this row names. */
+  onShowLanding: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [showGate, setShowGate] = useState(false)
-  // Resolved for *this* checkout: the script convention is fingerprinted from the
-  // worktree's own copy, so a branch that edited its gate is unapproved here while the
-  // primary checkout's reading still says approved.
-  const { gate, refresh: refreshGate } = useVerifyCommand(project.id, worktreeRoot, true)
 
   // Matched on either coordinate: the daemon records the root Git resolved, which can
   // differ from the one Map listed in separator and case, and a request whose worktree
@@ -75,22 +74,9 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
     } catch (cause) { setError(landErrorText(cause)) } finally { setBusy(false) }
   }
 
-  const approve = async () => {
-    if (!gate?.digest) return
-    setBusy(true)
-    try {
-      await api('POST', '/api/land/verify-command/approve', {
-        project_id: project.id, worktree_root: worktreeRoot, digest: gate.digest,
-      })
-      setShowGate(false); setError('')
-    } catch (cause) { setError(landErrorText(cause)) }
-    finally { setBusy(false); await refreshGate() }
-  }
-
   const installStopped = queue !== null && !queue.installedEnabled
 
   return <section class="git-land-row-section" aria-label={`Land ${branch || worktreeRoot}`}>
-    <h4>LANDING<small>reconcile · verify · fast-forward onto the trunk</small></h4>
     {error && <p class="git-state error" role="alert">{error}</p>}
 
     {/* A detached worktree is stated rather than offered and then refused: the daemon
@@ -99,41 +85,35 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
       This worktree is on a detached HEAD. Create a named branch here before landing.
     </p>}
 
-    {!detached && <>
-      {/* Outermost first. The sweep checks this one switch before it reads anything
-          else, so with it off a request enqueues and then sits at `queued` forever -
-          which looks exactly like a busy queue from here. */}
-      {installStopped && <GrantGate ids={['automation.landQueue']}
-        heading="The land queue is switched off for this install."
-        onGranted={onChanged}>
-        <p>This branch can still be queued, and nothing will move it: the daemon's sweep
-        is the only thing that reconciles, verifies, and fast-forwards, and it stops on
-        this switch before reading anything else.</p>
-      </GrantGate>}
+    {!detached && (active
+      ? <LandProgress request={active} busy={busy} onCancel={() => void cancel(active.id)} />
+      : <div class="git-land-launch">
+        <button disabled={busy || !branch} onClick={() => void enqueue()}>
+          Land {branch}
+        </button>
+        <small>fast-forward only · the daemon runs it, not this button</small>
+        {/* One line, and a way to act on it. The strip states which of the two causes
+            it is and holds the control; repeating either here would put a Project-wide
+            answer under every worktree, which is the repetition this row shed. */}
+        {installStopped && <button class="git-land-elsewhere" onClick={onShowLanding}>
+          the land queue is switched off — open Landing
+        </button>}
+      </div>)}
 
-      {active
-        ? <LandProgress request={active} busy={busy} onCancel={() => void cancel(active.id)} />
-        : <>
-          {/* The gate before the button. Nothing this button starts can get past an
-              unapproved gate, so a Land offered above it would read as ready. */}
-          <VerifyGate gate={gate} busy={busy} showing={showGate}
-            onToggle={() => setShowGate(value => !value)} onApprove={() => void approve()} />
-          <div class="git-land-launch">
-            <button disabled={busy || !branch} onClick={() => void enqueue()}>
-              Land {branch}
-            </button>
-            <small>fast-forward only · the daemon runs it, not this button</small>
-          </div>
-        </>}
-
-      {/* What happened last time, kept short. The full trail is the request's own
-          events; this is the one line that says whether to try again. */}
-      {!active && last && <p class={`git-land-last ${landStateTone(last.state)}`}>
+    {/* What happened last time, and why. A conflict's paths and a refusal's reason are
+        properties of *this* branch, so they belong on its row rather than only in the
+        queue's history above. */}
+    {!detached && !active && last && <div class={`git-land-last ${landStateTone(last.state)}`}>
+      <p>
         <em class={`git-land-state ${landStateTone(last.state)}`}>{landStateLabel(last.state)}</em>
         {last.reason && <span>{last.reason}</span>}
         {last.landedOid && <code>{shortSha(last.trunkBefore)} → {shortSha(last.landedOid)}</code>}
-      </p>}
-    </>}
+      </p>
+      {last.paths.length > 0 && <ul class="git-land-paths">
+        {last.paths.slice(0, 12).map(path => <li key={path}><code>{path}</code></li>)}
+        {last.paths.length > 12 && <li><small>and {last.paths.length - 12} more</small></li>}
+      </ul>}
+    </div>}
   </section>
 }
 
@@ -173,51 +153,5 @@ function LandProgress({ request, busy, onCancel }: {
     {progress && progress.beyondPlan && <small class="git-land-note">
       This run has more steps than the last one that passed, so there is no total to show.
     </small>}
-  </div>
-}
-
-/**
- * The verification gate as it stands for this checkout, and the human act that approves it.
- *
- * Shown only while it blocks: an approved gate is one line, and an unapproved one opens
- * the exact bytes beside the ones that were approved before. The approve button is the
- * only place in swe-mux where a verification command gains authority, and it is
- * deliberately not reachable from anything an agent can call.
- */
-function VerifyGate({ gate, busy, showing, onToggle, onApprove }: {
-  gate: ReturnType<typeof useVerifyCommand>['gate']
-  busy: boolean
-  showing: boolean
-  onToggle: () => void
-  onApprove: () => void
-}) {
-  if (!gate) return null
-  if (!gate.configured) {
-    return <p class="git-state warn">
-      No verification command resolves here, so a land would be refused rather than run.
-      Add an executable <code>{gate.scriptName}</code> to this worktree, or set one for
-      the Project in the Land segment.
-    </p>
-  }
-  return <div class={`git-land-gate ${gate.approved ? 'ok' : 'warn'}`}>
-    <div class="git-land-gate-head">
-      <strong>{gate.approved ? 'Verification approved' : 'Verification not approved'}</strong>
-      <code>{gate.display}</code>
-      <button onClick={onToggle}>{showing ? 'Hide' : 'Review'}</button>
-    </div>
-    {!gate.approved && <p class="git-state">
-      {gate.previouslyApproved
-        ? 'It changed since it was approved. Review it again before anything runs it.'
-        : 'Review the exact command a land will run, then approve it.'}
-    </p>}
-    {showing && <div class="git-land-gate-body">
-      {gate.previouslyApproved && gate.approvedSource && gate.approvedSource !== gate.currentSource && <>
-        <h5>Previously approved</h5>
-        <pre class="git-land-source">{gate.approvedSource}</pre>
-      </>}
-      <h5>Will run</h5>
-      <pre class="git-land-source">{gate.currentSource || gate.display}</pre>
-      {!gate.approved && <button disabled={busy} onClick={onApprove}>Approve these bytes</button>}
-    </div>}
   </div>
 }

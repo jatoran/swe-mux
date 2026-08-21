@@ -1,14 +1,14 @@
 /**
  * The two daemon reads the landing surfaces share.
  *
- * Landing is now drawn in two places at once - the act, inside the Map row of the
- * worktree it acts on, and the queue, in the Land segment - so the queue read had to
- * stop belonging to whichever component happened to own it. One hook, mounted once by
- * `GitTab` and handed down, is what keeps the row and the queue from disagreeing about
- * which request is running, and keeps them from polling the daemon twice for the same
- * answer.
+ * Landing is drawn twice on one surface - the act, inside the Map row of the worktree it
+ * acts on, and everything Project-wide, in the strip at the head of that map - so the
+ * queue read had to stop belonging to whichever component happened to own it. One hook,
+ * mounted once by `GitTab` and handed down, is what keeps the row and the strip from
+ * disagreeing about which request is running, and keeps them from polling the daemon
+ * twice for the same answer.
  *
- * `active` exists because the Git tab has four segments and only two of them care. A
+ * `active` exists because the Git tab has three readings and only Map is one of them. A
  * hook that polled regardless would keep a five-second timer alive behind Log and
  * Provenance for a payload nothing on screen reads.
  */
@@ -82,12 +82,15 @@ export type VerifyCommandState = {
 }
 
 /**
- * The gate as it resolves *for one checkout*.
+ * The gate as it resolves for one checkout.
  *
- * Per-worktree rather than per-Project because the script convention is fingerprinted
- * from the worktree's own copy: a branch that edits `.worktree-verify` must present for
- * approval again, and a reading taken from the primary checkout would say it is still
- * approved.
+ * Still per-worktree in the daemon - the script convention is fingerprinted from the
+ * worktree's own copy, so a branch that edits `.worktree-verify` must present for
+ * approval again. The *surface* asks it of the Project root only, once: a per-row copy
+ * of the answer meant the same paragraph about approved bytes under every worktree,
+ * which is a Project-wide fact drawn N times. A branch whose own script differs is
+ * reported by its land refusing, which names the branch, rather than by eight blocks
+ * that mostly agree.
  */
 export function useVerifyCommand(
   projectId: string | undefined,

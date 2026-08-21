@@ -142,9 +142,9 @@
   `technical/frontend/workspace-state.md`
 - Changing the land queue (its pipeline steps, preconditions, the verification gate, its
   approval or its editor, what a running gate reports, the grant, the Land control on a Map
-  row, or the Land segment): `design/features/land-queue.md`,
+  row, or the landing strip at the head of that map): `design/features/land-queue.md`,
   `design/features/git.md`, `design/features/project-actions.md`,
-  `design/features/setting-links.md`,
+  `design/features/setting-links.md`, `design/features/ui.md`,
   `design/features/prompt-queue.md`, `design/features/automation-enablement.md`,
   `design/features/mux-mcp.md`, `design/interfaces.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`,
@@ -169,6 +169,15 @@
   wrong number is acted on where an absent one is not.
   The reading is in memory and dies with the process; only the *plan* is durable, because
   it is a measurement of bytes rather than of a run.
+  A third rule governs *where* landing is drawn: it has no surface of its own, and each
+  part lives once, decided by what it is a property of. A worktree row owns the act and
+  nothing else, because a row is repeated per checkout and a Project-wide fact drawn there
+  is drawn N times - which is what the verification block did under every expansion before
+  it moved. A compact strip at the head of the map owns the queue, the verification
+  command, and the grants; a blocked row *opens* it rather than drawing a second copy of
+  its control. Retiring the Land segment did not delete its palette command, its voice
+  phrases, a stored selection, or a keybinding - all four migrate onto Map and the rows
+  stay forever (`drawerSegments.ts`, `drawerLayout.ts`, `keybindings.py`).
 - Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint
   detection, the absence digest, mined demotion rules, or model narration:
   `design/features/attention-ranking.md`, `design/features/deterministic-consumers.md`,

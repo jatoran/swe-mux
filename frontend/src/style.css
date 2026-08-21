@@ -4202,9 +4202,25 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-ref-move-kind{color:var(--muted);font-size:8px}
 .git-ref-move-kind.merged,.git-ref-move-kind.created{color:var(--accent)}
 .git-ref-move-kind.rebased,.git-ref-move-kind.reset,.git-ref-move-kind.unknown{color:var(--amber)}
-/* Land queue. The gate sits above the queue on purpose: nothing below it can run
-   until its bytes are approved, so a queue drawn first would read as ready. */
-.git-land{display:grid;gap:8px;padding:8px 10px;min-width:0}
+/* Landing, as one strip at the head of the worktree map. It reads as a band rather than
+   as a panel because a map with a panel bolted on top stops being a map: one summary
+   line, and the Project-wide detail only when it is opened or when the gate blocks. */
+.git-landing{display:grid;gap:8px;padding:6px 10px 8px;border-bottom:1px solid var(--line);min-width:0}
+.git-landing-summary{display:flex;align-items:center;gap:8px;width:100%;padding:5px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel,transparent);color:var(--fg);font:inherit;text-align:left;cursor:pointer;min-width:0}
+.git-landing-summary.busy{border-color:var(--accent)}
+.git-landing-summary.warn{border-color:var(--amber)}
+.git-landing-title{color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em}
+/* Both halves wrap rather than truncate: a gate's standing and a running step are the
+   two facts this line exists for, and eliding either makes the line worth less than the
+   space it takes. */
+.git-landing-facts{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;flex:1;min-width:0;font-size:9px;overflow-wrap:anywhere}
+.git-landing-facts em{font-style:normal}
+.git-landing-facts em.ok{color:var(--accent)}
+.git-landing-facts em.warn{color:var(--amber)}
+.git-landing-facts em.idle{color:var(--muted)}
+.git-landing-facts span{color:var(--muted);font-variant-numeric:tabular-nums}
+.git-landing-chevron{margin-left:auto;color:var(--muted)}
+.git-landing-body{display:grid;gap:8px;min-width:0}
 .git-land-gate{display:grid;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px}
 .git-land-gate.warn{border-color:var(--amber)}
 .git-land-gate.ok{border-color:var(--line)}
@@ -4232,8 +4248,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-paths{display:grid;gap:2px;margin:0;padding-left:14px;font-size:9px}
 .git-land-paths code{overflow-wrap:anywhere}
 .git-land-history summary{cursor:pointer;color:var(--muted);font-size:9px}
-.git-land-list h4,.git-land-row-section h4{display:flex;align-items:baseline;gap:8px;margin:0;padding:6px 0;color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
-.git-land-list h4 small,.git-land-row-section h4 small{font-weight:400;letter-spacing:0;text-transform:none}
+.git-land-list h4{display:flex;align-items:baseline;gap:8px;margin:0;padding:6px 0;color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.git-land-list h4 small{font-weight:400;letter-spacing:0;text-transform:none}
 /* Queue order is read top-down, so the position is a numeral rather than a bullet:
    "3rd in line" is the fact a reader wants and a list marker cannot state. */
 .git-land-position{min-width:16px;color:var(--muted);font-size:9px;text-align:right;font-variant-numeric:tabular-nums}
@@ -4248,11 +4264,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 
 /* Landing, on the Map row of the worktree it acts on. Set apart from the row's change
    groups by a rule rather than a box: it is another reading of the same checkout, not a
-   panel that happens to be parked here. */
-.git-land-row-section{display:grid;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid var(--line);min-width:0}
+   panel that happens to be parked here — and it carries no Project-wide block, which is
+   what keeps an expanded row short enough to read beside seven others. */
+.git-land-row-section{display:grid;gap:6px;margin-top:8px;padding-top:6px;border-top:1px solid var(--line);min-width:0}
 .git-land-row-section .git-land-launch{flex-wrap:wrap}
 .git-land-row-section .git-land-launch small{color:var(--muted);font-size:8px}
-.git-land-last{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
+/* A link to the control, not a copy of it: the row names what is blocking landing and
+   the press opens the strip that holds the grant. */
+.git-land-elsewhere{padding:0;border:0;background:transparent;color:var(--amber);font:inherit;font-size:9px;text-align:left;text-decoration:underline;cursor:pointer}
+.git-land-last{display:grid;gap:4px;margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
+.git-land-last p{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin:0}
 .git-land-last code{font-size:8px}
 
 /* A running gate's own reading of itself. Deliberately no bar and no percentage: the

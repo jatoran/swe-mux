@@ -7,6 +7,7 @@ import {
   landQueueOrder,
   landStateLabel,
   landStateTone,
+  landingSummary,
   parseLandQueue,
   parseLandVerifyCommand,
   parseVerifyProgress,
@@ -282,4 +283,101 @@ test('a plan is described as a past run, never as a prediction of the current on
 test('a plan with no steps is no plan', () => {
   assert.equal(parseLandVerifyCommand({ plan: { steps: [], duration_ms: 10 } }).plan, null)
   assert.equal(parseLandVerifyCommand({ plan: { steps: [1, 2] } }).plan, null)
+})
+
+// -- the one line the landing strip shows without being opened ----------------
+//
+// Landing sits above a map and must not turn the map into a panel. The summary is what
+// makes that affordable: a reader who is not landing anything reads one line and moves
+// on, and a reader who is does not have to open anything to see a gate running.
+
+const queueOf = (body: Record<string, unknown>) => parseLandQueue({
+  installed_enabled: true, project_enabled: true, agent_grant: 'draft', ...body,
+})
+const gateOf = (body: Record<string, unknown>) => parseLandVerifyCommand({
+  configured: true, display: '.worktree-verify', digest: 'd1', approved: true, ...body,
+})
+
+test('a quiet queue still states both halves rather than going blank', () => {
+  // "Nothing queued" is a fact worth reading. Blank would make a quiet queue and an
+  // unread one look the same, which is the conflation `installed_enabled` exists against.
+  const summary = landingSummary(queueOf({ requests: [] }), gateOf({}))
+  assert.equal(summary.gate, 'verification approved · .worktree-verify')
+  assert.equal(summary.gateTone, 'ok')
+  assert.equal(summary.queue, 'nothing queued')
+  assert.equal(summary.blocked, false)
+})
+
+test('a running gate reaches the summary line, with what is behind it', () => {
+  const summary = landingSummary(queueOf({
+    requests: [
+      { id: 'a', state: 'verifying', branch: 'worktree-alpha', created_at: 10,
+        verify_progress: { step_index: 3, step_name: 'mypy', expected_step_count: 7, elapsed_ms: 190_000 } },
+      { id: 'b', state: 'queued', branch: 'worktree-beta', created_at: 20 },
+    ],
+  }), gateOf({}))
+  assert.equal(summary.queue, 'worktree-alpha · verifying · step 3 of 7 · mypy · 3m 10s · 1 behind')
+  assert.equal(summary.tone, 'busy')
+  // The strip does not open itself for a healthy run: nothing needs a human.
+  assert.equal(summary.blocked, false)
+})
+
+test('the two things that block every land are what open the strip', () => {
+  // Exactly two, and both have their remedy inside the strip. A surface that cannot work
+  // must not render as merely quiet (`setting-links.md`).
+  const stopped = landingSummary(queueOf({ installed_enabled: false, requests: [] }), gateOf({}))
+  assert.equal(stopped.blocked, true)
+  assert.equal(stopped.tone, 'warn')
+  assert.match(stopped.queue, /switched off/)
+
+  const unapproved = landingSummary(queueOf({ requests: [] }), gateOf({ approved: false }))
+  assert.equal(unapproved.blocked, true)
+  assert.equal(unapproved.gate, 'verification not approved')
+  assert.equal(unapproved.gateTone, 'warn')
+
+  const absent = landingSummary(queueOf({ requests: [] }), gateOf({ configured: false }))
+  assert.equal(absent.blocked, true)
+  assert.equal(absent.gate, 'no verification command')
+})
+
+test('an unread gate is not a blocked one', () => {
+  // `null` is "the daemon has not answered yet". Treating it as blocked would flash the
+  // strip open on every mount, which is a worse lie than saying nothing.
+  const summary = landingSummary(queueOf({ requests: [] }), null)
+  assert.equal(summary.blocked, false)
+  assert.equal(summary.gate, 'verification unread')
+  assert.equal(summary.gateTone, 'idle')
+})
+
+test('the install stop outranks a running row, because it is the one inert-looking state', () => {
+  const summary = landingSummary(queueOf({
+    installed_enabled: false,
+    requests: [{ id: 'a', state: 'queued', branch: 'worktree-alpha', created_at: 10 }],
+  }), gateOf({}))
+  assert.match(summary.queue, /nothing will move/)
+  assert.equal(summary.tone, 'warn')
+})
+
+test('a handback surfaces only once nothing is queued behind it', () => {
+  const handed = landingSummary(queueOf({
+    requests: [{ id: 'a', state: 'handed_back', branch: 'worktree-alpha', created_at: 10, updated_at: 30, finished_at: 30 }],
+  }), gateOf({}))
+  assert.equal(handed.queue, 'worktree-alpha · returned to agent')
+  assert.equal(handed.tone, 'warn')
+  // A handback is not a *block*: the gate is fine and the queue would run the next one.
+  assert.equal(handed.blocked, false)
+
+  const busy = landingSummary(queueOf({
+    requests: [
+      { id: 'a', state: 'handed_back', branch: 'worktree-alpha', created_at: 10, finished_at: 30 },
+      { id: 'b', state: 'queued', branch: 'worktree-beta', created_at: 20 },
+    ],
+  }), gateOf({}))
+  assert.equal(busy.queue, '1 queued · next worktree-beta')
+})
+
+test('a summary with no queue read at all still renders', () => {
+  const summary = landingSummary(null, null)
+  assert.equal(summary.blocked, false)
+  assert.equal(summary.queue, 'nothing queued')
 })

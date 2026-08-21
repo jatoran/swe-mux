@@ -33,7 +33,7 @@ import {
 } from './gitWorktrees'
 import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
-import { GitLandPanel } from './GitLandPanel'
+import { GitLandBar } from './GitLandBar'
 import { GitLandRow } from './GitLandRow'
 import { useLandQueue } from './landState'
 import { GitReviewModal } from './GitReviewModal'
@@ -48,7 +48,10 @@ import type { ReviewLocator } from './gitReview'
 // One repository, three readings:
 //
 //  * Map is the operational projection: one row per worktree, with local files,
-//    comparison-ref changes, and the live sessions using the directory.
+//    comparison-ref changes, the live sessions using the directory, and what it would
+//    take to land that branch. Landing's Project-wide half - the verification command,
+//    the agent grants, the queue - is one compact strip at the head of it
+//    (`GitLandBar.tsx`), which is what lets each row carry only its own act.
 //  * Log is the repository's real commit DAG. Git computes the ASCII lanes; the browser
 //    styles them and attaches the structured commit metadata returned beside each prefix.
 //  * Provenance is the durable evidence ledger connecting commits to sessions and runs.
@@ -67,7 +70,13 @@ import type { ReviewLocator } from './gitReview'
 // phrase, and what persists the choice per Project — neither of which a local `useState`
 // could do. The host draws the segmented control above this tab's toolbar; what is left
 // here is the toolbar's actions.
-export type GitView = 'map' | 'log' | 'provenance' | 'land'
+// Land was a fourth reading and is not one any more. It answered "what is happening to
+// this worktree" beside a Map that answered "what is in it", and the split cost more
+// than it bought: the act sat on a surface that could not show the diff behind it, and
+// once the act moved onto the row the segment was a second copy of one Project-wide
+// block. Both now live on Map. The retired segment id, its palette command, and its
+// voice phrases all migrate here rather than being dropped (`drawerSegments.ts`).
+export type GitView = 'map' | 'log' | 'provenance'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
 
@@ -160,12 +169,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // Three-valued: `null` while unread, so an unreadable opt-in table never renders as
   // "this Project said no".
   const [provenancePermitted,setProvenancePermitted]=useState<boolean|null>(null)
-  // One read, two consumers: the Land control inside each expanded Map row and the Land
-  // segment's queue. Owned here rather than by either of them so they cannot show two
-  // different answers about the same request, and so Log and Provenance pay nothing for
-  // a five-second poll neither of them draws.
-  const landActive=view==='map'||view==='land'
-  const {queue:landQueue,error:landError,refresh:refreshLand}=useLandQueue(project?.id,landActive)
+  // One read, two consumers: the landing strip at the head of Map and the Land control
+  // inside each expanded row. Owned here rather than by either of them so they cannot
+  // show two different answers about the same request, and so Log and Provenance pay
+  // nothing for a five-second poll neither of them draws.
+  const {queue:landQueue,error:landError,refresh:refreshLand}=useLandQueue(project?.id,view==='map')
+  // `null` until the reader touches it, so the strip's own blocked-gate default still
+  // applies. Lifted out of the strip because a blocked row opens it (`GitLandRow.tsx`),
+  // which is what lets a row name a Project-wide control without drawing one.
+  const [landingOpen,setLandingOpen]=useState<boolean|null>(null)
 
   const refresh=useCallback(async()=>{
     if(!project){setOverview(null);return}
@@ -240,7 +252,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
 
   const provenanceOff=provenancePermitted===false
   // Most recently committed branch first. This is now the *only* list of checkouts in
-  // the tab - the Land segment used to draw a second one in the same order, which was a
+  // the tab - the retired Land segment used to draw a second one in the same order, a
   // standing invitation for the two to drift - so the order matters for the same reason
   // it always did and has one owner again. Parsing stays faithful to the payload;
   // presentation is what reorders (`sortWorktreesByActivity` says why the key is the
@@ -385,6 +397,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     {error&&<p class="git-state error" role="alert">{error}</p>}
     {adding&&<div class="git-add-form"><label>Absolute path<input value={addForm.path} onInput={event=>setAddForm(value=>({...value,path:event.currentTarget.value}))}/></label><label>New branch<input value={addForm.branch} onInput={event=>setAddForm(value=>({...value,branch:event.currentTarget.value}))}/></label><label>Start point<input value={addForm.start} onInput={event=>setAddForm(value=>({...value,start:event.currentTarget.value}))}/></label><div><button disabled={busy} onClick={()=>void create()}>Create</button><button onClick={()=>setAdding(false)}>Cancel</button></div></div>}
     {view==='map'&&<>
+      {/* Landing, once, at the head of the map: the verification command and its
+          approval, who besides you may start a land, and the queue. Everything here is
+          Project-wide, which is exactly why it is not on a row - drawn per row it was
+          the same paragraph about approved bytes under each of eight worktrees. It is a
+          compact strip rather than a panel so the tab still opens on a map. */}
+      <GitLandBar project={project} queue={landQueue} error={landError} onChanged={refreshLand}
+        open={landingOpen} onOpen={setLandingOpen}/>
       {!overview&&!error&&<p class="git-state">Reading repository…</p>}
       {overview&&orderedWorktrees.map(tree=>{
         const expanded=expandedTree===tree.path,{measured:localMeasured,total}=localMeasurement(tree)
@@ -416,10 +435,12 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
             {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {branchRef&&tree.branchDelta&&tree.branchDelta.total>0&&<ReviewGroup id={`${tree.path}:branch`} title={`BRANCH - VS ${branchRef.toUpperCase()}`} summary={tree.branchDelta} projectId={project.id} locator={{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref}} openRoot={tree.path} preview={preview[`${tree.path}:branch`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:branch`]:value}))} onReview={file=>startReview(tree.branchDelta!,{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {/* Landing is an act on the checkout in front of you, so it is drawn on the
-                row rather than on a segment with a second list of the same worktrees.
-                The main tree is the trunk these land *onto* and is never a candidate. */}
-            {!tree.main&&!tree.bare&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand}/>}
+            {/* Landing is an act on the checkout in front of you, so the act is drawn on
+                the row. Only the act: everything Project-wide is in the strip above, and
+                a row that needs one sends the reader there rather than drawing a second
+                copy under every worktree. The main tree is the trunk these land *onto*
+                and is never a candidate. */}
+            {!tree.main&&!tree.bare&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand} onShowLanding={()=>setLandingOpen(true)}/>}
             {!tree.main&&!tree.bare&&<div class="git-map-actions">{removalBlocked?<p class="git-change-empty">{tree.locked!==null?'Git reports this worktree as locked.':`${attached.length} live session${attached.length===1?' uses':'s use'} this worktree.`}</p>:remove?.path===tree.path?<><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force?'Force remove ✓':'Confirm remove ✓'}</button><label><input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> discard uncommitted files</label><button onClick={()=>setRemove(null)}>Cancel</button></>:<button onClick={()=>setRemove({path:tree.path,force:false})}>Remove worktree…</button>}</div>}
           </div>}
         </article>
@@ -484,10 +505,6 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           of them, so it belongs here rather than on each of their ledgers. */}
       {refMoves.length>0&&<div class="git-ref-moves"><h4>Reference movements</h4>{refMoves.map(move=><article key={move.id}><div><strong>{shortSha(move.commitOid)}</strong><span>{move.subject||'Moved to a commit without readable metadata'}</span></div><p><span class={`git-ref-move-kind ${move.kind}`}>{refMoveLabel(move)}</span></p><small>{move.worktreeRoot} · from {shortSha(move.previousHead)} · observed {new Date(move.observedAt*1000).toLocaleString()}</small></article>)}</div>}
     </section>}
-    {/* Land no longer lists checkouts at all: the act belongs to the Map row, and this
-        segment keeps what has no row to live in — the Project's verification command,
-        who besides the operator may start a land, and the queue's own order. */}
-    {view==='land'&&<GitLandPanel project={project} queue={landQueue} error={landError} onChanged={refreshLand}/>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
     {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>

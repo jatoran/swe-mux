@@ -1,3 +1,4 @@
+import { migratedDrawerSegment } from './drawerSegments.ts'
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs.ts'
 import { browserUuid } from './layout.ts'
 
@@ -36,6 +37,11 @@ export type DrawerProjectPresentation = {
    * loosely as `string` rather than validated against `drawerSegments.ts` on purpose —
    * this module stays the layout's own vocabulary, and an unknown id costs nothing
    * because `resolveDrawerSegment` falls back to the first available segment anyway.
+   *
+   * A *retired* id is the one case that fallback is not good enough for, and it is
+   * migrated on read (`migratedDrawerSegment`). Falling back would land a reader who had
+   * Land selected on Git's first segment, which is Map today by coincidence and would
+   * stop being the right answer the moment the order changed.
    */
   selected_segments: Record<string, string>
   focused_tab: DrawerTabId
@@ -57,6 +63,8 @@ export const DRAWER_MIN_RATIO = 0.1
 export const DRAWER_MAX_RATIO = 0.9
 
 const registeredIds = (): DrawerTabId[] => DRAWER_TABS.map(tab => tab.id)
+const isDrawerTab = (value: string): value is DrawerTabId =>
+  DRAWER_TABS.some(tab => tab.id === value)
 const nodeId = (kind: 'stack' | 'split'): string => `drawer-${kind}-${browserUuid().slice(0, 12)}`
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -293,7 +301,13 @@ export function normalizeDrawerProjectPresentation(
     if (target?.segment && segments[target.tab] === undefined) segments[target.tab] = target.segment
   }
   for (const [tab, stored] of Object.entries(segmentValue)) {
-    if (typeof stored === 'string' && stored) segments[tab] = stored
+    // A retired segment id lands on whatever absorbed it, by record rather than by the
+    // first-available fallback `resolveDrawerSegment` would otherwise apply: that
+    // fallback happens to be right for Land → Map today only because Map is Git's first
+    // segment, which is not something a retirement should depend on.
+    if (typeof stored === 'string' && stored) {
+      segments[tab] = isDrawerTab(tab) ? migratedDrawerSegment(tab, stored) : stored
+    }
   }
   for (const stack of drawerStacks(layout)) {
     const target = migratedTabTarget(selectedValue[stack.id])

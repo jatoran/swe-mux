@@ -106,13 +106,61 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   { tab: 'git', id: 'map', kind: 'segment', label: 'Map', heading: 'Worktree Map', title: 'Map - one row per worktree, with its files, changes, and live sessions' },
   { tab: 'git', id: 'log', kind: 'segment', label: 'Log', heading: 'Commit Log', title: 'Log - the repository’s commit graph' },
   { tab: 'git', id: 'provenance', kind: 'segment', label: 'Provenance', heading: 'Commit Provenance', title: 'Provenance - which session and run produced each commit' },
-  // Phase 14. A segment of its own rather than a strip inside Map, for the same
-  // watch-here/act-there reason the prompt Queue is separate from the Fleet Queue: Map
-  // answers "what is in this worktree", and Land answers "what is happening to it".
-  // The act of landing a branch lives on that branch's Map row; this segment is the
-  // queue itself, the Project's verification command, and who besides you may start one.
-  { tab: 'git', id: 'land', kind: 'segment', label: 'Land', heading: 'Land Queue', title: 'Land - the landing queue, the verification command, and who may start a land' },
 ]
+
+/**
+ * A segment that no longer exists, and where asking for it lands now.
+ *
+ * The registry's whole reason for existing is that folding a surface into another one
+ * must not delete a palette entry or a voice phrase (`App.tsx` generates both per
+ * registered segment). Retiring one has the same hazard in reverse: "open Land" is a
+ * navigation path someone learned, and dropping the entry would silently stop answering
+ * a phrase that used to work.
+ *
+ * So a retirement is a **row here rather than a deletion**, and the rows stay forever -
+ * exactly like `migratedTabTarget` in `drawerLayout.ts` and `_COMMAND_MIGRATIONS` in
+ * `keybindings.py`, which are the same idea for a retired tab id and a retired keybinding.
+ * `landsOn` must name a live segment of the same tab, so the phrase reaches the surface
+ * that absorbed it rather than the tab's first segment.
+ */
+export type RetiredDrawerSegment = {
+  tab: DrawerTabId
+  /** The retired id. Still the last part of the command id, permanently. */
+  id: string
+  /** What it was called. Still the command's label and the voice phrase's noun. */
+  label: string
+  title: string
+  /** The live segment id that answers for it now. */
+  landsOn: string
+}
+
+export const RETIRED_DRAWER_SEGMENTS: RetiredDrawerSegment[] = [
+  // Phase 14 shipped Land as a fourth Git reading, on the watch-here/act-there split the
+  // prompt Queue has with the Fleet Queue. That split did not survive contact: the act
+  // of landing belongs on the row showing the diff behind it, and once it moved there
+  // the segment held one Project-wide block - the verification command, the grants, the
+  // queue - which is now a compact strip at the head of Map. Landing is one surface.
+  {
+    tab: 'git',
+    id: 'land',
+    label: 'Land',
+    title: 'Land - the landing strip at the head of the worktree map',
+    landsOn: 'map',
+  },
+]
+
+/**
+ * The live segment id a stored or spoken one means now.
+ *
+ * Applied to a persisted selection as well as to a command, because the two are the same
+ * question asked at different times. Falling through `resolveDrawerSegment`'s
+ * first-available fallback would land on the right surface here by luck rather than by
+ * record, and would not survive Map ceasing to be Git's first segment.
+ */
+export function migratedDrawerSegment(tab: DrawerTabId, id: string): string {
+  const retired = RETIRED_DRAWER_SEGMENTS.find(item => item.tab === tab && item.id === id)
+  return retired ? retired.landsOn : id
+}
 
 export const DRAWER_SEGMENT_TABS: readonly DrawerTabId[] =
   [...new Set(DRAWER_SEGMENTS.filter(item => item.kind === 'segment').map(item => item.tab))]

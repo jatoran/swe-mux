@@ -196,6 +196,9 @@ _COMMAND_MIGRATIONS = {
     "drawer.changemap": "drawer.activity.changes",
     # Agent Context became the Agent tab's Instructions segment.
     "drawer.context": "drawer.agent.instructions",
+    # Land stopped being a Git segment: the act moved onto each worktree's own map row,
+    # and everything Project-wide about it became a strip at the head of that map.
+    "drawer.git.land": "drawer.git.map",
 }
 
 

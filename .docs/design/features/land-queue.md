@@ -93,8 +93,13 @@ The failure had no symptom, because both paths produce a working gate.
 
 ### Editing it
 
-The resolved command, which of the two mechanisms produced it, its approval standing, and an editor for the override are drawn together in the Land segment.
+The resolved command, which of the two mechanisms produced it, its approval standing, and an editor for the override are drawn together in the landing strip at the head of the worktree map - **once for the Project, not once per worktree**.
 Both mechanisms were documented and neither was ever stated on screen, so "why is it running that" had no answer in the app; and the only way to change the answer was to hand-edit a committed TOML file.
+
+It shipped first under every expanded Map row, which is what a per-checkout reading of the gate implies, and it was the wrong trade.
+The gate *is* fingerprinted per worktree - a branch that edits `.worktree-verify` must present for approval again - but the answer is the same on almost every row almost always, and the approval act is the same act whichever row happens to be open.
+Drawn per row it was the same paragraph about approved bytes under each of eight checkouts, which buries the thing an expanded row is for.
+A branch whose own script really does differ is reported by its land refusing, which names the branch, rather than by eight blocks that mostly agree.
 
 **Editing never approves, and the two are separate acts against separate routes.**
 An edit cannot produce an approved command even by accident: the approval is a digest over the bytes, so moving the bytes invalidates it without the write saying anything about approval at all.
@@ -137,10 +142,14 @@ All three are reported by `GET /api/land` (`installed_enabled`, `project_enabled
 The install stop is the sharpest case: it is checked by the sweep before anything else, so with it off a request enqueues and then sits at `queued` forever - identical, on screen, to a pipeline working through a backlog.
 It also had no control in any overlay until it gained one in Settings → Automation → Land queue.
 
-Where each is drawn follows what it makes inert.
-The **install stop** is what makes an individual row's own Land button pointless, so its gate is on that row - and in the Land segment, above everything, because it stops the whole queue too.
-The **Project opt-in** and **`land_grant`** decide what happens to an *agent's* `request_land` and never touch the operator's own button, so they stay in the Land segment as one Project-wide statement; copying them into every Map row would make a Project-wide control a standing fixture in a per-checkout pane, which is the thing `setting-links.md` forbids.
+**All three are Project-wide or wider, so all three are drawn once, in the landing strip.**
+A control that answers "for every branch in this repository" copied into each expanded row is a standing fixture in a per-checkout pane, which is exactly what `setting-links.md` forbids - and it is the same repetition that sent the verification block up here.
+The **install stop**'s gate is rendered outside the strip's disclosure so a collapsed strip cannot hide it: a gate is what a surface renders *instead of* working, and hiding one behind a summary is the same defect as rendering the surface empty.
+The **Project opt-in** and **`land_grant`** decide what happens to an *agent's* `request_land` and never touch the operator's own button, so they sit inside the disclosure as one statement.
 All three grant in place through the ordinary additive path; the Projects registry's **Agent authority** table is where any of them is lowered again.
+
+A Map row that cannot land because of one of them names it and **sends the reader to the control** rather than drawing a second copy: one press opens the strip.
+Naming a switch still obliges offering it, and pointing one section up on the same pane is offering it - the rule was written against a walk to an overlay, not against a scroll.
 
 A drafted request writes an inert `land_request` observation that appears as a Fleet Queue approval row; approval is what enqueues it, and the originating session is retained as the request's origin so a handback reaches the agent that asked rather than the human who approved.
 
@@ -180,26 +189,34 @@ A step is additionally mirrored into Tier 0 when the request has an originating 
 
 ## Surface
 
-Landing is drawn in **two** places, split by what each part is about.
+**Landing is part of the Git tab's worktree map, and has no surface of its own.**
+It shipped as a fourth Git reading beside Map, on the same watch-here/act-there split the prompt Queue has with the Fleet Queue: Map answers "what is in this worktree", Land answers "what is happening to it".
+That split did not survive contact. Landing a branch is an act on a checkout you are already looking at, and a separate view meant a launch list that was a second copy of Map's, with the button furthest from the diff that decides whether to press it.
+Moving the act onto the row fixed that and exposed the other half: what was left on the segment was one Project-wide block, and a parallel view holding one block is not a view.
 
-**The act is on the Map row of the worktree it acts on.**
-Landing a branch is something you do to a checkout you are already looking at, and it used to live on a segment carrying its own list of the same worktrees - two lists of one thing, and the button furthest from the diff that decides whether to press it.
-Expanding a worktree row shows that branch's Land control, its live land state (including the running gate's own reading of itself), the gate as it resolves *for that checkout*, and a Cancel while the request is still cancellable.
-The main tree is the trunk these land *onto* and is never offered.
-A detached worktree states why rather than offering a button that would be refused.
+So the map holds both halves, split by **what each part is a property of**:
 
-**The Land segment is what has no row to live in**: the Project's verification command with its approval and editor, who besides the operator may start a land, the queue in the order the pipeline will reach it, and finished requests.
-It keeps its own drawer segment - and therefore its own palette command and voice phrase - rather than becoming a strip Map draws, but it no longer lists checkouts at all.
+- **The row owns the act**, and only the act. Expanding a worktree shows that branch's Land button, its live land state (including the running gate's own reading of itself), a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths, a refusal's reason, which are facts about *this* branch.
+  The main tree is the trunk these land *onto* and is never offered; a detached worktree states why rather than offering a button that would be refused.
+- **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
 
-The gate appears **on the row** while it blocks that row, and the **editor** lives in the segment, which is the ordinary setting-links asymmetry: many surfaces may grant in place, exactly one owns withdrawal (`setting-links.md`).
-The per-worktree reading is not a duplicate of the Project one: the script convention is fingerprinted from the *worktree's* copy, so a branch that edited `.worktree-verify` is unapproved on its own row while the Project's reading still says approved.
-Reviewing either shows the approved bytes beside the current ones.
+Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.
+A fact that is true of the Project is drawn N times if it lives on a row, and the verification block shipped that way once: the same paragraph about approved bytes under each of eight expansions, burying the diff the expansion was opened for.
+
+**The strip stays a strip, so the tab still reads as a map.**
+It is one summary line - the gate's standing, and what the queue is doing right now, including a running gate's step - with everything else behind a disclosure.
+It **opens itself when landing is blocked**, which is exactly two states (the install stop is off, or the bytes a land would run are not approved) and in both the act that clears it is inside; a surface that cannot work must not render as merely quiet (`setting-links.md`).
+An explicit collapse wins after that and nothing re-opens under the reader, which stays honest because the summary line goes on stating the block while closed.
 
 Queue order is oldest-first - the order the pipeline will actually reach them.
 The daemon lists newest-first because that is what a history read wants; read backwards, the request about to run sat at the bottom.
 Finished requests are folded into a history disclosure, newest first.
 
-Nothing in either surface lands anything: the daemon's own supervised sweep is the only thing that moves a trunk.
+**The retired segment is migrated, not deleted.**
+`RETIRED_DRAWER_SEGMENTS` keeps `git/land` pointed at `git/map`, so the palette entry "Open Land" and the voice phrases "open/show/go to Land" still answer and now land on the map; a stored segment selection migrates on read rather than falling through to "the tab's first segment", which is Map today by coincidence; and `drawer.git.land` migrates in `keybindings.py`, where an unmigrated id is *rejected* rather than ignored.
+These rows stay forever, exactly like the retired tab ids beside them.
+
+Nothing in the surface lands anything: the daemon's own supervised sweep is the only thing that moves a trunk.
 
 ## API
 
@@ -247,9 +264,10 @@ It has **no target argument**: the checkout comes from the caller's own live cwd
 - What a running gate reports about itself: `src/swe_mux/verify_progress.py`
 - Shared command resolution and bounded execution: `src/swe_mux/worktree_exec.py`
 - Routes, the busy-session probe, the drafted-request approval: `src/swe_mux/server.py`
-- Landing on the Map row: `frontend/src/GitLandRow.tsx`
-- Land segment (queue, verification command, agent authority): `frontend/src/GitLandPanel.tsx`
-- Shared queue/gate reads: `frontend/src/landState.ts`; parsing and labels: `frontend/src/gitLand.ts`
+- The act, on the Map row: `frontend/src/GitLandRow.tsx`
+- The strip at the head of the map (queue, verification command, agent authority): `frontend/src/GitLandBar.tsx`
+- The retired segment and its migration: `frontend/src/drawerSegments.ts`, `frontend/src/drawerLayout.ts`, `src/swe_mux/keybindings.py`
+- Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, and the strip's summary line: `frontend/src/gitLand.ts`
 - Tests: `tests/test_land_queue.py`, `tests/test_land_api.py`, `tests/test_verify_progress.py`,
   `frontend/test/gitLand.test.ts`, `frontend/test/renderer/git-land.spec.ts`
 

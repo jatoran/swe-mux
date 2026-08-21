@@ -6,11 +6,13 @@ import { DRAWER_TABS, type DrawerTabId } from '../src/drawerTabs.ts'
 import {
   DRAWER_SEGMENTS,
   DRAWER_SEGMENT_TABS,
+  RETIRED_DRAWER_SEGMENTS,
   availableDrawerSegments,
   drawerSectionTarget,
   drawerSegment,
   drawerSegmentsFor,
   hasDrawerSegments,
+  migratedDrawerSegment,
   resolveDrawerSegment,
 } from '../src/drawerSegments.ts'
 
@@ -143,9 +145,7 @@ test('the host draws one shared control and keeps only what must stay mounted', 
 
 test('Git owns no view state of its own', () => {
   // Registering Git's readings is what leaves the drawer with one mechanism for this
-  // idea instead of two, and it buys "open Git Log" as a voice phrase for free. Land
-  // is a segment for the same reason, and for the watch-here/act-there split: Map
-  // answers "what is in this worktree", Land answers "what is happening to it".
+  // idea instead of two, and it buys "open Git Log" as a voice phrase for free.
   const git = source('GitTab.tsx')
   assert.ok(git.includes('export type GitView'))
   assert.ok(git.includes('view:GitView'))
@@ -153,9 +153,56 @@ test('Git owns no view state of its own', () => {
   assert.ok(!git.includes('git-view-toggle'), 'the bespoke toggle is replaced by the shared control')
   const tabs: DrawerTabId[] = ['git']
   for (const tab of tabs) {
+    // Land is not here. It shipped as a fourth reading on the watch-here/act-there
+    // split, and that split did not survive contact: the act belongs on the row showing
+    // the diff behind it, and what was left was one Project-wide block that is now a
+    // strip at the head of Map.
     assert.deepEqual(
       drawerSegmentsFor(tab, 'segment').map(item => item.id),
-      ['map', 'log', 'provenance', 'land'],
+      ['map', 'log', 'provenance'],
     )
   }
+})
+
+test('a retired segment keeps its command and its phrases, pointed at what absorbed it', () => {
+  // The registry exists because folding a surface into another one must not delete a
+  // palette entry or a voice phrase. Retiring one has the same hazard in reverse: "open
+  // Land" is a navigation path someone learned, and dropping the entry would silently
+  // stop answering a phrase that used to work.
+  const app = source('App.tsx')
+  assert.ok(app.includes('...RETIRED_DRAWER_SEGMENTS.map((segment): Command => ({'))
+  assert.ok(app.includes('run:()=>openDrawerTab(segment.tab,projectId,segment.landsOn)'))
+  assert.ok(app.includes('phrases:[`open ${segment.label}`,`show ${segment.label}`,`go to ${segment.label}`]'))
+
+  const land = RETIRED_DRAWER_SEGMENTS.find(item => item.tab === 'git' && item.id === 'land')
+  assert.ok(land, 'the Land segment is retired rather than deleted')
+  assert.equal(land.label, 'Land', 'the phrase keeps its noun')
+  // It must land on a segment that exists, or the phrase reaches nothing.
+  assert.ok(drawerSegmentsFor(land.tab, 'segment').some(item => item.id === land.landsOn))
+  assert.equal(land.landsOn, 'map')
+})
+
+test('a retired id never collides with a live one, and its command id is stable', () => {
+  const live = new Set(DRAWER_SEGMENTS.map(segment => `${segment.tab}:${segment.id}`))
+  const ids = new Set<string>()
+  for (const segment of RETIRED_DRAWER_SEGMENTS) {
+    const key = `${segment.tab}:${segment.id}`
+    assert.equal(live.has(key), false, `${key} is both live and retired`)
+    assert.equal(ids.has(key), false, `${key} is retired twice`)
+    ids.add(key)
+    assert.ok(segment.label.length > 0 && segment.title.length > 0, key)
+  }
+})
+
+test('a stored selection of a retired segment migrates rather than falling back', () => {
+  // `resolveDrawerSegment` would land this on Git's first segment, which is Map today by
+  // coincidence. Migrating by record is what keeps it right if that order ever changes.
+  assert.equal(migratedDrawerSegment('git', 'land'), 'map')
+  assert.equal(migratedDrawerSegment('git', 'log'), 'log', 'a live id is untouched')
+  assert.equal(migratedDrawerSegment('activity', 'land'), 'land', 'migrations never cross tabs')
+  assert.equal(migratedDrawerSegment('git', 'nonsense'), 'nonsense')
+
+  const layout = source('drawerLayout.ts')
+  assert.ok(layout.includes("import { migratedDrawerSegment } from './drawerSegments.ts'"))
+  assert.ok(layout.includes('migratedDrawerSegment(tab, stored)'))
 })

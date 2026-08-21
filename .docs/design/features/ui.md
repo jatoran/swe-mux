@@ -1748,6 +1748,9 @@ Its rules, and what each one is defending:
 - Segments are **registered, not local state**, and that is the point rather than tidiness.
   Every registered tab generates two palette commands and three voice phrases; a segment reached only by clicking would have none, so folding Clipboard into Actions and Change Map into Activity would have *deleted* "open Clipboard" and "open Change Map" as commands and as spoken navigation.
   The registry generates a command and a voice phrase per segment and per section, and every retired command id migrates forward in `keybindings.py` so an existing binding keeps working.
+- **Retiring a segment is the same obligation in reverse, and is a row rather than a deletion.**
+  A retired id stays in `RETIRED_DRAWER_SEGMENTS` naming the live segment that absorbed it, so its palette entry and its phrases keep answering and simply land somewhere else; a *stored* selection migrates on read through `migratedDrawerSegment` rather than falling through to "the tab's first segment", which is right only by coincidence and stops being right when the order changes; and the command id migrates in `keybindings.py`, where an unmigrated id is rejected outright rather than ignored.
+  Git's **Land** is the first: landing folded into the worktree map, so "open Land" now opens Map (`land-queue.md`).
 - Segment availability is a predicate, and a stored choice that cannot render falls back to the first that can rather than drawing an empty body.
   Activity's Timeline needs a harness transcript; Findings and Changes do not.
   Agent's Config and Tools read a live harness inventory and are unavailable on a shell; **Instructions is not**, which is what the separate Project-scoped Context tab used to buy and why neither tab is gated as a whole.
@@ -1756,6 +1759,7 @@ Its rules, and what each one is defending:
 - Only Change Map is kept mounted while another segment is selected.
   Everything else unmounts, because a hidden body that polls or refetches costs network for a surface nobody is looking at; the map is the exception because its layout worker's settled positions are the expensive part and remounting re-runs the simulation on every return.
 - **Git** is registered the same way, so the drawer has one mechanism for this idea rather than two: Map, Log, and Provenance are segments, drawn by the shared control above the tab's toolbar rather than by a toggle of its own, and each has its own palette entry and voice phrase.
+  Landing is deliberately **not** a fourth one. It was, and the split it rested on - Map answers what is *in* a worktree, Land what is *happening to* it - did not hold: the act belongs on the row showing the diff behind it, and once it moved there the segment held a single Project-wide block. It is now a compact strip at the head of Map, one summary line with the rest behind a disclosure, so the tab still opens on a map (`land-queue.md`).
   It is a tab rather than a modal because the decisions it offers - pause this, run it now, is last night's session still open - are judgements about live sessions, which are legible in the workspace behind the drawer.
   Like Processes it carries its own Project/all-Projects scope instead of a companion modal, since "what fires tonight" spans Projects even though every schedule belongs to exactly one.
   Notifications is neither and sits last.

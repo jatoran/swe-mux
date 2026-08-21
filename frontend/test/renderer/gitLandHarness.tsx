@@ -5,10 +5,11 @@ import { DrawerSegmentControl } from '../../src/DrawerSegmentControl'
 import type { Project, Session } from '../../src/types'
 import '../../src/style.css'
 
-// The Land segment with a gate actually running, which is the state the whole progress
-// reading exists for and the one a static screenshot of a real daemon cannot be relied
-// on to catch. The Map row's own landing section is exercised by `gitMapHarness.tsx`;
-// this page is about what the queue says while a branch is being verified.
+// The Map with a gate actually running, which is the state the whole progress reading
+// exists for and the one a static screenshot of a real daemon cannot be relied on to
+// catch. `gitMapHarness.tsx` is the quiet case - an approved gate and an empty queue, so
+// the row offers its Land button; this page is the busy one, and is also where the
+// landing strip's own summary line and verification editor are exercised.
 
 const project={id:'swe-mux',name:'swe-mux',root:'D:\\PROJECTS\\swe-mux'} as Project
 const response=(body:unknown)=>new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}})
@@ -18,6 +19,12 @@ const cleanSummary={total:0,additions:0,deletions:0,binary_files:0,files:[],trun
 /** Every write the page attempts, so the spec can prove the editor sends one key. */
 const writes:{url:string;body:unknown}[]=[]
 Object.assign(globalThis,{__writes:writes})
+
+// `?blocked=1` serves an unapproved gate from the *first* read, which is the state the
+// strip has to open itself for. Reaching it by editing the command instead would mean
+// the reader had already toggled the strip open by hand, so the default could never be
+// observed - and the default is the whole claim.
+const blocked=new URLSearchParams(location.search).has('blocked')
 
 globalThis.fetch=async(input,init)=>{
   const url=String(input)
@@ -46,7 +53,7 @@ globalThis.fetch=async(input,init)=>{
     }
     return response({
       configured:true,source:'convention',display:'.worktree-verify',digest:'d1',
-      approved:true,previously_approved:true,approved_source:'#!/usr/bin/env bash\nexit 0\n',
+      approved:!blocked,previously_approved:true,approved_source:'#!/usr/bin/env bash\nexit 0\n',
       current_source:'#!/usr/bin/env bash\nexit 0\n',
       config_command:'',config_revision:'r1',config_status:'ready',
       config_path:'D:\\PROJECTS\\swe-mux\\.swe-mux\\config.toml',
@@ -86,7 +93,9 @@ globalThis.fetch=async(input,init)=>{
 const session={id:'session',name:'claude-1',project_id:project.id,state:'running',cwd:project.root} as Session
 
 function LandHarness() {
-  const [view,setView]=useState<GitView>('land')
+  // 'map' rather than a Land segment: there is no Land segment any more. The strip is at
+  // the head of the map, and the retired id resolves here (`drawerSegments.ts`).
+  const [view,setView]=useState<GitView>('map')
   return <aside class="utility-drawer" style="width:100%;height:100dvh;overflow:auto">
     <DrawerSegmentControl tab="git" active={view}
       context={{hasTranscript:true,isAgentSession:true}} onSelect={id=>setView(id as GitView)}/>

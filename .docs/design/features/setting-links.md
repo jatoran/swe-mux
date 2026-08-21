@@ -68,10 +68,19 @@ Everything here is that pattern generalised.
   This is what keeps a Project-wide control from becoming a standing fixture in a
   session-scoped pane, which is the real content of the earlier rule that took the scan
   timeline's Project permission out of the Timeline tab (`test/scanTimeline.test.ts`).
-  It also decides *which* gate a per-item surface carries: a Map row draws the land queue's
-  install stop, because that switch is what makes the row's own Land button pointless, and
-  does **not** draw the Project opt-in or `land_grant`, which only govern an agent's
-  `request_land` and leave that button working (`land-queue.md`).
+  A **per-item** surface takes that further and carries no Project-wide gate at all. A Git
+  Map row draws none of the land queue's three switches, including the install stop that
+  does make its own Land button pointless: a row is repeated once per worktree, so a gate
+  on it is the same block under each of eight expansions. They live once, in the landing
+  strip at the head of that map, and a blocked row **sends the reader there** with one
+  press (`land-queue.md`). That still satisfies "naming a switch obliges offering it" -
+  the rule was written against a walk out to an overlay, not against a scroll to the top
+  of the pane you are already on.
+- **A gate is never hidden behind a disclosure.** A gate is what a surface renders
+  *instead of* working, so folding one into a collapsed summary is the same defect as
+  rendering the surface empty. The landing strip collapses everything except its install
+  stop for exactly this reason, and its summary line goes on stating an unapproved
+  verification command while closed.
 - **Allowlisted at both ends.** `GRANTABLE_INSTALL_KEYS` and `GRANTABLE_PROJECT_VALUES`
   (`src/swe_mux/grants.py`) are closed sets, validated against `Config` and
   `PROJECT_CONFIG_FIELDS` at import; `frontend/test/grants.test.ts` holds the browser's
@@ -150,9 +159,9 @@ only route to the owning overlay.
 | Findings pane (no detectors) | the four detectors | Project | grant, all four in one act |
 | Findings pane (no observer notes) | `automation_enabled` | install | grant (inline) |
 | Git → Provenance | `provenance_graph` | Project | grant |
-| Git → Map row (install stop) | `land_queue_enabled` | install | grant |
-| Git → Land (install stop) | `land_queue_enabled` | install | grant |
-| Git → Land (agent authority) | `land_queue`, `land_grant` | Project | grant |
+| Git → Map landing strip (install stop) | `land_queue_enabled` | install | grant |
+| Git → Map landing strip (agent authority) | `land_queue`, `land_grant` | Project | grant |
+| Git → Map row, landing blocked | the two above | install + Project | opens the strip that holds them |
 | Alerts tab (ranked inbox empty) | `attention_ranking` | Project | grant |
 | Alerts tab (delivery muted) | device alert master | device | grant (local write) |
 | Usage dashboard | `ccusage_enabled` | install | grant |

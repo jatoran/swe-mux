@@ -70,7 +70,7 @@ import {
   type DrawerEdge, type DrawerLayout, type DrawerProjectPresentation,
   type DrawerProjectPresentationMap,
 } from './drawerLayout'
-import { DRAWER_SEGMENTS } from './drawerSegments'
+import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS } from './drawerSegments'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
@@ -5123,6 +5123,18 @@ export function App() {
         if(segment.kind==='section')revealDrawerSection(segment.tab,segment.id)
         else openDrawerTab(segment.tab,projectId,segment.id)
       },
+      voice:{phrases:[`open ${segment.label}`,`show ${segment.label}`,`go to ${segment.label}`]},
+    })),
+    // A retired segment keeps its command and its phrases, pointed at whatever absorbed
+    // it. Deleting the entry would be the exact regression the registry exists to
+    // prevent, only in reverse: "open Land" is a navigation path someone learned, and it
+    // must keep answering after Land became a strip at the head of the worktree map.
+    ...RETIRED_DRAWER_SEGMENTS.map((segment): Command => ({
+      id:`drawer.${segment.tab}.${segment.id}`,
+      label:`Open ${segment.label}`,
+      category:'view',
+      available:true,
+      run:()=>openDrawerTab(segment.tab,projectId,segment.landsOn),
       voice:{phrases:[`open ${segment.label}`,`show ${segment.label}`,`go to ${segment.label}`]},
     })),
     // Tab order is persistent state a drag can scramble, so it needs a way back that is not

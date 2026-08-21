@@ -221,16 +221,22 @@ uncommitted work together.
 
 ## Git drawer tab
 
-- The Project-scoped Git tab has Map, Log, Provenance, and Land readings of one repository.
-- **Landing a branch is an act on the Map row of the worktree it acts on** (`land-queue.md`).
-  Expanding a worktree row shows its Land control, its live land state - including what a running verification gate reports about itself - and the gate as it resolves for that checkout.
-  The Land segment keeps what has no row to live in: the queue's order and history, the Project's verification command and its approval, and who besides the operator may start a land.
-  It used to carry a launch list of its own, in Map's order, so the two would not disagree; one list is the stronger form of the same guarantee.
+- The Project-scoped Git tab has **three** readings of one repository: Map, Log, and Provenance.
+- **Landing lives inside Map** (`land-queue.md`), which is what a fourth reading called Land turned into.
+  Land answered "what is happening to this worktree" beside a Map answering "what is in it", and the split cost more than it bought: the act sat on a surface with a second copy of Map's own list of checkouts and none of the diff that decides whether to press it.
+  Moving the act onto the row left the segment holding one Project-wide block, which is not a view.
+- Landing is split by what each part is a property of, and drawn in one place each.
+  A worktree **row** owns the act: its Land button, its live land state including what a running verification gate reports about itself, a Cancel, and what stopped it last time.
+  A compact **strip at the head of the map** owns everything Project-wide: the verification command with its approval and editor, who besides the operator may start a land, and the queue in run order with its history.
+  Nothing Project-wide is drawn on a row - a fact true of the Project drawn on a row is drawn once per worktree, which is what the verification block did under each of eight expansions before it moved up.
+  The strip is one summary line with the rest behind a disclosure, so the tab still opens on a map; it opens itself only when landing is actually blocked.
+- The retired Land segment keeps its palette command and voice phrases, migrated onto Map (`RETIRED_DRAWER_SEGMENTS`), and so does a stored selection and a `drawer.git.land` keybinding.
+- The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
 - The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
 
 ### A Project with no repository
 
-- A Project folder Git knows nothing about is a fourth state of this tab, not an error in it.
+- A Project folder Git knows nothing about is a state of this tab beside its three readings, not an error in it.
   The tab is never hidden for it: the drawer's tab visibility is a user choice, and a folder that is not a repository yet is exactly the case where the one available Git decision has to be reachable.
 - The daemon distinguishes that state from every other Git failure with its own `not_git_repository` code, raised by repository identity resolution when Git exits fatal, the folder exists, and it carries no `.git` of its own.
   A missing Git binary, a timeout, and a corrupt or unreadable repository all keep the generic failure, because offering to initialize one of those would reinitialize a repository the user still has.
@@ -369,7 +375,7 @@ uncommitted work together.
 - The Git surface mutates only through the worktree create and remove operations and the one-time repository initialization offered to a Project whose folder has no repository.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
 - The **land queue** is the one path that merges, and it is not this surface: it is a daemon-owned pipeline with its own fixed vocabulary, its own preconditions, and its own approval (`land-queue.md`).
-  Its controls in this tab - the Land button on a Map row, and the segment's cancel, verification-command editor, and approval - enqueue and cancel *requests*, write one Project config key, and approve the bytes that will run.
+  Its controls in this tab - the Land button on a Map row, and the landing strip's cancel, verification-command editor, and approval - enqueue and cancel *requests*, write one Project config key, and approve the bytes that will run.
   No control there moves a trunk, and the read-mostly rule for the rest of the tab is unchanged.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 - Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
@@ -452,7 +458,7 @@ and provider-managed worktrees may live outside that root.
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`
 - Display-name resolution shared by every surface that names a session: `src/swe_mux/session_titles.py`, `frontend/src/sessionNames.ts`
 - Drawer Map, Log, Provenance ledger, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
-- Landing on a Map row, and the shared queue/gate reads both landing surfaces use: `frontend/src/GitLandRow.tsx`, `frontend/src/landState.ts` (`land-queue.md`)
+- Landing on a Map row, the Project-wide landing strip above it, and the shared queue/gate reads both use: `frontend/src/GitLandRow.tsx`, `frontend/src/GitLandBar.tsx`, `frontend/src/landState.ts` (`land-queue.md`)
 - Session-link list and its destination rule: `frontend/src/GitSessionLinks.tsx`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`

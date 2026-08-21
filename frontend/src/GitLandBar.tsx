@@ -7,6 +7,7 @@ import {
   landQueueOrder,
   landStateLabel,
   landStateTone,
+  landingSummary,
   parseLandVerifyCommand,
   verifyCommandEditable,
   verifyPlanNote,
@@ -19,28 +20,44 @@ import { landErrorText, useVerifyCommand } from './landState'
 import { shortSha } from './gitWorktrees'
 import type { Project } from './types'
 
-// The Land segment: everything about landing that is *not* about one checkout.
+// Landing, as one compact section at the head of the Map.
 //
-// The act moved to the Map row of the branch it acts on (`GitLandRow.tsx`), because
-// landing is something you do to a checkout you are looking at and the segment's own
-// launch list was a second copy of Map's. What is left here has no row to live in:
+// It was a segment of its own until the map rows learned to land their own branch, and
+// then it was a second surface holding one copy of everything the rows could not: the
+// verification command, the agent grants, and the queue. Keeping it as a parallel view
+// meant a reader watching a land had to leave the map to see it, and putting the gate on
+// every row instead meant reading the same paragraph about approved bytes under each of
+// eight worktrees.
 //
-//  * the **verification command** for this Project - what resolves, whether its bytes
-//    are approved, and the editor that changes it,
-//  * **who besides the operator** may start a land here,
-//  * the **queue itself** - what is running, what is behind it, and what finished.
+// So it is neither. Landing is **one strip above the map**, and the map is still a map:
+//
+//  * A summary line that is always readable without opening anything - what the gate's
+//    standing is, and what the queue is doing right now.
+//  * Everything Project-wide, once: the verification command with its source, approval,
+//    recorded plan, and editor; who besides the operator may start a land; the queue in
+//    the order the pipeline will reach it; and what finished.
+//
+// The strip opens itself when the gate **blocks**, because a surface that cannot work
+// must not render as merely quiet (`setting-links.md`), and stays closed otherwise so
+// the tab still opens on a map. An explicit toggle wins over that for the rest of the
+// visit; nothing re-collapses under the reader.
 //
 // Read-mostly like the rest of the Git tab. The writes are a *request*'s cancellation,
-// the Project's own `[worktree] verify_command`, and approving the exact bytes that
-// will run. Nothing here moves a trunk.
+// the Project's own `[worktree] verify_command`, and approving the exact bytes that will
+// run. Nothing here moves a trunk.
 
 type Props = {
   project: Project | null
-  /** The shared queue read, owned by `GitTab` so Map rows and this segment cannot
+  /** The shared queue read, owned by `GitTab` so the map rows and this strip cannot
    *  disagree about which request is running. */
   queue: LandQueue | null
   error: string
   onChanged: () => void | Promise<void>
+  /** Open state is lifted so a blocked map row can send the reader here, which is what
+   *  lets the rows carry no Project-wide control of their own. `null` means "not decided
+   *  by hand yet", so the blocked-gate default still applies. */
+  open: boolean | null
+  onOpen: (value: boolean) => void
 }
 
 function ago(seconds: number): string {
@@ -51,13 +68,14 @@ function ago(seconds: number): string {
   return `${Math.round(delta / 3600)}h`
 }
 
-export function GitLandPanel({ project, queue, error, onChanged }: Props) {
+export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: Props) {
   const [localError, setLocalError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Resolved against the Project root: this is the Project's declared gate, which is
-  // what the editor below owns. A *branch* that edits its own `.worktree-verify` shows
-  // as unapproved on its own Map row, which is where that difference belongs.
+  // Resolved against the Project root: this is the Project's declared gate, and this is
+  // the one place it is drawn. A worktree whose own `.worktree-verify` differs resolves
+  // differently when its land actually runs, which the row reports as a refusal rather
+  // than by carrying a second copy of this block.
   const { gate, refresh: refreshGate, setGate } = useVerifyCommand(
     project?.id, project?.root || '', !!project,
   )
@@ -73,75 +91,95 @@ export function GitLandPanel({ project, queue, error, onChanged }: Props) {
   const queued = landQueueOrder(queue?.requests || [])
   const history = landHistoryOrder(queue?.requests || [])
   const shown = error || localError
+  const summary = landingSummary(queue, gate)
+  // Blocked means the tab cannot land anything: the install stop is off, or the bytes a
+  // land would run are not approved. That is the setting-links "inert surface" case, and
+  // the act that clears it is inside this strip - so it opens itself.
+  const isOpen = open ?? summary.blocked
 
-  return <section class="git-land" aria-label="Land queue">
+  return <section class="git-landing" aria-label="Landing">
+    <button class={`git-landing-summary ${summary.tone}`} aria-expanded={isOpen}
+      onClick={() => onOpen(!isOpen)}>
+      <span class="git-landing-title">LANDING</span>
+      <span class="git-landing-facts">
+        <em class={summary.gateTone}>{summary.gate}</em>
+        <span>{summary.queue}</span>
+      </span>
+      <span class="git-landing-chevron" aria-hidden="true">{isOpen ? '−' : '+'}</span>
+    </button>
+
     {shown && <p class="git-state error" role="alert">{shown}</p>}
 
-    {/* Before anything else, because the sweep checks it before anything else: with it
-        off a request enqueues and then sits at `queued` forever, which is identical on
-        screen to a pipeline working through a backlog. */}
+    {/* Outside the disclosure on purpose. A gate is what a surface renders *instead of*
+        working, so hiding it behind a collapsed summary would be the same defect as
+        rendering the surface empty. The sweep checks this switch before it reads
+        anything else, so with it off a request enqueues and then sits at `queued`
+        forever - identical on screen to a pipeline working through a backlog. */}
     {queue && !queue.installedEnabled && <GrantGate ids={['automation.landQueue']}
       heading="The land queue is switched off for this install."
       onGranted={onChanged}>
-      <p>Branches can still be queued, and nothing will move them: the daemon's sweep is
-      the only thing that reconciles, verifies, and fast-forwards, and it stops on this
-      switch before reading anything else.</p>
+      <p>Branches can still be queued from the rows below, and nothing will move them:
+      the daemon's sweep is the only thing that reconciles, verifies, and fast-forwards,
+      and it stops on this switch before reading anything else.</p>
     </GrantGate>}
 
-    <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
-      onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
+    {isOpen && <div class="git-landing-body">
+      <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
+        onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
 
-    {/* Who besides you may start one. Project-wide rather than per-row, which is why it
-        stayed here: a control that answers "for every branch in this repository" would
-        become a standing fixture in every Map row it was copied into. */}
-    {queue && project && <details class="git-land-authority">
-      <summary>
-        <span>Agent-initiated landing</span>
-        <em class={queue.projectEnabled && queue.agentGrant === 'granted' ? 'ok' : 'warn'}>{
-          !queue.projectEnabled ? 'not permitted'
-            : queue.agentGrant === 'granted' ? 'starts without asking' : 'you approve each one'
-        }</em>
-      </summary>
-      <p>Your own Land button never consults this — you are the authority it defers to.
-      It decides what happens when an agent in a worktree here calls
-      <code>mux.request_land</code> instead.</p>
-      {!queue.projectEnabled
-        ? <GrantGate ids={['project.landQueue']} projectId={project.id}
-            heading="This Project has not permitted the land queue for agents."
-            onGranted={onChanged}>
-            <p>With it off, an agent's <code>request_land</code> is refused outright.
-            With it on, the request is still drafted for you to approve until you raise
-            the authority below.</p>
-          </GrantGate>
-        : queue.agentGrant === 'draft'
-          ? <p class="git-land-authority-row">Each agent request writes a row you decide,
-            here.{' '}
-            <GrantButton id="project.landGrant" projectId={project.id} onGranted={onChanged}
-              title="Lets an agent start a land without waiting for you · writes to this Project’s .swe-mux/config.toml"
-            >Let agents start one directly</GrantButton>{' '}
-            (still fast-forward-only, still gated on the approved verification command,
-            and still inside {queue.hourlyBudget} requests per session per hour).</p>
-          : <p class="git-land-authority-row">Agents start lands directly, inside
-            {' '}{queue.hourlyBudget} requests per session per hour. Lower it back to
-            approve-each-one in this Project's settings.</p>}
-    </details>}
+      {/* Who besides you may start one. Project-wide, and therefore here rather than on
+          a row: a control that answers "for every branch in this repository" would be a
+          standing fixture in each of eight expansions, which is the repetition this
+          whole strip exists to remove. */}
+      {queue && project && <details class="git-land-authority">
+        <summary>
+          <span>Agent-initiated landing</span>
+          <em class={queue.projectEnabled && queue.agentGrant === 'granted' ? 'ok' : 'warn'}>{
+            !queue.projectEnabled ? 'not permitted'
+              : queue.agentGrant === 'granted' ? 'starts without asking' : 'you approve each one'
+          }</em>
+        </summary>
+        <p>Your own Land button never consults this — you are the authority it defers to.
+        It decides what happens when an agent in a worktree here calls
+        <code>mux.request_land</code> instead.</p>
+        {!queue.projectEnabled
+          ? <GrantGate ids={['project.landQueue']} projectId={project.id}
+              heading="This Project has not permitted the land queue for agents."
+              onGranted={onChanged}>
+              <p>With it off, an agent's <code>request_land</code> is refused outright.
+              With it on, the request is still drafted for you to approve until you raise
+              the authority below.</p>
+            </GrantGate>
+          : queue.agentGrant === 'draft'
+            ? <p class="git-land-authority-row">Each agent request writes a row you decide,
+              here.{' '}
+              <GrantButton id="project.landGrant" projectId={project.id} onGranted={onChanged}
+                title="Lets an agent start a land without waiting for you · writes to this Project’s .swe-mux/config.toml"
+              >Let agents start one directly</GrantButton>{' '}
+              (still fast-forward-only, still gated on the approved verification command,
+              and still inside {queue.hourlyBudget} requests per session per hour).</p>
+            : <p class="git-land-authority-row">Agents start lands directly, inside
+              {' '}{queue.hourlyBudget} requests per session per hour. Lower it back to
+              approve-each-one in this Project's settings.</p>}
+      </details>}
 
-    {/* The queue, in the order the pipeline will reach it. Oldest first: the request
-        about to run is the one a reader looks at first, and the daemon's own
-        newest-first listing put it at the bottom. */}
-    <div class="git-land-list" aria-label="Queued lands">
-      <h4>QUEUE<small>{queued.length ? `${queued.length} waiting to land` : 'nothing queued'}</small></h4>
-      {queued.length === 0 && <p class="git-change-empty">
-        Land a branch from its row in Map — expand the worktree and press Land.
-      </p>}
-      {queued.map((request, index) => <LandRow key={request.id} request={request}
-        position={index + 1} busy={busy} onCancel={() => void cancel(request.id)} />)}
-    </div>
+      {/* The queue, in the order the pipeline will reach it. Oldest first: the request
+          about to run is the one a reader looks at first, and the daemon's own
+          newest-first listing put it at the bottom. */}
+      <div class="git-land-list" aria-label="Queued lands">
+        <h4>QUEUE<small>{queued.length ? `${queued.length} waiting to land` : 'nothing queued'}</small></h4>
+        {queued.length === 0 && <p class="git-change-empty">
+          Land a branch from its row below — expand the worktree and press Land.
+        </p>}
+        {queued.map((request, index) => <LandRow key={request.id} request={request}
+          position={index + 1} busy={busy} onCancel={() => void cancel(request.id)} />)}
+      </div>
 
-    {history.length > 0 && <details class="git-land-history">
-      <summary>{history.length} finished</summary>
-      {history.map(request => <LandRow key={request.id} request={request} busy={busy} />)}
-    </details>}
+      {history.length > 0 && <details class="git-land-history">
+        <summary>{history.length} finished</summary>
+        {history.map(request => <LandRow key={request.id} request={request} busy={busy} />)}
+      </details>}
+    </div>}
   </section>
 }
 
@@ -149,10 +187,14 @@ export function GitLandPanel({ project, queue, error, onChanged }: Props) {
  * The Project's verification command: what resolves, whether it is approved, and the
  * one editor that changes it.
  *
- * The gate has always been able to *approve* bytes; until now the only way to change
- * which bytes those were was to hand-edit a committed TOML file or the script, with
- * nothing on screen saying which of the two was in force. Both facts are stated here,
- * and the override is editable in place.
+ * **One copy, at the head of the tab.** It shipped under every expanded worktree row
+ * first, which put the same paragraph about approved bytes under each of eight
+ * checkouts; the fact it states is a property of the Project, not of the row, and the
+ * approval act is the same act whichever row you happen to have open.
+ *
+ * The gate has always been able to *approve* bytes; until it gained this editor the only
+ * way to change which bytes those were was to hand-edit a committed TOML file or the
+ * script, with nothing on screen saying which of the two was in force.
  *
  * **Editing never approves.** They are separate acts against separate endpoints, and an
  * edit invalidates approval by construction because the approval is a digest over the
@@ -234,7 +276,7 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
     {/* Which of the two mechanisms is in force. Both were documented and neither was
         ever stated on screen, so "why is it running that" had no answer here. */}
     {gate?.configured && <p class="git-state">
-      Resolved from {sourceLabel}.{' '}
+      Resolved from {sourceLabel}, for every worktree of this Project.{' '}
       {gate.source === 'convention'
         ? 'Set an override below to run something else.'
         : gate.scriptPresent

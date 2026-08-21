@@ -57,6 +57,19 @@ def test_legacy_drawer_reset_binding_migrates() -> None:
     )
 
 
+def test_a_retired_drawer_segment_binding_lands_on_what_absorbed_it() -> None:
+    """A binding a user already made must survive a surface being folded into another.
+
+    An unmigrated id is *rejected* rather than quietly ignored, so retiring a surface
+    without a row here turns a working keybinding into a validation error on the next
+    read of a file the user has not touched.
+    """
+    assert normalize_binding("ctrl+alt+l", "drawer.git.land") == (
+        "ctrl+alt+l",
+        "drawer.git.map",
+    )
+
+
 def test_pane_swap_is_available_for_custom_bindings() -> None:
     assert normalize_binding("ctrl+alt+x", "pane.swapNext") == (
         "ctrl+alt+x",
