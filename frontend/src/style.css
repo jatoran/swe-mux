@@ -3889,6 +3889,31 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-map-actions button:hover:not(:disabled){border-color:var(--accent)}
 .git-map-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
 .git-map-actions button:disabled{opacity:.45;cursor:not-allowed}
+/* A worktree being deleted, said by the list. Dimmed rather than removed: the row is
+   still the thing that was pressed, and it must not blend back in on either the fast
+   path (renamed away, gone from the next inventory) or the slow one (Git unlinking a
+   dependency tree for the next twenty seconds). */
+.git-map-row.removing{opacity:.5}
+.git-map-row.removing .git-map-summary{cursor:wait}
+.git-map-metrics .removing{display:inline-flex;align-items:center;gap:4px;color:var(--amber)}
+.git-map-spinner{width:7px;height:7px;border:1.5px solid var(--line);border-top-color:var(--amber);border-radius:50%;animation:git-map-spin .7s linear infinite}
+@keyframes git-map-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.git-map-spinner{animation:none}}
+/* Selection is a mode: the column exists only while it is on, so the row keeps its
+   two-column geometry the rest of the time. */
+.git-map-head.selecting{grid-template-columns:max-content minmax(0,1fr) max-content}
+.git-map-select{display:flex;align-items:center;justify-content:center;min-width:26px;min-height:26px;padding-left:4px;cursor:pointer}
+.git-map-select input:disabled{cursor:not-allowed;opacity:.45}
+.git-map-bulk{display:grid;gap:5px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.git-map-bulk-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.git-map-bulk-head strong{margin-right:auto;color:var(--text)}
+.git-map-bulk-head button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
+.git-map-bulk-head button:disabled{opacity:.45;cursor:not-allowed}
+.git-map-bulk-badges{display:flex;flex-wrap:wrap;gap:3px 8px;color:var(--muted);font-size:8px}
+.git-map-bulk-badges em{font-style:normal}
+.git-map-bulk-badges em.warn{color:var(--yellow)}
+.git-map-bulk label{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:8px}
+.git-map-bulk .git-map-actions small{color:var(--muted);font-size:8px}
 .git-quiet{color:var(--muted);font-size:8px;line-height:1.35}
 .git-row-error{margin:0;color:var(--red);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
 .git-external{padding:5px 9px 8px;border-top:1px solid var(--line);background:var(--panel)}

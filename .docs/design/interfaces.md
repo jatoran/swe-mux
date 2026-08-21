@@ -1759,6 +1759,9 @@ If the target parent is missing, the daemon creates it only when it is below the
 The public configuration returns `worktree_root` as an absolute path, resolving an empty stored value to `<data_dir>/worktrees`.
 `DELETE /git/worktrees` takes `{cwd, path, force?}` and validates `path` against the exact current porcelain list.
 Create and remove responses carry an `operation_id` that correlates daemon mutation logs.
+A removal that could rename the checkout out of the way first returns `cleanup: {status:"purging", path}` naming the buried directory under `<git-common-dir>/swe-mux-graveyard`, and a background task deletes it; a removal Git performed in place returns `cleanup: {status:"removed", path:null}`.
+Both are success and neither is a client's concern beyond the log correlation: the response is returned before the bytes are gone in the first case and after Git deleted them in the second, so nothing may treat it as the moment the checkout stopped existing on disk.
+Renaming is declined for a locked worktree, a worktree containing submodules, and an unclean worktree without `force`, and falls back to in-place removal when the filesystem refuses the move.
 Worktree mutations are daemon-owned, survive requesting-client cancellation, and have a 30-minute deadline distinct from four-second Git reads.
 An exact prunable path with an existing directory and missing `.git` link is repaired and revalidated before removal; success and post-repair failures report `repaired`.
 Revalidation checks the exact registration, `.git` link, and reported top-level even when `git worktree repair` returns nonzero, because Git may already have restored the requested path before reporting a different repair error.

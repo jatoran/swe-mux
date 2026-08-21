@@ -327,6 +327,10 @@ So the map holds both halves, split by **what each part is a property of**:
   A land that **skipped** the gate says so here and in the strip's queue and history, because it is the one thing about a finished land that the states cannot show: a documentation-only row goes from merging the trunk straight to fast-forwarding, never passing through `Verifying`, and afterwards reads exactly like a land that passed three minutes of pytest.
   A *full* gate is deliberately not labelled, because it is what every land does and the states already narrate it; drawing both would put a redundant chip on every row and bury the one that matters.
   The main tree is the trunk these land *onto* and is never offered; a detached worktree states why rather than offering a button that would be refused.
+- **Map's selection mode can start many lands at once, and that is all it does** (`git.md`).
+  Selecting worktrees and pressing Land sends one ordinary request per branch, in map order, through the same route and the same preconditions as the row's own button - the queue then runs them one at a time, which is the serialization it already guarantees rather than anything the bulk control arranges.
+  It waits for nothing, reorders nothing, and cannot skip a precondition: a request the queue refuses is reported beside the branch it refused, and the rest are enqueued regardless.
+  The main tree and a detached HEAD are named as unable to land rather than enqueued and refused, for the same reason the row states them.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
 
 Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.

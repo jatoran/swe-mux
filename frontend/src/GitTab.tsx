@@ -35,7 +35,22 @@ import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
 import { GitLandBar } from './GitLandBar'
 import { GitLandRow } from './GitLandRow'
-import { useLandQueue } from './landState'
+import { landErrorText, useLandQueue } from './landState'
+import {
+  assessRemoval,
+  beginRemovals,
+  forgetRemoval,
+  isRemoving,
+  landBlockLabel,
+  planBulkLand,
+  planBulkRemoval,
+  removalBlockLabel,
+  removalWarningLabel,
+  settleRemovals,
+  skippedLabel,
+  type PendingRemovals,
+  type RemovalAssessment,
+} from './worktreeRemoval'
 import { GitReviewModal } from './GitReviewModal'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import {
@@ -159,6 +174,19 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const [adding,setAdding]=useState(false)
   const [addForm,setAddForm]=useState({path:'',branch:'',start:''})
   const [remove,setRemove]=useState<{path:string;force:boolean}|null>(null)
+  // Removals in flight, owned by the list rather than by any row. A row that held its
+  // own "removing" state stopped saying it the moment it was collapsed - or the moment
+  // the API answered, before the next inventory arrived - and the worktree then sat
+  // there looking exactly like the ones that were not being deleted.
+  const [pendingRemovals,setPendingRemovals]=useState<PendingRemovals>({})
+  // Bulk acts, off by default: checkboxes on every row are weight on a surface people
+  // open to read. One toolbar press is what turns fifty worktrees into a work list.
+  const [selecting,setSelecting]=useState(false)
+  const [selected,setSelected]=useState<Record<string,true>>({})
+  const [bulkRemoving,setBulkRemoving]=useState(false)
+  const [bulkForce,setBulkForce]=useState(false)
+  const [bulkBusy,setBulkBusy]=useState(false)
+  const [bulkNote,setBulkNote]=useState('')
   const [compareOverride,setCompareOverride]=useState(project?.git_compare_ref||'')
   // Set only from the daemon's own `not_git_repository`, never inferred from a message.
   const [notRepository,setNotRepository]=useState(false)
@@ -189,6 +217,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       const parsed=parseGitOverview(raw)
       if(!parsed)throw new Error('The daemon returned an invalid Git overview.')
       setOverview(parsed);setError('');setPreview({});setNotRepository(false)
+      // The inventory is the only thing that ends a removing indication, and the only
+      // thing that can: the daemon answers a fast removal before Git has finished
+      // deleting anything, and a slow one while it still is.
+      setPendingRemovals(current=>settleRemovals(current,parsed.worktrees))
+      setSelected(current=>{
+        const listed=new Set(parsed.worktrees.map(tree=>normalizePath(tree.path)))
+        const next=Object.fromEntries(Object.entries(current).filter(([key])=>listed.has(key)))
+        return Object.keys(next).length===Object.keys(current).length?current:next as Record<string,true>
+      })
     }catch(cause){if(mine===generation.current){
       const missing=(cause as ApiError)?.detail?.code==='not_git_repository'
       setOverview(null);setNotRepository(missing)
@@ -364,11 +401,89 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     }catch(cause){setError(describeGitError(cause,'Creating the repository',true))}
     finally{setBusy(false)}
   }
+  /**
+   * Remove one or many, by exactly one path.
+   *
+   * The pending set is written before the first request and only ever *narrowed* here,
+   * on a refusal: what clears an entry on success is the refreshed inventory not
+   * listing it. That is what makes the fast path (the tree is renamed away and gone
+   * from the next list within a second) and the slow one (Git is still unlinking
+   * thirty thousand files) render as the same sentence.
+   */
+  const runRemovals=async(targets:readonly {path:string;force:boolean}[])=>{
+    if(!targets.length)return
+    setPendingRemovals(current=>beginRemovals(current,targets.map(item=>item.path)))
+    setBusy(true);setError('')
+    const failures:string[]=[]
+    for(const target of targets){
+      try{await api('DELETE','/api/git/worktrees',{cwd:project.root,path:target.path,force:target.force})}
+      catch(cause){
+        failures.push(`${pathTail(target.path)}: ${describeGitError(cause,'Removing the worktree',true)}`)
+        setPendingRemovals(current=>forgetRemoval(current,target.path))
+      }
+    }
+    setBusy(false)
+    // The refresh first, then the message: a refusal may have been preceded by a repair
+    // or an interrupted Git command that changed the row, and `refresh` clears the error
+    // on success - so setting it before would show the new inventory with no reason
+    // beside it.
+    await refresh()
+    if(failures.length)setError(failures.join(' · '))
+  }
   const removeWorktree=async()=>{
     if(!remove)return
-    setBusy(true)
-    try{await api('DELETE','/api/git/worktrees',{cwd:project.root,path:remove.path,force:remove.force});setRemove(null);setExpandedTree('');await refresh()}
-    catch(cause){const message=describeGitError(cause,'Removing the worktree',true);await refresh();setError(message)}finally{setBusy(false)}
+    const target={path:remove.path,force:remove.force}
+    setRemove(null);setExpandedTree('')
+    await runRemovals([target])
+  }
+
+  // One assessment per linked worktree, in map order, so the bulk bar and each row are
+  // reading the same answer about the same checkout rather than two similar ones.
+  const assessments=new Map<string,RemovalAssessment>(
+    orderedWorktrees.map(tree=>[normalizePath(tree.path),assessRemoval(tree,sessionsFor(tree.path).length)]),
+  )
+  const selectedTrees=orderedWorktrees.filter(tree=>selected[normalizePath(tree.path)])
+  const selectedAssessments=selectedTrees
+    .map(tree=>assessments.get(normalizePath(tree.path))!)
+    .filter(Boolean)
+  const removalPlan=planBulkRemoval(selectedAssessments)
+  const landPlan=planBulkLand(selectedTrees)
+  const safeRemovals=removalPlan.removable.filter(item=>item.warnings.length===0)
+  const removalTargets=bulkForce?removalPlan.removable:safeRemovals
+  const clearSelection=()=>{setSelected({});setBulkRemoving(false);setBulkForce(false);setBulkNote('')}
+  const toggleSelected=(path:string)=>setSelected(current=>{
+    const key=normalizePath(path),next={...current}
+    if(next[key])delete next[key]; else next[key]=true
+    return next
+  })
+  /** Everything the reader could act on: a blocked checkout is not a candidate, so
+   *  selecting it would only be something to un-select before pressing anything. */
+  const selectAllRemovable=()=>setSelected(Object.fromEntries(
+    orderedWorktrees
+      .filter(tree=>!tree.main&&(assessments.get(normalizePath(tree.path))?.blocks.length??1)===0)
+      .map(tree=>[normalizePath(tree.path),true as const]),
+  ))
+  /** One `request_land` per branch, in map order. The queue serializes them - that is
+   *  the queue doing its job, and nothing here waits for or reorders a landing. */
+  const runBulkLand=async()=>{
+    if(!landPlan.landable.length)return
+    setBulkBusy(true)
+    const failures:string[]=[]
+    for(const item of landPlan.landable){
+      try{await api('POST','/api/land',{project_id:project.id,worktree_root:item.path})}
+      catch(cause){failures.push(`${item.branch}: ${landErrorText(cause)}`)}
+    }
+    setBulkBusy(false)
+    const queued=landPlan.landable.length-failures.length
+    setBulkNote(failures.length
+      ?`${queued} queued · ${failures.join(' · ')}`
+      :`${queued} branch${queued===1?'':'es'} queued to land.`)
+    await refreshLand()
+  }
+  const runBulkRemove=async()=>{
+    const targets=removalTargets.map(item=>({path:item.path,force:item.needsForce}))
+    setBulkRemoving(false);setBulkForce(false);setBulkNote('');setSelected({})
+    await runRemovals(targets)
   }
 
   // Nothing here has a repository to read, so the three views, the compare control, and
@@ -390,6 +505,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           an explicit accessible name. */}
       <div class="git-toolbar-actions">
         <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map')void refresh();else if(view==='log')void refreshGraph(graphLimit);void refreshProvenance()}}>↻</button>
+        {/* Bulk is a mode, not a permanent column. Fifty accumulated worktrees is what
+            makes it necessary; a checkbox under every branch name on a surface people
+            open to read a diff is what makes it a mode. */}
+        {view==='map'&&<button aria-pressed={selecting} onClick={()=>{setSelecting(value=>!value);clearSelection()}}>Select</button>}
         {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
       </div>
     </div>
@@ -404,6 +523,42 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           compact strip rather than a panel so the tab still opens on a map. */}
       <GitLandBar project={project} queue={landQueue} error={landError} onChanged={refreshLand}
         open={landingOpen} onOpen={setLandingOpen}/>
+      {/* The bulk bar states what it will *not* touch before it states what it will.
+          "Remove 30" is not a sentence anyone can check by reading it, so the counts
+          that make it checkable - what is in use, what holds uncommitted or unlanded
+          work - are the sentence instead. */}
+      {selecting&&overview&&<div class="git-map-bulk" aria-label="Selected worktrees">
+        <div class="git-map-bulk-head">
+          <strong>{selectedTrees.length} selected</strong>
+          <button disabled={bulkBusy||busy} onClick={selectAllRemovable}>All removable</button>
+          <button disabled={bulkBusy||busy||!selectedTrees.length} onClick={clearSelection}>None</button>
+        </div>
+        {selectedTrees.length>0&&<div class="git-map-bulk-badges">
+          {removalPlan.blocked.length>0&&<em class="warn">{skippedLabel(removalPlan.blocked.reduce<Record<string,number>>((counts,item)=>{for(const block of item.blocks)counts[block]=(counts[block]||0)+1;return counts},{}))}</em>}
+          {removalPlan.warned.length>0&&<em class="warn">{removalPlan.warned.length} with {[...new Set(removalPlan.warned.flatMap(item=>item.warnings))].map(removalWarningLabel).join(' / ')} work</em>}
+          {landPlan.blocked.length>0&&<em>{landPlan.blocked.length} cannot land ({[...new Set(landPlan.blocked.map(item=>landBlockLabel(item.reason)))].join(', ')})</em>}
+        </div>}
+        {!bulkRemoving&&<div class="git-map-actions">
+          <button disabled={bulkBusy||busy||!landPlan.landable.length} onClick={()=>void runBulkLand()}>
+            {bulkBusy?'Queueing…':`Land ${landPlan.landable.length}`}
+          </button>
+          <button disabled={bulkBusy||busy||!removalPlan.removable.length} onClick={()=>setBulkRemoving(true)}>
+            Remove {removalPlan.removable.length}…
+          </button>
+          <small>one land request per branch · the queue runs them one at a time</small>
+        </div>}
+        {bulkRemoving&&<div class="git-map-actions">
+          <button class="danger" disabled={bulkBusy||busy||!removalTargets.length} onClick={()=>void runBulkRemove()}>
+            Remove {removalTargets.length} ✓
+          </button>
+          {removalPlan.warned.length>0&&<label>
+            <input type="checkbox" checked={bulkForce} onChange={event=>setBulkForce(event.currentTarget.checked)}/>
+            {' '}also remove {removalPlan.warned.length} with uncommitted or unlanded work
+          </label>}
+          <button onClick={()=>{setBulkRemoving(false);setBulkForce(false)}}>Cancel</button>
+        </div>}
+        {bulkNote&&<p class="git-state" role="status">{bulkNote}</p>}
+      </div>}
       {!overview&&!error&&<p class="git-state">Reading repository…</p>}
       {overview&&orderedWorktrees.map(tree=>{
         const expanded=expandedTree===tree.path,{measured:localMeasured,total}=localMeasurement(tree)
@@ -411,15 +566,29 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         const attached=sessionsFor(tree.path),upstream=attached.find(session=>session.git?.ahead||session.git?.behind)?.git
         const removalBlocked=tree.locked!==null||attached.length>0
         const worktreeName=pathTail(tree.path),identityQualifier=tree.main?'main tree':worktreeName!==tree.branch?worktreeName:''
-        return <article class="git-map-row" key={tree.path}>
+        // Removing is a property of the *list*, so it survives this row being collapsed
+        // and it is the same reading on the fast and the slow path.
+        const removing=isRemoving(pendingRemovals,tree.path)
+        const assessment=assessments.get(normalizePath(tree.path))
+        const blocks=assessment?.blocks||[]
+        return <article class={`git-map-row${removing?' removing':''}`} key={tree.path} aria-busy={removing?'true':undefined}>
           {/* The live count is a sibling of the expand button, not a span inside it: it is
               its own affordance now, and interactive content nested in a button is neither
               valid nor reliably clickable. */}
-          <div class="git-map-head">
+          <div class={`git-map-head${selecting?' selecting':''}`}>
+            {selecting&&<label class="git-map-select" title={blocks.length?`Cannot be removed: ${blocks.map(removalBlockLabel).join(', ')}`:`Select ${tree.branch||worktreeName}`}>
+              <input
+                type="checkbox"
+                checked={!!selected[normalizePath(tree.path)]}
+                disabled={removing||blocks.length>0}
+                aria-label={`Select ${tree.branch||worktreeName}`}
+                onChange={()=>toggleSelected(tree.path)}
+              />
+            </label>}
             <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
               <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
               <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
-              <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
+              <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}{removing&&<em class="removing"><i class="git-map-spinner" aria-hidden="true"/>removing…</em>}</span>
               <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
             </button>
             {attached.length>0&&<button
@@ -440,8 +609,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
                 a row that needs one sends the reader there rather than drawing a second
                 copy under every worktree. The main tree is the trunk these land *onto*
                 and is never a candidate. */}
-            {!tree.main&&!tree.bare&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand} onShowLanding={()=>setLandingOpen(true)}/>}
-            {!tree.main&&!tree.bare&&<div class="git-map-actions">{removalBlocked?<p class="git-change-empty">{tree.locked!==null?'Git reports this worktree as locked.':`${attached.length} live session${attached.length===1?' uses':'s use'} this worktree.`}</p>:remove?.path===tree.path?<><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force?'Force remove ✓':'Confirm remove ✓'}</button><label><input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> discard uncommitted files</label><button onClick={()=>setRemove(null)}>Cancel</button></>:<button onClick={()=>setRemove({path:tree.path,force:false})}>Remove worktree…</button>}</div>}
+            {!tree.main&&!tree.bare&&!removing&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand} onShowLanding={()=>setLandingOpen(true)}/>}
+            {/* A checkout being deleted is not something to land or to remove again, and
+                its own row is not where that is decided any more - the list said it. */}
+            {!tree.main&&!tree.bare&&removing&&<p class="git-change-empty">This worktree is being removed.</p>}
+            {!tree.main&&!tree.bare&&!removing&&<div class="git-map-actions">{removalBlocked?<p class="git-change-empty">{tree.locked!==null?'Git reports this worktree as locked.':`${attached.length} live session${attached.length===1?' uses':'s use'} this worktree.`}</p>:remove?.path===tree.path?<><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force?'Force remove ✓':'Confirm remove ✓'}</button><label><input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> discard uncommitted files</label><button onClick={()=>setRemove(null)}>Cancel</button></>:<button onClick={()=>setRemove({path:tree.path,force:false})}>Remove worktree…</button>}</div>}
           </div>}
         </article>
       })}
