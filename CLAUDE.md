@@ -92,12 +92,13 @@ escalate to the user to land your own branch. Leave the worktree in place afterw
 (`ExitWorktree` with keep) rather than removing it because the task ended.
 
 **Landing is meant to be cheap; do not re-verify what did not change.** `.worktree-verify` is
-~175s of pytest plus ~17s for ruff, mypy, tsc, and `npm test` together, so after `git merge
+~45s of pytest (it runs across the host's cores; it was ~175s before 2026-08-21) plus ~17s for
+ruff, mypy, tsc, and `npm test` together, so after `git merge
 master` scope the re-run to what actually arrived (`git diff --stat ORIG_HEAD..`): docs-only
 means land immediately, anything not touching `src/swe_mux` means the ~17s half is enough, and
 only an incoming backend change earns another full pytest. Run the gate once and read all of
 it — piping it through `tail` or `grep` hides the part you needed and costs a second full run.
-Land the moment it is green, because a 3-minute window is wide enough for master to move and
+Land the moment it is green, because the window is wide enough for master to move and
 refuse the fast-forward; when that happens, merge again and apply the same triage instead of
 re-running everything.
 
@@ -123,7 +124,23 @@ tempted to re-add the lock on a hunch:
 - The SQLite files tests create live under `tests/`, which is per-worktree.
 - No test binds a port. Every `8765` in the suite is a string assertion.
 
-If any of those three stops being true, a verification lock is a stopgap.
+Re-audited 2026-08-21 for *intra*-run parallelism, where xdist workers share one `tests/`
+directory rather than each having their own:
+
+- Exactly one test writes into `tests/` at all (`test_control_plane_enablement.py`), and
+  the filename it writes already carries a `uuid4` - everything else writes under `tmp_path`.
+- There are no `module`, `class`, `session`, or `package` scoped fixtures anywhere in the
+  suite, and no `conftest.py`; every fixture is function-scoped, so no worker can inherit
+  another's state and no test depends on a neighbour having run first. That is also why
+  widening fixture scope for speed is the wrong trade here - the isolation is what makes
+  `-n auto` safe, and a 6x win does not need it.
+- The two tests that mutate `os.environ` (`test_pi_opencode_adapters.py`,
+  `test_pty_supervisor.py`) both restore it in a `finally`, and a worker is its own process,
+  so the mutation cannot reach another worker even in between.
+- The supervisor tests' discovery file and its socket are per-`tmp_path`; nothing in the
+  suite binds a fixed port.
+
+If any of those stops being true, a verification lock is a stopgap.
 Fix the isolation instead, because serialised verification is the largest cost in parallel work.
 
 Worktree bootstrap (`.worktree-setup`) is `uv sync` plus `npm ci`, sharing the uv and npm
@@ -144,11 +161,45 @@ thing to reach for when the queue is not enabled.
 
 ## Verification
 
-Backend: `uv run pytest tests -q -m "not live_agent and not live_subagent and not
-live_telemetry and not live_quota"`, `uv run ruff check src/swe_mux tests packaging`,
-`uv run mypy`. Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
+Backend: `uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent
+and not live_subagent and not live_telemetry and not live_quota"`, `uv run ruff check
+src/swe_mux tests packaging`, `uv run mypy`.
+Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
+
+**The gate runs pytest across the host's cores** (pytest-xdist, a `dev` dependency).
+Measured 2026-08-21 on the 16-physical-core primary host: 241.9s serial against 39.5-47.3s
+over seven `-n auto` runs, all 4214 tests passing in every one - about 6x, and `-n 32`
+(oversubscribed) measured no better than `-n auto`, so the physical-core default is the
+right one.
+The two real-console files carry `pytest.mark.xdist_group`, which is honoured **only** by
+`--dist loadgroup`; `--dist worksteal` ignores the mark entirely, so choosing it would
+silently scatter `test_conpty_integration.py` and `test_pty_supervisor.py` across workers
+and run their wall-clock-sensitive pseudoconsole tests concurrently with each other.
+Unmarked tests are distributed exactly as under `--dist load`, so the grouping costs
+nothing elsewhere.
+Each real-console file is its own group rather than the two sharing one: a file's own real
+consoles never overlap, while the two files still run on two workers.
+The measured critical path is the bulk of the suite (31s with both real-console files
+removed), not the groups, so pinning them buys robustness for about 11s.
+While iterating, plain `uv run pytest tests/test_x.py` is still the right thing - worker
+startup is not worth paying on a three-test run.
+
+Collection is not a barrier to this and needs no lazy-import work: cold collection is 10.4s,
+of which nearly all is pytest's assertion rewriting compiling to `__pycache__` (shared by
+every worker, paid once), and warm collection is 1.15s. The marginal import cost of all 198
+test modules together is 1.45s.
+
+**A fixed `asyncio.sleep` before a positive assertion is the failure mode parallelism
+exposes**, and the one thing to write differently now. A worker sharing the host with
+fifteen others is not scheduled inside the 10ms that such a sleep bets on, and the test
+reddens the gate over machine load rather than over the code
+(`test_pty_ws.py::test_pty_ws_orders_replay_then_live_updates_and_exit` did exactly this,
+intermittently, before the fix). Wait for the condition instead - `until(...)` in
+`tests/test_pty_ws.py` is the shape - which also returns sooner on an idle machine.
+Sleeps guarding a *negative* assertion ("no pulse fired") are a real quiet window and stay:
+load only makes those safer.
 
 The pytest run above includes the real-ConPTY integration tests (`-m conpty`,
 Windows-only, `tests/test_conpty_integration.py`) and the harness-adapter coverage

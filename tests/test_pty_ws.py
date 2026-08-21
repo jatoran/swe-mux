@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -93,6 +94,34 @@ async def next_bytes(ws: Any) -> bytes:
         return cast(bytes, message.data)
 
 
+async def until(predicate: Callable[[], bool], *, seconds: float = 5.0, what: str = "") -> None:
+    """Wait for a frame the daemon handles on its own side of the socket.
+
+    A frame sent over the websocket is acted on by a handler this test never
+    awaits, so the assertion that follows needs the loop to have got there. A
+    fixed `asyncio.sleep(0.01)` is a bet on how long that takes, and under
+    `-n auto` the bet loses: a worker sharing the host with fifteen others is
+    not scheduled inside ten milliseconds, and the test reddens the gate over
+    machine load rather than over the code. Polling is both faster (it returns
+    on the turn the condition holds) and honest under load.
+
+    Only for *positive* waits. An assertion that something has NOT happened
+    still needs a real quiet window, and those sleeps are deliberately left
+    alone - a loaded machine only makes them safer.
+
+    It polls rather than waiting on an `asyncio.Event` because the state it
+    watches is a plain list or attribute the handler mutates without signalling
+    anyone; there is nothing to subscribe to short of instrumenting the daemon
+    for the tests, which would be a worse trade than a 5ms tick.
+    """
+    try:
+        async with asyncio.timeout(seconds):
+            while not predicate():  # noqa: ASYNC110 - no event to wait on; see docstring
+                await asyncio.sleep(0.005)
+    except TimeoutError:
+        raise AssertionError(f"condition never held: {what or predicate}") from None
+
+
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
     writes: list[str] = []
@@ -169,8 +198,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         await ws.send_json(
             {"type": "input", "kind": "terminal_response", "data": "\x1b[?1;2c"}
         )
-        await asyncio.sleep(0.01)
-        assert writes == ["\x1b[?1;2c"]
+        await until(lambda: writes == ["\x1b[?1;2c"], what="the terminal response reached the pty")
         assert session.terminal_mode == "normal"
         assert session.input_revision == 0
 
@@ -190,8 +218,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert ack["type"] == "input_ack"
         assert ack["input_seq"] == 7
         assert isinstance(ack["server_received_at_ms"], int)
-        await asyncio.sleep(0.01)
-        assert session.input_revision == 1
+        await until(lambda: session.input_revision == 1, what="the paste was counted")
         assert writes[-1] == "\x1b[200~fixture\x1b[201~"
         input_event = await _next_event_of(events, "terminal_input")
         assert input_event.payload["input_seq"] == 7
@@ -307,8 +334,10 @@ async def test_a_reconnect_offering_its_position_gets_a_delta_and_no_repaint_pul
         assert first_end["position"] == session.scrollback.position
         await ws.close()
         # Let the first attach's own truncated-replay pulse finish before asserting
-        # that the delta adds none of its own.
-        await asyncio.sleep(0.1)
+        # that the delta adds none of its own. Waiting for the pulse rather than for
+        # a fixed beat is what keeps a loaded worker from letting it leak past the
+        # clear and land on the delta's account.
+        await until(lambda: len(resizes) >= 2, what="the first attach pulsed")
         resizes.clear()
 
         # Output the client misses while its socket is down.
@@ -416,7 +445,7 @@ async def test_windowed_replay_pulses_a_hidden_warm_mounted_pane() -> None:
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"xxxxxxxx"
         assert (await ws.receive_json())["type"] == "replay_end"
-        await asyncio.sleep(0.1)
+        await until(lambda: len(resizes) >= 2, what="the hidden warm mount pulsed")
 
         # Hidden deregisters the viewport, so the pulse runs on the geometry the
         # remaining clients arbitrated rather than on this pane's own fit.
@@ -551,7 +580,10 @@ async def test_a_settled_drag_pulses_an_alternate_screen_child_exactly_once(
         # because the screen worth repairing is the one the user stops on.
         for cols in (76, 74, 72, 70):
             await ws.send_json({"type": "resize", "cols": cols, "rows": 24})
-        await asyncio.sleep(0.02)
+        # Every frame of the drag has to have landed before the negative half of this
+        # assertion means anything; the settle timer restarts on each one, so waiting
+        # for them cannot let the pulse in early.
+        await until(lambda: len(resizes) >= 5, what="the drag's own resizes landed")
         # Only the widths the drag itself asked for. A pulse is the off-by-one width
         # (69) and is the one thing that must not have happened yet.
         assert resizes == [(78, 24), (76, 24), (74, 24), (72, 24), (70, 24)]
@@ -772,7 +804,7 @@ async def test_codex_drops_late_default_color_responses_from_current_and_stale_c
         # Older cached browser builds mislabeled OSC color replies as user input.
         await ws.send_json({"type": "input", "kind": "user", "data": foreground + background})
         await ws.send_json({"type": "input", "kind": "user", "data": "hello"})
-        await asyncio.sleep(0.01)
+        await until(lambda: writes == ["hello"], what="the typed input reached the pty")
         await ws.close()
 
     assert writes == ["hello"]
@@ -1029,11 +1061,9 @@ async def test_pty_ws_unsubscribes_when_the_replay_send_fails() -> None:
         ws = await client.ws_connect("/pty/mux-id")
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
         assert (await ws.receive_json())["type"] == "state"
-        await asyncio.sleep(0.05)
         await ws.close()
 
-    await asyncio.sleep(0.05)
-    assert session.subscribers == set()
+    await until(lambda: session.subscribers == set(), what="the failed attach unsubscribed")
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
@@ -1065,8 +1095,7 @@ async def test_pty_ws_unsubscribes_for_an_already_ended_session() -> None:
         assert (await ws.receive_json())["reason"] == "already_ended"
         await ws.close()
 
-    await asyncio.sleep(0.05)
-    assert session.subscribers == set()
+    await until(lambda: session.subscribers == set(), what="the ended session unsubscribed")
 
 
 def _arbitration_app() -> tuple[Session, web.Application, list[str], list[tuple[int, int]]]:
@@ -1158,8 +1187,7 @@ async def test_a_background_pane_cannot_take_input_from_the_device_in_use() -> N
         # Taking over is one gesture, and the replayed keystroke lands.
         assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
         await desktop.send_json({"type": "input", "data": "x", "retry": True})
-        await asyncio.sleep(0.02)
-        assert writes == ["hi", "x"]
+        await until(lambda: writes == ["hi", "x"], what="the replayed keystroke landed")
         assert resizes == [(40, 20), (200, 50)]
         await phone.close()
         await desktop.close()
@@ -1189,7 +1217,7 @@ async def test_a_hidden_client_does_not_size_the_pty() -> None:
 
         # Owning it is what hands the size over.
         assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
-        await asyncio.sleep(0.02)
+        await until(lambda: len(resizes) >= 2, what="the owner's size was applied")
         assert resizes == [(40, 20), (200, 50)]
         await phone.close()
         await desktop.close()
@@ -1206,8 +1234,7 @@ async def test_the_owner_detaching_releases_input_and_resizes_for_who_is_left() 
         assert resizes[-1] == (40, 20)
 
         await phone.close()
-        await asyncio.sleep(0.05)
-        assert session.input_owner is None
+        await until(lambda: session.input_owner is None, what="the owner's detach released input")
         assert resizes[-1] == (200, 50)
 
         # The pane left behind is told, so it can stop showing "input active on mobile"
@@ -1249,8 +1276,7 @@ async def test_the_phone_keeps_input_across_sessions_while_it_is_the_device_in_u
         assert granted["active"] is True
         assert granted["reason"] == "granted_device_in_use"
         await phone.send_json({"type": "input", "data": "hi"})
-        await asyncio.sleep(0.02)
-        assert writes == ["hi"]
+        await until(lambda: writes == ["hi"], what="the phone's keystroke landed")
         # The desktop pane is told it lost the claim.
         assert (await next_json(desktop))["reason"] == "claimed_elsewhere"
 
@@ -1354,21 +1380,23 @@ async def test_mouse_reports_are_not_counted_as_typed_input() -> None:
         assert (await _claim(pane, "gesture", "desktop"))["active"] is True
 
         await pane.send_json({"type": "input", "data": "\x1b[<35;80;10M\x1b[<35;81;10M"})
-        await asyncio.sleep(0.01)
+        # Still delivered: the child asked for these reports and renders from them.
+        # Waiting on the write is also what proves the frame was handled before the
+        # two "still zero" assertions below are allowed to mean anything.
+        await until(
+            lambda: writes[-1:] == ["\x1b[<35;80;10M\x1b[<35;81;10M"],
+            what="the motion reports reached the pty",
+        )
         assert session.input_revision == 0
         assert session.last_input_event_ts == 0.0
-        # Still delivered: the child asked for these reports and renders from them.
-        assert writes[-1] == "\x1b[<35;80;10M\x1b[<35;81;10M"
 
         # A click is the human being here, but it puts no text in the composer.
         await pane.send_json({"type": "input", "data": "\x1b[<0;80;10M"})
-        await asyncio.sleep(0.01)
+        await until(lambda: session.last_input_event_ts > 0.0, what="the click was seen")
         assert session.input_revision == 0
-        assert session.last_input_event_ts > 0.0
 
         await pane.send_json({"type": "input", "data": "h"})
-        await asyncio.sleep(0.01)
-        assert session.input_revision == 1
+        await until(lambda: session.input_revision == 1, what="the keystroke was counted")
         await pane.close()
 
 

@@ -67,9 +67,13 @@ jobs:
           src/swe_mux/win_jobobj.py
           src/swe_mux/secret_cipher_windows.py
 
+      # Mirrors `.worktree-verify`'s pytest step exactly, distribution flags
+      # included. `--dist loadgroup` is what honours the `xdist_group` mark that
+      # keeps each real-console file on a single worker; see the script and
+      # CLAUDE.md § Verification.
       - name: pytest (incl. ConPTY integration + harness adapter matrix)
         run: >-
-          uv run pytest tests -q
+          uv run pytest tests -q -n auto --dist loadgroup --durations=25
           -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"
 
       - name: Set up Node
@@ -143,5 +147,5 @@ jobs:
 
       - name: pytest
         run: >-
-          uv run pytest tests -q
+          uv run pytest tests -q -n auto --dist loadgroup --durations=25
           -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"

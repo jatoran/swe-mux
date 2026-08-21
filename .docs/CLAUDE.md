@@ -216,7 +216,7 @@
   exists only where a byte-identical run has already passed and is withdrawn the moment a
   run overruns it, a line count is stated as evidence of output rather than as progress,
   and no percentage is derived at either end - the steps of this repository's own gate take
-  175s and 3s in one run, so a denominator drawn as a proportion would be fiction, and a
+  45s and 3s in one run, so a denominator drawn as a proportion would be fiction, and a
   wrong number is acted on where an absent one is not.
   The reading is in memory and dies with the process; only the *plan* is durable, because
   it is a measurement of bytes rather than of a run.

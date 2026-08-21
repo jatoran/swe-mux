@@ -266,7 +266,7 @@ Three signals answer that, and **each is reported only when it was really observ
 - **Output lines.** The fallback for a gate that announces nothing. Reported as what it is: evidence the process is still producing output, never progress toward an end.
 
 **No percentage is derived from any of it, at either end.**
-A percent implies a denominator, and the steps of this repository's own gate take 175s and 3s in one run, so there is no honest one; line-of-script would be worse still, because the lines are not the work.
+A percent implies a denominator, and the steps of this repository's own gate take 45s and 3s in one run, so there is no honest one; line-of-script would be worse still, because the lines are not the work.
 `frontend/test/gitLand.test.ts` and `frontend/test/renderer/git-land.spec.ts` both assert the absence rather than trusting it.
 
 The reading is **in memory and lives exactly as long as the process does**.
