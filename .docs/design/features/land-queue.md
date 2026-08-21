@@ -418,6 +418,11 @@ So the map holds both halves, split by **what each part is a property of**:
   A **verify-only** row is labelled on exactly the same grounds and in exactly the same place: it moves through `Merging trunk` and `Verifying` in a landing's own words and stops one step early, which is when nobody is still watching, so `verify only` is drawn beside the branch - before the states it qualifies - and its green reads `Verified` rather than `Landed`.
   The main tree is the trunk these land *onto* and is never offered; a detached worktree states why rather than offering a button that would be refused.
   There is deliberately **no operator button for a verify-only run**: an operator with a worktree open has a terminal in it, and the value the queue adds here is the reusable verdict, which their next Land consumes without being asked. Verify-only rows still appear in the strip's queue and history like any other, so nothing is hidden - only unstartable from the map.
+- **Map's selection mode can start many lands at once, and that is all it does** (`git.md`).
+  Selecting worktrees and pressing Land sends one ordinary request per branch, in map order, through the same route and the same preconditions as the row's own button - the queue then runs them one at a time, which is the serialization it already guarantees rather than anything the bulk control arranges.
+  It waits for nothing, reorders nothing, and cannot skip a precondition: a request the queue refuses is reported beside the branch it refused, and the rest are enqueued regardless.
+  The main tree and a detached HEAD are named as unable to land rather than enqueued and refused, for the same reason the row states them.
+  A bulk press starts ordinary lands only, for the same reason a single row does: there is no operator button for a verify-only run.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
 
 Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.

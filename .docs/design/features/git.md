@@ -316,6 +316,18 @@ uncommitted work together.
   The worktree indicator is inline with the identity, while the left-aligned expand control is inline with the metrics; neither control reserves an otherwise empty row.
   The worktree leaf appears beside the branch only when it adds information; the exact root remains in expanded detail.
   Zero comparison divergence is omitted rather than rendered as separate ahead and behind labels.
+- A worktree being removed is dimmed with a spinner from the press until the refreshed inventory no longer lists it, and the pending set is a property of the **list** rather than of any row (`worktreeRemoval.ts`).
+  A row holding its own removing state stopped saying it the moment the row was collapsed, and the removal's response ended it too early on both paths - the daemon answers a renamed removal before Git has deleted a byte, and a fallback removal while Git still is - so the checkout sat in the map looking like every other one until a later poll dropped it.
+  The refreshed inventory is therefore the only thing that ends the indication, and a refusal is the only thing that clears an entry early.
+  While a worktree is pending its row offers neither Land nor Remove; the list already said what is happening to it.
+- Map has a **selection mode**, reached from one toolbar control, that draws a checkbox on every linked worktree row and a bulk bar at the head of the list.
+  It is a mode rather than a permanent column because a checkbox under every branch name is weight on a surface people open to read a diff, and it exists at all because a repository accumulates worktrees faster than anyone removes them one at a time.
+- **Bulk land** is one land request per selected branch, in map order, and nothing more: the queue serializes them, which is the queue doing exactly its job (`land-queue.md`).
+  The main tree and a detached HEAD are named as unable to land rather than being enqueued and refused.
+- **Bulk remove** rides the same pending-removals machinery as a single removal and applies the row's own refusals unchanged: the main tree is never a candidate, a checkout with a live session in it is not offered, and a locked one is Git's to refuse.
+  What bulk adds is that a checkout carrying uncommitted files or unlanded commits has to be **named and separately agreed to** before it can be swept up with thirty others, because "remove 30" is not a sentence a reader can check.
+  The default press takes only the clean, landed ones; one checkbox adds the rest, and the bar states the counts either way.
+  An unmeasured checkout is warned about rather than called clean, and takes the side of needing force.
 - Local changes are separate `CONFLICTS`, `UNSTAGED`, and `STAGED` groups.
 - Unstaged means working tree versus index, staged means index versus `HEAD`, and conflicted means unresolved index state.
 - A path changed on both sides of the index appears independently in staged and unstaged groups.
@@ -411,6 +423,23 @@ uncommitted work together.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 - Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
   Client cancellation cannot interrupt a mutation after Git starts changing repository state.
+- Removal renames the checkout out of the way and deletes it afterwards (`worktree_graveyard.py`).
+  Deleting an agent worktree is ten to twenty seconds of honest filesystem work - a checkout carrying `node_modules` and `.venv` is tens of thousands of small files, and NTFS unlink plus per-file antivirus scanning is what that costs - and none of that time is spent deciding anything.
+  The directory is moved into the repository's graveyard with one rename, Git is told to forget the registration, and a background task deletes the bytes.
+- The graveyard is `<git-common-dir>/swe-mux-graveyard`, and its location is a correctness constraint rather than a tidiness preference.
+  It is outside every working tree, so a buried checkout can never appear as untracked files in `git status` - which would raise dirty counts and make the land queue refuse to land that checkout.
+  `.git` is the first entry of the default project-ignore list, so a purge deleting thirty thousand files does not become thirty thousand watcher events.
+  And it is never in `git worktree list`, so Map cannot draw a row for it.
+  A sibling directory beside the worktree would always be same-volume, but `.claude/worktrees/` is gitignored only in repositories that happen to say so, which is not a fact about anyone else's.
+- What drops the registration after the rename is `git worktree remove` on the original path, measured to succeed and to drop that entry alone.
+  `git worktree prune` is global: it would also drop every other checkout whose directory is merely missing, and with it that checkout's index and reflog.
+- The rename is declined rather than attempted in every case where it would change what the removal means: the main tree (Git refuses to remove it at all, so renaming it first would move the primary checkout out of the way for a removal that was never going to happen), a locked worktree (Git refuses to remove one even once its directory is gone, so renaming first would leave a renamed tree beside a live registration), a worktree containing submodules, and a worktree that is not clean when force was not given (Git refuses in about fifty milliseconds, so the in-place path costs nothing and states its own reason).
+  The main tree is identified by Git listing it first, never by the shape of its `.git`: a main tree with a `.git` file is legal (`git init --separate-git-dir`) and the obvious probe would answer the opposite.
+- A rename the filesystem refuses - a cross-volume graveyard, or the Windows class where an open handle inside the tree defeats the move - falls back to the in-place deletion.
+  The move is atomic and its failure is total, so a defeated rename is a clean signal rather than a half-moved tree.
+  Git keeping the registration after a successful rename puts the tree back exactly where it was and lets the ordinary in-place removal answer.
+- Purging is idempotent and never removes the graveyard root, so a purge racing a burial cannot delete the directory another removal is renaming into.
+  Whatever it cannot delete stays for the next purge: the next removal, or the sweep at daemon start that clears what a killed purge left behind.
 - Removing an exact prunable root whose directory still exists but whose `.git` link is missing first runs path-specific `git worktree repair`, then validates the resulting exact registration, `.git` link, and reported top-level before removal.
   Post-state validation always runs because Git repair can restore the requested root while returning nonzero for another repair problem; a usable exact root continues to removal and an unusable root returns the repair failure.
   Missing directories and other non-repairable prune states return a typed conflict instead of globally pruning unrelated worktrees.
