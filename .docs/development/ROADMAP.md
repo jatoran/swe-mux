@@ -4072,6 +4072,77 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
   refusal, and the canonical restatement - and the criterion stays open until an operator
   runs the spoken form against a real CLI, which no test can stand in for.
 
+## Phase 16 - Usability follow-through: the first ten minutes, and a way to ask for help
+
+The 2026-08-20 usability audit (`USABILITY_AUDIT_2026-08-20.md`) measured the first-run path
+against the code and found it broken outright in three places, thin everywhere a user might ask
+"what is this", and stale where the tour describes chrome that no longer exists.
+This phase is that report's accepted findings, scoped 2026-08-21.
+Ordering inside the phase is deliberate: the blockers are small and stop a first run today, the
+help surface is the large item and the durable fix, and the verification section costs nothing
+but reading.
+
+### First-run blockers
+
+Three defects each end or corrupt a brand-new user's guided first run.
+
+- [ ] The tour must not strand on mobile: step `resources` is click-gated on
+  `[data-tutorial="project-notes"]`, which only the desktop launcher rail or an already-open
+  side panel carries, and an action step renders its hint instead of Next - so on a phone the
+  only control at step 10 of 14 is Exit.
+  `navigateTutorial` already opens the sidebar for other mobile steps; this step follows suit,
+  and the same fix covers the desktop case of a hidden Notes tab.
+- [ ] Step 5 must not demand a real provider login unskippably, while the harness panel one
+  screen earlier calls CLI login a later step.
+  The step becomes skippable and its copy agrees with the harness panel.
+- [ ] The two first-run surfaces must not render stacked: the harness dialog (z-140) sits over
+  the tour's blur (z-120), so the first frame is a dialog on a doubly-dimmed app with an
+  invisible tour card beneath it.
+  One surface leads and the other waits; which leads is the implementer's call, stated in the
+  code.
+
+### A help surface that exists
+
+The largest gap past minute ten: 106 commands, 206 config keys, 17 settings tabs, 11 side-panel
+tabs, and no `help.*` command, no docs link, and a tour reachable only from Settings → General.
+
+- [ ] The tour becomes a registered command (palette + voice), because a recovery path nobody
+  can find is not a recovery path.
+- [ ] Complex tabs (scan timeline first, then the surfaces the audit lists) get an in-context
+  help control opening a modal built from the tab's own feature doc, so the help cannot drift
+  from the design document that defines the surface.
+  The continuity project's generated-tutorial-from-docs pattern is the reference: the same two
+  inputs exist here (48 feature docs + the command registry).
+- [ ] The website-docs half of the operator's Release note is explicitly deferred to the
+  release track; this phase ships only the in-app half, so the two are not coupled.
+
+### Stale guidance
+
+- [ ] The tour no longer describes the removed `Utilities` menu group.
+- [ ] `ui.md` states the real side-panel tab count (the code has 11; the doc says 14/12 in two
+  places).
+
+### Verify the handed-off findings
+
+The audit routed two findings to the then-in-flight grant-gates session rather than acting on
+them; grant-gates has since landed, and nobody has checked whether they landed with it.
+
+- [ ] The Project Run menu no longer silently drops every agent row when no harness is enabled -
+  it says why the rows are missing, or shows them gated.
+- [ ] The assistant's off-state names the switch's real home (section 4 of Settings → Voice),
+  not the nonexistent "Settings → Assistant" tab.
+- [ ] Whichever of the two grant-gates did not in fact cover becomes work in this phase, not a
+  new report.
+
+### Phase 16 exit criteria
+
+- [ ] A first run on a phone reaches the end of the tour without stranding, skipping a provider
+  login it does not have, or opening under a stacked dialog.
+- [ ] "Help" is speakable and palettable, the tour is re-openable from it, and the scan
+  timeline's help modal opens from the tab and matches its feature doc.
+- [ ] The tour and `ui.md` describe only chrome that exists.
+- [ ] Both handed-off findings are verified fixed, with a pointer to where.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
