@@ -4,6 +4,7 @@ import { api } from './api'
 import { fitScrollingMenuInViewport } from './menuPosition'
 import type { LaunchProfile, Project, ProjectAction, ProjectActionCatalog, ProjectActionDiff, ProjectBackend, Session } from './types'
 import { promptDeliveryHarnesses } from './harnessRegistry'
+import { harnessMark } from './harnessIcons'
 import { isAbsolutePath } from './gitWorktrees'
 import { normalizeWorktreeBranchInput, worktreePathForBranch } from './worktreeLaunch'
 import { dismissStack } from './dismissStack.ts'
@@ -229,9 +230,14 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
         <div><button type="button" disabled={!!busy} onClick={()=>setWorktreeOpen(false)}>Back</button><button class="primary" type="submit" disabled={!!busy}>{busy?'Creating…':'Create and start'}</button></div>
       </form>:<>
       <div class="run-menu-section"><small>NEW SESSION</small>
+        {/* The harness's own mark, not a play triangle. Every row in this section starts a
+            session, so a triangle on all of them distinguished nothing; the one fact that
+            separates them is which CLI they start, which is exactly what the mark says. A
+            profile row wears its harness's mark for the same reason - "Claude (plan)" is a
+            Claude launch, and the label is what tells the two apart. */}
         {harnesses.map(harness=><Fragment key={harness.name}>
-          <button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span aria-hidden="true">▶</span><div><strong>{harness.display_name}</strong>{defaultProfileLabel(harness.name)&&<em>{defaultProfileLabel(harness.name)}</em>}</div></button>
-          {profilesFor(harness.name).map(profile=><button role="menuitem" key={profile.id} aria-label={`Start ${harness.display_name} session using ${profile.label}`} disabled={!!busy} title={profile.args.join(' ')} onClick={()=>onLaunch(harness.name,profile.id)}><span aria-hidden="true">▶</span><div><strong>{profile.label}</strong><em>{profile.args.join(' ')||harness.display_name}</em></div></button>)}
+          <button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span class="run-menu-mark" aria-hidden="true">{harnessMark(harness.name)}</span><div><strong>{harness.display_name}</strong>{defaultProfileLabel(harness.name)&&<em>{defaultProfileLabel(harness.name)}</em>}</div></button>
+          {profilesFor(harness.name).map(profile=><button role="menuitem" key={profile.id} aria-label={`Start ${harness.display_name} session using ${profile.label}`} disabled={!!busy} title={profile.args.join(' ')} onClick={()=>onLaunch(harness.name,profile.id)}><span class="run-menu-mark" aria-hidden="true">{harnessMark(harness.name)}</span><div><strong>{profile.label}</strong><em>{profile.args.join(' ')||harness.display_name}</em></div></button>)}
         </Fragment>)}
         <button data-tutorial="run-choice-shell" role="menuitem" aria-label="Start shell session" disabled={!!busy} onClick={()=>onLaunch('shell')}><span aria-hidden="true">&gt;_</span><div><strong>Shell</strong></div></button>
         <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>

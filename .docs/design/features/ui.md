@@ -214,6 +214,9 @@ responsive controls.
   On desktop, each Project row reveals its Run control while the pointer or keyboard focus is anywhere in that Project's row-and-session block; its reserved column preserves row alignment while hidden.
   On mobile, Project rows expose Run persistently and also expose `⋮` immediately left of it, giving Project actions direct tap targets.
   The compact Run menu contains new Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a launch surface, not persistent sidebar grouping.
+  Each harness launch row is marked with that harness's own mark (`harnessMark`, `harnessIcons.tsx`) rather than a play triangle, and a launch profile wears its harness's mark because it launches that harness.
+  Every row in the section starts a session, so a triangle on all of them distinguished nothing; which CLI a row starts is the fact that separates them.
+  The Project Action rows keep `▶`/`▷`, which there is not decoration but the file's trust state.
 - Run is the only always-present launcher, since tab strips carry no new-tab button
   (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
   and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
@@ -355,6 +358,21 @@ Its rules, and what each one is defending:
 - **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
   the menu is — so a mark that means "this opens something" appeared on nearly all of them
   and therefore distinguished none.
+- **Every row in the app menu and in the sidebar context menu carries its own mark**, opting
+  the row into `.menu-row` (icon, then label, then any trailing hint) and suppressing the
+  terminal skin's `> ` prefix.
+  Same argument as the ellipsis: a marker identical on fifteen rows says only "this is a menu
+  row", so a reader scanned fifteen prefixes and still had to read every label.
+  The marks come from `railIcons.tsx`, the drawer set, so a concept appearing in both places
+  (Notes, Queue, Actions, Alerts) is literally the same drawing.
+  `MenuGroup` takes an `icon` for the same reason and lines its header up with the rows it sits
+  among.
+  This is opt-in per row rather than applied to every `.context-menu button`: most context
+  menus in the app are a handful of verbs about one object ("Rename", "Close", "Duplicate"),
+  where a mark per verb is noise, while these two list a dozen unrelated destinations.
+  Where two rows differ only in what they reload, the marks name the *thing* rather than the
+  act — a server, a package, a refresh arrow — because three refresh arrows would say "reload"
+  three times and name nothing.
 - The app menu holds **nothing that acts on a single Project**, and no longer holds the Project
   registry either — adding and managing Projects are the two buttons in the sidebar's `PROJECTS`
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
