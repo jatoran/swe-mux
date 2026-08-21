@@ -10,10 +10,15 @@ import {
 import type { VoiceDockModel } from '../src/voiceDock.ts'
 
 const dir = join(import.meta.dirname, '..', 'src')
-const control = readFileSync(join(dir, 'ConversationControl.tsx'), 'utf8')
-const panel = readFileSync(join(dir, 'AssistantPanel.tsx'), 'utf8')
-const app = readFileSync(join(dir, 'App.tsx'), 'utf8')
-const css = readFileSync(join(dir, 'style.css'), 'utf8')
+// Normalized to LF: these assertions slice on literal "\n" anchors, and a
+// working copy checked out through autocrlf (any fresh merge checkout on
+// Windows) reads back CRLF, which silently breaks an indexOf bound into -1 and
+// turns a scoped slice into "the rest of the file".
+const read = (name: string) => readFileSync(join(dir, name), 'utf8').replace(/\r\n/g, '\n')
+const control = read('ConversationControl.tsx')
+const panel = read('AssistantPanel.tsx')
+const app = read('App.tsx')
+const css = read('style.css')
 
 const model = (state: VoiceDockModel['state'], expanded: VoiceDockModel['expanded'] = 'full', borrowed = false): VoiceDockModel =>
   ({ state, expanded, borrowed })
