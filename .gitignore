@@ -91,6 +91,14 @@ _agents-orchestrator/
 .swe-mux/observations.json
 # Preview screenshots, generated on demand.
 .swe-mux/preview-shots/
+# Typed Project config. The *format* is portable by design and a clone is meant to
+# be able to carry one (`.docs/design/features/automation-enablement.md`), but this
+# repository does not commit its own: the daemon rewrites the file whenever an
+# automation is toggled or a grant changes, so every switch flipped in the UI showed
+# up as a pending commit. A clone therefore starts with no opt-ins, which is the
+# correct default for automations anyway - none of them should arm themselves in a
+# checkout nobody has configured.
+.swe-mux/config.toml
 
 # === Test / verification scratch ===
 # Throwaway working directories written by live-agent and identity tests and by
