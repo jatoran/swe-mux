@@ -59,10 +59,20 @@ from .git_monitor import (
     read_commit_changes,
     read_commit_metadata,
     read_commit_range,
+    read_excluded_range,
     read_git_position,
     read_is_ancestor,
+    read_merge_resolution_changes,
 )
-from .history import HistoryIndex
+from .history import (
+    AUTHORING_ROLES,
+    ROLE_BRANCH_AUTHOR,
+    ROLE_COMMITTER,
+    ROLE_CONTRIBUTOR,
+    ROLE_INTEGRATOR,
+    ROLE_OBSERVER,
+    HistoryIndex,
+)
 from .models import MuxEvent
 from .session import Session, SessionManager
 from .tier0_store import Tier0Store
@@ -142,8 +152,18 @@ ARRIVAL_KINDS = frozenset({REF_MOVE_FAST_FORWARD, REF_MOVE_RESET, REF_MOVE_UNKNO
 #: rank written before it (50 was the highest), so re-attribution promotes a
 #: historical row in place instead of being refused by the ranked upsert.
 COMMITTER_EXACT_RANK = 70
+#: An integrator is the same strength of evidence as a committer — mux watched the
+#: session run the command across a successful tool boundary — asked about a
+#: different act. Deliberately equal, so the ranked upsert (which updates on `>=`)
+#: reclassifies a merge row already recorded as a committer's.
+INTEGRATOR_EXACT_RANK = COMMITTER_EXACT_RANK
 CONTRIBUTOR_CONTENT_RANK = 65
 CONTRIBUTOR_PATH_RANK = 60
+#: Derived from the ledger's own answers about other commits rather than from an
+#: observation of this one, so it sits below every direct match and above
+#: occupancy: "wrote the branch this merge carries" is a better answer than "had
+#: the directory open", and a worse one than "wrote these bytes".
+BRANCH_AUTHOR_RANK = 40
 COMMITTER_AMBIGUOUS_RANK = 35
 MONITOR_OBSERVED_RANK = 20
 MONITOR_RANGE_RANK = 15
@@ -175,6 +195,24 @@ AUTHORED_COMMIT_LIMIT = 20
 #: resolution reads objects, so a fifty-commit rebase must not turn one event into
 #: fifty file reads; the rest are picked up by the backfill's contributor pass.
 CONTRIBUTOR_COMMITS_PER_EVENT = 3
+#: Commits of a merge's own side examined when naming the branch it unified. A
+#: branch longer than this is named from its newest commits; the answer is a set
+#: of sessions, and a session that wrote fifty commits wrote one of the last ones.
+BRANCH_LINE_LIMIT = COMMIT_RANGE_LIMIT
+#: Parents whose metadata is read to floor a merge's contributor window. Octopus
+#: merges are rare and bounded; this stops a pathological one from reading fifty.
+MERGE_PARENT_READS = 8
+
+
+def is_merge(commit: GitCommitMetadata | None) -> bool:
+    """Whether this commit unified two lines rather than continuing one.
+
+    The parent count is the whole test, and it is a property of the object rather
+    than of the command that produced it: `git merge` fast-forwards whenever it
+    can and then leaves no merge commit at all, while a merge commit reached by
+    any other route is still a merge.
+    """
+    return commit is not None and len(commit.parents) > 1
 
 
 @dataclass(slots=True, frozen=True)
@@ -558,9 +596,16 @@ def summarize_git_provenance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     denormalized into every row, where a later discovery would have to rewrite all
     of them.
 
-    `attribution` is `exact` when a committer was isolated, `correlated` when only
-    contributions or occupancy are known, and `ambiguous` when the commit is work
-    mux never observed.
+    `attribution` is `exact` when a committer or integrator was isolated,
+    `correlated` when only contributions or occupancy are known, and `ambiguous`
+    when the commit is work mux never observed.
+
+    A merge commit answers to *three* slots rather than one, because a landing
+    merge has three true answers and collapsing them onto `committer` is what made
+    the session that ran a land read as the author of somebody else's branch. The
+    `integrator` made the merge; the `branch_authors` wrote the side it unified;
+    the `contributors` wrote bytes it holds, which for a merge is the conflict
+    resolution and nothing else.
 
     A retracted row is skipped rather than summarized. Retraction is the ledger's
     only weakening operation and it exists precisely so a row that turned out to
@@ -579,6 +624,8 @@ def summarize_git_provenance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "committed_at": row.get("committed_at"),
                 "worktree_root": row.get("worktree_root") or "",
                 "committer": None,
+                "integrator": None,
+                "branch_authors": [],
                 "contributors": [],
                 "attribution": "ambiguous",
             },
@@ -591,16 +638,26 @@ def summarize_git_provenance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
             "match_method": row.get("match_method"),
             "paths": row.get("contributed_paths") or [],
         }
-        role = str(row.get("role") or "observer")
-        if role == "committer" and not row.get("ambiguous"):
-            commit["committer"] = entry
-            commit["attribution"] = "exact"
-        elif role == "committer" and commit["committer"] is None:
-            commit["committer"] = entry
+        role = str(row.get("role") or ROLE_OBSERVER)
+        slot = "committer" if role == ROLE_COMMITTER else "integrator"
+        if role in AUTHORING_ROLES:
+            if not row.get("ambiguous"):
+                commit[slot] = entry
+                commit["attribution"] = "exact"
+            elif commit[slot] is None:
+                commit[slot] = entry
+        elif role == ROLE_BRANCH_AUTHOR:
+            commit["branch_authors"].append(entry)
         if entry["paths"]:
             commit["contributors"].append(entry)
     for commit in commits.values():
-        if commit["attribution"] != "exact" and (commit["contributors"] or commit["committer"]):
+        named = (
+            commit["contributors"]
+            or commit["branch_authors"]
+            or commit["committer"]
+            or commit["integrator"]
+        )
+        if commit["attribution"] != "exact" and named:
             commit["attribution"] = "correlated"
     return list(commits.values())
 
@@ -634,6 +691,7 @@ class GitProvenanceService:
         self._moved: OrderedDict[tuple[str, str, str], float] = OrderedDict()
         self._captured = 0
         self._contributors = 0
+        self._branch_authors = 0
         self._moves = 0
         self._arrivals = 0
         self._suppressed = 0
@@ -662,6 +720,7 @@ class GitProvenanceService:
             "running": bool(self._task and not self._task.done()),
             "captured": self._captured,
             "contributors": self._contributors,
+            "branch_authors": self._branch_authors,
             "ref_moves": self._moves,
             # Moves that brought in commits written elsewhere, and bystander rows
             # not written because another session is known to have made the
@@ -960,24 +1019,37 @@ class GitProvenanceService:
         ambiguous: bool = False,
         match_method: str | None = None,
     ) -> None:
-        """Write the committer rows for the commits one command actually created."""
+        """Write the committer rows for the commits one command actually created.
+
+        A merge commit is the one shape where "the session that ran the command"
+        and "the session whose work this is" are different answers, so it is
+        written as an integration and the branch it unified is named beside it.
+        """
         method = match_method or f"command_{move.kind}"
         for index, commit in enumerate(authored[:AUTHORED_COMMIT_LIMIT]):
+            fresh = (
+                index < CONTRIBUTOR_COMMITS_PER_EVENT
+                and self._claim_attribution(root, commit.oid)
+            )
             contributors = (
                 await self._resolve_contributors(root, pending.project_id, commit)
-                if index < CONTRIBUTOR_COMMITS_PER_EVENT
-                and self._claim_attribution(root, commit.oid)
+                if fresh
                 else []
             )
             own = next(
                 (item for item in contributors if item.session_id == pending.session_id), None
             )
+            merge = is_merge(commit)
             await self._record(
                 session,
                 worktree_root=root,
                 commit=commit,
                 previous_head=(commit.parents[0] if commit.parents else None),
-                relationship=pending.relationship,
+                relationship=(
+                    "merged"
+                    if merge and pending.relationship == "created"
+                    else pending.relationship
+                ),
                 confidence="ambiguous" if ambiguous else "exact",
                 ambiguous=ambiguous,
                 source="session_tool",
@@ -987,7 +1059,7 @@ class GitProvenanceService:
                     COMMITTER_AMBIGUOUS_RANK if ambiguous else COMMITTER_EXACT_RANK
                 ),
                 observed_at=event.ts,
-                role="committer",
+                role=ROLE_INTEGRATOR if merge else ROLE_COMMITTER,
                 match_method=method,
                 contributed_paths=own.paths if own else (),
                 session_name=pending.session_name,
@@ -1003,6 +1075,15 @@ class GitProvenanceService:
                 observed_at=event.ts,
                 source_event_seq=event.seq or None,
             )
+            if merge and fresh:
+                await self._record_branch_authors(
+                    worktree_root=root,
+                    project_id=pending.project_id,
+                    commit=commit,
+                    exclude_session_id=pending.session_id,
+                    observed_at=event.ts,
+                    source_event_seq=event.seq or None,
+                )
 
     async def _note_git_change(self, event: MuxEvent) -> None:
         payload = event.payload or {}
@@ -1079,7 +1160,7 @@ class GitProvenanceService:
                 tool_call_id=None,
                 evidence_rank=MONITOR_OBSERVED_RANK,
                 observed_at=event.ts,
-                role="observer",
+                role=ROLE_OBSERVER,
                 match_method=f"monitor_{move.kind}",
             )
             await self._record_contributors(
@@ -1091,6 +1172,18 @@ class GitProvenanceService:
                 observed_at=event.ts,
                 source_event_seq=event.seq or None,
             )
+            if fresh and is_merge(commit):
+                # The tool path is not the only way a merge reaches the ledger: a
+                # merge run outside an observed tool call is first seen here, and
+                # the branch it unified is nobody's less for that.
+                await self._record_branch_authors(
+                    worktree_root=root,
+                    project_id=project_id,
+                    commit=commit,
+                    exclude_session_id=None,
+                    observed_at=event.ts,
+                    source_event_seq=event.seq or None,
+                )
 
     async def _resolve_contributors(
         self, worktree_root: str, project_id: str, commit: GitCommitMetadata | None
@@ -1104,16 +1197,25 @@ class GitProvenanceService:
         """
         if self.tier0 is None or not project_id or commit is None:
             return []
-        changes = await read_commit_changes(worktree_root, commit.oid)
+        merge = is_merge(commit)
+        changes = (
+            await read_merge_resolution_changes(worktree_root, commit.oid)
+            if merge
+            else await read_commit_changes(worktree_root, commit.oid)
+        )
         if not changes:
             return []
-        parent = (
-            await read_commit_metadata(worktree_root, commit.parents[0])
-            if commit.parents
-            else None
-        )
+        parents = [
+            found
+            for parent in commit.parents[:MERGE_PARENT_READS]
+            if (found := await read_commit_metadata(worktree_root, parent)) is not None
+        ]
         floor = commit.committed_at - CONTRIBUTOR_LOOKBACK_SECONDS
-        since = max(floor, parent.committed_at) if parent else floor
+        # For an ordinary commit the parent's time is the floor: work committed
+        # before it is in *that* commit. For a merge every parent already existed
+        # when the resolution was written, so the floor is the newest of them —
+        # the earlier side's commits are not what a conflict resolution is.
+        since = max([floor, *(parent.committed_at for parent in parents)])
         facts = await self.tier0.write_facts_for_project(
             project_id,
             since=since,
@@ -1162,6 +1264,94 @@ class GitProvenanceService:
             digests[candidate.path] = await read_blob_digest(worktree_root, candidate.blob)
             reads += 1
         return resolve_contributors(candidates, digests)
+
+    async def _record_branch_authors(
+        self,
+        *,
+        worktree_root: str,
+        project_id: str,
+        commit: GitCommitMetadata,
+        exclude_session_id: str | None,
+        observed_at: float,
+        source_event_seq: int | None,
+    ) -> None:
+        """Name the sessions whose commits a merge unified.
+
+        Two bounded reads and no guessing. Git answers *which* commits the merge's
+        own side had that the other side did not — `rev-list p0 ^p1...`, the
+        symmetric half of the first-parent rule that classifies the move — and the
+        ledger answers *whose* those commits already are. Nothing is inferred from
+        a timestamp, a directory, or a branch name, and a merge whose side commits
+        mux never attributed produces no rows rather than a guess.
+
+        The first parent is the side deliberately: it is the merge's own line of
+        development, the branch the merge belongs to, and in a worktree landing
+        (`git merge master` run inside the branch's checkout) it is exactly the
+        work that checkout did. The other parents are the trunk being absorbed,
+        whose commits are already attributed where they were written.
+        """
+        if not project_id or len(commit.parents) < 2:
+            return
+        branch_side = await read_excluded_range(
+            worktree_root,
+            commit.parents[0],
+            commit.parents[1:MERGE_PARENT_READS],
+            limit=BRANCH_LINE_LIMIT,
+        )
+        if not branch_side:
+            return
+        authors = await self.history.git_branch_authors(
+            project_id=project_id, commit_oids=list(branch_side)
+        )
+        for session_id, author in authors.items():
+            if not session_id or session_id == exclude_session_id:
+                continue
+            await self.history.record_git_provenance(
+                session_id=session_id,
+                session_name=await self._session_label(
+                    session_id, author.get("agent_run_id") or None
+                ),
+                agent_run_id=author.get("agent_run_id") or None,
+                project_id=project_id,
+                worktree_root=worktree_root,
+                commit_oid=commit.oid,
+                parent_oids=commit.parents,
+                subject=commit.subject,
+                committed_at=commit.committed_at,
+                previous_head=commit.parents[0],
+                relationship="authored_branch",
+                confidence=str(author.get("confidence") or "correlated"),
+                ambiguous=False,
+                source="ledger_branch_line",
+                source_event_seq=source_event_seq,
+                evidence_rank=BRANCH_AUTHOR_RANK,
+                observed_at=observed_at,
+                role=ROLE_BRANCH_AUTHOR,
+                match_method="merge_branch_line",
+                # Deliberately no paths. This session's files are in its own
+                # commits, and copying them onto the merge would put A's branch
+                # content on a commit A did not write — the mirror image of the
+                # defect this exists to fix.
+                contributed_paths=(),
+            )
+            self._branch_authors += 1
+            log.info(
+                "git branch authorship recorded session=%s merge=%s commits=%d",
+                session_id,
+                commit.oid[:12],
+                len(branch_side),
+            )
+            await self.events.emit(
+                "git_provenance_changed",
+                session_id=session_id,
+                source="daemon",
+                project_id=project_id,
+                agent_run_id=author.get("agent_run_id") or None,
+                commit_oid=commit.oid,
+                relationship="authored_branch",
+                confidence=str(author.get("confidence") or "correlated"),
+                role=ROLE_BRANCH_AUTHOR,
+            )
 
     async def _session_roots(self, session_ids: set[str]) -> dict[str, str | None]:
         """Each session's checkout, for placing a write that named a relative path.
@@ -1234,7 +1424,7 @@ class GitProvenanceService:
                 source_event_seq=source_event_seq,
                 evidence_rank=contributor.evidence_rank,
                 observed_at=observed_at,
-                role="contributor",
+                role=ROLE_CONTRIBUTOR,
                 match_method=contributor.method,
                 contributed_paths=contributor.paths,
             )
@@ -1258,7 +1448,7 @@ class GitProvenanceService:
                 commit_oid=commit.oid,
                 relationship="contributed",
                 confidence=contributor.confidence,
-                role="contributor",
+                role=ROLE_CONTRIBUTOR,
             )
 
     async def _record(

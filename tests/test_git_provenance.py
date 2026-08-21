@@ -343,6 +343,48 @@ def test_summarize_rolls_rows_up_into_one_attribution_per_commit() -> None:
     assert summary[SIBLING]["contributors"] == []
 
 
+def test_summarize_keeps_a_landing_merges_three_answers_apart() -> None:
+    """A merge commit has more than one true answer and one slot forced a choice.
+
+    It always chose the merger, so a land read as authorship of the branch it
+    landed. Integration, branch authorship, and the bytes the merge itself decided
+    are three separate questions with three separate answers.
+    """
+    rows = [
+        {
+            "commit_oid": SIBLING,
+            "session_id": "merger",
+            "session_name": "Orchestrator",
+            "role": "integrator",
+            "confidence": "exact",
+            "ambiguous": False,
+            "contributed_paths": ["shared.py"],
+        },
+        {
+            "commit_oid": SIBLING,
+            "session_id": "branch-agent",
+            "session_name": "Branch agent",
+            "role": "branch_author",
+            "confidence": "exact",
+            "ambiguous": False,
+            "contributed_paths": [],
+        },
+    ]
+    summary = {item["commit_oid"]: item for item in summarize_git_provenance(rows)}
+
+    # An integration is observed evidence of who made the commit, so the commit is
+    # answered - it is simply answered with the right verb.
+    assert summary[SIBLING]["attribution"] == "exact"
+    assert summary[SIBLING]["committer"] is None
+    assert summary[SIBLING]["integrator"]["session_id"] == "merger"
+    assert [item["session_id"] for item in summary[SIBLING]["branch_authors"]] == [
+        "branch-agent"
+    ]
+    # The merger contributed the resolution, and only the resolution.
+    assert [item["session_id"] for item in summary[SIBLING]["contributors"]] == ["merger"]
+    assert summary[SIBLING]["contributors"][0]["paths"] == ["shared.py"]
+
+
 async def test_store_promotes_observed_evidence_to_exact_without_duplication(
     tmp_path: Path,
 ) -> None:
@@ -716,6 +758,10 @@ async def test_failed_commit_and_unchanged_head_record_nothing(
     history.close()
 
 
+async def _no_digest(_cwd: str, _blob: str) -> str | None:
+    return None
+
+
 class _FakeTier0:
     def __init__(self, facts: list[dict[str, Any]]) -> None:
         self.facts = facts
@@ -966,14 +1012,17 @@ async def test_the_arrival_oracle_only_points_backwards_in_time(
     history.close()
 
 
-async def test_merge_command_attributes_the_merge_commit_to_the_session_that_ran_it(
+async def test_merge_command_records_the_session_that_ran_it_as_the_integrator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`git merge` creates a commit, and full ancestry hides that it created one.
 
     The merge absorbs the side branch, so `previous..head` counts the commits it
     pulled in and reads as a bulk arrival. The reference's own first-parent line
-    gained exactly one commit, and that commit is this session's.
+    gained exactly one commit, and that commit is this session's — as an
+    *integration*, which is what a merge commit is. The stronger word is reserved
+    for a commit whose content the session wrote, because a landing merge carries
+    somebody else's branch and `committed` claimed all of it.
     """
     session = _session()
     manager = cast(Any, SimpleNamespace(sessions={session.record.id: session}))
@@ -993,7 +1042,8 @@ async def test_merge_command_attributes_the_merge_commit_to_the_session_that_ran
 
     assert len(rows) == 1
     assert rows[0]["commit_oid"] == SIBLING
-    assert rows[0]["role"] == "committer"
+    assert rows[0]["role"] == "integrator"
+    assert rows[0]["relationship"] == "merged"
     assert rows[0]["confidence"] == "exact"
     assert rows[0]["ambiguous"] is False
     # Picked the same way any single authored commit is: it was the only one the
@@ -1004,6 +1054,137 @@ async def test_merge_command_attributes_the_merge_commit_to_the_session_that_ran
     moves = await history.git_ref_moves(project_id="project-1")
     assert moves[0]["kind"] == "merged"
     assert moves[0]["authored_count"] == 1
+    history.close()
+
+
+async def test_a_land_names_the_merger_and_the_branch_it_carries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B merges master inside A's worktree: the exact shape a land takes here.
+
+    The merge commit used to name B alone, as the committer of a commit whose
+    whole content is A's branch. Both sessions belong on it, in their own roles:
+    B integrated it and decided the conflict, and A wrote the branch it carries.
+    """
+    branch_commit = "d" * 40
+    merger, author = _session("merger", "Orchestrator"), _session("author", "Branch agent")
+    manager = cast(Any, SimpleNamespace(sessions={"merger": merger, "author": author}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    # The ledger already holds A's own commit, which is the only evidence the
+    # branch-author derivation reads. Nothing is inferred from a directory, a
+    # branch name, or a timestamp.
+    await history.record_git_provenance(
+        session_id="author",
+        session_name="Branch agent",
+        agent_run_id="run-a",
+        project_id="project-1",
+        worktree_root="C:/repo",
+        commit_oid=branch_commit,
+        relationship="created",
+        confidence="exact",
+        ambiguous=False,
+        source="session_tool",
+        evidence_rank=git_provenance.COMMITTER_EXACT_RANK,
+        observed_at=5.0,
+        role="committer",
+        match_method="command_range",
+    )
+    tier0 = _FakeTier0(
+        [
+            {
+                "id": "f1",
+                "project_id": "project-1",
+                "session_id": "merger",
+                "agent_run_id": "run-b",
+                "target": "C:/repo/shared.py",
+                "content_hash": None,
+                "created_at": 11.5,
+            }
+        ]
+    )
+    service = GitProvenanceService(history, manager, EventBus(), cast(Any, tier0))
+    merge = _commit(SIBLING, (branch_commit, NEW), 12.0, "Merge branch 'master' into feature")
+    _patch_git(
+        monkeypatch,
+        head=SIBLING,
+        commits=(merge, _commit(branch_commit, (OLD,), 6.0, "A's branch work"),
+                 _commit(NEW, (OLD,), 11.0, "From master")),
+        first_parent=(merge,),
+    )
+
+    async def plain_changes(_cwd: str, _oid: str, **_kwargs: Any) -> Any:
+        # `diff-tree` says nothing about a merge, and the service must not ask it.
+        raise AssertionError("a merge must be read with the combined diff")
+
+    async def resolution(_cwd: str, _oid: str, **_kwargs: Any) -> Any:
+        return (GitCommitChange(path="shared.py", status="MM", blob="9" * 40),)
+
+    async def side(_cwd: str, include: str, exclude: tuple[str, ...], **_kwargs: Any) -> Any:
+        assert include == branch_commit and exclude == (NEW,)
+        return (branch_commit,)
+
+    monkeypatch.setattr(git_provenance, "read_commit_changes", plain_changes)
+    monkeypatch.setattr(git_provenance, "read_merge_resolution_changes", resolution)
+    monkeypatch.setattr(git_provenance, "read_excluded_range", side)
+    monkeypatch.setattr(git_provenance, "read_blob_digest", _no_digest)
+
+    await _run_command(service, "merger", "call-merge", "git merge master")
+    rows = {
+        (row["session_id"], row["commit_oid"]): row
+        for row in await history.git_provenance(project_id="project-1")
+    }
+
+    integrator = rows[("merger", SIBLING)]
+    assert integrator["role"] == "integrator"
+    assert integrator["relationship"] == "merged"
+    assert integrator["confidence"] == "exact"
+    # Only what the merge itself decided. A's branch content is carried by this
+    # commit and is not B's, which is the whole scoping rule.
+    assert integrator["contributed_paths"] == ["shared.py"]
+
+    named = rows[("author", SIBLING)]
+    assert named["role"] == "branch_author"
+    assert named["relationship"] == "authored_branch"
+    assert named["confidence"] == "exact"
+    assert named["match_method"] == "merge_branch_line"
+    assert named["source"] == "ledger_branch_line"
+    # No path claim: naming A here must not move A's files onto B's commit or
+    # B's onto A's.
+    assert named["contributed_paths"] == []
+
+    # A keeps its own commit outright, and B never appears on it.
+    assert rows[("author", branch_commit)]["role"] == "committer"
+    assert ("merger", branch_commit) not in rows
+    assert service.status()["branch_authors"] == 1
+    history.close()
+
+
+async def test_a_merge_of_work_mux_never_saw_names_nobody_extra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty ledger for the branch side produces no branch author, not a guess.
+
+    Branch authorship is a re-reading of rows mux already wrote. With nothing
+    recorded for the commits the merge unified there is no answer, and inventing
+    one from the checkout the merge happened in is exactly what this replaces.
+    """
+    branch_commit = "d" * 40
+    session = _session("merger", "Orchestrator")
+    manager = cast(Any, SimpleNamespace(sessions={"merger": session}))
+    history = HistoryIndex(tmp_path / "mux.db")
+    service = GitProvenanceService(history, manager, EventBus())
+    merge = _commit(SIBLING, (branch_commit, NEW), 12.0, "Merge branch 'master' into feature")
+    _patch_git(monkeypatch, head=SIBLING, commits=(merge,), first_parent=(merge,))
+
+    async def side(_cwd: str, _include: str, _exclude: tuple[str, ...], **_kwargs: Any) -> Any:
+        return (branch_commit,)
+
+    monkeypatch.setattr(git_provenance, "read_excluded_range", side)
+
+    await _run_command(service, "merger", "call-merge", "git merge master")
+    rows = await history.git_provenance(project_id="project-1")
+
+    assert [row["role"] for row in rows] == ["integrator"]
     history.close()
 
 

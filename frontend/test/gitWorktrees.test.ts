@@ -510,6 +510,66 @@ test('the ledger groups by commit so occupancy cannot bury the answer', () => {
   assert.deepEqual(groupProvenance({ items: [] }), [])
 })
 
+test('a landing merge names the merger and the branch it carries', () => {
+  // The exact production shape: session B ran `git merge master` inside session
+  // A's worktree, resolved one file, and committed the merge. The card used to
+  // show B alone, as `committed`, on the commit carrying A's whole branch.
+  const oid = 'a'.repeat(40)
+  const row = (id: string, sessionId: string, role: string, over: Record<string, unknown> = {}) => ({
+    id, session_id: sessionId, session_name: sessionId, project_id: 'p',
+    worktree_root: '/repo/wt', commit_oid: oid, relationship: 'observed',
+    confidence: 'exact', ambiguous: false, source: 'session_tool', observed_at: 1,
+    role, ...over,
+  })
+  const raw = {
+    items: [
+      row('m1', 'orchestrator', 'integrator', {
+        relationship: 'merged', match_method: 'command_range',
+        contributed_paths: ['shared.py'],
+      }),
+      row('b1', 'branch-agent', 'branch_author', {
+        relationship: 'authored_branch', source: 'ledger_branch_line',
+        match_method: 'merge_branch_line',
+      }),
+      row('o1', 'bystander', 'observer', { confidence: 'correlated', source: 'git_monitor' }),
+    ],
+    commits: [{
+      commit_oid: oid, subject: "Merge branch 'master' into feature", committed_at: 5,
+      worktree_root: '/repo/wt', committer: null, integrator: { id: 'm1' },
+      branch_authors: [{ id: 'b1' }], contributors: [{ id: 'm1' }], attribution: 'exact',
+    }],
+  }
+  const [group] = groupProvenance(raw)
+  assert.equal(group.committer, null)
+  assert.equal(group.integrator?.sessionId, 'orchestrator')
+  assert.deepEqual(group.branchAuthors.map(item => item.sessionId), ['branch-agent'])
+  assert.deepEqual(group.contributors.map(item => item.sessionId), ['orchestrator'])
+  // Neither named session is also counted as a bystander to its own work.
+  assert.deepEqual(group.observers.map(item => item.sessionId), ['bystander'])
+  assert.equal(group.attribution, 'exact')
+  assert.equal(provenanceRoleLabel(group.integrator!), 'merged it, resolving 1 file')
+  assert.equal(provenanceRoleLabel(group.branchAuthors[0]), 'wrote the branch it merges')
+})
+
+test('an unknown role or relationship never becomes a claim it is not', () => {
+  const base = {
+    id: 'x', session_id: 's', session_name: 's', project_id: 'p', worktree_root: '/repo',
+    commit_oid: 'a'.repeat(40), confidence: 'exact', ambiguous: false,
+    source: 'session_tool', observed_at: 1,
+  }
+  // A relationship this build does not know is dropped rather than rendered.
+  assert.deepEqual(
+    parseGitProvenance({ items: [{ ...base, relationship: 'invented', role: 'integrator' }] }),
+    [],
+  )
+  // A role it does not know degrades to the weakest one, never to an authorship.
+  const [row] = parseGitProvenance({
+    items: [{ ...base, relationship: 'merged', role: 'invented' }],
+  })
+  assert.equal(row.role, 'observer')
+  assert.equal(provenanceRoleLabel(row), 'was in the checkout when it appeared')
+})
+
 test('file status labels fit the narrow change list', () => {
   assert.equal(changeStatusLabel('??'), '?')
   assert.equal(changeStatusLabel('.M'), 'M')

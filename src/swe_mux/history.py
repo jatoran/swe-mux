@@ -205,6 +205,25 @@ CREATE INDEX IF NOT EXISTS idx_git_ref_moves_commit
 _MESSAGE_SEARCH_TABLES = ("history_messages_fts", "history_messages_trigram")
 
 
+#: The `git_provenance.role` vocabulary. It lives here because this module owns
+#: the table, and because `git_provenance.py` imports this one — the semantics are
+#: documented there (`design/features/git.md`, session-to-commit provenance).
+#:
+#: `committer` ran the command that wrote the commit; `integrator` ran the command
+#: that *merged* it, which is a different act and used to be recorded as the same
+#: one; `contributor` wrote bytes the commit contains; `branch_author` wrote the
+#: branch a merge commit unified; `observer` merely had the checkout open.
+ROLE_COMMITTER = "committer"
+ROLE_INTEGRATOR = "integrator"
+ROLE_CONTRIBUTOR = "contributor"
+ROLE_BRANCH_AUTHOR = "branch_author"
+ROLE_OBSERVER = "observer"
+#: Roles that answer "who made this commit happen". Bystander suppression and the
+#: arrival oracle both read this, and leaving `integrator` out would put occupancy
+#: rows back on every session that had a worktree open while someone merged in it.
+AUTHORING_ROLES = frozenset({ROLE_COMMITTER, ROLE_INTEGRATOR})
+
+
 def canonical_worktree_root(value: str) -> str:
     """One spelling for a checkout, because it is part of a uniqueness key.
 
@@ -2481,11 +2500,65 @@ class HistoryIndex:
                         seen[root] = observed_at
                 if row["retracted_at"]:
                     continue
-                if str(row["role"] or "") == "committer" and not row["ambiguous"]:
+                if str(row["role"] or "") in AUTHORING_ROLES and not row["ambiguous"]:
                     session_id = str(row["session_id"] or "")
                     if session_id and session_id not in claim["committers"]:
                         claim["committers"].append(session_id)
             return claims
+
+        return await self._run(op)
+
+    async def git_branch_authors(
+        self, *, project_id: str, commit_oids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Whose the ledger already says a set of commits are, one entry per session.
+
+        This is how a merge commit learns the name of the branch it unified: git
+        says which commits the merge's own side had, and this says who already
+        holds them. Nothing new is decided — the answer is drawn from rows written
+        by the ordinary committer and contributor paths, so a branch mux never
+        attributed produces no entry rather than a guess.
+
+        Occupancy is excluded deliberately. "Had the checkout open while this
+        appeared" is not authorship of a branch, and admitting it would put every
+        session that ever sat in a worktree on every merge that worktree landed.
+        Retracted rows are excluded for the same reason a claim is: a withdrawn
+        answer is not an answer.
+        """
+        if not commit_oids or not project_id:
+            return {}
+        normalized = list(dict.fromkeys(oid.lower() for oid in commit_oids))[:500]
+        rank = {"exact": 2, "correlated": 1, "ambiguous": 0}
+
+        def op() -> dict[str, dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT session_id,session_name,agent_run_id,role,confidence,ambiguous "
+                "FROM git_provenance WHERE project_id=? AND retracted_at IS NULL "
+                f"AND commit_oid IN ({','.join('?' for _ in normalized)})",
+                (project_id, *normalized),
+            ).fetchall()
+            authors: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                role = str(row["role"] or "")
+                if role not in AUTHORING_ROLES and role != "contributor":
+                    continue
+                if row["ambiguous"]:
+                    continue
+                session_id = str(row["session_id"] or "")
+                if not session_id:
+                    continue
+                confidence = str(row["confidence"] or "correlated")
+                entry = authors.get(session_id)
+                if entry is not None and rank.get(confidence, 0) <= rank.get(
+                    str(entry["confidence"]), 0
+                ):
+                    continue
+                authors[session_id] = {
+                    "session_name": str(row["session_name"] or ""),
+                    "agent_run_id": str(row["agent_run_id"] or ""),
+                    "confidence": confidence,
+                }
+            return authors
 
         return await self._run(op)
 

@@ -93,11 +93,16 @@ export type GitProvenance = {
   subject: string
   committedAt: number | null
   previousHead: string | null
-  relationship: 'created' | 'rewrote' | 'observed' | 'contributed'
+  relationship: 'created' | 'rewrote' | 'merged' | 'observed' | 'contributed' | 'authored_branch'
   confidence: 'exact' | 'correlated' | 'ambiguous'
   ambiguous: boolean
-  /** What the session did for this commit, as opposed to what the ref did. */
-  role: 'committer' | 'contributor' | 'observer'
+  /** What the session did for this commit, as opposed to what the ref did.
+   *
+   *  `integrator` and `branch_author` exist because a landing merge has more than
+   *  one true answer: the session that ran `git merge` in someone else's worktree
+   *  made that commit, and the session whose branch it carries wrote the work. One
+   *  slot forced a choice between them, and it always chose the merger. */
+  role: 'committer' | 'integrator' | 'contributor' | 'branch_author' | 'observer'
   /** How the attribution was made, for a reader who wants to judge it. */
   matchMethod: string | null
   /** Files of this commit that this session's observed writes account for. */
@@ -140,6 +145,12 @@ export type GitCommitAttribution = {
   committedAt: number | null
   worktreeRoot: string
   committer: GitProvenance | null
+  /** Who made the merge commit itself. Never also the `committer`: a commit either
+   *  continues a line or unifies two, and the roles name which act was observed. */
+  integrator: GitProvenance | null
+  /** Whose branch a merge commit unified, read from the ledger's own rows for the
+   *  commits on that side. Empty for an ordinary commit. */
+  branchAuthors: GitProvenance[]
   contributors: GitProvenance[]
   attribution: 'exact' | 'correlated' | 'ambiguous'
 }
@@ -299,7 +310,8 @@ export function parseGitProvenance(raw: unknown): GitProvenance[] {
       || typeof row.project_id !== 'string'
       || typeof row.worktree_root !== 'string'
       || typeof row.commit_oid !== 'string'
-      || !['created', 'rewrote', 'observed', 'contributed'].includes(String(row.relationship))
+      || !['created', 'rewrote', 'merged', 'observed', 'contributed', 'authored_branch']
+        .includes(String(row.relationship))
       || !['exact', 'correlated', 'ambiguous'].includes(String(row.confidence))
       // Source is an open vocabulary, not a closed one: an allowlist here silently
       // dropped every `transcript_backfill:*` row the importer wrote, and would
@@ -330,7 +342,8 @@ export function parseGitProvenance(raw: unknown): GitProvenance[] {
       relationship: row.relationship as GitProvenance['relationship'],
       confidence: row.confidence as GitProvenance['confidence'],
       ambiguous: row.ambiguous === true,
-      role: ['committer', 'contributor', 'observer'].includes(String(row.role))
+      role: ['committer', 'integrator', 'contributor', 'branch_author', 'observer']
+        .includes(String(row.role))
         ? row.role as GitProvenance['role']
         : 'observer',
       matchMethod: typeof row.match_method === 'string' ? row.match_method : null,
@@ -400,12 +413,17 @@ export function parseGitCommitAttributions(raw: unknown): GitCommitAttribution[]
     const contributors = Array.isArray(row.contributors)
       ? row.contributors.map(entry).filter((item): item is GitProvenance => item !== null)
       : []
+    const branchAuthors = Array.isArray(row.branch_authors)
+      ? row.branch_authors.map(entry).filter((item): item is GitProvenance => item !== null)
+      : []
     items.push({
       commitOid: row.commit_oid,
       subject: typeof row.subject === 'string' ? row.subject : '',
       committedAt: typeof row.committed_at === 'number' ? row.committed_at : null,
       worktreeRoot: typeof row.worktree_root === 'string' ? row.worktree_root : '',
       committer: entry(row.committer),
+      integrator: entry(row.integrator),
+      branchAuthors,
       contributors,
       attribution: ['exact', 'correlated', 'ambiguous'].includes(String(row.attribution))
         ? row.attribution as GitCommitAttribution['attribution']
@@ -446,6 +464,8 @@ export function groupProvenance(raw: unknown): ProvenanceGroup[] {
     const summary = attributions.get(commitOid)
     const named = new Set<string>()
     if (summary?.committer) named.add(summary.committer.id)
+    if (summary?.integrator) named.add(summary.integrator.id)
+    for (const item of summary?.branchAuthors || []) named.add(item.id)
     for (const item of summary?.contributors || []) named.add(item.id)
     groups.push({
       commitOid,
@@ -453,6 +473,8 @@ export function groupProvenance(raw: unknown): ProvenanceGroup[] {
       committedAt: summary?.committedAt ?? rows[0].committedAt,
       worktreeRoot: summary?.worktreeRoot || rows[0].worktreeRoot,
       committer: summary?.committer || null,
+      integrator: summary?.integrator || null,
+      branchAuthors: summary?.branchAuthors || [],
       contributors: summary?.contributors || [],
       attribution: summary?.attribution || 'ambiguous',
       // Everything the summary did not already name. A session that committed or
@@ -473,9 +495,22 @@ export function occupancyLabel(group: ProvenanceGroup): string {
   return `${count} sessions had this checkout open`
 }
 
-/** What a row claims about the session, in the reader's words. */
+/**
+ * What a row claims about the session, in the reader's words.
+ *
+ * `merged` and `wrote the branch it merges` are the two halves of a landing said
+ * separately. Both used to read `committed`, which credited the session that ran
+ * the land with the branch it landed and left the branch's own agent unnamed on
+ * the commit that carries its work.
+ */
 export function provenanceRoleLabel(item: GitProvenance): string {
   if (item.role === 'committer') return item.relationship === 'rewrote' ? 'amended' : 'committed'
+  if (item.role === 'integrator') {
+    const count = item.contributedPaths.length
+    if (!count) return 'merged it'
+    return count === 1 ? 'merged it, resolving 1 file' : `merged it, resolving ${count} files`
+  }
+  if (item.role === 'branch_author') return 'wrote the branch it merges'
   if (item.role === 'contributor') {
     const count = item.contributedPaths.length
     return count === 1 ? 'wrote 1 file in it' : `wrote ${count} files in it`

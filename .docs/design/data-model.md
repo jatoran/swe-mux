@@ -97,10 +97,14 @@
   compaction summary, exit state, materialized chronological native start/final conversational message
   time and role, plus source mtime/size watermarks for bounded timestamp-summary refreshes.
 - `git_provenance`: durable evidence connecting a full commit OID to a session, optional agent run, Project, and exact checkout root.
-  It copies parent OIDs, subject, Git commit time, previous HEAD, relationship (`created|rewrote|observed|contributed`), confidence (`exact|correlated|ambiguous`), ambiguity flag, evidence source, source event sequence, optional tool-call id, and first/latest observation times.
-  `role` (`committer|contributor|observer`) records what the session did, which is a different question from what the reference did, so one commit legitimately holds one committer row and several contributor rows.
+  It copies parent OIDs, subject, Git commit time, previous HEAD, relationship (`created|rewrote|merged|observed|contributed|authored_branch`), confidence (`exact|correlated|ambiguous`), ambiguity flag, evidence source, source event sequence, optional tool-call id, and first/latest observation times.
+  `role` (`committer|integrator|contributor|branch_author|observer`) records what the session did, which is a different question from what the reference did, so one commit legitimately holds one committer row and several contributor rows.
+  A merge commit is the one shape with more than one true answer, and it holds one `integrator` row for the session that ran the merge and one `branch_author` row per session the ledger already credits for the commits on the merge's own side.
+  `committer` and `integrator` are mutually exclusive for one commit and rank identically, so a row recorded before the distinction existed reclassifies in place through the ordinary upsert rather than needing a migration.
+  A `branch_author` row carries no contributed paths by design: it says whose branch the merge carries, never that those bytes are in the merge.
   `match_method` names how the attribution was made and `contributed_paths_json` holds the commit files that session's observed writes account for, bounded to 200 paths.
   Existing rows migrate additively to `observer` with no method, which is exactly what they recorded; re-attribution is the explicit backfill's job, never a startup rewrite.
+  The same rule covers the integrator/branch-author split: rows written before it keep saying `committer` until the backfill is run, because a startup rewrite of a durable ledger is not something a version bump may do silently.
   The uniqueness key is `(session_id, agent_run_id, worktree_root, commit_oid)` with shell runs represented by the empty run id.
   `worktree_root` is stored in one canonical spelling (forward slashes, no trailing separator) because it is part of that key: Git prints `D:/PROJECTS/x` and `pathlib` prints `D:\PROJECTS\x` for one directory, and both spellings made the daemon's row and the backfill's row for one session and one commit into two rows.
   Opening a database written before that rule collapses the duplicates in favour of the stronger row.
