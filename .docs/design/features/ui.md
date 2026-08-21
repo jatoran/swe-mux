@@ -1650,9 +1650,13 @@ Its rules, and what each one is defending:
 - **Branch opens a point picker where the daemon honours one** (`BranchPicker.tsx`, gated on the
   published `branch_from_message`), and forks on the click where it does not — offering a choice
   the daemon would then refuse is worse than offering none. The picker is a dialog of its own
-  rather than controls added to the Transcript tab: that tab is deliberately inert, copy being its
-  only verb, because it is where somebody reviews what an agent already did and a stray tap there
-  must not start a session. Rows run newest first, since a branch is normally a recent regret; each
+  rather than controls added to the Transcript tab: that tab writes nothing back, because it is
+  where somebody reviews what an agent already did and a stray tap there must not start a session
+  or put words into one. The rule is about *what a tap can reach*, not about a count of buttons:
+  copy, select, and read-aloud playback all leave the conversation, the PTY, and the session
+  exactly as they were, which is why per-message playback could join them (`voice.md`) while
+  branching could not. The one thing playback does spend - a summary's model call - is stated on
+  the chip before it is pressed, and its verbatim twin spends nothing at all. Rows run newest first, since a branch is normally a recent regret; each
   states the cut it would make in the words of the act (a prompt is branched *before*, a reply
   *after*); and a row whose cut is illegal stays visible with its reason inline, because the reader
   can see the message and hiding why it is not offered leaves them guessing.

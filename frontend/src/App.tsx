@@ -6825,6 +6825,7 @@ export function App() {
         session={active||null}
         project={activeProject}
         backend={active?.backend}
+        readAloud={!!voiceStatus?.enabled}
         notifications={notificationData}
         onNotificationsChanged={()=>void loadNotifications()}
         unread={notificationUnread}

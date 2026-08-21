@@ -109,14 +109,23 @@ It is taken rather than read, so a reconnect cannot re-insert it, and bounded so
 
 ## Transcript reader
 
-`TranscriptTab.tsx`, `TranscriptToolCalls.tsx`, `transcriptView.ts`
+`TranscriptTab.tsx`, `TranscriptToolCalls.tsx`, `transcriptView.ts`, `transcriptAudio.ts`
 
-An inert conversation reader.
+A write-nothing conversation reader.
 It reads `/api/sessions/{id}/transcript` on open, on rollover, on the observed-user `mux:transcript-changed` event, and on the assistant-boundary `mux:turn-ended` event, never on a timer.
 It offers local literal search plus per-message and whole-conversation copy.
 A default-off toggle replaces count-only tool seams with individually collapsed native call names and inputs; results, telemetry, and persistence remain outside this surface.
 
 There is no insert, no send, and no `onDone`: a stray tap here must not become a message, and on mobile `onDone` would close the drawer after every copy.
+The rule bounds *what a tap can reach*, not the number of buttons - copy, select, and the per-message read-aloud markers all leave the conversation, the PTY, and the session untouched (`../../../design/features/ui.md`).
+
+### Per-message read aloud
+
+Each assistant message carries two markers, one per kind, backed by `transcriptAudio.ts`: a pure index of the session's clips keyed on `message_anchor`, and the four states a marker can be in (`none`, `generating`, `ready`, `failed`) with only `ready` rendering as a play button.
+A ready marker **plays** rather than regenerating, which is what the anchor buys - the daemon answers a repeat request for the same (run, message, kind) out of the store instead of spending a second summary call (`../../../design/features/voice.md`).
+A `synthesizing` row reads as `generating` even though this tab did not ask for it, since the automatic path may be making exactly that clip; a request this tab issued and has not seen land is local state, because a clip another device is generating is invisible here until it arrives.
+The index is refetched on `mux:voice-clip` rather than polled, and dropped on a rollover with the transcript it belonged to.
+Markers are drawn only while `tts_enabled` is on: this is a per-item surface repeated once per reply, so it carries no gate and the master switch's gate lives in the voice panel's `tts` tab.
 `App.tsx` owns the capability-gated pane-header chip shared by desktop and mobile, and focuses the named session before opening the Transcript drawer tab.
 
 Search filters and highlights the loaded messages without changing copy-all, and its temporary scroll position restores the normal reading place on clear.

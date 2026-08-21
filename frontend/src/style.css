@@ -3549,6 +3549,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .transcript-copy{pointer-events:auto;flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .transcript-copy:hover{color:var(--text)}
 .transcript-copy.copied{border-color:var(--accent);color:var(--accent)}
+/* The per-message read-aloud markers, in the same hovering chip row as Copy and Select.
+   Four states, and only one of them is a play button: `ready` is the clip that already
+   exists (the whole point of anchoring one to its message), `generating` is disabled
+   because a second request would be a duplicate, `failed` invites a retry, and the
+   resting state offers to make it. Green only for `ready`, so a glance answers "is
+   there audio for this reply" without reading the words. */
+.transcript-audio.ready{border-color:color-mix(in srgb,var(--green,#8bd450) 55%,var(--line));color:var(--green,#8bd450)}
+.transcript-audio.generating{border-color:var(--amber);color:var(--amber);cursor:progress}
+.transcript-audio.failed{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.transcript-audio:disabled{cursor:progress}
 /* Nothing in the column's chrome may host a selection endpoint.
    The head bar is a sibling *above* the scroller, so it sits before every message in
    document order. A selection dragged past the top of the body used to resolve its
@@ -3621,6 +3631,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   /* Two controls now float here, so the header's reserved gutter widens with them. */
   .transcript-message>header{padding-right:118px}
   .transcript-copy{min-height:28px;padding:0 10px}
+  /* Four chips in the row on a phone instead of two, so the audio pair takes the
+     tighter padding and lets Copy and Select keep their thumb width. */
+  .transcript-copy.transcript-audio{padding:0 7px}
   .transcript-tab-head>button{min-height:32px}
   .transcript-search input{height:36px;font-size:16px}
   .transcript-search>button{width:35px;height:34px}
