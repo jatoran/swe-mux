@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import {
-  announceAction, applyAssistantEvent, cancelAction, confirmAction, dialogDetail, ensureDialog,
-  interruptTurn, openFollowUpWindow, rememberDialogId, sendTurn,
+  announceAction, applyAssistantEvent, ASSISTANT_DIALOG_RESET_EVENT, cancelAction, confirmAction,
+  dialogDetail, ensureDialog, interruptTurn, openFollowUpWindow, sendTurn, startNewDialog,
 } from './assistant'
 import type { AssistantAction, AssistantClientContext, AssistantMessage } from './assistant'
 import {
@@ -17,6 +17,12 @@ import { playEarcon } from './earcons'
  * so two devices watching the same dialog render the same turn. Confirmation
  * is typed state rendered as cards, never prose — voice mode drives the same
  * cards through spoken confirm/cancel.
+ *
+ * Starting a fresh conversation is likewise not a local action: both the `new`
+ * button and the voice alias call `startNewDialog`, and the panel reacts to the
+ * `mux:assistant-dialog-reset` it announces. The cleared conversation is stashed
+ * behind a disclosure rather than dropped, which is what lets clearing context
+ * run with no confirmation.
  */
 export function AssistantPanel({
   enabled,
@@ -41,6 +47,14 @@ export function AssistantPanel({
 }) {
   const [dialogId, setDialogId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AssistantMessage[]>([])
+  /**
+   * The conversation the last "new conversation" cleared, kept behind a
+   * disclosure. This is what makes clearing context reversible enough to run
+   * with no confirmation, by voice as well as by the button, so it is part of
+   * the feature rather than a convenience.
+   */
+  const [previousMessages, setPreviousMessages] = useState<AssistantMessage[]>([])
+  const [previousOpen, setPreviousOpen] = useState(false)
   const [actions, setActions] = useState<AssistantAction[]>([])
   const [thinking, setThinking] = useState<string | null>(null)
   const [turnRunning, setTurnRunning] = useState(false)
@@ -52,6 +66,7 @@ export function AssistantPanel({
   const speechRef = useRef(speechEnabled); speechRef.current = speechEnabled
   const voiceActiveRef = useRef(voiceActive); voiceActiveRef.current = voiceActive
   const dialogRef = useRef<string | null>(null); dialogRef.current = dialogId
+  const messagesRef = useRef<AssistantMessage[]>([]); messagesRef.current = messages
   /** True while this turn's speech may be spoken: decided once, at turn start. */
   const speakingTurnRef = useRef<string | null>(null)
   /** Cards already announced on this device; an announcement is per card, not per event. */
@@ -134,6 +149,17 @@ export function AssistantPanel({
           }
         }
       }
+      // A notice belongs to no turn, so it is spoken on the announcement path:
+      // it joins whatever stream is live rather than taking the floor, which is
+      // the same rule a confirmation card follows. A Project Action's outcome
+      // arriving mid-sentence must not cut the sentence off.
+      if (event.type === 'assistant_notice') {
+        const notice = String(payload.speech || '')
+        playEarcon('tick')
+        if (notice && voiceActiveRef.current && speechRef.current) {
+          void speakAnnouncement(notice).catch(() => {})
+        }
+      }
       if (event.type === 'assistant_action') {
         const status = String(payload.status || '')
         const actionId = String(payload.id || '')
@@ -168,6 +194,25 @@ export function AssistantPanel({
     return () => window.removeEventListener('mux:assistant-event', handler)
   }, [])
 
+  // One reset path for both surfaces. The `new` button and the voice alias both
+  // call `startNewDialog`, which announces here; the panel never clears itself
+  // directly, so a conversation started by voice and one started by the button
+  // leave the panel in exactly the same state.
+  useEffect(() => {
+    const handler = (raw: Event) => {
+      const id = String(((raw as CustomEvent).detail as { dialog_id?: string } || {}).dialog_id || '')
+      if (!id) return
+      // Kept, not deleted. The cleared conversation stays readable right here,
+      // which is the whole reason clearing needs no confirmation. An empty one
+      // must not displace a real previous conversation.
+      if (messagesRef.current.length) { setPreviousMessages(messagesRef.current); setPreviousOpen(false) }
+      setMessages([]); setActions([]); setThinking(null); setError(null)
+      setDialogId(id)
+    }
+    window.addEventListener(ASSISTANT_DIALOG_RESET_EVENT, handler)
+    return () => window.removeEventListener(ASSISTANT_DIALOG_RESET_EVENT, handler)
+  }, [])
+
   useLayoutEffect(() => {
     const element = logRef.current
     if (element) element.scrollTop = element.scrollHeight
@@ -186,11 +231,8 @@ export function AssistantPanel({
   }
 
   const newDialog = async () => {
-    rememberDialogId(null)
-    setMessages([]); setActions([]); setThinking(null); setError(null)
     try {
-      const id = await ensureDialog()
-      setDialogId(id)
+      await startNewDialog()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -204,6 +246,19 @@ export function AssistantPanel({
   const openActions = actions.filter(item => item.status === 'pending' || item.status === 'scheduled')
   return <div class="assistant-panel">
     <div ref={logRef} class="assistant-log" role="log" aria-live="polite">
+      {previousMessages.length > 0 && <details
+        class="assistant-previous"
+        open={previousOpen}
+        onToggle={event => setPreviousOpen(event.currentTarget.open)}
+      >
+        <summary>
+          previous conversation · {previousMessages.length} message{previousMessages.length === 1 ? '' : 's'} · kept, not deleted
+        </summary>
+        {previousMessages.map(message => <article key={`previous-${message.id}`} class={`assistant-message ${message.role}`}>
+          <header>{message.role === 'user' ? 'you' : 'mux'}</header>
+          <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
+        </article>)}
+      </details>}
       {messages.length === 0 && !thinking && <p class="assistant-empty">
         Ask about the fleet, queue or reword messages, spawn sessions, or navigate — in plain language.
       </p>}
@@ -234,7 +289,7 @@ export function AssistantPanel({
       {turnRunning
         ? <button class="assistant-stop" title="Interrupt the running turn" onClick={() => { if (dialogId) void interruptTurn(dialogId) }}>stop</button>
         : <button class="assistant-send" disabled={!input.trim()} onClick={() => void submit()}>send</button>}
-      <button class="assistant-new" title="Start a fresh conversation" onClick={() => void newDialog()}>new</button>
+      <button class="assistant-new" title="Start a fresh conversation. The current one is kept, not deleted." onClick={() => void newDialog()}>new</button>
     </footer>
   </div>
 }

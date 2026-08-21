@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 8
+AUTOMATION_SCHEMA_VERSION = 9
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS automation_budget_ledger (
   id TEXT PRIMARY KEY, day TEXT NOT NULL, rule_id TEXT NOT NULL,
   project_id TEXT, agent_run_id TEXT,
   requested_model TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL, observer_call_id TEXT, created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_budget_day_rule
@@ -339,6 +340,14 @@ class AutomationStore:
         for column in ("project_id", "agent_run_id"):
             if budget_ledger and column not in budget_ledger:
                 self._db.execute(f"ALTER TABLE automation_budget_ledger ADD COLUMN {column} TEXT")
+        if budget_ledger and "cached_tokens" not in budget_ledger:
+            # Backfilled to 0 rather than NULL: every pre-migration row was billed
+            # by a request that carried no cache breakpoint, so zero is the true
+            # reading for it, not a missing one.
+            self._db.execute(
+                "ALTER TABLE automation_budget_ledger "
+                "ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0"
+            )
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -771,13 +780,14 @@ class AutomationStore:
         call_id: str,
         project_id: str | None = None,
         agent_run_id: str | None = None,
+        cached_tokens: int = 0,
     ) -> None:
         def op() -> None:
             self._db.execute(
                 "INSERT INTO automation_budget_ledger"
                 "(id,day,rule_id,project_id,agent_run_id,requested_model,input_tokens,"
-                "output_tokens,cost_usd,observer_call_id,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "output_tokens,cached_tokens,cost_usd,observer_call_id,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     str(uuid.uuid4()),
                     time.strftime("%Y-%m-%d", time.gmtime()),
@@ -787,6 +797,11 @@ class AutomationStore:
                     model,
                     input_tokens,
                     output_tokens,
+                    # Part of `input_tokens`, never added to it: cached prompt
+                    # tokens were still sent and still counted, only billed at a
+                    # discount. Summing the two would inflate every token figure
+                    # on the page by the amount caching saved.
+                    max(0, int(cached_tokens)),
                     cost_usd,
                     call_id,
                     time.time(),
@@ -819,6 +834,8 @@ class AutomationStore:
     ) -> dict[str, float | int]:
         sql = (
             "SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
+            "COALESCE(SUM(input_tokens),0) input_tokens,"
+            "COALESCE(SUM(cached_tokens),0) cached_tokens,"
             "COALESCE(SUM(cost_usd),0) cost FROM automation_budget_ledger WHERE day=?"
         )
         args: list[Any] = [time.strftime("%Y-%m-%d", time.gmtime())]
@@ -834,7 +851,15 @@ class AutomationStore:
 
         def op() -> dict[str, float | int]:
             row = self._db.execute(sql, args).fetchone()
-            return {"tokens": int(row["tokens"]), "cost_usd": float(row["cost"])}
+            return {
+                "tokens": int(row["tokens"]),
+                "cost_usd": float(row["cost"]),
+                # `input_tokens` rides along because it is the only honest
+                # denominator for the cached figure: `tokens` includes output,
+                # which was never cacheable.
+                "input_tokens": int(row["input_tokens"]),
+                "cached_tokens": int(row["cached_tokens"]),
+            }
 
         return await self._run(op)
 
@@ -1681,15 +1706,21 @@ class AutomationStore:
                 "SELECT rule_id,"
                 "COUNT(*) calls,"
                 "COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
+                "COALESCE(SUM(input_tokens),0) input_tokens,"
+                "COALESCE(SUM(cached_tokens),0) cached_tokens,"
                 "COALESCE(SUM(cost_usd),0) cost,"
                 "COALESCE(SUM(CASE WHEN day=? THEN 1 ELSE 0 END),0) today_calls,"
                 "COALESCE(SUM(CASE WHEN day=? THEN input_tokens+output_tokens ELSE 0 END),0)"
                 " today_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN input_tokens ELSE 0 END),0)"
+                " today_input_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN cached_tokens ELSE 0 END),0)"
+                " today_cached_tokens,"
                 "COALESCE(SUM(CASE WHEN day=? THEN cost_usd ELSE 0 END),0) today_cost,"
                 "MAX(created_at) last_at "
                 "FROM automation_budget_ledger WHERE day>=? "
                 "GROUP BY rule_id ORDER BY cost DESC,calls DESC",
-                (today, today, today, start),
+                (today, today, today, today, today, start),
             ).fetchall()
             models = self._db.execute(
                 "SELECT rule_id,requested_model,COUNT(*) calls "
@@ -1706,9 +1737,13 @@ class AutomationStore:
                         "rule_id": str(row["rule_id"]),
                         "calls": int(row["calls"]),
                         "tokens": int(row["tokens"]),
+                        "input_tokens": int(row["input_tokens"]),
+                        "cached_tokens": int(row["cached_tokens"]),
                         "cost_usd": float(row["cost"]),
                         "today_calls": int(row["today_calls"]),
                         "today_tokens": int(row["today_tokens"]),
+                        "today_input_tokens": int(row["today_input_tokens"]),
+                        "today_cached_tokens": int(row["today_cached_tokens"]),
                         "today_cost_usd": float(row["today_cost"]),
                         "models": by_rule.get(str(row["rule_id"]), []),
                         "last_at": float(row["last_at"] or 0),
@@ -1724,7 +1759,10 @@ class AutomationStore:
         result["today"] = today
         result["totals"] = {
             key: sum(rule[key] for rule in rules)
-            for key in ("calls", "tokens", "today_calls", "today_tokens")
+            for key in (
+                "calls", "tokens", "input_tokens", "cached_tokens",
+                "today_calls", "today_tokens", "today_input_tokens", "today_cached_tokens",
+            )
         } | {
             key: round(sum(rule[key] for rule in rules), 6)
             for key in ("cost_usd", "today_cost_usd")

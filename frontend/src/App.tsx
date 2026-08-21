@@ -109,15 +109,16 @@ import { ConversationSurface, ConversationToggle, useConversation, type VoicePan
 import { AssistantPanel } from './AssistantPanel'
 import {
   ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
-  latestOpenAction, noteAssistantActionEvent, reportUiResult,
+  latestOpenAction, NEW_CONVERSATION_PHRASES, NEW_CONVERSATION_REPLY,
+  noteAssistantActionEvent, reportUiResult,
   sendTurn as sendAssistantTurnApi,
-  spokenConfirmation, type AssistantClientContext, type AssistantStatus,
+  spokenConfirmation, startNewDialog, type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, playAllHeldClips, playClip, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
@@ -2099,11 +2100,13 @@ export function App() {
               trigger: event.payload?.trigger,
               streamId: event.payload?.stream_id,
             } }))
-            // The pane's mode is re-checked here as well as on the daemon: a clip
-            // generated just before the user hit "off" would otherwise land and start
-            // speaking after the switch was thrown.
+            // The pane's participation is re-checked here as well as on the daemon: a
+            // clip generated just before the user hit "off" would otherwise land and
+            // start speaking after the switch was thrown. Whether it *plays* or is
+            // *held* is `enqueueAutoplay`'s call, so the device toggle and the focus
+            // rule stay in one place rather than being half-decided here.
             const autoAllowed = eventSession ? eventSession.voice_mode !== 'off' : true
-            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
+            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
             if(!isReplay&&event.type==='voice_clip_ready'&&event.payload?.trigger!=='auto'&&clipId&&event.payload?.stream_id){
               enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
             }
@@ -2323,6 +2326,11 @@ export function App() {
   useEffect(()=>{
     if(focusedAgentSession)noteTerminalFocus(focusedAgentSession.id)
   },[focusedAgentSession?.id])
+  // The one report that drives focus-driven playback. Read aloud plays the session
+  // being watched and holds the rest, so this has to be the same "focused agent"
+  // every other pane-scoped surface means — and `null` (a note, a shell, nothing)
+  // holds everything, which is why a held clip is surfaced rather than dropped.
+  useEffect(()=>{setPlaybackFocus(focusedAgentSession?.id||null)},[focusedAgentSession?.id])
   const liveVoiceSessionIds=useRef<Set<string>>(new Set())
   liveVoiceSessionIds.current=new Set(sessions.filter(session=>isAgent(session)&&!session.pending&&!isEndedSession(session)).map(session=>session.id))
   const liveVoiceSessionRuns=useRef<Map<string,string|null>>(new Map())
@@ -5077,6 +5085,12 @@ export function App() {
     { id: 'voice.cycleMode', label: `Read aloud: cycle focused session mode${active && isAgent(active) ? ` (now ${voiceModeLabel(effectiveVoiceMode(active))})` : ''}`, category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) cycleVoiceMode(active); setContextMenu(null) } },
     { id: 'voice.speak', label: 'Read aloud: speak focused session’s last reply', category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) void speakLastReply(active); setContextMenu(null) } },
     { id: 'voice.autoplayDevice', label: `Read aloud: turn device autoplay ${autoplayEnabled() ? 'off' : 'on'}`, category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { setAutoplayEnabled(!autoplayEnabled()); setContextMenu(null) } },
+    // The keyboard route to held clips. The pane's own strip is the surface that
+    // *announces* a held clip, but a session whose pane is behind another tab has
+    // no visible strip, so the backlog needs one route that does not depend on the
+    // pane being drawn. Deliberately not labelled with a count: reading one would
+    // subscribe this component to every `timeupdate` the audio element fires.
+    { id: 'voice.playHeld', label: 'Read aloud: play clips held while you were elsewhere', category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { unlockPlayback(); playAllHeldClips(); setContextMenu(null) } },
     { id:'voice.fleetStatus',label:'Speak fleet status',category:'voice',available:true,run:()=>{},voice:{
       phrases:['fleet status','status report','what is running'],
       execute:text=>voiceQueryHandler.current(parseVoiceQuery(text||'fleet status')||{kind:'status',entity:'fleet',reference:'',scope:{kind:'all'}}),
@@ -5118,6 +5132,23 @@ export function App() {
         return next
       })
     },voice:{phrases:['assistant','open assistant','open the assistant','chat','close assistant','close the assistant']}},
+    // Clearing context is the one assistant act that runs on the word with no
+    // confirmation card, because nothing is destroyed: the prior dialog is
+    // unremembered, not deleted, and the panel keeps it readable. The spoken
+    // reply therefore has to carry both halves - "context cleared" on its own
+    // describes the same act as a deletion the operator cannot see.
+    { id:'assistant.newConversation',label:'Start a new assistant conversation',category:'voice',
+      available:!!assistantInfo?.enabled,disabledReason:'Enable the assistant in Settings → Assistant first',
+      run:()=>{setAssistantOpen(true);setVoicePanelMode('chat');void startNewDialog().catch(()=>{})},voice:{
+      phrases:NEW_CONVERSATION_PHRASES,
+      execute:async()=>{
+        await startNewDialog()
+        // Show what was just done. The reply claims the old conversation is
+        // still in the panel, so the panel is what the operator must land on.
+        setAssistantOpen(true);setVoicePanelMode('chat')
+        return{detail:NEW_CONVERSATION_REPLY,speech:NEW_CONVERSATION_REPLY}
+      },
+    }},
     { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
       phrases:['approve','review approval','confirm tool use'],
       execute:async()=>{
@@ -5975,7 +6006,7 @@ export function App() {
     // easy to lose off-screen. Grouped in the header they have a fixed home; the group is its
     // own scroller so a long chip set can never push the pane tools out of the bar.
     const paneVoice=agentVoice&&voiceStatus?<>
-      {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
+      {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: this session generates ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto · what is spoken here follows workspace focus and the device toggle`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {/* Read aloud is off (or unconfigured): the chip stays and becomes the way to fix
           that, landing on the switch rather than on the Voice tab. */}
       {!voiceAvailable&&<SettingLink target="voice.tts" class="voice-chip mobile-voice-action" title="Read aloud is disabled · open its switch">tts:setup</SettingLink>}

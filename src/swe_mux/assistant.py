@@ -44,9 +44,10 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from .config import Config
 from .event_bus import EventBus
 from .leaf_names import suggest_folder_name, validate_leaf_name
-from .openrouter import OpenRouterClient, OpenRouterError
+from .openrouter import OpenRouterClient, OpenRouterError, cache_stable_message
 from .path_identity import same_path
 from .projects import RESERVED_PROJECT_FOLDER_NAMES
+from .session import TERMINAL_SESSION_STATES
 from .session_titles import generated_titles, record_display_name, record_run_id
 from .sqlite_store import (
     connect_or_quarantine,
@@ -112,12 +113,23 @@ _STREAM_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 # second identical note append writes the paragraph twice; a second identical
 # spawn is a thing operators genuinely ask for, so it stays unguarded.
 DUPLICATE_GUARDED_KINDS = {
-    "append_project_note",
-    "edit_project_note",
+    "write_project_note",
     "create_project",
     "send_to_session",
 }
 UI_ACK_TIMEOUT_SECONDS = 8.0
+# How long the daemon watches an assistant-started Project Action for its
+# outcome. A step is an ordinary one-shot terminal, so its exit code arrives
+# long after the turn that started it ended; the watch is what turns that into
+# the one terse notification the operator gets. Bounded because a task that
+# never exits is a task nobody is waiting on: the watch says so and stops,
+# rather than holding a timer for the life of the daemon.
+ACTION_OUTCOME_WATCH_SECONDS = 900.0
+ACTION_OUTCOME_POLL_SECONDS = 2.0
+# How much of a finished step's terminal tail the health check reads. Never
+# returned, spoken, or stored - only classified. Reading output back was
+# rejected at scoping as spam, and a flag that quotes the log is a read-back.
+ACTION_OUTCOME_TAIL_BYTES = 4_096
 MAX_TURN_TEXT_CHARS = 8_000
 MAX_TOOL_RESULT_CHARS = 12_000
 MAX_CONTEXT_SESSIONS = 80
@@ -143,8 +155,7 @@ CLIENT_EXECUTED_KINDS = {
 # can tell "one card and nothing else" — where the card says it all — from a
 # turn that also did work the operator has no other way to hear about.
 MUTATION_KINDS = {
-    "append_project_note",
-    "edit_project_note",
+    "write_project_note",
     "send_to_session",
     "spawn_session",
     "interrupt_session",
@@ -152,7 +163,26 @@ MUTATION_KINDS = {
     "type_into_session",
     "submit_session_composer",
     "create_project",
+    "run_project_action",
 }
+
+# Markers that make a step's output tail worth flagging even though it exited
+# cleanly. Deliberately narrow and line-anchored to a strong signal: bare
+# "error" and "failed" appear in healthy builds ("0 errors", a test named
+# test_error_path), and a flag that fires on green runs trains the operator to
+# ignore it, which is the dangerous direction for the one bit this feature
+# reports. The exit code stays the primary signal; this only catches the
+# command that fails while exiting 0.
+UNHEALTHY_OUTPUT_MARKERS = (
+    "traceback (most recent call last)",
+    "unhandled exception",
+    "npm err!",
+    "fatal:",
+    "panic:",
+    "segmentation fault",
+    "command not found",
+    "is not recognized as an internal or external command",
+)
 
 
 @dataclass
@@ -196,11 +226,18 @@ clarifying question. Every status figure you state must come from the workspace 
 a tool result, never from memory; include the provided age qualifiers when a reading is stale.
 
 Use tools for anything you cannot answer from the snapshot. Refer to sessions and projects \
-by their names exactly as the snapshot spells them. Project notes are fully editable: \
-append, prepend, insert at a specific line, or replace a unique text span \
-(edit_project_note); read a note first when a precise position matters. If a tool reports \
-ambiguity, ask the operator to choose. UI commands (focus, open tabs) run on the device the \
-operator is speaking through; if none is connected the tool will say so.
+by their names exactly as the snapshot spells them. If a tool reports ambiguity, ask the \
+operator to choose. UI commands (focus, open tabs) run on the device the operator is \
+speaking through; if none is connected the tool will say so.
+
+Notes are a stack, not a log: write_project_note defaults to the top, under the note's \
+leading headings, and that is what "add", "jot", "note this down" and even "append" mean \
+from an operator. Never pass where="end" unless they explicitly said the end or the bottom. \
+When they name a place — a section, "under Release", "next to the Tailscale bit" — use \
+`section`, or `after`/`before` with a unique anchor span, or `at_line` with a number read \
+off the numbered note view you are given. That view carries the note's outline and its \
+first lines; call read_project_note with `from_line` when the place they mean is further \
+down, and read it before writing whenever the position has to be exact.
 
 A turn has a limited number of tool rounds and you are told how many remain. Spend them on \
 work, not on repetition: everything a tool already returned this turn is still in front of \
@@ -208,6 +245,12 @@ you, and the action ledger lists what earlier turns did, so do not read the same
 twice. When a request names several targets — three sessions, two notes — emit all the \
 independent tool calls in one response rather than one per round. If the rounds run low, \
 stop starting new work and say plainly what is done and what is not.
+
+The operator is usually speaking, and speech arrives in breaths. If a turn reads as an \
+unfinished thought - it stops mid-clause, or it is context with no request in it yet - offer \
+once, in one short sentence, to hold while they finish: they can say "hold on" to keep talking \
+and "go ahead" when they want an answer. Suggest it, never assume it. Still answer whatever \
+they did say in the same reply, and do not repeat the offer later in the conversation.
 
 spawn_session has two prompt parameters and they are not interchangeable. stage_text \
 leaves the prompt waiting in the new session's composer WITHOUT sending it, so the \
@@ -217,6 +260,13 @@ chance to review. When the operator asks for text staged, input, or left unsent,
 stage_text and never seed_text. type_into_session also stages text, but only into a \
 session whose terminal is already open on the operator's device, so it is the wrong tool \
 immediately after a spawn.
+
+A project's actions are commands a human already approved: list_project_actions shows them \
+with their approval state, and run_project_action starts one. You cannot approve an action \
+and you cannot invent a command - an unapproved action refuses and names the file a person \
+has to review, which you relay as the answer. A run reports its outcome on its own when the \
+steps finish, so never offer to read the output back and never claim it succeeded before \
+that report arrives.
 
 Confirmation is not yours to restate. A mutating tool that returns pending_confirmation has \
 already put a card in front of the operator and their device reads that card out, so do not \
@@ -283,51 +333,336 @@ CREATE INDEX IF NOT EXISTS idx_assistant_actions_dialog
 """
 
 
-NOTE_EDIT_ACTIONS = ("append", "prepend", "insert_line", "replace_text")
+# Where a note write lands. `top` is the default and the only one an operator
+# gets without asking for it by name: a note is a stack of things you thought
+# of, so the newest belongs where it will be read first. `end` exists because
+# "put this at the bottom of Future" is a real request, but it is never inferred
+# — see `NOTE_WRITE_TOOL_DESCRIPTION` and `restate_action`, which say the word
+# END on the card so an unrequested one is visible before it runs.
+NOTE_WRITE_POSITIONS = ("top", "end", "after", "before", "at_line", "replace")
+
+NOTE_WRITE_TOOL_DESCRIPTION = (
+    "Write text into a project note. `where` defaults to `top`, which puts the text "
+    "at the top of the note UNDER its leading headings — that is what an operator "
+    "means by add, jot, note this down, and by append. Do NOT use `end` unless they "
+    "explicitly asked for the end or the bottom of something. `section` writes under "
+    "a named heading (with `top` or `end`); `after`/`before` sit beside a unique "
+    "`anchor` span; `at_line` makes the text become a 1-indexed line from the "
+    "numbered note view; `replace` swaps a unique `find` span. Reversible; may need "
+    "confirmation."
+)
+
+_ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:\s|$)")
+_CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# How much of the note travels in every turn's context, and the ceiling on one
+# on-demand page. The early chunk is what makes an insert point choosable
+# without a tool round trip; the outline is what makes the rest addressable.
+NOTE_CONTEXT_LINES = 60
+# How far into a note a level-1 heading still counts as a buried title rather
+# than a section that follows an introduction. See `_stranded_title`.
+NOTE_TITLE_SEARCH_LINES = 40
+NOTE_CONTEXT_LINE_CHARS = 200
+NOTE_OUTLINE_LIMIT = 40
+NOTE_PAGE_MAX_LINES = 240
+NOTE_PAGE_MAX_CHARS = 8_000
 
 
-def apply_note_edit(markdown: str, payload: dict[str, Any]) -> str:
-    """Apply one granular edit to a note body; raises AssistantError on refusal.
+def _fence_state(line: str, marker: str | None) -> str | None:
+    """Track fenced-code state across one line.
 
-    Pure so the transform is testable without a project on disk. Line numbers
-    are 1-indexed over the note body as the editor shows it; `insert_line` makes
-    the text *become* that line. `replace_text` demands a unique match — a find
-    string that appears three times is an ambiguity to answer, never a guess.
+    A `#` inside a fenced block is not a heading, and a note that pastes a shell
+    transcript is exactly where that bites: without this the anchor scanner
+    would treat a comment line as the note's structure and insert into the
+    middle of someone's code sample.
     """
-    action = str(payload.get("action") or "append")
+    match = _CODE_FENCE.match(line)
+    if match is None:
+        return marker
+    token = match.group(1)
+    if marker is None:
+        return token
+    # A fence closes only on the same character, at least as long as the opener.
+    if token[0] == marker[0] and len(token) >= len(marker):
+        return None
+    return marker
+
+
+def note_headings(markdown: str) -> list[dict[str, Any]]:
+    """Every ATX heading in a note body, with 1-indexed lines and levels."""
+    out: list[dict[str, Any]] = []
+    marker: str | None = None
+    for index, line in enumerate(markdown.split("\n")):
+        previous = marker
+        marker = _fence_state(line, marker)
+        if previous is not None or marker is not None:
+            continue
+        match = _ATX_HEADING.match(line)
+        if match is None:
+            continue
+        out.append(
+            {
+                "line": index + 1,
+                "level": len(match.group(1)),
+                "text": line.strip().lstrip("#").strip(),
+            }
+        )
+    return out
+
+
+def _heading_levels(markdown: str) -> dict[int, int]:
+    """0-indexed line -> heading level, for the scanners below."""
+    return {int(item["line"]) - 1: int(item["level"]) for item in note_headings(markdown)}
+
+
+def _stranded_title(lines: list[str], levels: dict[int, int], start: int) -> int | None:
+    """The index of an H1 that earlier writes buried under orphaned text.
+
+    A note whose body opens with prose usually has a lead paragraph to respect.
+    But the note this feature exists for opens with three dictated items sitting
+    *above* `# swe-mux Notes`, because the old `prepend` wrote to byte 0 — and if
+    `top` respects that, every new write stacks on the damage forever.
+
+    The discriminator is that nobody writes prose above their own H1 on purpose:
+    a level-1 heading close to the start, with nothing but non-heading text above
+    it, is a title that got buried rather than a section that follows an
+    introduction. The level and distance bounds are what keep this from firing on
+    an all-prose note whose only heading is a `## Later` near the bottom.
+    """
+    for index in range(start, min(len(lines), start + NOTE_TITLE_SEARCH_LINES)):
+        level = levels.get(index)
+        if level is None:
+            continue
+        return index if level == 1 else None
+    return None
+
+
+def _consume_heading_run(lines: list[str], levels: dict[int, int], start: int) -> int:
+    """Index one past a contiguous run of headings beginning at or after `start`.
+
+    "Contiguous" tolerates blank lines between headings and nothing else, which
+    is what makes `# swe-mux Notes` / `## Unsorted` one preamble and a heading
+    with a paragraph under it a section boundary. Returns `start` unchanged when
+    the first non-blank line is not a heading and no buried title explains why —
+    a note that genuinely opens with prose has no preamble to slot under, and
+    inventing one would bury the operator's own lead paragraph.
+    """
+    index = start
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index >= len(lines) or index not in levels:
+        # Only at the document top: inside a section the range is already cut at
+        # the next same-or-shallower heading, so there is no title to strand.
+        buried = _stranded_title(lines, levels, index) if start == 0 else None
+        if buried is None:
+            return start
+        index = buried
+    last = index
+    probe = index + 1
+    while probe < len(lines):
+        if not lines[probe].strip():
+            probe += 1
+            continue
+        if probe in levels:
+            last = probe
+            probe += 1
+            continue
+        break
+    return last + 1
+
+
+def resolve_note_section(markdown: str, section: str) -> dict[str, Any]:
+    """Locate one section by heading text; raises AssistantError on ambiguity.
+
+    Exact (case-folded) matches win outright, so a note holding both `## Release`
+    and `## Release Notes` still resolves "Release". Only when nothing matches
+    exactly does a substring match apply, and a substring that hits twice is an
+    ambiguity to answer rather than a coin flip — the same rule `replace`
+    already enforces on its find string.
+    """
+    wanted = " ".join(section.split()).casefold()
+    headings = note_headings(markdown)
+    if not wanted:
+        raise AssistantError("the section name must not be empty")
+    if not headings:
+        raise AssistantError("this note has no headings to target by section")
+    exact = [item for item in headings if str(item["text"]).casefold() == wanted]
+    matches = exact or [
+        item for item in headings if wanted in str(item["text"]).casefold()
+    ]
+    if not matches:
+        names = ", ".join(str(item["text"]) for item in headings[:NOTE_OUTLINE_LIMIT])
+        raise AssistantError(f'no section named "{section[:60]}"; this note has: {names}')
+    if len(matches) > 1:
+        lines = ", ".join(f'"{item["text"]}" (line {item["line"]})' for item in matches[:6])
+        raise AssistantError(
+            f'"{section[:60]}" matches {len(matches)} headings: {lines} — name one exactly'
+        )
+    found = matches[0]
+    total = len(markdown.split("\n"))
+    level = int(found["level"])
+    end = total
+    for item in headings:
+        if int(item["line"]) > int(found["line"]) and int(item["level"]) <= level:
+            end = int(item["line"]) - 1
+            break
+    return {
+        "heading_line": int(found["line"]),
+        "text": str(found["text"]),
+        "level": level,
+        # 0-indexed half-open body range, excluding the heading line itself.
+        "body_start": int(found["line"]),
+        "body_end": end,
+    }
+
+
+def _unique_span(markdown: str, needle: str, label: str) -> int:
+    count = markdown.count(needle)
+    if count == 0:
+        raise AssistantError(f'"{needle[:80]}" was not found in the note')
+    if count > 1:
+        raise AssistantError(
+            f'"{needle[:80]}" appears {count} times; give a longer, unique span for {label}'
+        )
+    return markdown.index(needle)
+
+
+def _splice(lines: list[str], index: int, text: str) -> list[str]:
+    """Insert a paragraph at a line index, keeping exactly one blank line each side.
+
+    The seam is normalized rather than the whole note: a dictated paragraph that
+    glues onto the next one is the difference between a note and a wall, and
+    reflowing anything further would rewrite text the operator did not touch.
+    """
+    block = text.strip().split("\n")
+    before = lines[:index]
+    after = lines[index:]
+    while before and not before[-1].strip():
+        before.pop()
+    while after and not after[0].strip():
+        after.pop(0)
+    result: list[str] = []
+    if before:
+        result.extend(before)
+        result.append("")
+    result.extend(block)
+    if after:
+        result.append("")
+        result.extend(after)
+    return result
+
+
+def apply_note_write(markdown: str, payload: dict[str, Any]) -> str:
+    """Apply one note write; raises AssistantError on refusal.
+
+    Pure so the transform is testable without a project on disk. The whole point
+    of this function is that `top` means *the top an operator would point at* —
+    under the note's leading heading run, not above the title — because a voice
+    note that lands above `# swe-mux Notes` orphans the heading and reads as a
+    bug every single time.
+    """
+    where = str(payload.get("where") or "top")
     text = str(payload.get("text") or "")
-    if action not in NOTE_EDIT_ACTIONS:
-        raise AssistantError(f"unknown note edit action {action}")
-    if not text.strip() and action != "replace_text":
-        raise AssistantError("the edit text must not be empty")
-    if action == "append":
-        base = markdown.rstrip()
-        return f"{base}\n\n{text.strip()}\n" if base else f"{text.strip()}\n"
-    if action == "prepend":
-        rest = markdown.lstrip("\n")
-        return f"{text.strip()}\n\n{rest}" if rest else f"{text.strip()}\n"
-    if action == "insert_line":
+    section = str(payload.get("section") or "").strip()
+    if where not in NOTE_WRITE_POSITIONS:
+        raise AssistantError(f"unknown note write position {where}")
+    if not text.strip() and where != "replace":
+        raise AssistantError("the text must not be empty")
+    if where == "replace":
+        find = str(payload.get("find") or "")
+        if not find:
+            raise AssistantError("replace needs the text to find")
+        _unique_span(markdown, find, "replace")
+        return markdown.replace(find, text)
+
+    lines = markdown.split("\n")
+    if where in {"after", "before"}:
+        anchor = str(payload.get("anchor") or "")
+        if not anchor:
+            raise AssistantError(f"{where} needs an `anchor` — a unique span to sit beside")
+        offset = _unique_span(markdown, anchor, where)
+        start_line = markdown.count("\n", 0, offset)
+        end_line = start_line + anchor.count("\n")
+        index = end_line + 1 if where == "after" else start_line
+        return "\n".join(_splice(lines, index, text)).rstrip("\n") + "\n"
+
+    if where == "at_line":
         try:
             line = int(payload.get("line") or 0)
         except (TypeError, ValueError):
             line = 0
         if line < 1:
-            raise AssistantError("insert_line needs a 1-indexed line number")
-        lines = markdown.split("\n")
+            raise AssistantError("at_line needs a 1-indexed line number")
+        # Deliberately exact, unlike every other position: the model picks this
+        # number off the numbered view it was handed, so the text has to *become*
+        # that line. Pick a blank-line boundary and the paragraph still breathes.
         index = min(line - 1, len(lines))
-        lines[index:index] = [text]
-        return "\n".join(lines)
-    find = str(payload.get("find") or "")
-    if not find:
-        raise AssistantError("replace_text needs the text to find")
-    count = markdown.count(find)
-    if count == 0:
-        raise AssistantError(f'"{find[:80]}" was not found in the note')
-    if count > 1:
-        raise AssistantError(
-            f'"{find[:80]}" appears {count} times; give a longer, unique span'
-        )
-    return markdown.replace(find, text)
+        lines[index:index] = text.split("\n")
+        return "\n".join(lines).rstrip("\n") + "\n"
+
+    levels = _heading_levels(markdown)
+    if section:
+        found = resolve_note_section(markdown, section)
+        body_start = int(found["body_start"])
+        body_end = int(found["body_end"])
+        if where == "top":
+            index = _consume_heading_run(lines[:body_end], levels, body_start)
+        else:
+            index = body_end
+            while index > body_start and not lines[index - 1].strip():
+                index -= 1
+    elif where == "top":
+        index = _consume_heading_run(lines, levels, 0)
+    else:
+        index = len(lines)
+        while index > 0 and not lines[index - 1].strip():
+            index -= 1
+    return "\n".join(_splice(lines, index, text)).rstrip("\n") + "\n"
+
+
+def note_outline(markdown: str) -> list[str]:
+    """The note's headings as `line: ## text`, for context and error messages."""
+    return [
+        f"{item['line']}: {'#' * int(item['level'])} {item['text']}"
+        for item in note_headings(markdown)[:NOTE_OUTLINE_LIMIT]
+    ]
+
+
+def note_page(
+    markdown: str, *, from_line: int = 1, max_lines: int = NOTE_CONTEXT_LINES
+) -> dict[str, Any]:
+    """A line-numbered window onto a note body.
+
+    Numbered because a position is only choosable if it is nameable: handed a
+    numbered early chunk plus the outline, the model can pick `at_line` or a
+    section without spending a tool round trip discovering the note's shape,
+    and can ask for a later window when the early one is not where the text
+    belongs.
+    """
+    lines = markdown.split("\n")
+    total = len(lines)
+    start = max(1, int(from_line or 1))
+    count = max(1, min(int(max_lines or NOTE_CONTEXT_LINES), NOTE_PAGE_MAX_LINES))
+    window = lines[start - 1 : start - 1 + count]
+    rendered: list[str] = []
+    budget = NOTE_PAGE_MAX_CHARS
+    shown = 0
+    for offset, line in enumerate(window):
+        trimmed = line[:NOTE_CONTEXT_LINE_CHARS]
+        if len(line) > NOTE_CONTEXT_LINE_CHARS:
+            trimmed += "…"
+        entry = f"{start + offset}: {trimmed}"
+        if budget - len(entry) < 0:
+            break
+        budget -= len(entry) + 1
+        rendered.append(entry)
+        shown += 1
+    return {
+        "total_lines": total,
+        "from_line": start,
+        "to_line": start + shown - 1 if shown else start - 1,
+        "more": start + shown - 1 < total,
+        "numbered": "\n".join(rendered),
+    }
 
 
 class _SentenceStreamer:
@@ -663,23 +998,47 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
                 "its history and settings)"
             )
         return f'create the new project "{name}"{where}{git_note}{revive}'
-    if kind == "append_project_note":
-        return f"append to the {target} project note:{preview}" if preview else (
-            f"append to the {target} project note"
-        )
-    if kind == "edit_project_note":
+    if kind == "write_project_note":
         note = str(arguments.get("note") or "primary")
-        action = str(arguments.get("action") or "append")
-        where = f"the {target} project's {note} note"
-        if action == "insert_line":
-            return f"insert at line {arguments.get('line')} of {where}:{preview}" if preview \
-                else f"insert a line into {where}"
-        if action == "replace_text":
+        where = str(arguments.get("where") or "top")
+        section = str(arguments.get("section") or "").strip()
+        destination = f"the {target} project's {note} note"
+        # The position is the one detail the spoken form keeps. It is what the
+        # operator would have to undo by hand, and "at the very END" is exactly
+        # the choice they need to hear in time to cancel it.
+        if where == "replace":
             find = str(arguments.get("find") or "")[:80]
             if spoken:
-                return f"replace a span in {where}"
-            return f'replace "{find}" in {where} with{preview}'
-        return f"{action} to {where}:{preview}" if preview else f"{action} to {where}"
+                return f"replace a span in {destination}"
+            return f'replace "{find}" in {destination} with{preview}'
+        if where == "at_line":
+            place = f"at line {arguments.get('line')} of {destination}"
+        elif where in {"after", "before"}:
+            anchor = str(arguments.get("anchor") or "")[:60]
+            place = (
+                f"{where} a span in {destination}"
+                if spoken
+                else f'{where} "{anchor}" in {destination}'
+            )
+        elif where == "end":
+            place = (
+                f"at the very END of {destination}'s {section} section"
+                if section
+                else f"at the very END of {destination}"
+            )
+        else:
+            place = (
+                f"at the top of {destination}'s {section} section"
+                if section
+                else f"at the top of {destination}"
+            )
+        return f"add {place}:{preview}" if preview else f"add {place}"
+    # Retired kinds still sit in stored ledgers; a card the operator already
+    # confirmed should not degrade into a bare tool name months later.
+    if kind in {"append_project_note", "edit_project_note"}:
+        return f"write to the {target} project note:{preview}" if preview else (
+            f"write to the {target} project note"
+        )
     if kind == "interrupt_session":
         return f"interrupt the agent in {target}"
     if kind == "end_session":
@@ -692,7 +1051,76 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
         return f"type into {target}'s composer without sending:{preview}"
     if kind == "submit_session_composer":
         return f"press Enter on {target}'s composer, sending its staged text"
+    if kind == "run_project_action":
+        # The label rather than the id, and the step count rather than the
+        # commands: the operator confirms the Run-menu entry they know, and the
+        # exact bytes behind it are the thing they already approved once. Any
+        # inputs are named because those are the part no approval covers.
+        label = str(arguments.get("action_label") or arguments.get("action") or "")
+        steps = int(arguments.get("steps") or 0)
+        shape = f" ({steps} terminal{'s' if steps != 1 else ''})" if steps else ""
+        values = arguments.get("inputs")
+        filled = ""
+        if isinstance(values, dict) and values:
+            filled = " with " + ", ".join(
+                f"{key}={str(value)[:40]}" for key, value in sorted(values.items())
+            )
+        return f'run the "{label}" action in {target}{filled}{shape}'
     return kind
+
+
+def output_looks_unhealthy(tail: str) -> bool:
+    """Whether a finished step's output tail carries a failure marker.
+
+    Pure, so the classification is testable without a PTY. It answers one bit
+    and the bit never carries the text that produced it: the outcome report is
+    a flag, never a read-back of the log.
+    """
+    lowered = tail.casefold()
+    return any(marker in lowered for marker in UNHEALTHY_OUTPUT_MARKERS)
+
+
+def action_outcome_line(label: str, steps: list[dict[str, Any]]) -> tuple[str, bool]:
+    """The terse notification for a finished action, and whether it flags an issue.
+
+    One sentence, no output. `steps` carries one entry per started step with
+    `state`, `exit_code`, and `unhealthy`; a step whose session is gone before
+    the watch read it carries `state: "unknown"`.
+
+    Three outcomes, in the order that matters most: a nonzero exit code, then
+    an unhealthy tail on an otherwise clean exit, then success. A step still
+    running when the watch expired reports as such rather than as either, so
+    nothing here ever calls an unfinished task done.
+    """
+    if not steps:
+        return f'The "{label}" action started nothing.', True
+    running = [item for item in steps if item.get("state") == "running"]
+    if running:
+        minutes = int(ACTION_OUTCOME_WATCH_SECONDS // 60)
+        return (
+            f'The "{label}" action is still running after {minutes} minutes; '
+            "I have stopped watching it.",
+            True,
+        )
+    failed = [
+        item for item in steps
+        if item.get("exit_code") not in (None, 0) or item.get("state") == "crashed"
+    ]
+    if failed:
+        codes = sorted({
+            str(item.get("exit_code")) for item in failed
+            if item.get("exit_code") is not None
+        })
+        detail = f"exit code {', '.join(codes)}" if codes else "a failed step"
+        return f'The "{label}" action finished with {detail}.', True
+    if any(item.get("unhealthy") for item in steps):
+        return (
+            f'The "{label}" action exited cleanly but its output looks unhealthy.',
+            True,
+        )
+    if any(item.get("state") == "unknown" for item in steps):
+        return f'The "{label}" action finished; its outcome could not be read.', True
+    return f'The "{label}" action finished cleanly.', False
 
 
 def action_announcement(kind: str, arguments: dict[str, Any], status: str) -> str:
@@ -749,12 +1177,23 @@ class AssistantService:
         end_op: Callable[[Session, str], Awaitable[Any]],
         history_search: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         note_read: Callable[[str, str | None], Awaitable[dict[str, Any]]] | None = None,
-        note_append: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
         note_list: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
-        note_edit: Callable[
+        note_write: Callable[
             [str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]
         ] | None = None,
         create_project_op: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+        # Project Actions. Three closures over the one service the Run menu and
+        # the MCP surface already use, so the assistant adds no second authority:
+        # it can list what a Project declares, resolve one name to exactly what
+        # would run, and start an action whose file a human approved. Unwired,
+        # both tools report honestly that the daemon does not offer them.
+        action_catalog: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        action_preview: Callable[
+            [str, str, dict[str, str]], Awaitable[dict[str, Any]]
+        ] | None = None,
+        action_run: Callable[
+            [str, str, dict[str, str]], Awaitable[dict[str, Any]]
+        ] | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -770,9 +1209,11 @@ class AssistantService:
         self.history_search = history_search
         self.note_read = note_read
         self.note_list = note_list
-        self.note_edit = note_edit
-        self.note_append = note_append
+        self.note_write = note_write
         self.create_project_op = create_project_op
+        self.action_catalog = action_catalog
+        self.action_preview = action_preview
+        self.action_run = action_run
         self.diagnostic: str | None = None
         # One turn at a time per dialog; concurrent turns would interleave the
         # message log and race the pending-action state.
@@ -789,6 +1230,10 @@ class AssistantService:
         # because two breaths of one thought are one request.
         self._queued: dict[str, _QueuedTurn] = {}
         self._queue_starters: set[asyncio.Task[None]] = set()
+        # One task per running Project Action, waiting for its steps to finish
+        # so the operator gets the outcome. Held so a daemon shutdown cancels
+        # them instead of leaving timers referencing dead sessions.
+        self._outcome_watches: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ status
 
@@ -977,12 +1422,16 @@ class AssistantService:
         self._queued.clear()
         for task in [
             *self._turn_tasks.values(), *self._window_tasks.values(),
-            *self._queue_starters,
+            *self._queue_starters, *self._outcome_watches,
         ]:
             task.cancel()
-        pending = [*self._turn_tasks.values(), *self._window_tasks.values()]
+        pending = [
+            *self._turn_tasks.values(), *self._window_tasks.values(),
+            *self._outcome_watches,
+        ]
         self._turn_tasks.clear()
         self._window_tasks.clear()
+        self._outcome_watches.clear()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
@@ -1173,17 +1622,63 @@ class AssistantService:
             + "\n".join(lines[-CONTEXT_ACTION_LIMIT:])
         )
 
+    async def _note_context(self, project: Any) -> str:
+        """The primary note's outline and opening lines, numbered, for one project.
+
+        Carried every turn rather than fetched on demand because the common
+        request — "jot this down" — is one tool call only if the model already
+        knows the note's shape. Without it the model either burns a round trip
+        reading the note or writes blind, and writing blind is how text ends up
+        above the note's own title. Scoped to the focused session's project, or
+        to the only project when there is exactly one; guessing among several
+        would hand the model an outline for a note the operator did not mean.
+        """
+        if self.note_read is None:
+            return ""
+        if project is None:
+            ordered = self.projects.ordered_projects()
+            if len(ordered) != 1:
+                return ""
+            project = ordered[0]
+        try:
+            note = await self.note_read(project.id, None)
+        except Exception:  # noqa: BLE001 - context must never fail a turn
+            log.debug("note context read failed", exc_info=True)
+            return ""
+        if note.get("error") or not str(note.get("markdown") or "").strip():
+            return ""
+        markdown = str(note["markdown"])
+        page = note_page(markdown, from_line=1, max_lines=NOTE_CONTEXT_LINES)
+        outline = note_outline(markdown)
+        lines = [
+            f"The {project.name} project's primary note "
+            f'("{note.get("title")}", {page["total_lines"]} lines), as numbered lines. '
+            "Line numbers are the ones write_project_note's at_line takes; "
+            "read_project_note with from_line pages further down.",
+        ]
+        if outline:
+            lines.append("Outline: " + " | ".join(outline))
+        lines.append(page["numbered"])
+        if page["more"]:
+            lines.append(
+                f"… lines {page['to_line'] + 1}-{page['total_lines']} not shown; "
+                f"read_project_note from_line={page['to_line'] + 1} for more."
+            )
+        return "\n".join(lines)
+
     async def _context_message(
         self, client_context: dict[str, Any], dialog_id: str = ""
     ) -> str:
         snapshot = await self.fleet_snapshot()
         focused = str(client_context.get("focused_session_id") or "")
         focused_name = None
+        focused_project = None
         if focused:
             session = self.sessions.sessions.get(focused)
             if session is not None:
                 names = await self._display_names([session])
                 focused_name = names.get(session.record.id, session.record.name)
+                focused_project = self.projects.projects.get(session.record.project_id)
         commands = client_context.get("commands")
         command_lines: list[str] = []
         if isinstance(commands, list):
@@ -1196,6 +1691,9 @@ class AssistantService:
         ]
         if focused_name:
             parts.append(f"The operator's focused session is: {focused_name}")
+        note_view = await self._note_context(focused_project)
+        if note_view:
+            parts.append(note_view)
         parts.append(
             "run_ui_command executes on the operator's device through the workspace's "
             "deterministic spoken grammar. Reliable command shapes: 'open project "
@@ -1270,12 +1768,24 @@ class AssistantService:
             ),
             tool(
                 "read_project_note",
-                "Read one of a project's notes; omit `note` for the primary note.",
+                "Read one of a project's notes as numbered lines, plus its heading "
+                "outline. Omit `note` for the primary note; pass `from_line` to page "
+                "further down a long note.",
                 {
                     "project": project_property,
                     "note": {
                         "type": "string",
                         "description": "The note's title from list_project_notes",
+                    },
+                    "from_line": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "1-indexed first line to return (default 1)",
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": f"Lines to return, up to {NOTE_PAGE_MAX_LINES}",
                     },
                 },
                 ["project"],
@@ -1288,35 +1798,45 @@ class AssistantService:
                 [],
             ),
             tool(
-                "append_project_note",
-                "Append text to a project's primary note. Reversible; may need confirmation.",
-                {"project": project_property, "text": {"type": "string"}},
-                ["project", "text"],
-            ),
-            tool(
-                "edit_project_note",
-                "Granular edit to a project note: append, prepend, insert at a "
-                "1-indexed line (the text becomes that line), or replace a unique "
-                "text span. Reversible; may need confirmation.",
+                "write_project_note",
+                NOTE_WRITE_TOOL_DESCRIPTION,
                 {
                     "project": project_property,
                     "note": {
                         "type": "string",
                         "description": "Note title; omit for the primary note",
                     },
-                    "action": {"type": "string", "enum": list(NOTE_EDIT_ACTIONS)},
+                    "where": {
+                        "type": "string",
+                        "enum": list(NOTE_WRITE_POSITIONS),
+                        "description": (
+                            "Default top. Use end ONLY when the operator said the "
+                            "end or the bottom."
+                        ),
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": (
+                            "Heading to write under, from the note outline; "
+                            "combines with top or end"
+                        ),
+                    },
                     "line": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "For insert_line: the line the text becomes",
+                        "description": "For at_line: the line the text becomes",
+                    },
+                    "anchor": {
+                        "type": "string",
+                        "description": "For after/before: a unique span to sit beside",
                     },
                     "find": {
                         "type": "string",
-                        "description": "For replace_text: a unique span to replace",
+                        "description": "For replace: a unique span to replace",
                     },
                     "text": {"type": "string"},
                 },
-                ["project", "action", "text"],
+                ["project", "text"],
             ),
             tool(
                 "send_to_session",
@@ -1440,6 +1960,40 @@ class AssistantService:
                 {"session": session_property},
                 ["session"],
             ),
+            tool(
+                "list_project_actions",
+                "List a project's Run-menu actions: what each one is for, how many "
+                "terminals it opens, the inputs it asks for, and whether a human has "
+                "approved its file. Only an approved action can be run.",
+                {"project": project_property},
+                ["project"],
+            ),
+            tool(
+                "run_project_action",
+                "Run one of a project's already-approved actions. You cannot approve "
+                "an action and cannot run an unapproved one: that refuses and names "
+                "the file a human must review. Always requires confirmation. Each "
+                "step opens a terminal; the outcome is reported to the operator when "
+                "the steps finish, so do not promise to read the output back.",
+                {
+                    "project": project_property,
+                    "action": {
+                        "type": "string",
+                        "description": (
+                            "The action's title or id, from list_project_actions"
+                        ),
+                    },
+                    "inputs": {
+                        "type": "object",
+                        "description": (
+                            "Values for the action's declared inputs, as "
+                            "id-to-string. Omit when it declares none."
+                        ),
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                ["project", "action"],
+            ),
         ]
 
     @staticmethod
@@ -1451,10 +2005,21 @@ class AssistantService:
             "read_project_note",
             "list_project_notes",
             "list_queue",
+            "list_project_actions",
         }:
             return ACTION_CLASS_READ
         if kind == "run_ui_command":
             return ACTION_CLASS_NAVIGATION
+        # Running a Project Action is consequential and stated rather than left
+        # to the fall-through, because the classification is the whole trust
+        # story: the bytes were approved by a human, but a build, a deploy, or a
+        # migration is not undone by removing a registration or clearing a
+        # composer, which is what "reversible" means everywhere else here. It
+        # therefore sits on the always-confirm floor rather than under
+        # `assistant_trust_reversible`, where an `auto` setting would run
+        # repository commands with no card at all.
+        if kind == "run_project_action":
+            return ACTION_CLASS_CONSEQUENTIAL
         # Typing unsent text is reversible on its face (the operator can clear
         # the composer, and nothing is delivered); submitting the composer is a
         # send and falls through to the consequential floor below. Creating a
@@ -1462,7 +2027,7 @@ class AssistantService:
         # registration tombstone that deletes nothing on disk, and the folder the
         # tool minted inside the configured parent is empty.
         if kind in {
-            "append_project_note", "edit_project_note", "spawn_session", "type_into_session",
+            "write_project_note", "spawn_session", "type_into_session",
             "create_project",
         }:
             return ACTION_CLASS_REVERSIBLE
@@ -1834,7 +2399,7 @@ class AssistantService:
             # confirms names the session the way their screen does.
             names = await self._display_names([session])
             arguments["session"] = names.get(session.record.id, session.record.name)
-        if kind in {"spawn_session", "append_project_note", "edit_project_note"}:
+        if kind in {"spawn_session", "write_project_note", "run_project_action"}:
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
@@ -1853,19 +2418,32 @@ class AssistantService:
             refusal = await self._preflight_create_project(arguments)
             if refusal is not None:
                 return refusal
-        if kind == "edit_project_note":
-            action = str(arguments.get("action") or "")
-            if action not in NOTE_EDIT_ACTIONS:
-                return {"error": f"action must be one of {', '.join(NOTE_EDIT_ACTIONS)}"}
-            if action == "insert_line" and int(arguments.get("line") or 0) < 1:
-                return {"error": "insert_line needs a 1-indexed line number"}
-            if action == "replace_text" and not str(arguments.get("find") or ""):
-                return {"error": "replace_text needs the text to find"}
-            if action != "replace_text" and not str(arguments.get("text") or "").strip():
+        if kind == "run_project_action":
+            refusal = await self._preflight_run_action(arguments)
+            if refusal is not None:
+                return refusal
+        if kind == "write_project_note":
+            where = str(arguments.get("where") or "top")
+            if where not in NOTE_WRITE_POSITIONS:
+                return {"error": f"where must be one of {', '.join(NOTE_WRITE_POSITIONS)}"}
+            if where == "at_line" and int(arguments.get("line") or 0) < 1:
+                return {"error": "at_line needs a 1-indexed line number"}
+            if where in {"after", "before"} and not str(arguments.get("anchor") or ""):
+                return {"error": f"{where} needs an anchor — a unique span to sit beside"}
+            if where == "replace" and not str(arguments.get("find") or ""):
+                return {"error": "replace needs the text to find"}
+            if where != "replace" and not str(arguments.get("text") or "").strip():
                 return {"error": "text must not be empty"}
+            if str(arguments.get("section") or "").strip() and where not in {"top", "end"}:
+                return {
+                    "error": (
+                        "section only combines with where=top or where=end; "
+                        f"{where} already names its own position"
+                    )
+                }
         text = arguments.get("text") or arguments.get("seed_text")
         if kind in {
-            "send_to_session", "append_project_note", "type_into_session",
+            "send_to_session", "type_into_session",
         } and not str(text or "").strip():
             return {"error": "text must not be empty"}
         return None
@@ -1937,6 +2515,56 @@ class AssistantService:
         removed = await self.projects.history.removed_project_for_root(str(target))
         if removed is not None:
             arguments["restores"] = removed.name
+        return None
+
+    async def _preflight_run_action(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Resolve an action name and refuse anything that cannot execute.
+
+        Everything answerable before a card pends is answered here, because a
+        card that pends for an unapproved action asks the operator to confirm
+        something the executor will refuse. The refusal names the file a human
+        must review, which is the same answer the MCP surface gives, and it is
+        the only useful next step: the assistant cannot approve an action, and
+        neither can the agent that wrote it.
+
+        The resolved id, label, step count, and validated inputs are stamped
+        into the arguments so the restatement the operator confirms describes
+        exactly what runs - including any input value, which is the one part of
+        a run no approval covers.
+        """
+        # Preflight-owned outputs, never model inputs: a stray `action_label`
+        # or `steps` could otherwise make the card describe a different action
+        # from the one whose id executes.
+        arguments.pop("action_label", None)
+        arguments.pop("steps", None)
+        if self.action_preview is None:
+            return {"error": "Project Actions are not available on this daemon"}
+        project, candidates = self.resolve_project(str(arguments.get("project") or ""))
+        if project is None:
+            return {"error": "project did not resolve", "candidates": candidates}
+        reference = str(arguments.get("action") or "").strip()
+        if not reference:
+            return {"error": "name the action to run"}
+        raw_inputs = arguments.get("inputs") or {}
+        if not isinstance(raw_inputs, dict):
+            return {"error": "inputs must be a map of input id to string value"}
+        inputs = {str(key): str(value) for key, value in raw_inputs.items()}
+        preview = await self.action_preview(project.id, reference, inputs)
+        if preview.get("error"):
+            refusal: dict[str, Any] = {"error": str(preview["error"])}
+            for key in ("candidates", "trust_required", "file"):
+                if preview.get(key):
+                    refusal[key] = preview[key]
+            return refusal
+        arguments["action"] = str(preview.get("action_id") or reference)
+        arguments["action_label"] = str(preview.get("label") or arguments["action"])
+        arguments["steps"] = int(preview.get("steps") or 0)
+        if inputs:
+            arguments["inputs"] = inputs
+        else:
+            arguments.pop("inputs", None)
         return None
 
     async def _execute_mutation_row(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -2053,6 +2681,8 @@ class AssistantService:
             # arguments carry the preflight-resolved absolute root, so what
             # executes is exactly what the confirmed card restated.
             return await self.create_project_op(dict(arguments))
+        if kind == "run_project_action":
+            return await self._run_project_action(arguments, row)
         if kind == "interrupt_session":
             session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
@@ -2065,27 +2695,220 @@ class AssistantService:
                 raise AssistantError("the target session is no longer live")
             await self.end_op(session, "assistant")
             return {"ended": True, "session": session.record.name}
-        if kind == "append_project_note":
+        if kind == "write_project_note":
             project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 raise AssistantError("the target project no longer exists")
-            if self.note_append is None:
+            if self.note_write is None:
                 raise AssistantError("note writing is not wired on this daemon")
-            note = await self.note_append(project.id, str(arguments.get("text") or ""))
-            return {"appended": True, "note": note.get("title"), "bytes": note.get("bytes")}
-        if kind == "edit_project_note":
-            project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
-            if project is None:
-                raise AssistantError("the target project no longer exists")
-            if self.note_edit is None:
-                raise AssistantError("note editing is not wired on this daemon")
-            note = await self.note_edit(
+            note = await self.note_write(
                 project.id, str(arguments.get("note") or "") or None, dict(arguments)
             )
             if note.get("error"):
                 raise AssistantError(str(note["error"]))
-            return {"edited": True, "note": note.get("title"), "bytes": note.get("bytes")}
+            return {
+                "written": True,
+                "note": note.get("title"),
+                "where": str(arguments.get("where") or "top"),
+                "bytes": note.get("bytes"),
+            }
         raise AssistantError(f"unknown mutation {kind}")
+
+    # -------------------------------------------------- project action outcomes
+
+    async def _run_project_action(
+        self, arguments: dict[str, Any], row: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Start one approved action and arm the watch that reports its outcome.
+
+        The run itself is the Run menu's own path: the same trust check, the
+        same substitution, the same spawn and timeout arming. Nothing here
+        widens what may execute - the assistant's whole addition is that a
+        confirmed card started a command whose exact bytes a human approved.
+
+        The tool result deliberately says only that the steps started. Their
+        exit codes arrive long after this turn ends, and the operator hears
+        about them once, tersely, from the watch.
+        """
+        if self.action_run is None:
+            raise AssistantError("Project Actions are not available on this daemon")
+        project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
+        if project is None:
+            raise AssistantError("the target project no longer exists")
+        action_id = str(arguments.get("action") or "")
+        label = str(arguments.get("action_label") or action_id)
+        raw_inputs = arguments.get("inputs") or {}
+        inputs = (
+            {str(key): str(value) for key, value in raw_inputs.items()}
+            if isinstance(raw_inputs, dict)
+            else {}
+        )
+        try:
+            payload = await self.action_run(project.id, action_id, inputs)
+        except PermissionError as exc:
+            # The executor is the authority and preflight only refuses early:
+            # a file edited between the card opening and the operator
+            # confirming it lands here, and it has to read as a refusal to
+            # relay rather than as a broken tool.
+            raise AssistantError(
+                f"{exc} A human has to review and approve it in the Project's Run menu."
+            ) from exc
+        except (KeyError, ValueError) as exc:
+            raise AssistantError(str(exc)[:300] or "the action could not start") from exc
+        sessions = list(payload.get("sessions") or [])
+        errors = list(payload.get("errors") or [])
+        session_ids = [str(item.get("id")) for item in sessions if item.get("id")]
+        if not session_ids:
+            detail = "; ".join(str(item.get("error") or "")[:120] for item in errors)
+            raise AssistantError(
+                f'no step of "{label}" started{": " + detail if detail else ""}'
+            )
+        log.info(
+            "assistant_action_run action_id=%s label=%s project_id=%s dialog=%s "
+            "steps=%d failures=%d inputs=%d",
+            action_id, label, project.id, row.get("dialog_id"),
+            len(session_ids), len(errors), len(inputs),
+        )
+        self._watch_action_outcome(str(row.get("dialog_id") or ""), label, session_ids)
+        result: dict[str, Any] = {
+            "started": True,
+            "action": label,
+            "project": project.name,
+            "terminals": len(session_ids),
+            "note": (
+                "The steps are running. Their outcome is reported to the operator "
+                "when they finish; do not offer to read the output back."
+            ),
+        }
+        if errors:
+            result["errors"] = [
+                {
+                    "step": str(item.get("step") or ""),
+                    "error": str(item.get("error") or "")[:200],
+                }
+                for item in errors
+            ][:8]
+        return result
+
+    def _watch_action_outcome(
+        self, dialog_id: str, label: str, session_ids: list[str]
+    ) -> None:
+        """Report an action's outcome once its step sessions finish.
+
+        Deferred rather than awaited inline for two reasons that both matter: a
+        confirmation request would otherwise block for the length of a build,
+        and the confirming operator is not inside a turn, so there is no reply
+        for the outcome to ride. The report is one sentence delivered into the
+        dialog when it is true, which is what "a terse notification" means here.
+        """
+        if not dialog_id or not session_ids:
+            return
+
+        async def watch() -> None:
+            deadline = time.monotonic() + ACTION_OUTCOME_WATCH_SECONDS
+            steps: list[dict[str, Any]] = []
+            # unsupervised-loop-ok: one poll per started action, bounded by
+            # ACTION_OUTCOME_WATCH_SECONDS. A task that outlives the bound is
+            # reported as still running rather than watched forever.
+            while True:
+                steps = [self._step_outcome(item) for item in session_ids]
+                if all(item["state"] != "running" for item in steps):
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(ACTION_OUTCOME_POLL_SECONDS)
+            line, issue = action_outcome_line(label, steps)
+            log.log(
+                logging.WARNING if issue else logging.INFO,
+                "assistant_action_outcome label=%s dialog=%s issue=%s steps=%s",
+                label, dialog_id, issue,
+                [
+                    f"{item['state']}:{item['exit_code']}"
+                    f"{':unhealthy' if item['unhealthy'] else ''}"
+                    for item in steps
+                ],
+            )
+            await self._notify(dialog_id, line)
+
+        task = asyncio.create_task(watch(), name=f"assistant-action-outcome-{dialog_id}")
+        self._outcome_watches.add(task)
+        task.add_done_callback(self._outcome_watches.discard)
+
+    def _step_outcome(self, session_id: str) -> dict[str, Any]:
+        """One step's finished state: still running, its exit code, or unknown.
+
+        A session the daemon no longer holds reports `unknown` rather than
+        success. Reporting a removed step as clean is the one wrong answer
+        here: the operator would hear "finished cleanly" about a task whose
+        result nobody read.
+        """
+        session = self.sessions.sessions.get(session_id)
+        if session is None:
+            return {
+                "session_id": session_id, "state": "unknown",
+                "exit_code": None, "unhealthy": False,
+            }
+        record = session.record
+        if str(record.state) not in TERMINAL_SESSION_STATES:
+            return {
+                "session_id": session_id, "state": "running",
+                "exit_code": None, "unhealthy": False,
+            }
+        return {
+            "session_id": session_id,
+            "state": str(record.state),
+            "exit_code": record.exit_code,
+            "unhealthy": self._tail_unhealthy(session),
+        }
+
+    @staticmethod
+    def _tail_unhealthy(session: Session) -> bool:
+        """Classify a finished step's output tail without returning any of it."""
+        try:
+            raw = session.scrollback.tail_bytes(ACTION_OUTCOME_TAIL_BYTES)
+        except (AttributeError, OSError, ValueError):
+            return False
+        return output_looks_unhealthy(raw.decode("utf-8", "replace"))
+
+    async def _notify(self, dialog_id: str, text: str) -> None:
+        """Say one thing in a dialog outside any turn.
+
+        The dialog is the assistant's own surface, so an outcome that arrives
+        minutes after the turn belongs in it rather than in a second inbox. It
+        is stored like any assistant message - durable, and part of the next
+        turn's context, so the model knows what the operator was already told -
+        and published as `assistant_notice`, which the client renders and (with
+        Talk active) speaks on the announcement path that joins the current
+        speech stream rather than taking the floor from it.
+        """
+        message_id = str(uuid.uuid4())
+        speech = speech_form(text)
+        await self.store.add_message(
+            {
+                "id": message_id,
+                "dialog_id": dialog_id,
+                "turn_id": f"notice:{message_id}",
+                "created_at": time.time(),
+                "role": "assistant",
+                "display": text,
+                "speech": speech,
+                "status": "done",
+                "error": None,
+                "model": None,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": None,
+            }
+        )
+        await self.store.touch_dialog(dialog_id)
+        await self.events.emit(
+            "assistant_notice",
+            source="assistant",
+            dialog_id=dialog_id,
+            message_id=message_id,
+            display=text,
+            speech=speech,
+        )
 
     async def _execute_read(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if kind == "session_detail":
@@ -2195,10 +3018,69 @@ class AssistantService:
             note = await self.note_read(project.id, str(arguments.get("note") or "") or None)
             if note.get("error"):
                 return {"error": str(note["error"]), "candidates": note.get("candidates") or []}
+            markdown = str(note.get("markdown") or "")
+            try:
+                from_line = max(1, int(arguments.get("from_line") or 1))
+            except (TypeError, ValueError):
+                from_line = 1
+            try:
+                max_lines = int(arguments.get("max_lines") or NOTE_PAGE_MAX_LINES)
+            except (TypeError, ValueError):
+                max_lines = NOTE_PAGE_MAX_LINES
+            page = note_page(markdown, from_line=from_line, max_lines=max_lines)
+            # Numbered, not raw: a position is only choosable if it is nameable,
+            # and the outline travels with every page so a later window is still
+            # addressable by section without paging back to the top.
             return {
                 "title": note.get("title"),
-                "markdown": str(note.get("markdown") or "")[:8_000],
+                "outline": note_outline(markdown),
+                **page,
             }
+        if kind == "list_project_actions":
+            project, candidates = self.resolve_project(str(arguments.get("project") or ""))
+            if project is None:
+                return {"error": "project did not resolve", "candidates": candidates}
+            if self.action_catalog is None:
+                return {"error": "Project Actions are not available on this daemon"}
+            catalog = await self.action_catalog(project.id)
+            actions = [
+                {
+                    "id": item.get("id"),
+                    "title": item.get("label"),
+                    "description": str(item.get("description") or "")[:400],
+                    "file": item.get("source_path"),
+                    # The approval state per action, which is the state that
+                    # decides whether run_project_action can start it: trust is
+                    # per source file, so one unapproved file leaves the rest
+                    # runnable.
+                    "approved": bool(item.get("trusted")),
+                    "terminals": len(item.get("steps") or []),
+                    "inputs": [
+                        {
+                            "id": value.get("id"),
+                            "label": value.get("label"),
+                            "kind": value.get("kind"),
+                            "options": value.get("options") or [],
+                            "default": value.get("default"),
+                        }
+                        for value in item.get("inputs") or []
+                    ],
+                }
+                for item in catalog.get("actions") or []
+            ][:60]
+            result: dict[str, Any] = {
+                "project": project.name,
+                "actions": actions,
+                "note": (
+                    "Only an action marked approved can be run. An unapproved one "
+                    "needs a human to review its file in the Project's Run menu; "
+                    "you cannot approve it."
+                ),
+            }
+            diagnostics = [str(item)[:200] for item in catalog.get("diagnostics") or []][:6]
+            if diagnostics:
+                result["diagnostics"] = diagnostics
+            return result
         if kind == "list_queue":
             reference = str(arguments.get("session") or "").strip()
             if reference:
@@ -2430,8 +3312,16 @@ class AssistantService:
             model=turn.resolved_model,
             input_tokens=turn.input_tokens,
             output_tokens=turn.output_tokens,
+            # Per call rather than per turn: the first round of a turn writes the
+            # cache and the rest read it, so a turn-level figure would average the
+            # write into the hit rate and hide whether the breakpoint is working.
+            cached_tokens=turn.cached_tokens,
             cost_usd=turn.cost_usd or 0,
             call_id=call_id,
+        )
+        log.debug(
+            "assistant model call turn=%s step=%d in=%d cached=%d out=%d",
+            turn_id, step, turn.input_tokens, turn.cached_tokens, turn.output_tokens,
         )
         return turn
 
@@ -2443,7 +3333,21 @@ class AssistantService:
             dialog_id, limit=self.config.assistant_context_messages
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PRIMER},
+            # The one message that is identical on every call this assistant ever
+            # makes, so it is where the cache breakpoint goes. For a provider that
+            # needs the marker the breakpoint also covers the tool definitions,
+            # which the provider orders ahead of the system prompt; for the rest
+            # `cache_stable_message` hands the plain string straight back.
+            #
+            # Nothing may be inserted ahead of this message, and its text may not
+            # be interpolated per turn: either change moves the prefix and turns
+            # every subsequent call into a cache write. The workspace snapshot is
+            # the *second* message for exactly that reason, and the per-round
+            # budget line stays trailing.
+            cache_stable_message(
+                {"role": "system", "content": SYSTEM_PRIMER},
+                model=self.config.assistant_model,
+            ),
             {
                 "role": "system",
                 "content": await self._context_message(client_context, dialog_id),
@@ -2457,7 +3361,13 @@ class AssistantService:
         messages.append({"role": "user", "content": text})
         client_id = str(client_context.get("client_id") or "")[:64]
         tools = self._tool_definitions()
-        totals = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "calls": 0}
+        totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost_usd": 0.0,
+            "calls": 0,
+        }
         display_parts: list[str] = []
         spoken_parts: list[str] = []
         sentence_index = 0
@@ -2505,6 +3415,7 @@ class AssistantService:
             )
             totals["input_tokens"] += turn.input_tokens
             totals["output_tokens"] += turn.output_tokens
+            totals["cached_tokens"] += turn.cached_tokens
             totals["cost_usd"] += float(turn.cost_usd or 0)
             totals["calls"] += 1
             if turn.content.strip():
@@ -2541,9 +3452,10 @@ class AssistantService:
                 known = {
                     "session_detail", "read_transcript", "search_history",
                     "read_project_note", "list_project_notes", "list_queue",
-                    "append_project_note", "edit_project_note", "send_to_session",
+                    "write_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
                     "type_into_session", "submit_session_composer", "create_project",
+                    "list_project_actions", "run_project_action",
                 }
                 if name in known:
                     try:
@@ -2642,11 +3554,11 @@ class AssistantService:
         await self.store.touch_dialog(dialog_id)
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
-            "assistant turn complete dialog=%s turn=%s calls=%d in=%d out=%d "
+            "assistant turn complete dialog=%s turn=%s calls=%d in=%d cached=%d out=%d "
             "cost=%.5f elapsed=%.0fms sentences=%d cards=%d mutations=%d "
             "suppressed=%s exhausted=%s",
             dialog_id, turn_id, totals["calls"], totals["input_tokens"],
-            totals["output_tokens"], totals["cost_usd"], elapsed_ms,
+            totals["cached_tokens"], totals["output_tokens"], totals["cost_usd"], elapsed_ms,
             sentence_index, cards_opened, mutations_executed,
             suppress_speech, exhausted,
         )

@@ -21,6 +21,7 @@ import { currentProfile } from './deviceSettings'
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
 import { canHideDrawerTab } from './drawerVisibility'
 import { enableMobileVoice } from './mobileVoice'
+import { autoplayEnabled, setAutoplayEnabled } from './voice'
 import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatus, type FirewallStatus } from './remoteConnection'
 import { WslBridgePanel } from './WslBridgePanel'
 import { type WslBridgeStatus } from './wslBridge'
@@ -257,6 +258,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [argsText, setArgsText] = useState('')
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
+  // Layer 3 of the read-aloud policy lives in this browser's localStorage, not in the
+  // config, so it is read once and mirrored in local state. Deliberately not a
+  // `subscribePlayback` subscription: that listener fires on every `timeupdate` of a
+  // playing clip, and re-rendering the whole Settings panel four times a second to
+  // keep one checkbox live is a bad trade for a value only this panel changes.
+  const [deviceAutoplay, setDeviceAutoplay] = useState(() => autoplayEnabled())
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
   const completeVoiceCatalog=useMemo(()=>completeVoiceReference(voiceCommands,draft?.voice_commands||[]),[voiceCommands,draft?.voice_commands])
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
@@ -317,6 +324,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     api<WslBridgeStatus>('GET','/api/wsl/bridge').then(setWsl).catch(()=>setWsl(null))
     api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites').then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
     api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
+    // Re-read on open: the player strip and the command palette also flip it.
+    setDeviceAutoplay(autoplayEnabled())
     api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
     // One bundled request instead of nine — on a high-RTT client (phone over
     // Tailscale) per-request connection setup dominated the panel's open delay.
@@ -1519,10 +1528,37 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
         {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
-          <p>Mark an observed agent session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
           <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
-          <label class="check" data-setting="tts_enabled"><span>Enable read aloud</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
-          <label>Default mode for agent sessions<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
+          {/* Three switches decide whether a word is ever spoken, and they used to sit in
+              three unrelated places — a checkbox here, a pane chip there, a button on a
+              floating strip — so the honest answer to "why is it talking / why is it
+              silent" needed all three. They are one numbered block now: each layer says
+              what it governs and where its per-item control lives, in the order the
+              question is actually asked. */}
+          <div class="policy-stack" data-policy="read-aloud">
+            <h4>Policy · what speaks, and where</h4>
+            <div class="policy-layer">
+              <span class="policy-step">1</span>
+              <div class="policy-body">
+                <label class="check" data-setting="tts_enabled"><span>Read aloud is on (master)</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
+                <small>Off means no session generates audio and nothing plays, on any device. Everything below is inert while it is off.</small>
+              </div>
+            </div>
+            <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
+              <span class="policy-step">2</span>
+              <div class="policy-body">
+                <label data-setting="tts_default_mode">Each session: does it generate?<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
+                <small>The default for agent sessions. Any pane overrides it with its <code>tts:</code> chip, so a session that should never speak can be set off on its own.</small>
+              </div>
+            </div>
+            <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
+              <span class="policy-step">3</span>
+              <div class="policy-body">
+                <label class="check"><span>Autoplay on this device (browser)</span><input type="checkbox" checked={deviceAutoplay} onChange={e=>{const next=e.currentTarget.checked;setAutoplayEnabled(next);setDeviceAutoplay(next)}} /></label>
+                <small>Stored in this browser, not in the config, so each device answers for itself. When it is on, only the session you are focused on plays here; every other session finishes its clip, keeps it, and offers it as <strong>▶ n held</strong> on that pane's player strip.</small>
+              </div>
+            </div>
+          </div>
           <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select></label>
           <label>Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="sapi">OS voice (offline, no download)</option><option value="kokoro">Kokoro-82M (local neural, one-time download)</option></select></label>
           {draft.tts_engine==='sapi'&&<>

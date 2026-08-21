@@ -244,3 +244,135 @@ test('a segment arriving while the previous one is still loading queues behind i
   assert.equal(voice.getPlayback().clipId,'race-2')
   voice.bargeInPlayback()
 })
+
+// ---------------------------------------------------------------------------
+// Focus-driven playback. Everything above runs before focus has ever been
+// reported, which is deliberate: that is the pre-policy state, and it must keep
+// playing whatever it played before. From here on the module knows about focus,
+// and it cannot be un-known — so a new test that wants the legacy behaviour
+// belongs above this line, not below it.
+// ---------------------------------------------------------------------------
+
+test('an unfocused session holds its clip instead of speaking over the focused one',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-focus')
+  voice.enqueueAutoplay('clip-focus','stream-focus','session-focus')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'clip-focus')
+
+  voice.enqueueAutoplay('clip-held','stream-held','session-other')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'clip-focus','an unfocused session must not even queue behind the focused one')
+  assert.deepEqual(voice.heldClipsFor('session-other').map(item=>item.clipId),['clip-held'])
+  assert.equal(voice.heldClipTotal(),1)
+
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().playing,false,'the held clip must not follow on when the focused one ends')
+  voice.stopAllPlayback()
+  assert.equal(voice.heldClipTotal(),0,'a global stop clears the backlog it would otherwise still offer')
+})
+
+test('moving focus never plays a held clip, and asking for it plays them in order',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-a')
+  voice.enqueueAutoplay('held-1','stream-h1','session-b')
+  voice.enqueueAutoplay('held-2','stream-h2','session-b')
+  assert.equal(voice.heldClipsFor('session-b').length,2)
+
+  voice.setPlaybackFocus('session-b')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,null,'arriving at a pane is not a request to be talked at')
+  assert.equal(voice.heldClipsFor('session-b').length,2,'the backlog survives the focus move')
+
+  voice.playHeldClips('session-b')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'held-1')
+  assert.equal(voice.heldClipTotal(),0,'played clips leave the backlog')
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'held-2','the backlog plays oldest first')
+  voice.stopAllPlayback()
+})
+
+test('a pinned session speaks while another pane has focus, and stops when unpinned',async()=>{
+  // Voice Comms is the one mode where focus is the wrong question: the operator is
+  // talking to that agent hands-free, so its replies are the point.
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-a')
+  voice.setPinnedPlaybackSession('session-comms',true)
+  voice.enqueueAutoplay('comms-1','stream-c1','session-comms')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'comms-1')
+  assert.equal(voice.heldClipTotal(),0)
+
+  voice.setPinnedPlaybackSession('session-comms',false)
+  voice.stopAllPlayback()
+  voice.enqueueAutoplay('comms-2','stream-c2','session-comms')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,null)
+  assert.equal(voice.heldClipsFor('session-comms').length,1,'releasing the pin returns the session to the focus rule')
+  voice.stopAllPlayback()
+})
+
+test('turning a session off, or dismissing it, drops the clips it was holding',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-a')
+  voice.enqueueAutoplay('drop-1','stream-d1','session-b')
+  assert.equal(voice.heldClipsFor('session-b').length,1)
+  voice.stopSessionPlayback('session-b')
+  assert.equal(voice.heldClipsFor('session-b').length,0,'"off" that leaves a play-me button behind is not off')
+  voice.playHeldClips('session-b')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,null)
+
+  voice.enqueueAutoplay('drop-2','stream-d2','session-b')
+  voice.dismissHeldClips('session-b')
+  assert.equal(voice.heldClipTotal(),0)
+  voice.stopAllPlayback()
+})
+
+test('the device toggle clears the backlog rather than leaving it on offer',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-a')
+  voice.enqueueAutoplay('mute-1','stream-m1','session-b')
+  assert.equal(voice.heldClipTotal(),1)
+  voice.setAutoplayEnabled(false)
+  assert.equal(voice.heldClipTotal(),0)
+  voice.enqueueAutoplay('mute-2','stream-m2','session-b')
+  assert.equal(voice.heldClipTotal(),0,'a muted device generates no backlog either')
+  voice.setAutoplayEnabled(true)
+})
+
+test('a held backlog is bounded and keeps the newest clips',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-a')
+  for(let index=0;index<8;index+=1)voice.enqueueAutoplay(`bound-${index}`,`stream-b${index}`,'session-b')
+  const held=voice.heldClipsFor('session-b').map(item=>item.clipId)
+  assert.equal(held.length,5,'an hour of talking to itself is not a backlog worth working through')
+  assert.deepEqual(held,['bound-3','bound-4','bound-5','bound-6','bound-7'])
+  voice.stopAllPlayback()
+})
+
+test('with no session focused everything holds, but an unattributed clip still plays',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus(null)
+  voice.enqueueAutoplay('none-1','stream-n1','session-a')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,null,'a note or shell in focus means nothing speaks over the operator')
+  assert.deepEqual(voice.heldClipSessions(),['session-a'])
+
+  // A clip nobody can attribute to a session cannot be held against one either.
+  voice.enqueueAutoplay('loose-1','stream-l1',null)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'loose-1')
+  voice.stopAllPlayback()
+
+  voice.setPlaybackFocus('session-a')
+  voice.enqueueAutoplay('none-2','stream-n2','session-b')
+  voice.playAllHeldClips()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'none-2')
+  assert.equal(voice.heldClipTotal(),0)
+  voice.stopAllPlayback()
+})

@@ -11,7 +11,8 @@ import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import {
   autoplayEnabled, bargeInPlayback, beginRequestedStream, cancelRequestedStream, getPlayback,
-  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPlaybackDucked, unlockPlayback,
+  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPinnedPlaybackSession,
+  setPlaybackDucked, unlockPlayback,
 } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
@@ -28,6 +29,9 @@ import { insertIntoTerminal } from './terminalActions'
 import { voiceCommsMessage } from './voiceComms'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
 import { assistantFollowUpActive, latestOpenAction, spokenConfirmation } from './assistant'
+import { chatPatienceMs, deferralExtensionMs, endpointPatienceMs } from './utteranceCompleteness'
+import { DeferralPen } from './utteranceDeferral'
+import type { DeferredUtterance } from './utteranceDeferral'
 import { playEarcon } from './earcons'
 import type { ComponentChildren } from 'preact'
 
@@ -48,6 +52,17 @@ type Phase='off'|'starting'|'warming'|'listening'|'hearing'|'heard'|'transcribin
 // own trigger word rather than a hardcoded "Mux".
 const primaryWake=(words?:string[])=>(words&&words.find(word=>word.trim())||DEFAULT_WAKE_WORDS[0])
 
+/**
+ * How a deferred fragment left the holding pen; reported for every deferral.
+ *
+ * The pair that matters is `merged` versus `submitted`: the first means the
+ * trigger caught a real trail-off, the second means the operator was finished
+ * after all and the word cost them one extension, so the ratio of the two IS the
+ * heuristic's false-positive rate. `held` and `discarded` are neither and are
+ * counted apart so they cannot be mistaken for either verdict.
+ */
+type DeferralOutcome='merged'|'submitted'|'discarded'|'held'
+
 export type Conversation={
   /** Current commit destination. Capture stays live when this changes. */
   target:ConversationTarget|null
@@ -63,6 +78,12 @@ export type Conversation={
   hold:boolean
   /** Speech accumulated while holding; released as one assistant turn. */
   holdBuffer:string
+  /**
+   * The dangling token that is currently holding a chat turn back, or ''.
+   * At most one utterance is ever deferred, so this is a single value rather
+   * than a queue, and it clears the moment the turn resolves.
+   */
+  deferredTrigger:string
   comms:boolean
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
@@ -120,6 +141,7 @@ export function useConversation(
   const [standby,setStandby]=useState(false)
   const [hold,setHoldState]=useState(false)
   const [holdBuffer,setHoldBufferState]=useState('')
+  const [deferredTrigger,setDeferredTrigger]=useState('')
   const [commsTargetId,setCommsTargetId]=useState<string|null>(null)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
@@ -140,6 +162,21 @@ export function useConversation(
   const standbyRef=useRef(false)
   const holdRef=useRef(false)
   const holdBufferRef=useRef('')
+  /**
+   * The holding pen for one unfinished utterance (`utteranceDeferral.ts`), and
+   * the release timer that empties it.
+   *
+   * The pen owns the decisions and this component owns the effects: arming the
+   * timer, reporting the outcome, and dispatching the turn. A `useRef` and not
+   * state, because the capture callbacks that read it outlive the render that
+   * built them.
+   */
+  const penRef=useRef(new DeferralPen())
+  const deferralTimerRef=useRef<ReturnType<typeof setTimeout>|null>(null)
+  /** Speech is arriving right now, per the gate. Read by the release timer. */
+  const speakingRef=useRef(false)
+  /** How many utterances are mid-decode. A continuation in flight is not silence. */
+  const decodingRef=useRef(0)
   const draftRef=useRef<Draft>(EMPTY_DRAFT)
   const queueRef=useRef<Promise<void>>(Promise.resolve())
   const commsTargetRef=useRef<string|null>(null);commsTargetRef.current=commsTargetId
@@ -182,10 +219,46 @@ export function useConversation(
   })
   const respond=(text:string)=>{setDetail(text);recordHistory('mux',text)}
 
+  /**
+   * Report a resolved deferral to the daemon, with the token that triggered it.
+   *
+   * Sent on resolution rather than at the deferral, because the outcome is what
+   * makes the heuristic measurable: `merged` means the trigger caught a real
+   * trail-off, `submitted` means the operator was finished after all and the
+   * word cost them one extension. Fire-and-forget - a diagnostic that can fail
+   * an utterance is worse than no diagnostic.
+   */
+  const reportDeferral=(deferred:DeferredUtterance,outcome:DeferralOutcome)=>{
+    void api('POST','/api/voice/deferral-diagnostic',{
+      outcome,trigger:deferred.trigger,kind:deferred.kind,words:deferred.words,
+      heldMs:Math.round(performance.now()-deferred.at),
+    },{timeoutMs:4000}).catch(()=>{})
+  }
+  /** Cancel a pending release and clear the chip. Safe to call with nothing held. */
+  const clearDeferralTimer=()=>{
+    if(deferralTimerRef.current!==null)clearTimeout(deferralTimerRef.current)
+    deferralTimerRef.current=null
+    setDeferredTrigger('')
+  }
+  /** Empty the pen for a non-dispatch reason, reporting the deferral it ends. */
+  const resolveDeferral=(outcome:DeferralOutcome):DeferredUtterance|null=>{
+    const deferred=penRef.current.take()
+    clearDeferralTimer()
+    if(deferred)reportDeferral(deferred,outcome)
+    return deferred
+  }
+
   const stop=(record=true)=>{
     bargeInPlayback()
     if(record&&enabledRef.current)recordHistory('mux','Talk stopped.')
     enabledRef.current=false;enterStandby(false);enterHold(false);setHoldBuffer('')
+    // A held fragment dies with the microphone. Submitting it after the operator
+    // stopped Talk would answer a question they withdrew. `speakingRef` goes with
+    // it: a microphone released mid-utterance never raises the endpoint that
+    // would clear it, and a stale "still speaking" would make the next
+    // deferral's release re-arm against nothing.
+    resolveDeferral('discarded')
+    speakingRef.current=false
     speculationRef.current?.controller.abort();speculationRef.current=null
     startingRef.current?.stop();startingRef.current=null
     captureRef.current?.stop();captureRef.current=null
@@ -292,6 +365,7 @@ export function useConversation(
       }
       if(commsPreviousAutoplay.current!==null)setAutoplayEnabled(commsPreviousAutoplay.current)
       commsPreviousAutoplay.current=null
+      setPinnedPlaybackSession(activeId,false)
       setPinnedTarget(commsPreviousPin.current);commsPreviousPin.current=null
       if(restoreFailure){reportFailure(restoreFailure);return}
       setPhase('listening');respond('Voice comms off. Normal agent replies restored.');return
@@ -306,6 +380,11 @@ export function useConversation(
     }catch(cause){reportFailure(cause);return}
     commsPreviousAutoplay.current=autoplayEnabled()
     setAutoplayEnabled(true)
+    // Playback is otherwise focus-driven, and Voice Comms is the one mode where that
+    // is wrong: the operator is talking to *this* agent hands-free, so its replies
+    // have to speak even while their eyes are on another pane. The pin is released
+    // when comms is turned off, above.
+    setPinnedPlaybackSession(target.id,true)
     commsPreviousPin.current=pinnedTargetRef.current
     commsTargetRef.current=target.id;setCommsTargetId(target.id);setPinnedTarget(target)
     setPhase('listening');respond(`Voice comms on for ${target.label}. Replies will be short and read aloud.`)
@@ -349,7 +428,66 @@ export function useConversation(
    * utterance the way a wake-worded command is.
    */
   const awaitingVerdict=()=>chatAddressee()&&latestOpenAction()!==null
+  /** The operator's own chat patience, clamped; one number the deferral derives from. */
+  const configuredPatience=()=>chatPatienceMs(statusRef.current?.chat_patience_ms)
+
+  // ---- Unfinished-utterance deferral: a trailed-off clause is not a question. ----
+  // Deterministic and pre-model by design. The heuristic runs BEFORE a chat turn
+  // is dispatched, an utterance ending mid-clause earns exactly ONE patience
+  // extension instead of submitting, and the model is never asked to decide
+  // whether the operator was finished - a model told to sometimes return nothing
+  // returns nothing when it should have answered. The daemon's queue-merge
+  // remains the safety net for fragments this rule set does not recognize.
+
+  /** Send one body to the assistant and report it, shared by both dispatch paths. */
+  const askAssistant=async(body:string):Promise<boolean>=>{
+    const handler=onAssistantRef.current
+    if(!handler)return false
+    setPhase('sending');setDetail('Asking the assistant…')
+    const outcome=await handler(body)
+    if(outcome===false){setPhase('listening');return false}
+    setPhase('listening');respond(outcome||'Asked the assistant.')
+    return true
+  }
+  /**
+   * The release timer fired. The pen decides; this only carries out the verdict.
+   *
+   * `busy` is "the operator is still mid-thought": speech arriving, or an
+   * utterance mid-decode. The pen re-arms rather than submitting then, because
+   * answering half a sentence whose other half is already in flight is the
+   * precise failure being fixed - bounded by its own hold ceiling, so a detector
+   * wedged in "speaking" cannot hold a turn forever.
+   */
+  const releaseDeferral=(deferred:DeferredUtterance,holdMs:number)=>{
+    const busy=speakingRef.current||decodingRef.current>0
+    const verdict=penRef.current.release(deferred,busy)
+    if(verdict.kind==='gone')return
+    if(verdict.kind==='wait'){
+      deferralTimerRef.current=setTimeout(()=>releaseDeferral(deferred,holdMs),holdMs)
+      return
+    }
+    clearDeferralTimer()
+    reportDeferral(verdict.deferred,'submitted')
+    void (async()=>{
+      if(!enabledRef.current)return
+      try{await askAssistant(verdict.deferred.text)}
+      catch(cause){reportFailure(cause)}
+    })()
+  }
+  /** Arm the single extension the pen just granted, and say why on screen. */
+  const armDeferral=(deferred:DeferredUtterance)=>{
+    const holdMs=deferralExtensionMs(configuredPatience())
+    deferralTimerRef.current=setTimeout(()=>releaseDeferral(deferred,holdMs),holdMs)
+    setDeferredTrigger(deferred.trigger)
+    setPhase('listening')
+    setDetail(`That sounded unfinished after “${deferred.trigger}” - keep going, or pause and it goes as-is.`)
+  }
   const beginHold=()=>{
+    // A fragment held by the heuristic is thinking-out-loud text, which is
+    // exactly what the brainstorm buffer is for: fold it in rather than
+    // answering it behind the operator's back.
+    const pending=resolveDeferral('held')
+    if(pending)setHoldBuffer([holdBufferRef.current,pending.text].map(part=>part.trim()).filter(Boolean).join(' '))
     enterHold(true);setPhase('listening')
     respond('Holding — thinking out loud is buffered, not answered. Say “go ahead” when you want the assistant to respond.')
   }
@@ -390,6 +528,10 @@ export function useConversation(
       setPhase('standby');setDetail(`Standby — say “${wakeWord}, resume” to continue.`);return
     }
     if(parsed.command==='standby'){
+      // Standby and cancel are both "stop paying attention to what I just said",
+      // so a fragment held by the heuristic goes with them rather than surfacing
+      // as a turn seconds after the operator asked for quiet.
+      resolveDeferral('discarded')
       enterStandby(true);setPhase('standby')
       respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
     }
@@ -438,12 +580,16 @@ export function useConversation(
         // A bare "hold on" enters the brainstorm hold without the wake word;
         // exact-match only, so a sentence merely containing it is never eaten.
         if(matchesBarePhrase(rawText,HOLD_ENTER_PHRASES)){beginHold();return}
-        setPhase('sending');setDetail('Asking the assistant…')
+        // The pen decides whether this is a turn or half of one. A held fragment
+        // merges and dispatches whatever the merged text looks like - the
+        // heuristic deliberately does not run again, which is what makes "one
+        // deferral per utterance" bounded rather than a rule to remember.
+        const routed=penRef.current.offer(rawText)
+        if(routed.kind==='defer'){armDeferral(routed.deferred);return}
+        if(routed.merged){clearDeferralTimer();reportDeferral(routed.merged,'merged')}
         try{
-          const outcome=await onAssistantRef.current(rawText.trim())
-          if(outcome!==false){setPhase('listening');respond(outcome||'Asked the assistant.');return}
+          if(await askAssistant(routed.text))return
         }catch(cause){reportFailure(cause);return}
-        setPhase('listening')
       }
     }
     if(parsed.command===null&&onIntentRef.current){
@@ -456,7 +602,9 @@ export function useConversation(
       }
     }
     if(parsed.command==='cancel'){
-      setDraft(clearDraft());setPhase('listening');respond('Voice message cleared. Still listening.');return
+      const dropped=resolveDeferral('discarded')
+      setDraft(clearDraft());setPhase('listening')
+      respond(dropped?'Voice message cleared, and the unfinished sentence was dropped. Still listening.':'Voice message cleared. Still listening.');return
     }
     if(parsed.command==='undo'){
       const next=undoUtterance(draftRef.current);setDraft(next);setPhase('listening')
@@ -549,6 +697,14 @@ export function useConversation(
 
   const transcribe=async(audio:Blob,marks:CaptureMarks)=>{
     if(!enabledRef.current)return
+    // Counted around the whole decode-and-act path so a held fragment's release
+    // timer can tell "the room went quiet" from "the continuation is in flight".
+    decodingRef.current++
+    try{await transcribeInner(audio,marks)}
+    finally{decodingRef.current=Math.max(0,decodingRef.current-1)}
+  }
+
+  const transcribeInner=async(audio:Blob,marks:CaptureMarks)=>{
     if(!standbyRef.current){setPhase('transcribing');setDetail('Transcribing locally on muxd…')}
     // Whisper models are cached for the life of the *daemon*, not the tab, so the
     // first utterance after a restart or a redeploy waits seconds on a model load.
@@ -675,12 +831,12 @@ export function useConversation(
         setDetail(current=>current===STALL_DETAIL||current===STALL_ENDED_DETAIL?'Microphone recovered. Listening…':current)
         recordHistory('mux','Microphone recovered.')
       },
-      onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
+      onSpeechStart:()=>{speakingRef.current=true;if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
       onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail('Playback stopped. Listening…')}},
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the
       // decode does, or the pause reads as a failure.
-      onSpeechEnd:()=>{if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail('Heard you.')},
+      onSpeechEnd:()=>{speakingRef.current=false;if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail('Heard you.')},
       onSpeculative:(audio,marks)=>{void speculate(audio,marks)},
       onSpeculativeAbort:utteranceId=>{
         const pending=speculationRef.current
@@ -711,8 +867,11 @@ export function useConversation(
         // ordinary tail — holding a one-word reply for another 1.2 s is the
         // difference between the confirmation feeling instant and feeling stuck.
         if(awaitingVerdict())return 0
-        const configured=statusRef.current?.chat_patience_ms
-        return Math.max(0,Math.min(5000,typeof configured==='number'?configured:1200))
+        // The adaptive half of the deferral: while an unfinished utterance is
+        // held, the continuation gets a roomier tail so the second breath is not
+        // itself chopped in half. It ends when the deferral resolves, and a
+        // deferral resolves exactly once, so the extension cannot compound.
+        return endpointPatienceMs(configuredPatience(),penRef.current.pending!==null)
       },
     })
     startingRef.current=capture
@@ -737,7 +896,7 @@ export function useConversation(
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,hold,holdBuffer,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
+    detail,draft:draft.text,active,standby,hold,holdBuffer,deferredTrigger,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()
@@ -958,6 +1117,7 @@ export function DictationPanel({
         {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={`${conversation.detail?conversation.detail+' · ':''}In chat mode the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the dictation draft. Wake-word commands keep their normal meaning.`}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
         {talkActive&&<span class="dictation-mic-note" title="Plain speech goes to the assistant while chat mode is open">mic→assistant</span>}
         {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
+        {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
         <div class="dictation-actions">
           {talkActive&&conversation.hold&&<button class="dictation-stop" title="Send the buffered brainstorm to the assistant now" onClick={()=>conversation.releaseHold()}>go ahead</button>}
           {talkActive&&conversation.hold&&<button class="dictation-stop" title="Discard the buffered brainstorm and leave hold" onClick={()=>conversation.discardHold()}>discard</button>}
