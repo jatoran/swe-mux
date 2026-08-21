@@ -4,8 +4,10 @@ import asyncio
 import io
 import json
 import logging
+import sqlite3
 import time
 import wave
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -23,8 +25,10 @@ from swe_mux.server import (
     voice_prepare_submit,
     voice_submit,
 )
+from swe_mux.transcript_view import conversation_view, message_exchange
 from swe_mux.voice import (
     VOICE_RULE_ID,
+    VOICE_SCHEMA_VERSION,
     VoiceError,
     VoiceService,
     VoiceStore,
@@ -1203,6 +1207,8 @@ async def test_store_prune_removes_oldest_ready_clips_beyond_cap(tmp_path: Path)
                     "input_tokens": 0,
                     "output_tokens": 0,
                     "cost_usd": None,
+                    "source_ts": base + index,
+                    "message_anchor": f"msg-{index}",
                 }
             )
         removed = await store.prune(1300)
@@ -1454,3 +1460,283 @@ def test_service_validates_and_logs_capture_diagnostics(
             service.record_capture_diagnostic("stalled")
     finally:
         service.store.close()
+
+
+# ---------------------------------------------------------------- clip anchors
+#
+# A clip is a rendering of one assistant message, and the message it renders is
+# captured when the clip is generated. Two behaviours rest on that and on nothing
+# else: a held backlog lists by when its replies *arrived* rather than by when an
+# engine slot happened to free up, and asking to hear a reply that has already
+# been spoken is a lookup instead of a second summary call.
+
+TWO_REPLY_EVENTS: list[dict[str, Any]] = [
+    claude_user("what broke?"),
+    claude_assistant("The scrollback ring dropped bracketed paste mode."),
+    claude_user("and now?"),
+    claude_assistant("Fixed, and the paste replays whole."),
+]
+
+
+def clip_row(clip_id: str, **overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": clip_id,
+        "session_id": "s1",
+        "agent_run_id": "run-1",
+        "created_at": 100.0,
+        "trigger": "auto",
+        "content_mode": "verbatim",
+        "engine": "sapi",
+        "voice": "system default",
+        "text": "hello",
+        "file_path": "",
+        "format": "wav",
+        "size_bytes": 0,
+        "duration_hint_s": None,
+        "status": "ready",
+        "error": None,
+        "model": None,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": None,
+        "source_ts": None,
+        "message_anchor": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def last_assistant_message(service: VoiceService) -> dict[str, Any]:
+    session = service.sessions.sessions["s1"]
+    view = conversation_view(session.transcript_path, session.record.backend)
+    return [message for message in view["messages"] if message["role"] == "assistant"][-1]
+
+
+async def test_generated_clip_is_anchored_to_the_message_it_speaks(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    write_transcript(service, REPLY_EVENTS)
+    patch_engine(service)
+    try:
+        clip = await service.generate("s1", trigger="manual")
+        anchor = last_assistant_message(service)
+        assert clip["message_anchor"] == anchor["message_id"]
+        # The source time is the message's own, not the moment synthesis finished.
+        assert clip["source_ts"] == pytest.approx(
+            datetime.fromisoformat(str(anchor["ts"]).replace("Z", "+00:00")).timestamp()
+        )
+        assert clip["source_ts"] < clip["created_at"]
+    finally:
+        service.store.close()
+
+
+async def test_clips_are_ordered_by_source_message_not_synthesis(tmp_path: Path) -> None:
+    store = VoiceStore(tmp_path / "mux.db")
+    try:
+        base = time.time()
+        # The held-backlog shape: the older reply is synthesized last, because its
+        # summary call queued behind the newer one. Ordering by `created_at` would
+        # put an hour-old update above the reply that just landed.
+        for clip_id, source, created in (
+            ("old-reply", base - 3600, base + 10),
+            ("new-reply", base - 10, base + 1),
+        ):
+            await store.add_clip(clip_row(clip_id, source_ts=source, created_at=created))
+        assert [row["id"] for row in await store.clips(session_id="s1")] == [
+            "new-reply",
+            "old-reply",
+        ]
+        # A clip with no source message (application speech, and every row written
+        # before the anchor existed) falls back to its synthesis time rather than
+        # sorting as if it were infinitely old.
+        await store.add_clip(clip_row("system", source_ts=None, created_at=base + 20))
+        assert [row["id"] for row in await store.clips(session_id="s1")][0] == "system"
+    finally:
+        store.close()
+
+
+async def test_segments_of_one_reply_share_its_anchor(tmp_path: Path) -> None:
+    speech = (
+        "First sentence is ready and contains " + "useful detail " * 18 + ". "
+        "Second sentence follows with " + "another detail " * 18 + "."
+    )
+    service, _events, _emitted, _record = make_service(
+        tmp_path, content="summary", provider=ProviderStub(speech=speech)
+    )
+    write_transcript(service, REPLY_EVENTS)
+    patch_engine(service)
+    try:
+        await service.generate("s1", trigger="manual")
+        await asyncio.gather(*tuple(service._segment_tasks))
+        clips = await service.store.clips(session_id="s1", limit=50)
+        anchor = last_assistant_message(service)["message_id"]
+        assert len(clips) > 1
+        # One spoken message cut into clips: they share its anchor and its source
+        # time, so a list ordered by source keeps them together instead of
+        # scattering them by whenever each segment's synthesis finished.
+        assert {row["message_anchor"] for row in clips} == {anchor}
+        assert len({row["source_ts"] for row in clips}) == 1
+    finally:
+        service.store.close()
+
+
+async def test_naming_a_message_reuses_the_clip_that_already_speaks_it(
+    tmp_path: Path,
+) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    write_transcript(service, REPLY_EVENTS)
+    spoken = patch_engine(service)
+    try:
+        first = await service.generate("s1", trigger="manual")
+        anchor = last_assistant_message(service)["message_id"]
+        again = await service.generate("s1", trigger="manual", message_id=anchor)
+        assert again["id"] == first["id"]
+        assert again["reused"] is True
+        assert len(spoken) == 1, "the second request must not synthesize anything"
+        # A different kind is a different clip: the summary and the verbatim
+        # reading of one reply are both legitimate audio for that message.
+        assert (
+            await service.store.anchored_clip(
+                agent_run_id="run-1", message_anchor=anchor, content_mode="summary"
+            )
+            is None
+        )
+        # And an explicit regenerate is honoured, because the operator may no
+        # longer trust the text a clip was made from.
+        forced = await service.generate(
+            "s1", trigger="manual", message_id=anchor, reuse=False
+        )
+        assert forced["id"] != first["id"]
+        assert len(spoken) == 2
+    finally:
+        service.store.close()
+
+
+async def test_naming_a_message_speaks_that_message_and_not_the_newest(
+    tmp_path: Path,
+) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    write_transcript(service, TWO_REPLY_EVENTS)
+    spoken = patch_engine(service)
+    try:
+        session = service.sessions.sessions["s1"]
+        view = conversation_view(session.transcript_path, session.record.backend)
+        replies = [
+            message for message in view["messages"] if message["role"] == "assistant"
+        ]
+        earlier = replies[0]
+        clip = await service.generate(
+            "s1", trigger="manual", message_id=earlier["message_id"]
+        )
+        assert clip["message_anchor"] == earlier["message_id"]
+        assert earlier["text"] in " ".join(spoken)
+        assert replies[-1]["text"] not in " ".join(spoken)
+    finally:
+        service.store.close()
+
+
+async def test_a_message_that_is_not_a_reply_has_no_audio_to_make(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    write_transcript(service, REPLY_EVENTS)
+    patch_engine(service)
+    try:
+        session = service.sessions.sessions["s1"]
+        view = conversation_view(session.transcript_path, session.record.backend)
+        prompt = [message for message in view["messages"] if message["role"] == "user"][0]
+        # A prompt is something the operator wrote; read aloud speaks replies.
+        assert not message_exchange(
+            session.transcript_path, session.record.backend, prompt["message_id"]
+        ).reply
+        with pytest.raises(VoiceError, match="not an agent reply"):
+            await service.generate("s1", trigger="manual", message_id=prompt["message_id"])
+        with pytest.raises(VoiceError, match="not an agent reply"):
+            await service.generate("s1", trigger="manual", message_id="no-such-message")
+    finally:
+        service.store.close()
+
+
+async def test_a_clip_is_visible_while_it_is_still_being_made(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    write_transcript(service, REPLY_EVENTS)
+    seen: list[str] = []
+
+    async def synthesize(text: str, destination: Path) -> None:
+        rows = await service.store.clips(session_id="s1")
+        seen.extend(str(row["status"]) for row in rows)
+        destination.write_bytes(b"ID3" + text.encode()[:64])
+
+    service._synthesize = synthesize  # type: ignore[method-assign]
+    try:
+        clip = await service.generate("s1", trigger="manual")
+        # The row exists, and says what it is doing, before the engine returns.
+        assert seen == ["synthesizing"]
+        assert clip["status"] == "ready"
+    finally:
+        service.store.close()
+
+
+async def test_synthesis_interrupted_by_a_restart_is_retired_not_left_spinning(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mux.db"
+    store = VoiceStore(path)
+    try:
+        await store.add_clip(clip_row("in-flight", status="synthesizing"))
+    finally:
+        store.close()
+    # Synthesis runs in the daemon that started it, so nothing can finish this row.
+    reopened = VoiceStore(path)
+    try:
+        row = await reopened.clip("in-flight")
+        assert row is not None
+        assert row["status"] == "failed"
+        assert "interrupted" in str(row["error"])
+    finally:
+        reopened.close()
+
+
+async def test_a_pre_anchor_database_gains_the_columns_and_keeps_its_clips(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mux.db"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE voice_clips (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_run_id TEXT,
+            created_at REAL NOT NULL, trigger TEXT NOT NULL, content_mode TEXT NOT NULL,
+            engine TEXT NOT NULL, voice TEXT NOT NULL, text TEXT NOT NULL,
+            file_path TEXT NOT NULL, format TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL DEFAULT 0, duration_hint_s REAL,
+            status TEXT NOT NULL, error TEXT, model TEXT,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL
+        );
+        INSERT INTO voice_clips VALUES(
+            'legacy','s1','run-1',10.0,'auto','verbatim','sapi','system default',
+            'hello','','wav',3,1.0,'ready',NULL,NULL,0,0,NULL
+        );
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = VoiceStore(path)
+    try:
+        row = await store.clip("legacy")
+        assert row is not None
+        # Backfilled to NULL, not to `created_at`: a clip made before the anchor
+        # existed has no source message, and claiming one would assert an ordering
+        # nothing recorded.
+        assert row["source_ts"] is None
+        assert row["message_anchor"] is None
+        assert row["status"] == "ready"
+        versions = sqlite3.connect(path)
+        try:
+            stored = versions.execute(
+                "SELECT version FROM schema_versions WHERE store='voice'"
+            ).fetchone()
+        finally:
+            versions.close()
+        assert stored[0] == VOICE_SCHEMA_VERSION
+    finally:
+        store.close()

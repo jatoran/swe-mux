@@ -1703,7 +1703,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <span class="policy-step">2</span>
               <div class="policy-body">
                 <label data-setting="tts_default_mode">Each session: does it generate?<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
-                <small>The default for agent sessions. Any pane overrides it with its <code>tts:</code> chip, so a session that should never speak can be set off on its own.</small>
+                <small>The default for agent sessions. The voice panel's <code>tts</code> tab overrides it for the focused session, so a session that should never speak can be set off on its own.</small>
               </div>
             </div>
             <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
@@ -1727,13 +1727,20 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
           </>}
           {draft.tts_engine==='kokoro'&&<>
-            <label>Kokoro voice</label>
-            <KokoroVoicePicker
-              voices={voiceInfo?.kokoro_model?.voices||['af_heart']}
-              ready={voiceInfo?.kokoro_model?.status==='ready'}
-              selected={draft.tts_kokoro_voice}
-              onSelect={voice=>change('tts_kokoro_voice',voice)}
-            />
+            {/* Fifty-odd chips, each of them worth tapping to audition and none of them
+                worth scrolling past every time. Folded, with the current voice named on
+                the summary so the closed state still answers which one is selected -
+                the same rule the tab's reference sections follow, applied to a control
+                that is long rather than rarely read. */}
+            <details class="settings-disclosure kokoro-voice-disclosure">
+              <summary>Kokoro voice <em>· {kokoroVoiceLabel(draft.tts_kokoro_voice)}</em></summary>
+              <KokoroVoicePicker
+                voices={voiceInfo?.kokoro_model?.voices||['af_heart']}
+                ready={voiceInfo?.kokoro_model?.status==='ready'}
+                selected={draft.tts_kokoro_voice}
+                onSelect={voice=>change('tts_kokoro_voice',voice)}
+              />
+            </details>
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
           </>}
           <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
@@ -1747,10 +1754,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               the section says so and offers the engine control rather than going quiet. */}
           <section><h3>Pronunciation</h3>
           {draft.tts_engine==='kokoro'
-            ?<>
+            ?<details class="settings-disclosure">
+              <summary>Respellings and spelled-word history <em>· {Object.keys(draft.tts_lexicon||{}).length} entr{Object.keys(draft.tts_lexicon||{}).length===1?'y':'ies'}</em></summary>
               <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Spell the sound with plain letters — if it isn't a real word (<code>swee</code>), tap ✨ and the exact phonemes are built for you; you never have to write them by hand. Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix — ✨ there with an empty box pronounces the word the way it reads.</p>
               <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
-            </>
+            </details>
             :<>
               <p>Respellings repair <strong>Kokoro's</strong> pronouncer, which spells a word it does not know letter by letter. The OS voice uses the system's own dictionary and never reads this list, so there is nothing to teach it here. Any entries you have already saved are kept and apply again the moment Kokoro is selected.</p>
               <div class="theme-actions"><button onClick={()=>goToSetting('voice','tts_engine')}>Go to the engine setting</button></div>
@@ -1761,7 +1769,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               halves, so it leads them rather than sitting a heading above. */}
           <section><h3>Spoken summary</h3>
           <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts. Verbatim never touches a model.</p>
-          <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select><small>The default for every session. A pane's player strip overrides it for that session alone.</small></label>
+          <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select><small>The default for every session. The voice panel's <code>tts</code> tab and the pane's player strip both override it for that session alone.</small></label>
           <label for="summary-model-picker" data-setting="tts_summary_model">Summary model<ModelPicker id="summary-model-picker" value={draft.tts_summary_model} options={modelOptions(draft.tts_summary_model)} emptyLabel="Use the cheap model…" onChange={value=>change('tts_summary_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <BudgetControl name="tts_daily_budget" label="Read-aloud summaries, daily" value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>

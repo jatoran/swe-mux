@@ -46,7 +46,6 @@ import { harnessMark } from './harnessIcons'
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
-import { SettingLink } from './SettingLink'
 import { INSTALL_CONFIG_CHANGED } from './installSwitches'
 import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
@@ -107,12 +106,13 @@ import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
-import { ConversationToggle, useConversation, VoiceDock, VoiceDockChip } from './ConversationControl'
+import { useConversation, VoiceControl, VoiceDock } from './ConversationControl'
 import {
-  canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, loadVoiceDock,
-  reduceVoiceDock, saveVoiceDock, voiceBodyVariant,
+  canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, isVoicePanelMode,
+  loadVoiceDock, reduceVoiceDock, saveVoiceDock, voiceAddressee, voiceBodyVariant,
   type VoiceDockEvent, type VoiceDockModel, type VoicePanelMode,
 } from './voiceDock'
+import { VoiceReadTab } from './VoiceReadTab'
 import { AssistantPanel } from './AssistantPanel'
 import {
   ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
@@ -2380,7 +2380,7 @@ export function App() {
   // as the degradation path for budget exhaustion, outages, or verbatim
   // dictation. Device-local and persisted, so a deliberate switch sticks.
   const [voicePanelMode,setVoicePanelModeState]=useState<VoicePanelMode>(()=>{
-    try{const saved=localStorage.getItem('mux.voice.panelMode');return saved==='dictation'||saved==='chat'?saved:'chat'}catch{return 'chat'}
+    try{const saved=localStorage.getItem('mux.voice.panelMode');return isVoicePanelMode(saved)?saved:'chat'}catch{return 'chat'}
   })
   const setVoicePanelMode=(mode:VoicePanelMode)=>{
     setVoicePanelModeState(mode)
@@ -2598,11 +2598,13 @@ export function App() {
   // Who plain speech reaches right now. Named for the addressee rather than the "mode" it
   // is stored as, because `effectiveVoiceMode` in this file is already the read-aloud
   // mode of one session, which is an unrelated thing.
-  const voiceAddressee=effectiveVoicePanelMode(voicePanelMode,talkActive)
+  const voiceBody=effectiveVoicePanelMode(voicePanelMode,talkActive)
   // Capture start/stop is a dock *event*, not a dock setter: only the reducer decides
   // whether it may open anything, and it may only ever open the dictation draft, which
-  // has no other surface. A chat-addressed microphone leaves a collapsed dock collapsed.
-  const captureAddressee=voiceAddressee==='chat'?'assistant' as const:'dictation' as const
+  // has no other surface. Any other body leaves a collapsed dock collapsed.
+  const captureAddressee=voiceAddressee(voicePanelMode,talkActive)==='assistant'
+    ?'assistant' as const
+    :'dictation' as const
   const captureAddresseeRef=useRef(captureAddressee);captureAddresseeRef.current=captureAddressee
   useEffect(()=>{
     dispatchVoiceDock({kind:'capture',active:talkActive,addressee:captureAddresseeRef.current})
@@ -2617,7 +2619,7 @@ export function App() {
     speechEnabled={!!voiceStatus?.enabled}
     voiceActive={talkActive}
     pendingSpeech={conversation.hold?conversation.holdBuffer:''}
-    variant={voiceBodyVariant(voiceDock.state,voiceAddressee,'chat')}
+    variant={voiceBodyVariant(voiceDock.state,voiceBody,'chat')}
     onOpenActions={count=>{
       setAssistantPendingActions(count)
       // A countdown nobody can see is a decision made by timeout. One-way, and only as
@@ -4465,6 +4467,30 @@ export function App() {
     void setVoiceMode(session, order[(order.indexOf(effectiveVoiceMode(session)) + 1) % order.length])
   }
   const voiceModeLabel = (mode: VoiceMode) => mode === 'on_demand' ? 'on demand' : mode === 'auto' ? 'auto on reply' : 'off'
+  const effectiveVoiceContent = (session: Session): VoiceContent =>
+    session.voice_content === 'summary' || session.voice_content === 'verbatim'
+      ? session.voice_content
+      : (voiceStatus?.content || 'verbatim')
+  const setVoiceContent = (session: Session, content: VoiceContent) =>
+    api<Session>('PATCH', `/api/sessions/${session.id}`, { voice_content: content })
+      .then(updateSession)
+      .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
+  // Read aloud's own panel, mounted once by App for the same reason as the assistant
+  // view: it holds the clip list it has fetched and its subscription to clip events, so
+  // a remount on every tab switch would refetch the whole list to render the same rows.
+  // The session it reports on is the same focused agent `setPlaybackFocus` uses, so what
+  // the panel offers to change is what this device would actually speak.
+  const readView = <VoiceReadTab
+    variant={voiceBodyVariant(voiceDock.state, voiceBody, 'read')}
+    status={voiceStatus}
+    session={focusedAgentSession}
+    mode={focusedAgentSession ? effectiveVoiceMode(focusedAgentSession) : 'off'}
+    content={focusedAgentSession ? effectiveVoiceContent(focusedAgentSession) : (voiceStatus?.content || 'verbatim')}
+    onMode={mode => { if (focusedAgentSession) void setVoiceMode(focusedAgentSession, mode) }}
+    onContent={content => { if (focusedAgentSession) void setVoiceContent(focusedAgentSession, content) }}
+    onOpenSettings={() => openSettings('Voice')}
+    onStatusChanged={() => { void api<VoiceStatus>('GET', '/api/voice').then(setVoiceStatus).catch(() => {}) }}
+  />
   const speakLastReply = async (session: Session) => {
     unlockPlayback()
     try {
@@ -6132,16 +6158,19 @@ export function App() {
     // easy to lose off-screen. Grouped in the header they have a fixed home; the group is its
     // own scroller so a long chip set can never push the pane tools out of the bar.
     const paneVoice=agentVoice&&voiceStatus?<>
-      {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: this session generates ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto · what is spoken here follows workspace focus and the device toggle`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
-      {/* Read aloud is off (or unconfigured): the chip stays and becomes the way to fix
-          that, landing on the switch rather than on the Voice tab. */}
-      {!voiceAvailable&&<SettingLink target="voice.tts" class="voice-chip mobile-voice-action" title="Read aloud is disabled · open its switch">tts:setup</SettingLink>}
-      {/* Beside `tts:` because both chips answer the same question — what mux
-          does for this session without being asked each time — and the pane bar
-          is the one surface that is visible for as long as the pane is. Unlike
-          `tts:` it does not cycle on click: the three positions are not a ladder
-          you want to pass *through* (`allow_all` is not a step on the way back to
-          `wait`), so it opens a menu and each mode is chosen directly. */}
+      {/* The per-session read-aloud controls used to live here, one copy per pane, and
+          they answered the same question - what does read aloud do for the session I am
+          looking at - once per pane on whichever pane happened to be drawn. They are in
+          the voice panel's `tts` tab now, which knows the focused session and is one
+          surface rather than N. The pane keeps its player strip below: that is the local
+          *view* of this session's clips, the same watch-here/act-there split the drawer's
+          Processes tab has with the Resources dialog. */}
+      {/* The pane bar's one remaining standing chip. It stays because it answers what
+          mux does for this session without being asked each time, and the pane bar is
+          the one surface visible for as long as the pane is. It does not cycle on
+          click: the three positions are not a ladder you want to pass *through*
+          (`allow_all` is not a step on the way back to `wait`), so it opens a menu and
+          each mode is chosen directly. */}
       <ApprovalChip session={session}/>
       {/* speak / verbatim-summary / autoplay were repeated here for touch while the playback
           strip was buried at the bottom of the pane; the strip owns them now. The `audio…`
@@ -6527,9 +6556,10 @@ export function App() {
           or it would close the menu on pointer-down and the click would reopen
           it, so a second tap could never collapse what the first opened. */}
       <button class="mobile-project-name" type="button" data-menu-toggle aria-haspopup="menu" aria-expanded={!!projectMenu} disabled={!activeProject} title={activeProject?`${activeProject.name} — Project actions`:'No Project selected'} onClick={event=>{if(!activeProject)return;if(projectMenu){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(activeProject,rect.left,rect.bottom+4)}} onContextMenu={event=>{if(!activeProject)return;event.preventDefault();if(projectMenu){setProjectMenu(null);return}openProjectMenuAt(activeProject,event.clientX,event.clientY)}}>{activeProject?.name||'No Project'}</button>
-      {voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>}
-      {/* The panel's control, beside the microphone and deliberately not part of it. */}
-      <VoiceDockChip state={voiceDock.state} talkActive={talkActive} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggle={()=>dispatchVoiceDock({kind:'toggle'})}/>
+      {/* One voice control, two actions: tap opens the panel, hold starts listening.
+          It was two buttons - a microphone and a panel chip - which on this row meant
+          two voice buttons whose difference had to be remembered. */}
+      <VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/>
       {/* Tap opens the launcher; hold repeats the last launch straight away,
           which is the common case once a Project settles on one backend. The
           long-press fires while the finger is down, so the click it is followed
@@ -6572,7 +6602,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>}<VoiceDockChip state={voiceDock.state} talkActive={talkActive} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggle={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
@@ -6933,6 +6963,8 @@ export function App() {
           mode={voicePanelMode}
           onMode={setVoicePanelMode}
           assistantView={assistantView}
+          readView={readView}
+          captureConfigured={!!voiceStatus?.stt_enabled}
           dock={voiceDock.state}
           onDock={step=>dispatchVoiceDock({kind:step})}
         />

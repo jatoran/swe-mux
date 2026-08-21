@@ -82,7 +82,12 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
    .context-menu(49). Layers stacked over a dialog stay above 80. */
 .modal-layer { position:fixed;inset:0;background:#050608b8;backdrop-filter:blur(6px);display:grid;place-items:center;z-index:80 }.modal { width:min(560px,calc(100% - 30px));border:1px solid #343b44;border-radius:12px;background:#111419;box-shadow:0 30px 100px #000;padding:0;overflow:hidden }.modal-heading { display:flex;justify-content:space-between;padding:20px 22px 16px;border-bottom:1px solid var(--line) }.modal-heading span { color:#778271;font:600 9px 'JetBrains Mono';letter-spacing:.13em }.modal-heading h2 { font-size:18px;margin:5px 0 0 }.modal-heading>button { align-self:start;border:0;background:transparent;color:#858e9a;font-size:20px;cursor:pointer }.modal>label { display:block;margin:17px 22px;color:#929ca9;font-size:11px;font-weight:600 }.modal input:not([type=checkbox]):not([type=radio]) { display:block;width:100%;height:calc(37px*var(--ui-scale));margin-top:7px;padding:0 10px;border:1px solid #303741;border-radius:6px;background:#0b0e12;color:var(--text);font:11px 'JetBrains Mono' }.backend-picker { display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:7px }.backend-picker button { height:calc(70px*var(--ui-scale));border:1px solid #30363e;border-radius:7px;background:#0e1115;display:grid;grid-template-columns:31px 1fr;grid-template-rows:1fr 1fr;text-align:left;align-items:end;padding:10px;cursor:pointer }.backend-picker button>span { grid-row:1/3;width:24px;height:calc(24px*var(--ui-scale));display:grid;place-items:center;border-radius:5px;background:#20262d;color:#9da7b3;font:600 11px 'JetBrains Mono';align-self:center }.backend-picker strong { text-transform:capitalize;font-size:11px }.backend-picker small { color:#707986;font-size:9px;align-self:start }.backend-picker button.selected { border-color:#708c5f;background:#172016;box-shadow:inset 0 0 0 1px #3b4c31 }.backend-picker button.selected>span { background:#304527;color:var(--green) }.modal-footer { padding:13px 18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:flex-end;background:#0e1115 }.modal-footer>span { color:#6f7986;font-size:10px;margin-right:auto }.modal-footer>span strong { color:#a9b0ba }.toast-stack { position:fixed;right:18px;bottom:18px;z-index:30;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:min(420px,calc(100vw - 36px));pointer-events:none }.toast { pointer-events:auto;background:#2b1518;border:1px solid #72333a;color:#f1a5aa;border-radius:8px;padding:11px 13px;font-size:11px;box-shadow:0 10px 35px #000;cursor:pointer }.toast span { margin-left:15px }
 .quick-launcher { position:fixed;left:264px;top:58px;width:410px;max-height:calc(100vh - 75px);overflow:auto;z-index:15;background:#11151a;border:1px solid #343c46;border-radius:10px;box-shadow:0 20px 70px #000 }.quick-heading { height:calc(37px*var(--ui-scale));display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 13px;border-bottom:1px solid var(--line);color:#74806d;font:600 9px 'JetBrains Mono';letter-spacing:.1em }.quick-heading button { border:0;background:transparent;color:#7e8895;font-size:17px;cursor:pointer }.quick-launcher form { display:flex;align-items:end;gap:7px;padding:13px }.quick-launcher label { flex:1;color:#89939f;font-size:10px;font-weight:600 }.quick-launcher input { display:block;width:100%;height:calc(35px*var(--ui-scale));margin-top:6px;padding:0 9px;border:1px solid #303741;border-radius:6px;background:#090c0f;color:var(--text);font:10px 'JetBrains Mono' }.quick-launcher form>button { height:calc(35px*var(--ui-scale));border-radius:6px;padding:0 11px }.recent-cwds { padding:0 8px 9px }.recent-cwds>span { display:block;padding:3px 5px 6px;color:#626d79;font:600 8px 'JetBrains Mono';letter-spacing:.1em }.recent-cwds button { width:100%;height:calc(43px*var(--ui-scale));display:flex;flex-direction:column;justify-content:center;gap:2px;border:0;border-radius:5px;background:transparent;text-align:left;padding:0 7px;cursor:pointer }.recent-cwds button:hover { background:#1a201c }.recent-cwds strong { color:#c6ccd3;font-size:10px }.recent-cwds small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#68727f;font:8px 'JetBrains Mono' }
-.palette-layer { position:fixed;inset:0;z-index:25;background:#0506089c;backdrop-filter:blur(3px);display:flex;justify-content:center;align-items:flex-start;padding-top:13vh }.palette { width:min(570px,calc(100% - 30px));overflow:hidden;border:1px solid #3b444f;border-radius:10px;background:#11151a;box-shadow:0 30px 100px #000 }.palette>input { width:100%;height:calc(48px*var(--ui-scale));border:0;border-bottom:1px solid var(--line);background:#0d1115;color:var(--text);padding:0 15px;font-size:13px }.palette>div { padding:6px;max-height:330px;overflow:auto }.palette button { width:100%;height:calc(37px*var(--ui-scale));border:0;border-radius:5px;background:transparent;display:flex;align-items:center;justify-content:space-between;padding:0 9px;color:#bdc4ce;cursor:pointer;text-align:left;font-size:11px }.palette button:hover { background:#202720;color:#e8eee5 }.palette button kbd { color:#7d8877 }
+/* The command palette is a modal overlay and belongs in the overlay band, not at 25
+   among the workspace's own decorations. At 25 it drew UNDER the overflow rails' scroll
+   arrows (29), which is the same defect the voice dock had against them, and it had to
+   move for the dock to sit above those arrows and still stay under a real dialog. 82 is
+   above the modal band (80) on purpose: a palette opened over a dialog covers it. */
+.palette-layer { position:fixed;inset:0;z-index:82;background:#0506089c;backdrop-filter:blur(3px);display:flex;justify-content:center;align-items:flex-start;padding-top:13vh }.palette { width:min(570px,calc(100% - 30px));overflow:hidden;border:1px solid #3b444f;border-radius:10px;background:#11151a;box-shadow:0 30px 100px #000 }.palette>input { width:100%;height:calc(48px*var(--ui-scale));border:0;border-bottom:1px solid var(--line);background:#0d1115;color:var(--text);padding:0 15px;font-size:13px }.palette>div { padding:6px;max-height:330px;overflow:auto }.palette button { width:100%;height:calc(37px*var(--ui-scale));border:0;border-radius:5px;background:transparent;display:flex;align-items:center;justify-content:space-between;padding:0 9px;color:#bdc4ce;cursor:pointer;text-align:left;font-size:11px }.palette button:hover { background:#202720;color:#e8eee5 }.palette button kbd { color:#7d8877 }
 @keyframes blink { 50% { opacity:0 } } @keyframes pulse { 50% { background:#332b10 } }
 .context-menu { position:fixed;z-index:35;width:calc(200px*var(--ui-scale));padding:5px;border:1px solid #3b434d;border-radius:8px;background:#15191e;box-shadow:0 18px 60px #000 }.context-title { height:calc(31px*var(--ui-scale));display:flex;align-items:center;gap:8px;padding:0 7px;border-bottom:1px solid #292f37;margin-bottom:4px;font-size:10px }.context-title .state-dot { margin:0 }.context-menu button { width:100%;height:calc(29px*var(--ui-scale));border:0;border-radius:4px;background:transparent;color:#b8c0ca;text-align:left;padding:0 8px;font-size:10px;cursor:pointer }.context-menu button:hover:not(:disabled) { background:#252c25;color:#e6ece2 }.context-menu button:disabled { color:#535c67 }.context-menu button.danger { color:#df7c82 }.context-subtitle { padding:8px 8px 3px;color:#626c78;font:600 7px 'JetBrains Mono';letter-spacing:.1em }.context-rule { height:1px;background:#292f37;margin:4px }
 /* MenuGroup: a collapsible group inside any .context-menu. Deliberately styled
@@ -1852,7 +1857,16 @@ body {
 .budget-control .budget-mode>input{margin:0}
 .budget-control .budget-mode:has(>input:checked){border-color:var(--green);background:var(--bg);color:var(--text)}
 .budget-axes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.budget-axis{display:grid;gap:3px}
+/* Three classes deep on purpose. `.settings-content label:not(.check)` is (0,2,1) and
+   re-grids every label in the panel into a 165px/30% two-column form row, which out-specifies
+   both `.budget-axis` (0,1,0) and the `.budget-control .budget-mode` scoping above it
+   (0,2,0) - so the mode radios rendered as tall two-column form rows and each axis put its
+   own word in a 165px label column. On a phone the media override narrows that column to
+   38%, which is where it read as "too tall, misaligned, and oversized". No `!important`:
+   the fix is to be more specific than the panel's own label rule, not to shout over it. */
+.budget-control .budget-modes .budget-mode{display:inline-flex;grid-template-columns:none;align-items:center;gap:6px;margin:0;padding:3px 10px;min-height:26px}
+.budget-control .budget-axes .budget-axis{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:3px;padding:0}
+.budget-control .budget-axes .budget-axis>input,.budget-control .budget-axes .budget-axis>small{grid-column:1}
 .budget-axis>input{width:100%}
 .budget-axis-off{opacity:.55}
 .budget-axis-off>small{color:var(--muted)}
@@ -2649,39 +2663,49 @@ body {
    Settings, so the button opens Settings instead of listening. It needs its own mark
    now that off is no longer green: off and unconfigured both mean "not listening",
    but only one of them can start. */
-.conversation-talk-toggle{--talk-edge:var(--line);--talk-edge-style:solid;--talk-fill:transparent;--talk-ink:var(--muted);flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px var(--talk-edge-style) var(--talk-edge);background:var(--talk-fill);color:var(--talk-ink);cursor:pointer}
+/* One control, two actions: click opens the panel, ctrl+click or a hold listens.
+   `position:relative` because the waiting badge and the unread dot hang off it now -
+   they used to belong to the separate panel chip, which this button replaced. */
+.conversation-talk-toggle{--talk-edge:var(--line);--talk-edge-style:solid;--talk-fill:transparent;--talk-ink:var(--muted);position:relative;flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px var(--talk-edge-style) var(--talk-edge);background:var(--talk-fill);color:var(--talk-ink);cursor:pointer}
 .conversation-talk-toggle:hover{--talk-fill:var(--panel2);--talk-ink:var(--text)}
+/* Green is capture, and only capture. The panel being open is a fill, deliberately
+   colourless: two reasons to light up would make the lit state unreadable, and "is
+   this listening to me right now?" is the one question this button has to answer. */
 .conversation-talk-toggle.active{--talk-edge:var(--green,#8bd450);--talk-fill:color-mix(in srgb,var(--green,#8bd450) 18%,transparent);--talk-ink:var(--green,#8bd450)}
 .conversation-talk-toggle.active:hover{--talk-fill:color-mix(in srgb,var(--green,#8bd450) 28%,transparent)}
+.conversation-talk-toggle.dock-open:not(.active){--talk-edge:color-mix(in srgb,var(--text) 34%,var(--line));--talk-fill:var(--panel2);--talk-ink:var(--text)}
+/* An open confirmation card outranks the resting states: it expires. It never
+   outranks the lit microphone, which is a fact about the room. */
+.conversation-talk-toggle.pending:not(.active){--talk-edge:var(--amber);--talk-ink:var(--amber)}
 .conversation-talk-toggle.setup{--talk-edge-style:dashed}
 .conversation-talk-toggle svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .app-identity .conversation-talk-toggle{flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));padding:0;border:1px var(--talk-edge-style) var(--talk-edge);background:var(--talk-fill);color:var(--talk-ink)}
 .app-identity .conversation-talk-toggle:hover{background:var(--talk-fill);color:var(--talk-ink)}
-/* The voice dock's collapsed state, sitting beside the microphone in both top bars.
-   Same four-variable trick as the mic toggle above and for the same reason: the generic
-   `.app-identity button` reset outranks the class, so the header needs its own copy of
-   the box, and pointing both copies at the same variables is what stops them drifting.
-   It is a separate control from the microphone on purpose - this one opens and closes the
-   panel, that one starts and stops capture, and neither does the other's job. */
-.voice-dock-chip{--dock-edge:var(--line);--dock-fill:transparent;--dock-ink:var(--muted);position:relative;flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px solid var(--dock-edge);background:var(--dock-fill);color:var(--dock-ink);cursor:pointer}
-.voice-dock-chip:hover{--dock-fill:var(--panel2);--dock-ink:var(--text)}
-.voice-dock-chip.open{--dock-edge:color-mix(in srgb,var(--text) 34%,var(--line));--dock-fill:var(--panel2);--dock-ink:var(--text)}
-/* An open confirmation card outranks every other state: it expires. */
-.voice-dock-chip.pending{--dock-edge:var(--amber);--dock-ink:var(--amber)}
-.voice-dock-chip svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* What is waiting behind a collapsed panel: a count while confirmation cards are open,
+   a dot when a reply landed. They hang off the one voice control, which is the only way
+   back to a dock that is still streaming, speaking, and opening cards from the top bar. */
 .voice-dock-badge{position:absolute;top:-4px;right:-4px;min-width:12px;height:12px;padding:0 2px;display:grid;place-items:center;border-radius:6px;background:var(--amber);color:#11160e;font:600 8px/1 'JetBrains Mono';font-style:normal}
 .voice-dock-dot{position:absolute;top:-2px;right:-2px;width:6px;height:6px;border-radius:50%;background:var(--green,#8bd450)}
-.app-identity .voice-dock-chip{flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));padding:0;border:1px solid var(--dock-edge);background:var(--dock-fill);color:var(--dock-ink)}
-.app-identity .voice-dock-chip:hover{background:var(--dock-fill);color:var(--dock-ink)}
+/* The panel's own microphone, and the primary capture control on touch. Same colour
+   rule as the top-bar control: lit means listening, and nothing else lights it. */
+.voice-dock-mic{--talk-edge:var(--line);--talk-edge-style:solid;--talk-fill:transparent;--talk-ink:var(--muted);flex:none;width:calc(22px*var(--ui-scale));min-width:22px;height:calc(22px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px var(--talk-edge-style) var(--talk-edge);background:var(--talk-fill);color:var(--talk-ink);cursor:pointer}
+.voice-dock-mic:hover{--talk-fill:var(--panel2);--talk-ink:var(--text)}
+.voice-dock-mic.active{--talk-edge:var(--green,#8bd450);--talk-fill:color-mix(in srgb,var(--green,#8bd450) 18%,transparent);--talk-ink:var(--green,#8bd450)}
+.voice-dock-mic.setup{--talk-edge-style:dashed}
+.voice-dock-mic svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 /* The dock hangs from a zero-height anchor placed in the main stage's own grid cell, the
    same pattern the read-aloud strip uses inside a pane and for the same reason: a surface
    that takes a workspace track changes a pane's row count, which resizes the PTY under a
    live agent and reflows scrollback that does not come back when the panel closes. The
    anchor spans the stage's rows but has no height of its own, so no track can size to it.
-   z-index 24 is the band the old fixed conversation layer held: over the panes, under the
-   command palette (25) and everything in the overlay band (80+), because a dialog that
-   the dock paints over is a dialog whose own header swallows taps. */
-.voice-dock-anchor{grid-column:3;grid-row:1/3;position:relative;z-index:24;height:0;min-width:0}
+   z-index 30 puts the dock over everything drawn inside the workspace and under every
+   menu and overlay: the pane stack's focus ring (25) and, the reason the number moved,
+   the overflow rail's scroll arrows (29). Those arrows are `position:absolute` inside a
+   rail that establishes no stacking context, so at 24 they painted on top of the panel -
+   the tab strip sat under the dock while its own left/right buttons drew over it. The
+   ceiling is the context menu band (35+) and the overlay band (80+): a dialog the dock
+   paints over is a dialog whose own header swallows taps. */
+.voice-dock-anchor{grid-column:3;grid-row:1/3;position:relative;z-index:30;height:0;min-width:0}
 .voice-dock{position:absolute;top:6px;left:6px;right:6px;display:grid;gap:4px;min-width:0;padding:5px 8px 6px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted);overflow:hidden}
 /* Collapsed to the top bar: the workspace is fully clear, and the conversation inside is
    still mounted, still streaming, still speaking. `display:none` rather than unmounting is
@@ -2697,6 +2721,35 @@ body {
 .voice-dock.full.chat-mode .voice-dock-chat{align-content:stretch;grid-template-rows:minmax(0,1fr)}
 .voice-dock .assistant-panel{min-height:0}
 .voice-dock.full .assistant-log{min-height:120px}
+/* Read aloud's operational panel. Two blocks: the switches that decide what speaks
+   here, and the clip list they produce - ordered by when each reply arrived, which is
+   what makes a backlog readable rather than a synthesis log. */
+.voice-dock.full.read-mode{max-height:min(60dvh,560px);grid-template-rows:auto minmax(0,1fr)}
+.voice-dock.full.read-mode .voice-dock-read{align-content:stretch;grid-template-rows:auto minmax(0,1fr)}
+.voice-read{min-width:0;min-height:0;display:grid;gap:5px;align-content:start}
+.voice-dock.full.read-mode .voice-read{align-content:stretch;grid-template-rows:auto minmax(0,1fr)}
+.voice-read-controls{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.voice-read-session{min-width:0;display:flex;align-items:center;gap:5px;flex:1 1 auto}
+.voice-read-session>span{flex:none;color:var(--muted);font:600 8px 'JetBrains Mono';letter-spacing:.06em;text-transform:uppercase}
+.voice-read-session>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:400}
+.voice-read-controls button,.voice-read-controls .voice-read-master{flex:none;min-height:22px;padding:0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;text-decoration:none;cursor:pointer}
+.voice-read-controls button:disabled{opacity:.45;cursor:not-allowed}
+.voice-read-mode.auto,.voice-read-autoplay.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
+.voice-read-held{border-color:var(--amber);color:var(--amber)}
+.voice-read-error{margin:0;color:var(--red)}
+.voice-read-empty{margin:0;color:var(--muted);line-height:1.5}
+.voice-read-clips{min-height:0;overflow:auto;overscroll-behavior:contain;display:grid;gap:2px;align-content:start}
+.voice-read-clip{min-width:0;display:grid;grid-template-columns:auto auto auto minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:2px 3px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.voice-read-clip>button{min-height:20px;padding:0 5px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.voice-read-clip>button:disabled{opacity:.4;cursor:not-allowed}
+.voice-read-kind,.voice-read-when,.voice-read-state{flex:none;color:var(--muted)}
+.voice-read-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.voice-read-state.synthesizing{color:var(--amber)}
+.voice-read-state.failed{color:var(--red)}
+.voice-read-state.held{color:var(--amber)}
+.voice-read-state.playing{color:var(--green,#8bd450)}
+.voice-read-state.played,.voice-read-state.dismissed{color:var(--muted)}
+.voice-read-clip.dismissed .voice-read-text,.voice-read-clip.played .voice-read-text{color:var(--muted)}
 .voice-dock-line{margin:0;min-width:0;display:flex;align-items:baseline;gap:6px;color:var(--text);font:10px/1.5 'JetBrains Mono'}
 .voice-dock-line>b{flex:none;color:var(--muted);font:600 8px 'JetBrains Mono';letter-spacing:.06em;text-transform:uppercase}
 .voice-dock-line>em{flex:0 1 auto;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal;color:var(--green,#8bd450)}
@@ -2879,14 +2932,19 @@ body {
      drawer marks use, because a 12px icon in a 36px thumb target reads as a mistake. */
   .mobile-toolbar>.conversation-talk-toggle{width:calc(36px*var(--ui-scale));min-width:36px;height:calc(36px*var(--ui-scale));padding:0}
   .mobile-toolbar>.conversation-talk-toggle svg{width:18px;height:18px}
-  .mobile-toolbar>.voice-dock-chip{width:calc(36px*var(--ui-scale));min-width:36px;height:calc(36px*var(--ui-scale));padding:0}
-  .mobile-toolbar>.voice-dock-chip svg{width:18px;height:18px}
-  .mobile-toolbar>.voice-dock-chip .voice-dock-badge{top:-3px;right:-3px;min-width:14px;height:14px;border-radius:7px;font-size:9px}
+  .mobile-toolbar>.conversation-talk-toggle .voice-dock-badge{top:-3px;right:-3px;min-width:14px;height:14px;border-radius:7px;font-size:9px}
   /* The workspace grid collapses to one column on a phone, so the dock's anchor follows
      the main stage there the same way `.main-stage` itself does. */
   .voice-dock-anchor{grid-column:1;grid-row:1}
   .voice-dock{top:5px;left:5px;right:5px}
   .voice-dock-step{min-width:34px;height:calc(28px*var(--ui-scale))}
+  /* The panel's mic is the capture control on touch, so it gets a thumb target. */
+  .voice-dock-mic{width:calc(34px*var(--ui-scale));min-width:34px;height:calc(30px*var(--ui-scale))}
+  .voice-dock-mic svg{width:17px;height:17px}
+  .voice-read-controls button,.voice-read-controls .voice-read-master{min-height:30px}
+  .voice-read-clip{grid-template-columns:auto auto minmax(0,1fr) auto}
+  .voice-read-when{display:none}
+  .voice-read-play{min-width:34px;height:calc(30px*var(--ui-scale))}
   .dictation-target button{min-width:44px;height:calc(30px*var(--ui-scale));font-size:10px}
   .dictation-actions button{min-width:42px;height:calc(28px*var(--ui-scale))}
   .conversation-history{max-height:min(28dvh,210px)}

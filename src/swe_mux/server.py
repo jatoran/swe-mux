@@ -12523,10 +12523,23 @@ async def voice_generate(request: web.Request) -> web.Response:
     content_mode = body.get("content_mode")
     if content_mode is not None and content_mode not in {"summary", "verbatim"}:
         raise ValueError("content_mode must be summary or verbatim")
+    # `message_id` names one reply in the reader rather than "the newest": the
+    # Transcript tab plays any message through this same pipeline, and naming the
+    # message is also what lets an existing clip answer the request instead of a
+    # second synthesis of identical audio (`design/features/voice.md`).
+    message_id = body.get("message_id")
+    if message_id is not None and not isinstance(message_id, str):
+        raise ValueError("message_id must be a string")
     try:
         options: dict[str, Any] = {"trigger": "manual", "content_mode": content_mode}
         if body.get("stream_id") is not None:
             options["stream_id"] = body["stream_id"]
+        if message_id:
+            options["message_id"] = message_id
+            # `regenerate` is the deliberate override for a clip whose text the
+            # operator no longer trusts; it is never the default, because the
+            # default request is "let me hear this" and the audio already exists.
+            options["reuse"] = not bool(body.get("regenerate"))
         clip = await voice.generate(session.record.id, **options)
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
@@ -12566,9 +12579,14 @@ async def list_voice_clips(request: web.Request) -> web.Response:
     session_id = request.query.get("session") or None
     if session_id:
         session_id = request.app["sessions"].resolve(session_id).record.id
+    content_mode = request.query.get("kind") or None
+    if content_mode is not None and content_mode not in {"summary", "verbatim"}:
+        raise ValueError("kind must be summary or verbatim")
     rows = await store.clips(
         session_id=session_id,
         agent_run_id=request.query.get("run") or None,
+        message_anchor=request.query.get("anchor") or None,
+        content_mode=content_mode,
         limit=int(request.query.get("limit") or 20),
     )
     return json_response({"items": [clip_snapshot(row) for row in rows]})

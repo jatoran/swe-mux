@@ -32,16 +32,22 @@ the overwhelm this ordering exists to end.
    generation (`generate`), and on trusted application speech (`speak`) - a switch that only
    governs the paths that happen to consult it is not a master, which is what it was before
    Phase 15.
-2. **Per-session participation** (`voice_mode`, the pane's `tts:` chip). Answers *does this
-   session generate*, and nothing else. `auto` no longer implies "and plays here": what is
+2. **Per-session participation** (`voice_mode`, the voice panel's `tts` tab). Answers *does
+   this session generate*, and nothing else. `auto` no longer implies "and plays here": what is
    spoken is layer 3's question, so a session can be a full participant while being silent on
    the device you happen to be looking at.
 3. **This device** (the browser's autoplay toggle, plus the focus rule below). Answers *does
    this browser speak, and for which session*.
 
 The three are presented as one numbered block in Settings -> Voice -> Read aloud (TTS), each layer naming where its
-per-item control lives. The block is the source of truth for the wording; the chip and the strip
-say the same thing in one line each.
+per-item control lives. The block is the source of truth for the wording; the `tts` tab and the
+pane strip say the same thing in one line each.
+
+**Settings owns the switches; the `tts` tab operates them.** Layer 1 is edited in Settings ->
+Voice and, in particular, can only be turned *off* there - the `tts` tab renders the standard
+gate while it is off and a link back to the owner while it is on, because a grant may only ever
+turn something on (`setting-links.md`). Layers 2 and 3 are per-session and per-device rather than
+install-wide, so the tab edits them directly for the focused session.
 
 ### Generation model
 
@@ -153,11 +159,37 @@ say the same thing in one line each.
 ### Storage and playback
 
 - Clips are app-owned files under `<data_dir>/voice/` plus one `voice_clips` SQLite row
-  (spoken text, engine/voice, trigger, tokens/cost for summaries, status, error). The store
+  (spoken text, engine/voice, trigger, tokens/cost for summaries, status, error, and the
+  message anchor below). The store
   confines every `sqlite3` call to one dedicated worker thread (WAL, `synchronous=NORMAL`),
   mirroring `HistoryIndex`, so nothing blocks the event loop. Public snapshots
   (`clip_snapshot`) never expose daemon file paths. A byte-cap prune (`tts_cache_mb`) deletes
   oldest ready clips; stale failed rows expire after a day.
+- **A clip is a rendering of one assistant message, and it records which one**
+  (`source_ts`, `message_anchor`, both captured at generation time; schema version 2).
+  `content_mode` is the clip's *kind* - `summary` or `verbatim` - and is part of its identity
+  for the same reason, since the two are both legitimate audio for the same reply.
+  Three things depend on the anchor and on nothing else.
+  A **global clip list ordered by when each reply arrived** rather than by when its audio
+  finished: a held backlog is synthesized in whatever order engine slots and summary calls free
+  up, so synthesis order puts an hour-old update above the reply that just landed.
+  A **per-message play button in the transcript** that finds existing audio instead of paying
+  for it twice (`VoiceStore.anchored_clip`, keyed on run + anchor + kind).
+  And a **join point**: one clip model, with the pane strip (local), the `tts` tab (global), and
+  the transcript's markers as three views over the same rows, none of which owns a clip.
+  `source_ts` is nullable and backfills to NULL rather than to `created_at` - a clip made before
+  the column existed has no source message, and inventing one would assert exactly the ordering
+  the column exists to fix. Clips with no source message (application speech) fall back to
+  `created_at`, which is also the tie-break inside one reply, where every segment of a stream
+  shares one anchor and one source time and must stay in the order it will be spoken.
+- **`status` is the daemon's synthesis lifecycle and nothing else**: `synthesizing` (written
+  before the engine runs, so a clip is visible while it is being made rather than appearing only
+  once it can play), then `ready` or `failed`. Every path out of synthesis writes its own
+  verdict; a row still claiming `synthesizing` at connect belongs to a run that died, so
+  `VoiceStore._migrate` retires it - synthesis cannot outlive the daemon that started it.
+  `held`, `played` and `dismissed` are deliberately **not** stored: they are per-device facts (a
+  clip played on the phone is unplayed on the desktop), so `voice.ts` keeps them in memory and
+  the `tts` tab renders them over the daemon's row.
 - Files and rows are reconciled, not assumed to agree. Prune only walks row-listed paths, so
   a failed synthesis (stored with an empty `file_path`) or a delete that lost a lock race on
   Windows would leave audio nothing can ever find again: synthesis failure unlinks its
@@ -240,7 +272,8 @@ say the same thing in one line each.
   Playback controls retain their normal meaning when the utterance began over audio, so `stop listening` and `interrupt agent` cannot be discarded as playback echo after they already silenced it.
 - **Turning read aloud off is immediate, at all three scopes.** The singleton element is
   shared, so clips are tagged with the session that owns them and each "off" switch stops
-  exactly what it turns off: the pane's `tts:` chip going to `off` calls `stopSessionPlayback`
+  exactly what it turns off: the session's mode going to `off` (from the `tts` tab, the session
+  menu, or the palette) calls `stopSessionPlayback`
   (that session's clip is halted and its queued clips dropped; another pane's audio keeps
   playing, and a clip already queued for a still-enabled pane is promoted rather than
   stranded), while the device autoplay toggle and the global Settings switch call
@@ -661,29 +694,49 @@ into mobile-voice setup instead.
 
 ## Browser surface
 
-- **Read aloud remains session-scoped.** Each Agent pane header carries only its `tts:` chip (off / tap / auto).
-  The player strip (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay) floats from the pane's zero-height `.voice-overlay-anchor`.
+- **Read aloud is generated per session and operated from one place.**
+  The pane header no longer carries a `tts:` chip: a per-session control repeated on every pane answered the same question once per pane, on whichever pane happened to be drawn, so it moved to the voice panel's `tts` tab, which knows the focused session.
+  What stays on the pane is the **player strip** (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay, `▶ n held`), floating from the pane's zero-height `.voice-overlay-anchor`.
+  That is deliberate duplication of the same shape the drawer's Processes tab has with the Resources dialog: the strip is the local *view* of this session's clips beside its terminal, the tab is the global one.
+  Neither owns a clip; both read the same `voice_clips` rows.
   It never changes terminal geometry.
 - **There is one voice surface, and it is app-level: the voice dock** (`.voice-dock`, `voiceDock.ts`).
   It holds the dictation draft and the assistant conversation as two bodies behind the talk/chat tabs, and it is mounted **once**, at one fixed place in the tree, for the life of the app.
   It hangs from `.voice-dock-anchor`, a zero-height grid item in the main stage's own cell, so it floats over the top of the workspace and never takes a track: a pane's row count *is* its PTY's row count, and a surface that took a row would resize a live agent's terminal every time it opened.
   It used to move between the focused pane's `.voice-overlay` and a fixed `.conversation-layer` depending on where the sink was, which meant a focus change remounted the assistant view inside it - see the announced-card rule in `assistant.md` for why that is a correctness problem and not a cosmetic one.
   Capture, draft, target pin, and history stay mounted across Project, pane, and target changes, as they always did.
-- **Three axes, deliberately separate: capture, addressee, and size.**
-  - *Capture* is the microphone. The Talk toggle sits directly before Run in the mobile toolbar and desktop app header and does nothing but start and stop listening.
-  - *Addressee* is the talk/chat tabs (`VoicePanelMode`): who plain speech reaches, and therefore which body the dock draws. With capture off there is no draft to dictate into, so the dock shows the assistant whatever the stored addressee says; the stored value is left alone.
+- **Three axes, deliberately separate: capture, body, and size.**
+  - *Capture* is the microphone. Its primary control is the mic button in the dock's own header; the top-bar control reaches the same toggle behind ctrl+click or a long press.
+  - *Body* is the talk/chat/tts tabs (`VoicePanelMode`): the dictation draft, the assistant conversation, or read aloud's operational panel.
+    For the two conversational bodies it is also the addressee - who plain speech reaches.
+    With capture off there is no draft to dictate into, so the dock shows the assistant whatever the stored value says; the stored value is left alone.
+    `read` is unaffected by capture in either direction: it needs no microphone and says nothing about one.
   - *Size* is the dock state: `full`, `peek`, or `chip`. It is presentation only.
   They were one thing before, and the cost was concrete: the surface rendered only while capture ran and its close button appeared only while capture was stopped, so the sole way to clear the panel off the workspace mid-conversation was `stop mic`.
+- **Exactly one body is ever the addressee: the dictation draft** (`voiceAddressee`).
+  The draft has no surface but its own, so speech may only land there while it is the body on screen; every other body - the assistant, and the `tts` panel, which is a control surface with no conversation behind it - leaves the assistant as the addressee.
+  That is the shipped chat rule generalized rather than a new one, and the dock's header states it (`mic→assistant`) rather than redirecting speech silently.
 - **Collapsing is not closing.** At `chip` the dock is `display:none` and the workspace is completely clear, while the dialog keeps streaming, speaking, and opening cards from the same mounted component.
   Hiding rather than unmounting is load-bearing, not an optimisation: the set of cards this device has already announced lives in `AssistantPanel`, and a remount reads as a device that has never seen an open card and speaks its line again.
-  The way back is the **voice dock chip** beside the microphone in both top bars - a separate button, carrying a count while confirmation cards are open and a dot when a reply landed while collapsed.
-  The chip reopens into the size it was collapsed from, so a deliberate `peek` does not come back as a full panel.
+  The way back is the **one voice control** in both top bars, which carries a count while confirmation cards are open and a dot when a reply landed while collapsed.
+  It reopens into the size it was collapsed from, so a deliberate `peek` does not come back as a full panel.
 - **`peek` is one row: the newest line, plus every open confirmation card with its buttons and countdown, and no composer.**
   The cards are the reason peek exists rather than a straight open/closed toggle - they are the only part of a conversation that expires, and a scheduled one runs on its own.
   A card opening therefore raises the dock to at least `peek`, one-way and never further, because a countdown nobody can see is a decision made by timeout.
-- **The microphone may open the dictation draft, and only that.** Starting Talk from the chip opens the dock when the addressee is dictation, because the draft has no other surface; it is a loan, returned when capture stops, and any dock action by the operator clears the loan for good.
-  A chat-addressed microphone leaves a collapsed dock collapsed, which is the whole point of the chip: the assistant speaks its replies.
-  A spoken question routed to the assistant never reopens a collapsed dock either - the reply is spoken and the chip marks it unread.
+- **There is one voice control in the top bar, and the modifier separates its two jobs.**
+  Plain click toggles the panel and never touches capture, because that is the common action.
+  Ctrl/Cmd+click toggles capture, as does a **long press** - the same 550 ms hold the sidebar, the rail, and the Run button use, and the touch route to capture, since ctrl+click does not exist on a phone.
+  A hold that fired swallows the click that follows it, so one gesture never does both.
+  **The colour means exactly one thing: capture is live.**
+  Opening or closing the panel never changes it; the open panel gets a deliberately colourless treatment and `aria-expanded`, while capture gets the green and `aria-pressed`.
+  A control that lit up for two reasons could not answer the one question a microphone has to answer.
+  This reverses the rule the dock shipped with - that the panel chip and the microphone are separate buttons with separate jobs - because in use two voice buttons on the app's tightest row read as one difference to be remembered rather than two clear controls.
+  The separation survives as the modifier rather than as the button, and `frontend/test/voiceDock.test.ts` pins the new rule in place of the old one.
+- **Mobile capture control: the in-modal mic is primary, the top-bar hold is the shortcut.**
+  The panel's own microphone starts as well as stops (the header used to carry only a `stop mic`, so the panel could release the microphone but never take it), and it is what a touch user is expected to reach for; the long press exists so capture is one gesture away without opening anything.
+- **The microphone may open the dictation draft, and only that.** Starting Talk from the collapsed state opens the dock when the addressee is dictation, because the draft has no other surface; it is a loan, returned when capture stops, and any dock action by the operator clears the loan for good.
+  An assistant-addressed microphone leaves a collapsed dock collapsed, which is the whole point of collapsing it: the assistant speaks its replies.
+  A spoken question routed to the assistant never reopens a collapsed dock either - the reply is spoken and the control marks it unread.
 - **Talk keeps a reviewable conversation history.** Every recognized utterance and every final Mux outcome is stored in a device-local, app-wide 120-entry ring.
   Lists and help retain their line-broken display text while TTS receives the separately paced speech form.
   Last-reply requests retain the generated reply text, not only a playback status message.
@@ -705,7 +758,18 @@ into mobile-voice setup instead.
   The command catalog is a viewport modal and is not a utility-drawer tab.
   Spoken drawer aliases always open the named tab rather than toggling it closed.
   Spoken `open Notes` also claims the selected drawer note as the current text sink without raising the mobile keyboard; a later pointer or keyboard focus change overrides that claim normally.
-  Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
+  Disabled read aloud is fixed from the `tts` tab's gate rather than from a pane chip; disabled Conversation leaves the top-bar control opening the panel normally and routes its capture gesture to the microphone switch instead.
+- **The `tts` tab is read aloud's operational surface** (`VoiceReadTab.tsx`), beside talk and chat.
+  It carries, in order: the focused session's participation (`voice_mode`) and content mode (`voice_content`), this device's autoplay toggle and its `▶ n held` shortcut, a link to the master switch's owner in Settings, and the **global clip list**.
+  The list is every clip the daemon holds, fleet-wide, ordered by the source message's arrival and never by synthesis time, each row showing its kind (`summary`/`verbatim`), its state, its text, and a play control.
+  A row's state is the daemon's `synthesizing`/`failed`, or - once synthesis has settled - what this device did with it: `held`, `playing`, `played`, `dismissed`.
+  The two are separate because they disagree by design: a clip is `ready` on the daemon forever while `played` is true on the laptop and false on the phone.
+  While `tts_enabled` is off the tab renders a `GrantGate` for `voice.tts` rather than an empty list, which is the invariant in `setting-links.md`: a gated surface never renders as merely empty.
+  The tab is mounted once by `App` and hidden rather than dropped, like the assistant body, because it holds the clip list it has fetched and its subscription to `mux:voice-clip`.
+- **Nothing drawn inside the workspace paints over the voice dock.**
+  The dock's anchor sits at `z-index: 30` - above the pane stack's focus ring (25) and above the overflow rails' scroll arrows (29), which are `position:absolute` inside a rail that establishes no stacking context and therefore used to draw on top of the panel while the tab strip underneath it sat correctly beneath.
+  The ceiling is unchanged in spirit: context menus (35+) and every overlay (80+) still cover it, because a dialog the dock paints over is a dialog whose own header swallows taps.
+  The command palette moved with it, from 25 to 82: at 25 it was under those same rail arrows, and it is a modal overlay rather than a workspace decoration.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
   So are the dock's own: `assistant.toggle` (chip ↔ last expanded size, keeping its id because it is reachable from saved keybindings and gesture slots), `voice.dockExpand`, and `voice.dockCollapse`.
   None of them touches capture.
@@ -734,7 +798,8 @@ Three rules hold this shape, and each answers a way the previous single section 
 
 - **The read-aloud policy is one unit.** The three layers are only useful read together, so they stay one numbered block under the first heading and are never split across sections. This is the same rule as the ordering in *One policy, three layers* above, stated for the surface.
 - **The pronunciation lexicon owns a section.** It used to be an `<h4>` inside the Kokoro branch of the engine block, which is the one place nobody looks when a project name comes out spelled letter by letter. It stays a Kokoro repair - the OS voice has its own dictionary and never reads `tts_lexicon` - so under SAPI the section says so and offers the engine control rather than rendering empty.
-- **Reference folds; controls do not.** The command catalog, the two measuring instruments, and the one-time mobile setup are read rarely and are long, so each keeps its heading (and therefore its rail entry) and collapses its body behind a `<details class="settings-disclosure">`. A `data-setting` mark deliberately stays outside a collapsed one: `revealSetting` does open the disclosures above its target, but a switch a gate just promised should be on screen when the panel lands.
+- **Reference folds; controls do not - and so does a control that is long rather than rarely read.** The command catalog, the two measuring instruments, and the one-time mobile setup are read rarely and are long, so each keeps its heading (and therefore its rail entry) and collapses its body behind a `<details class="settings-disclosure">`. Two Kokoro-only controls fold for the other reason: the voice picker's fifty-odd chips and the pronunciation editor with its spelled-word history each buried everything below them, so both collapse by default, the voice picker naming the current selection on its summary so the closed state still answers which voice is selected. A `data-setting` mark deliberately stays outside every collapsed one: `revealSetting` does open the disclosures above its target, but a switch a gate just promised should be on screen when the panel lands.
+- **The budget control is a row of chips, at every width.** `.settings-content label:not(.check)` re-grids every label in the panel into a two-column form row and out-specifies the `.budget-control` scoping that was meant to exempt these, so the tokens/dollars mode radios rendered as tall two-column rows and each axis stranded its one-word label in a 165px (38% on a phone) column. The rules are scoped one class deeper instead - no `!important`, because the fix is to be more specific than the panel's own label rule rather than to shout over it - and `voice-settings.spec.ts` measures it at phone width.
 
 `frontend/test/renderer/voice-settings.spec.ts` pins all four: the section list and its rail, the policy block, the lexicon's own section under both engines, and that nothing deep-linkable folds away.
 
@@ -816,10 +881,11 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `frontend/src/assistantSpeech.ts` — one speech stream per assistant turn (`assistant.md`).
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/voiceNavigation.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, canonical hierarchical indexes, and fleet speech projection.
 - `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
-- `frontend/src/voiceDock.ts` - the dock's size axis and the addressee type: the pure reducer (`reduceVoiceDock`), the loan rule for capture-opened docks, the card floor, `voiceBodyVariant`, and device-local persistence. Covered by `frontend/test/voiceDock.test.ts` and `frontend/test/renderer/voice-dock.spec.ts`.
+- `frontend/src/voiceDock.ts` - the dock's size axis and its body/addressee types: the pure reducer (`reduceVoiceDock`), the loan rule for capture-opened docks, the card floor, `voiceBodyVariant`, `voiceAddressee` (only the dictation draft is ever the addressee), and device-local persistence. Covered by `frontend/test/voiceDock.test.ts` and `frontend/test/renderer/voice-dock.spec.ts`.
 - `frontend/src/spokenListContext.ts` - validated five-minute device-local membership and paging context for recent spoken lists.
-- `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (the microphone, in both top bars), `VoiceDockChip` (the dock's control, beside it), and `VoiceDock` (the one voice surface: header, dictation body, assistant slot).
+- `frontend/src/VoicePlayer.tsx` — per-pane player strip: the local view of one session's clips, beside the global list in the `tts` tab.
+- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `VoiceControl` (the one top-bar voice button: click opens the panel, ctrl+click or a hold toggles capture, colour means capture alone), and `VoiceDock` (the one voice surface: header with the panel's own microphone and the talk/chat/tts tabs, the dictation body, and the assistant and read-aloud slots).
+- `frontend/src/VoiceReadTab.tsx` - the `tts` tab: the focused session's participation and content mode, this device's autoplay, the gate/link split with the master switch's owner in Settings, and the global clip list with its arrival ordering and its daemon-state/device-state split.
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.

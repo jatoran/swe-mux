@@ -59,9 +59,9 @@ Three things the surface never does:
 The effective mode is recomputed client-side rather than taken from the endpoint's `effective_mode` **for the row badge specifically**, because the badge renders from the ordinary session snapshot every `update` frame already carries and must not need a request per session.
 The two implementations apply the same expiry and run-id checks, and `approvals.test.ts` pins the cases where they could drift.
 
-`ApprovalChip.tsx` is the pane-bar chip beside `tts:`, rendered for every agent pane *including* ones where no mode can be selected: a control that vanishes when unavailable teaches the operator it does not exist, while one that stays and states its reason teaches them what would make it work.
+`ApprovalChip.tsx` is the pane bar's one standing chip - the per-session `tts:` control it used to sit beside moved into the voice panel's `tts` tab (`../../../design/features/voice.md`) - rendered for every agent pane *including* ones where no mode can be selected: a control that vanishes when unavailable teaches the operator it does not exist, while one that stays and states its reason teaches them what would make it work.
 `approvalChipLabel` is capped at four characters and pinned there by test, because the chip shares a bar with the session name, the path, and the tools; the numbers, expiry, and refusal reasons live in its drop-down, which registers with the dismiss stack like every other level and closes on an outside pointer-down.
-It does not cycle on click the way `tts:` does, because `allow_all` is not a step on the way back to `wait`, so each mode is chosen directly.
+It does not cycle on click, because `allow_all` is not a step on the way back to `wait`, so each mode is chosen directly.
 
 The chip owns no policy: every refusal is the daemon's, and a rejected click re-reads rather than leaving the menu showing a choice the server declined.
 The one-shot Approve lives on the command rail (`TerminalPane.tsx`) and routes through the daemon rather than writing `\r`, because only the server can re-check the agent run, the screen classification, and the prompt fingerprint.

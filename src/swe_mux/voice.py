@@ -47,17 +47,25 @@ from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
     run_sqlite_operation,
+    write_schema_version,
 )
 from .subprocess_flags import background_creation_flags
-from .transcript_view import final_exchange
+from .transcript_view import SpokenExchange, final_exchange_record, message_exchange
 from .voice_models import ENGLISH_VOICES, KokoroModelStore
 
 
 def _last_exchange(
     path: Path | None, backend: str, native_id: str | None
-) -> tuple[str, str]:
-    """`final_exchange` positionally, for `asyncio.to_thread`, which takes no keywords."""
-    return final_exchange(path, backend, native_id=native_id)
+) -> SpokenExchange:
+    """`final_exchange_record` positionally, for `to_thread`, which takes no keywords."""
+    return final_exchange_record(path, backend, native_id=native_id)
+
+
+def _named_exchange(
+    path: Path | None, backend: str, native_id: str | None, message_id: str
+) -> SpokenExchange:
+    """`message_exchange` positionally, for the same reason."""
+    return message_exchange(path, backend, message_id, native_id=native_id)
 
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
@@ -147,6 +155,8 @@ SUMMARY_PROMPT = (
     "the assistant in first person."
 )
 
+VOICE_SCHEMA_VERSION = 2
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS voice_clips (
     id TEXT PRIMARY KEY,
@@ -167,11 +177,29 @@ CREATE TABLE IF NOT EXISTS voice_clips (
     model TEXT,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL
+    cost_usd REAL,
+    source_ts REAL,
+    message_anchor TEXT
 );
+"""
+
+# Applied *after* the column migration, never with the table. An index over a
+# column that a pre-existing database has not gained yet is a hard error at
+# connect, and `CREATE TABLE IF NOT EXISTS` is exactly the case where that
+# happens: the table is left alone, so the index runs against the old columns.
+SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_voice_clips_session ON voice_clips(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_clips_run ON voice_clips(agent_run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_clips_anchor
+    ON voice_clips(agent_run_id, message_anchor, content_mode);
 """
+
+# A clip's life on the daemon. `synthesizing` is written before the engine runs, so a
+# backlog the operator is waiting on is visible while it is being made rather than
+# appearing only once it can play. `held`, `played` and `dismissed` are deliberately
+# NOT here: they are per-device facts (a clip played on the phone is unplayed on the
+# desktop), so the browser overlays them on this row rather than writing them to it.
+CLIP_STATUSES = frozenset({"synthesizing", "ready", "failed"})
 
 # Short and workload-flavored: long enough to carry the voice's character,
 # short enough that browsing a dozen voices stays fluid on CPU synthesis.
@@ -303,6 +331,11 @@ class SpeechStream:
     content_mode: str
     agent_run_id: str | None = None
     model: str | None = None
+    # The message every clip in this stream speaks, when there is one. Application
+    # speech has none - it is the daemon's own words, not a rendering of a reply -
+    # and its clips fall back to synthesis time for ordering.
+    source_ts: float | None = None
+    message_anchor: str | None = None
     created_at: float = 0.0
     pending: deque[str] = dataclass_field(default_factory=deque)
     next_index: int = 0
@@ -528,7 +561,41 @@ class VoiceStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self._path, self._open)
             self._db.executescript(SCHEMA)
+            self._migrate()
+            self._db.executescript(SCHEMA_INDEXES)
+            write_schema_version(self._db, "voice", VOICE_SCHEMA_VERSION)
             self._db.commit()
+
+    def _columns(self, table: str) -> set[str]:
+        return {
+            str(row["name"]) for row in self._db.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+
+    def _migrate(self) -> None:
+        """Add the message anchor to a database created before it existed.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already
+        exists, so a column added to the schema above reaches a fresh install and
+        no other. Both are nullable and backfill to NULL, which is the truth: a
+        clip made before the anchor was captured has no anchor, and inventing one
+        from `created_at` would claim a source-message time nothing recorded -
+        exactly the ordering error the column exists to fix.
+        """
+        columns = self._columns("voice_clips")
+        if columns and "source_ts" not in columns:
+            self._db.execute("ALTER TABLE voice_clips ADD COLUMN source_ts REAL")
+        if columns and "message_anchor" not in columns:
+            self._db.execute("ALTER TABLE voice_clips ADD COLUMN message_anchor TEXT")
+        # No synthesis survives the process that started it: the engine runs in
+        # this daemon, so a row still claiming `synthesizing` at connect belongs to
+        # a run that died. Resolved here rather than left to age out, because a
+        # clip list showing a spinner that will never finish is worse than one
+        # showing a failure that happened.
+        self._db.execute(
+            "UPDATE voice_clips SET status='failed', error=COALESCE(error,?) "
+            "WHERE status='synthesizing'",
+            ("synthesis was interrupted by a daemon restart",),
+        )
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -537,6 +604,13 @@ class VoiceStore:
         )
 
     async def add_clip(self, row: dict[str, Any]) -> None:
+        """Record a clip before it is synthesized, in its `synthesizing` state.
+
+        Inserted up front rather than on completion: the global clip list is the
+        operational view of a backlog, and a clip that only appears once it can
+        play makes a slow summary look like nothing happening at all.
+        """
+
         def op() -> None:
             self._db.execute(
                 # Named columns, not positional: adding a column would otherwise
@@ -544,10 +618,34 @@ class VoiceStore:
                 "INSERT INTO voice_clips"
                 "(id,session_id,agent_run_id,created_at,trigger,content_mode,engine,voice,"
                 "text,file_path,format,size_bytes,duration_hint_s,status,error,model,"
-                "input_tokens,output_tokens,cost_usd) VALUES("
+                "input_tokens,output_tokens,cost_usd,source_ts,message_anchor) VALUES("
                 ":id,:session_id,:agent_run_id,:created_at,:trigger,:content_mode,"
                 ":engine,:voice,:text,:file_path,:format,:size_bytes,:duration_hint_s,"
-                ":status,:error,:model,:input_tokens,:output_tokens,:cost_usd)",
+                ":status,:error,:model,:input_tokens,:output_tokens,:cost_usd,"
+                ":source_ts,:message_anchor)",
+                row,
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def update_clip(self, row: dict[str, Any]) -> None:
+        """Write a synthesized (or failed) clip over the row `add_clip` reserved.
+
+        Only the fields synthesis produces are written, so a concurrent restart
+        sweep cannot be undone by a task that outlived it: a row already retired
+        to `failed` is simply overwritten by this row's own verdict, and one that
+        no longer exists updates nothing rather than raising out of a background
+        segment task.
+        """
+
+        def op() -> None:
+            self._db.execute(
+                "UPDATE voice_clips SET text=:text,file_path=:file_path,format=:format,"
+                "size_bytes=:size_bytes,duration_hint_s=:duration_hint_s,status=:status,"
+                "error=:error,model=:model,input_tokens=:input_tokens,"
+                "output_tokens=:output_tokens,cost_usd=:cost_usd,source_ts=:source_ts,"
+                "message_anchor=:message_anchor WHERE id=:id",
                 row,
             )
             self._db.commit()
@@ -566,8 +664,21 @@ class VoiceStore:
         *,
         session_id: str | None = None,
         agent_run_id: str | None = None,
+        message_anchor: str | None = None,
+        content_mode: str | None = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
+        """Clips newest first, by the arrival of the message they speak.
+
+        Ordering is by source-message time, not synthesis time, and that is the
+        whole point of `source_ts`: a held backlog is synthesized in whatever
+        order engine slots and summary calls happen to free up, so a list ordered
+        by synthesis puts an hour-old reply above the one that landed while the
+        operator was reading. `created_at` is the fallback for a clip with no
+        source message (application speech, and every pre-migration row) and the
+        tie-break within one reply, where a stream's segments share one source
+        time and must stay in the order they will be spoken.
+        """
         sql = "SELECT * FROM voice_clips"
         clauses: list[str] = []
         args: list[Any] = []
@@ -577,13 +688,40 @@ class VoiceStore:
         if agent_run_id:
             clauses.append("agent_run_id=?")
             args.append(agent_run_id)
+        if message_anchor:
+            clauses.append("message_anchor=?")
+            args.append(message_anchor)
+        if content_mode:
+            clauses.append("content_mode=?")
+            args.append(content_mode)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        sql += " ORDER BY COALESCE(source_ts,created_at) DESC, created_at DESC LIMIT ?"
         args.append(max(1, min(limit, 200)))
 
         def op() -> list[dict[str, Any]]:
             return [dict(row) for row in self._db.execute(sql, args).fetchall()]
+
+        return await self._run(op)
+
+    async def anchored_clip(
+        self, *, agent_run_id: str, message_anchor: str, content_mode: str
+    ) -> dict[str, Any] | None:
+        """The newest ready clip already speaking this message in this mode.
+
+        The dedup lookup behind per-message playback: automatic read-aloud and the
+        reader's own play button produce the same audio for the same reply, so the
+        second request is answered from the store rather than by spending a summary
+        call and an engine slot on a duplicate.
+        """
+
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM voice_clips WHERE agent_run_id=? AND message_anchor=? "
+                "AND content_mode=? AND status='ready' ORDER BY created_at DESC LIMIT 1",
+                (agent_run_id, message_anchor, content_mode),
+            ).fetchone()
+            return dict(row) if row else None
 
         return await self._run(op)
 
@@ -1001,6 +1139,8 @@ class VoiceService:
         trigger: str,
         content_mode: str | None = None,
         stream_id: str | None = None,
+        message_id: str | None = None,
+        reuse: bool = True,
     ) -> dict[str, Any]:
         # The master switch, checked here rather than only on the automatic path:
         # `tts_enabled` off means no session generates audio, and a manual "speak
@@ -1025,13 +1165,34 @@ class VoiceService:
             if content_mode is not None and content_mode not in {"summary", "verbatim"}:
                 raise VoiceError("content mode must be summary or verbatim")
             selected_content = content_mode or self.effective_content(record)
+            # Dedup before spending anything. Automatic read-aloud and the reader's
+            # own play button ask for the same audio for the same reply, and with the
+            # clip anchored to its message the second request is a lookup rather than
+            # another summary call and another engine slot.
+            if reuse and message_id and record.agent_run_id:
+                existing = await self.store.anchored_clip(
+                    agent_run_id=record.agent_run_id,
+                    message_anchor=message_id,
+                    content_mode=selected_content,
+                )
+                if existing is not None:
+                    reused = clip_snapshot(existing)
+                    reused["reused"] = True
+                    return reused
             row = self._new_clip_row(
                 session_id, trigger, record.agent_run_id, selected_content
             )
+            await self.store.add_clip(row)
             try:
-                spoken = await self._spoken_text(session, row, selected_content)
+                spoken = await self._spoken_text(
+                    session, row, selected_content, message_id=message_id
+                )
             except (VoiceError, OpenRouterError, TimeoutError, OSError) as exc:
                 message = str(exc)[:500] or exc.__class__.__name__
+                # Stated, not defaulted. The row was inserted as `synthesizing`, so
+                # every path out of synthesis has to write its own verdict or the
+                # clip list keeps a spinner for work that has already stopped.
+                row["status"] = "failed"
                 row["error"] = message
                 self.diagnostic = message
                 log.warning(
@@ -1043,7 +1204,7 @@ class VoiceService:
                     selected_content,
                     message,
                 )
-                await self.store.add_clip(row)
+                await self.store.update_clip(row)
                 await self.events.emit(
                     "voice_clip_failed",
                     session_id=session_id,
@@ -1068,6 +1229,7 @@ class VoiceService:
                     session_id=session_id, agent_run_id=record.agent_run_id,
                     trigger=trigger, content_mode=selected_content, model=row["model"],
                     stream_id=stream_id, segments=segments[1:], total=len(segments),
+                    source_ts=row["source_ts"], message_anchor=row["message_anchor"],
                 )
             else:
                 await self._prune()
@@ -1124,6 +1286,7 @@ class VoiceService:
         stream_id = self._stream_id(stream_id)
         stream = self._open_stream(stream_id)
         row = self._new_clip_row("system", "system", None, "verbatim")
+        await self.store.add_clip(row)
         # Reserved before the await so an append landing mid-synthesis queues
         # behind this text rather than in front of it. `opening` holds the
         # worker back until index 0 has actually been emitted.
@@ -1259,6 +1422,9 @@ class VoiceService:
                 stream.session_id, stream.trigger, stream.agent_run_id, stream.content_mode
             )
             row["model"] = stream.model
+            row["source_ts"] = stream.source_ts
+            row["message_anchor"] = stream.message_anchor
+            await self.store.add_clip(row)
             try:
                 await self._synthesize_stream_segment(
                     row, segment, session_id=stream.session_id,
@@ -1494,9 +1660,10 @@ class VoiceService:
             await self._synthesize_clip(row, spoken)
         except (VoiceError, TimeoutError, OSError) as exc:
             message = str(exc)[:500] or exc.__class__.__name__
+            row["status"] = "failed"
             row["error"] = message
             self.diagnostic = message
-            await self.store.add_clip(row)
+            await self.store.update_clip(row)
             await self.events.emit(
                 "voice_clip_failed", session_id=session_id, source="daemon",
                 clip_id=row["id"], trigger=trigger, stream_id=stream_id,
@@ -1508,7 +1675,7 @@ class VoiceService:
                 session_id, agent_run_id, trigger, index + 1, count, message,
             )
             raise VoiceError(message) from exc
-        await self.store.add_clip(row)
+        await self.store.update_clip(row)
         await self.events.emit(
             "voice_clip_ready", session_id=session_id, source="daemon",
             clip_id=row["id"], agent_run_id=agent_run_id, trigger=trigger,
@@ -1526,12 +1693,15 @@ class VoiceService:
         stream_id: str,
         segments: list[str],
         total: int,
+        source_ts: float | None = None,
+        message_anchor: str | None = None,
     ) -> None:
         task = asyncio.create_task(
             self._generate_segment_tail(
                 session_id=session_id, agent_run_id=agent_run_id, trigger=trigger,
                 content_mode=content_mode, model=model, stream_id=stream_id,
-                segments=segments, total=total,
+                segments=segments, total=total, source_ts=source_ts,
+                message_anchor=message_anchor,
             ),
             name=f"voice-segments-{stream_id}",
         )
@@ -1557,10 +1727,18 @@ class VoiceService:
         stream_id: str,
         segments: list[str],
         total: int,
+        source_ts: float | None = None,
+        message_anchor: str | None = None,
     ) -> None:
         for offset, segment in enumerate(segments, start=1):
             row = self._new_clip_row(session_id, trigger, agent_run_id, content_mode)
             row["model"] = model
+            # Every segment of one reply carries that reply's anchor: they are one
+            # spoken message cut into clips, so a list ordered by source time keeps
+            # them together and in order instead of scattering them by synthesis.
+            row["source_ts"] = source_ts
+            row["message_anchor"] = message_anchor
+            await self.store.add_clip(row)
             try:
                 await self._synthesize_stream_segment(
                     row, segment, session_id=session_id, agent_run_id=agent_run_id,
@@ -1593,12 +1771,21 @@ class VoiceService:
             "format": "wav",
             "size_bytes": 0,
             "duration_hint_s": None,
-            "status": "failed",
+            # Inserted in this state and updated by the synthesis that follows, so a
+            # clip is visible while it is being made. A row that never reaches
+            # `ready` or `failed` is retired by the connect-time sweep in
+            # `VoiceStore._migrate`, because synthesis cannot outlive its daemon.
+            "status": "synthesizing",
             "error": None,
             "model": None,
             "input_tokens": 0,
             "output_tokens": 0,
             "cost_usd": None,
+            # The message this clip speaks, captured at generation time. Ordering a
+            # held backlog by synthesis time is exactly wrong, and a clip that cannot
+            # name its message cannot be reused by the reader's play button either.
+            "source_ts": None,
+            "message_anchor": None,
         }
 
     async def _synthesize_clip(self, row: dict[str, Any], spoken: str) -> None:
@@ -1626,20 +1813,42 @@ class VoiceService:
         self.diagnostic = None
 
     async def _spoken_text(
-        self, session: Any, row: dict[str, Any], content_mode: str
+        self,
+        session: Any,
+        row: dict[str, Any],
+        content_mode: str,
+        *,
+        message_id: str | None = None,
     ) -> str:
         # The same segment "Copy reply" puts on the clipboard and the reader tab
         # shows as the last agent message. Speaking a different span than the one
         # on screen is how a listener ends up hearing "I'll investigate the
         # sidebar sort" as the answer to a question that was already answered.
-        prompt, reply = await asyncio.to_thread(
-            _last_exchange,
-            session.transcript_path,
-            session.record.backend,
-            session.record.native_session_id,
-        )
-        if not reply:
-            raise VoiceError("no assistant reply text was found in the last turn")
+        # A named message is the same reduction asked for one reply rather than
+        # the newest, so the reader's play button and the automatic path speak
+        # byte-identical text and their clips are interchangeable.
+        if message_id:
+            exchange = await asyncio.to_thread(
+                _named_exchange,
+                session.transcript_path,
+                session.record.backend,
+                session.record.native_session_id,
+                message_id,
+            )
+            if not exchange.reply:
+                raise VoiceError("that message is not an agent reply in this conversation")
+        else:
+            exchange = await asyncio.to_thread(
+                _last_exchange,
+                session.transcript_path,
+                session.record.backend,
+                session.record.native_session_id,
+            )
+            if not exchange.reply:
+                raise VoiceError("no assistant reply text was found in the last turn")
+        prompt, reply = exchange.prompt, exchange.reply
+        row["source_ts"] = exchange.ts_epoch
+        row["message_anchor"] = exchange.message_id or None
         if content_mode == "verbatim":
             return speechify(reply, self.config.tts_verbatim_max_chars)
         # The summariser still sees what the reply was answering. Without the

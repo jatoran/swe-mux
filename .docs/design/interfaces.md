@@ -1266,7 +1266,8 @@ It does not change tailnet policy or make swe-mux public.
 
 ```text
 GET    /voice
-POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim, stream_id?: UUID}
+POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim, stream_id?: UUID,
+                                         message_id?: string, regenerate?: bool}
 POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
 POST   /voice/transcribe                 same body and headers, no session
 POST   /sessions/{id}/voice/prepare-submit  {text}
@@ -1280,7 +1281,7 @@ DELETE /voice/stt-latency
 POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
 POST   /voice/capture-diagnostic         bounded stalled/recovered capture watchdog report
 POST   /voice/deferral-diagnostic        one resolved unfinished-utterance deferral
-GET    /voice/clips[?session=&run=&limit=]
+GET    /voice/clips[?session=&run=&anchor=&kind=summary|verbatim&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
 GET    /voice/models/kokoro               pinned-download state
@@ -1360,6 +1361,20 @@ so a speculative routing decode cannot queue a real utterance behind it. The res
 The session-free transcribe form exists for the wake-word tester: choosing a trigger word is a
 recognition question, not a dictation one, and requiring a live agent to ask it would have forced
 a parallel implementation of the decoder and the matcher.
+
+`/sessions/{id}/voice/generate` speaks the session's newest reply by default. `message_id` names
+one reply in the reader instead, which is how the Transcript tab plays any message through the
+same pipeline. Naming the message is also what makes the request cheap the second time: an
+existing ready clip for the same (run, message, kind) is returned as-is, with `reused: true`, so
+the reader's play button does not spend a summary call on audio that already exists. `regenerate`
+is the deliberate override for a clip whose text the operator no longer trusts, and is never the
+default - the default request is "let me hear this". A `message_id` that is not an assistant
+message in the readable window is a 409, not a silent fall back to the newest reply.
+
+`/voice/clips` returns clips newest-first by the arrival of the message each one speaks, falling
+back to synthesis time for application speech and for rows written before the anchor existed.
+`anchor` and `kind` narrow it to one message's audio, which is the lookup the transcript's
+per-message markers do in one request for a whole run.
 
 `/voice/stt-latency` is the end-of-speech-to-action stage breakdown. Only the browser can measure
 the whole path, so it posts the merged sample; every field is clamped on arrival rather than
