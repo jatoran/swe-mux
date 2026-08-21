@@ -2638,6 +2638,15 @@ body {
 .assistant-panel.disabled{min-height:0;display:block;padding:8px;color:var(--muted)}
 .assistant-log{min-height:220px;overflow:auto;overscroll-behavior:contain;display:grid;align-content:start;gap:6px;padding:6px;border:1px solid var(--line);background:var(--bg)}
 .assistant-empty{margin:0;color:var(--muted);font:10px/1.5 'JetBrains Mono'}
+/* The conversation the last "new conversation" cleared. Collapsed and muted so
+   it never competes with the live dialog, but present, because it is the reason
+   clearing context needs no confirmation. */
+.assistant-previous{display:grid;gap:6px;padding-bottom:4px;border-bottom:1px dashed var(--line)}
+.assistant-previous>summary{color:var(--muted);font:9px/1.4 'JetBrains Mono';cursor:pointer;list-style:none}
+.assistant-previous>summary::-webkit-details-marker{display:none}
+.assistant-previous>summary::before{content:'▸ '}
+.assistant-previous[open]>summary::before{content:'▾ '}
+.assistant-previous .assistant-message{opacity:.65}
 .assistant-message{display:grid;gap:2px;padding:5px 7px;border-left:2px solid var(--line);background:var(--panel)}
 .assistant-message.user{border-left-color:var(--blue,#7aa2f7)}
 .assistant-message.assistant{border-left-color:var(--green,#8bd450)}

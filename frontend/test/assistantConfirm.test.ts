@@ -8,7 +8,7 @@ import {
 
 const action = (id: string, status: AssistantAction['status'], createdAt: number): Partial<AssistantAction> => ({
   id, status, created_at: createdAt, restatement: `do thing ${id}`,
-  dialog_id: 'd1', turn_id: 't1', kind: 'edit_project_note',
+  dialog_id: 'd1', turn_id: 't1', kind: 'write_project_note',
   action_class: 'reversible', arguments: {},
 })
 
