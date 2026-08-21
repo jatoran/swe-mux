@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast, get_args
+from typing import Any, NamedTuple, cast, get_args
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -46,6 +46,7 @@ from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
 from .approvals import DEFAULT_ALLOW_RULES, normalize_rules
 from .assistant import (
+    ASSISTANT_RULE_ID,
     AssistantError,
     AssistantService,
     AssistantStore,
@@ -69,7 +70,7 @@ from .automation_registry import dependency_closure
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
-from .behavioral_consumers import BehavioralConsumerService
+from .behavioral_consumers import ADAPTIVE_TITLE_RULE_ID, BehavioralConsumerService
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
@@ -3347,18 +3348,64 @@ async def automation_dry_run(request: web.Request) -> web.Response:
     return json_response({"event": normalized.snapshot(), "reports": reports})
 
 
-# Four features bill the same observer budget without being automation rules, so a spend
-# breakdown grouped by `rule_id` alone would print raw ids for them and leave the reader
-# unable to tell an expensive feature from an expensive rule.
-FEATURE_SPENDERS: dict[str, tuple[str, str]] = {
-    SCAN_RULE_ID: ("Scan timeline", "Per-run scans that extract timeline records"),
-    VOICE_RULE_ID: ("Read aloud", "Spoken summaries of agent replies"),
-    PROJECT_CARD_RULE_ID: ("Project card", "Generated Project context cards"),
-    NARRATION_RULE_ID: ("Attention narration", "Model narration of ranked attention"),
+class FeatureSpender(NamedTuple):
+    """A feature that bills the observer budget without being an automation rule.
+
+    Every field here exists because the spend table lies without it. Grouping by
+    `rule_id` alone prints a raw id, so a reader cannot tell an expensive feature
+    from an expensive rule. And `enabled` is the column that separates a live
+    bill from spent history, so it has to name the switch that actually governs
+    the feature rather than assert that features are always on.
+    """
+
+    label: str
+    detail: str
+    #: The install-wide config flag that turns this spender off. Per-project
+    #: opt-ins are deliberately not consulted: this column answers "is this
+    #: still running", and the honest install-wide answer is the global switch.
+    setting_key: str
+    setting_label: str
+
+
+# Anything that spends under its own rule id belongs here. A spender missing from
+# this table is indistinguishable from one that was retired, and the row says
+# "retired · off" about a feature the operator is actively using — which is what
+# `builtin:assistant` did between Phase 10.6 shipping and 2026-08-20.
+FEATURE_SPENDERS: dict[str, FeatureSpender] = {
+    SCAN_RULE_ID: FeatureSpender(
+        "Scan timeline", "Per-run scans that extract timeline records",
+        "scan_timeline_enabled", "Scan timeline",
+    ),
+    VOICE_RULE_ID: FeatureSpender(
+        "Read aloud", "Spoken summaries of agent replies",
+        "tts_enabled", "Read aloud",
+    ),
+    PROJECT_CARD_RULE_ID: FeatureSpender(
+        "Project card", "Generated Project context cards",
+        # No install-wide switch of its own: it is per-Project, under the
+        # automation kill switch, which is the only global truth to report.
+        "automation_enabled", "Automation",
+    ),
+    NARRATION_RULE_ID: FeatureSpender(
+        "Attention narration", "Model narration of ranked attention",
+        "attention_narration_enabled", "Attention narration",
+    ),
+    ASSISTANT_RULE_ID: FeatureSpender(
+        "Mux assistant", "Conversational fleet operation, typed and spoken",
+        "assistant_enabled", "Mux assistant",
+    ),
+    ADAPTIVE_TITLE_RULE_ID: FeatureSpender(
+        "Adaptive title", "Session titles rewritten from scan records",
+        # Per-Project beneath that, but it consumes scan records and cannot
+        # spend at all without the timeline that produces them.
+        "scan_timeline_enabled", "Scan timeline",
+    ),
 }
 
 
-def _label_spend_rows(rows: list[dict[str, Any]], engine: dict[str, Any]) -> list[dict[str, Any]]:
+def _label_spend_rows(
+    rows: list[dict[str, Any]], engine: dict[str, Any], config: Config
+) -> list[dict[str, Any]]:
     """Name every spending rule, and say what kind of thing it is.
 
     Cost is only actionable next to the control that turns it off, so each row also carries
@@ -3382,15 +3429,19 @@ def _label_spend_rows(rows: list[dict[str, Any]], engine: dict[str, Any]) -> lis
             "enabled": bool(rule.get("enabled")),
             "setting_label": "",
         }
-    for rule_id, (label, detail) in FEATURE_SPENDERS.items():
+    for rule_id, feature in FEATURE_SPENDERS.items():
         known.setdefault(
             rule_id,
             {
-                "label": label,
-                "detail": detail,
+                "label": feature.label,
+                "detail": feature.detail,
                 "kind": "feature",
-                "enabled": True,
-                "setting_label": "",
+                # Read from config rather than asserted: a feature switched off
+                # still has spend in the window, and calling that a live bill
+                # sends the reader looking for something to turn off that is
+                # already off.
+                "enabled": bool(getattr(config, feature.setting_key, False)),
+                "setting_label": feature.setting_label,
             },
         )
     labelled = []
@@ -3414,7 +3465,9 @@ async def automation_dashboard(request: web.Request) -> web.Response:
     store: AutomationStore = request.app["automation_store"]
     engine = request.app["automation"].status()
     breakdown = await store.spend_breakdown(days=7)
-    breakdown["rules"] = _label_spend_rows(breakdown["rules"], engine)
+    breakdown["rules"] = _label_spend_rows(
+        breakdown["rules"], engine, request.app["config"]
+    )
     return json_response(
         {
             **await store.dashboard(),
