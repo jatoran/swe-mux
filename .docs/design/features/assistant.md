@@ -68,8 +68,12 @@ Interrupt cancels the running task; nothing already executed is undone.
   At most one turn waits per dialog and consecutive arrivals **merge into it**, because a thought finished in two breaths is one request.
   The queued turn keeps the id its `assistant_turn_queued` event announced, so the words render once and the later `assistant_turn_started` updates that same bubble.
   The queue drains even when the turn ahead was cancelled or failed — an interrupted turn is usually interrupted *by* the thing now waiting.
-- **`seed_text` is how a session opens with a prompt already written.**
-  It stages text in the new session's composer without sending it, and it is described as such to the model: undescribed, a model asked to do exactly that passed `""` twice, and the capability was invisible.
+- **`spawn_session` carries two prompt parameters, and the split is submit versus stage.**
+  `seed_text` is a prompt the new agent RUNS: it rides the CLI's argv, so it is submitted by construction and can never leave text waiting for review.
+  It was first documented as staging without sending — a description written from the field's summary rather than its delivery path — and the model followed it faithfully: three sessions opened with their prompts already submitted while the operator asked for them left unsent, and the model told them "none of the messages will be sent" (2026-08-20).
+  `stage_text` is the real stage-without-send: the daemon spawns, waits for readiness, and writes a bracketed paste with no carriage return (`_stage_spawn_text`, `interfaces.md`), so it works headless with no mounted pane.
+  The primer and both schema descriptions state the split, the confirmation card says "prompt staged unsent" or "running the prompt", and the tool result carries `staged`/`submitted` so the model reports truthfully which happened.
+  The two are mutually exclusive at every layer (assistant preflight and `SpawnRequest.parse`).
   `type_into_session` also stages text but needs the session's terminal already mounted on the device, so it is the wrong tool immediately after a spawn.
 - **An identical proposal is answered with the existing action, never a second card** (`_duplicate_action`).
   A pending or scheduled duplicate is refused for every kind: two cards for one intent means answering either leaves the other armed.

@@ -40,7 +40,9 @@ import type { ComponentChildren } from 'preact'
 // listening in that window — on the energy detector and its 900 ms tail — so calling
 // it `listening` would be true and still misleading, and calling it `starting` would
 // be a lie in the other direction.
-type Phase='off'|'starting'|'warming'|'listening'|'hearing'|'heard'|'transcribing'|'sending'|'standby'|'error'
+// 'stalled' is the watchdog's phase: capture claims to run but no audio frames are
+// arriving, so "listening" would be a lie. It is not 'error' — capture may recover.
+type Phase='off'|'starting'|'warming'|'listening'|'hearing'|'heard'|'transcribing'|'sending'|'standby'|'stalled'|'error'
 
 // The first configured wake word, shown in prompts so the hints match the user's
 // own trigger word rather than a hardcoded "Mux".
@@ -164,6 +166,10 @@ export function useConversation(
   // if it is still the thing on screen. Comparing the text avoids tracking the phase
   // in a ref that a mid-utterance callback could read one render stale.
   const WARMING_DETAIL='Starting the speech detector — utterances need a longer pause until it loads.'
+  // The stall lines are compared exactly on recovery, like WARMING_DETAIL above:
+  // the recovered message replaces them only while they are still on screen.
+  const STALL_DETAIL='Microphone stalled — no audio is arriving. Trying to revive it…'
+  const STALL_ENDED_DETAIL='The browser released the microphone. Turn Talk off and on to reconnect.'
 
   const setDraft=(next:Draft)=>{draftRef.current=next;setDraftState(next)}
   const enterStandby=(value:boolean)=>{standbyRef.current=value;setStandby(value)}
@@ -651,6 +657,24 @@ export function useConversation(
       playbackOrigin:()=>getPlayback().origin,
       onPlaybackProbe:active=>setPlaybackDucked(active),
       onPlaybackProbeResult:result=>{void api('POST','/api/voice/barge-in-diagnostic',result,{timeoutMs:4000}).catch(()=>{})},
+      // The watchdog's whole reason to exist (2026-08-20): the phone's capture died
+      // while the UI said "listening", and no transcribe request ever left the
+      // device again. The stall is reported to the daemon FIRST — durable evidence
+      // that survives the phone being walked away from — then to the operator.
+      onCaptureStall:diagnostic=>{
+        void api('POST','/api/voice/capture-diagnostic',diagnostic,{timeoutMs:4000}).catch(()=>{})
+        if(!enabledRef.current)return
+        setPhase('stalled')
+        setDetail(diagnostic.trackState==='ended'?STALL_ENDED_DETAIL:STALL_DETAIL)
+        recordHistory('mux','Microphone stalled: the device stopped delivering audio.')
+      },
+      onCaptureRecovered:diagnostic=>{
+        void api('POST','/api/voice/capture-diagnostic',diagnostic,{timeoutMs:4000}).catch(()=>{})
+        if(!enabledRef.current)return
+        setPhase(current=>current==='stalled'?(standbyRef.current?'standby':'listening'):current)
+        setDetail(current=>current===STALL_DETAIL||current===STALL_ENDED_DETAIL?'Microphone recovered. Listening…':current)
+        recordHistory('mux','Microphone recovered.')
+      },
       onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
       onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail('Playback stopped. Listening…')}},
       // Fired at the endpoint, before any text exists. It is the whole point of the

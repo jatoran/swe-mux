@@ -164,6 +164,47 @@ def test_spawn_contract_carries_a_working_directory_and_environment() -> None:
     assert request.env == {"PORT": "45603", "DEBUG": "True"}
 
 
+def test_spawn_contract_carries_seed_and_stage_text_separately() -> None:
+    seeded = SpawnRequest.parse(
+        {"backend": "claude", "project_id": "dev", "seed_text": "run the tests"}
+    )
+    assert seeded.seed_text == "run the tests"
+    assert seeded.stage_text is None
+    staged = SpawnRequest.parse(
+        {"backend": "claude", "project_id": "dev", "stage_text": "review this first"}
+    )
+    assert staged.stage_text == "review this first"
+    assert staged.seed_text is None
+
+
+@pytest.mark.parametrize(
+    ("body", "field"),
+    [
+        ({"backend": "claude", "project_id": "dev", "stage_text": "   "}, "stage_text"),
+        ({"backend": "claude", "project_id": "dev", "stage_text": 7}, "stage_text"),
+        (
+            {"backend": "claude", "project_id": "dev", "stage_text": "x" * 500_001},
+            "stage_text",
+        ),
+        # One runs the prompt, the other deliberately does not; both together
+        # would run one prompt with another parked on top of it.
+        (
+            {
+                "backend": "claude",
+                "project_id": "dev",
+                "seed_text": "run this",
+                "stage_text": "stage this",
+            },
+            "stage_text",
+        ),
+    ],
+)
+def test_spawn_contract_rejects_bad_stage_text(body: dict[str, object], field: str) -> None:
+    with pytest.raises(ValueError) as error:
+        SpawnRequest.parse(body)
+    assert field in error.value.args[0]
+
+
 def test_spawn_contract_env_is_bounded() -> None:
     oversized = {f"K{index}": "1" for index in range(MAX_SPAWN_ENV + 1)}
     with pytest.raises(ValueError) as error:

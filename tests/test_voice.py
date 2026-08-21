@@ -1309,3 +1309,61 @@ def test_service_validates_and_logs_barge_in_diagnostics(
             service.record_barge_in_diagnostic({"outcome": "maybe"})
     finally:
         service.store.close()
+
+
+def test_service_validates_and_logs_capture_diagnostics(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A capture stall is durable daemon evidence, not just a phone-side phase.
+
+    The outage this pins (2026-08-20): the phone stopped POSTing audio while the
+    UI said "listening", and the only evidence was the access log read after the
+    fact. A stall must land in the log at WARNING, a recovery at INFO, and junk
+    numbers must be bounded rather than trusted.
+    """
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger="swe_mux.voice"):
+            stalled = service.record_capture_diagnostic(
+                {
+                    "event": "stalled",
+                    "detector": "silero",
+                    "silentMs": 6120.7,
+                    "contextState": "suspended",
+                    "trackState": "live",
+                    "trackMuted": False,
+                    "recoveryAttempts": 1,
+                }
+            )
+        assert stalled == {
+            "event": "stalled",
+            "detector": "silero",
+            "silent_ms": 6120,
+            "context_state": "suspended",
+            "track_state": "live",
+            "track_muted": False,
+            "recovery_attempts": 1,
+        }
+        stall_records = [
+            record for record in caplog.records if "voice capture stall" in record.getMessage()
+        ]
+        assert stall_records and stall_records[0].levelno == logging.WARNING
+        recovered = service.record_capture_diagnostic(
+            {
+                "event": "recovered",
+                "detector": "energy",
+                "silentMs": -50,
+                "recoveryAttempts": 10**9,
+            }
+        )
+        assert recovered["silent_ms"] == 0
+        assert recovered["recovery_attempts"] == 100_000
+        assert recovered["context_state"] == "unknown"
+        with pytest.raises(VoiceError, match="event"):
+            service.record_capture_diagnostic({"event": "listening", "detector": "silero"})
+        with pytest.raises(VoiceError, match="detector"):
+            service.record_capture_diagnostic({"event": "stalled", "detector": "sonar"})
+        with pytest.raises(VoiceError, match="object"):
+            service.record_capture_diagnostic("stalled")
+    finally:
+        service.store.close()

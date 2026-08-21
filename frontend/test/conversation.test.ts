@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import {
   BARGE_IN_CONFIRM_FRAMES,
+  CAPTURE_STALL_MS,
+  CaptureFrameWatchdog,
   HOLD_ENTER_PHRASES,
   HOLD_RELEASE_PHRASES,
   PLAYBACK_PROBE_CONFIRM_FRAMES,
@@ -112,5 +114,29 @@ bargeFrames=nextBargeInFrameCount(bargeFrames,.9)
 assert.equal(bargeFrames,BARGE_IN_CONFIRM_FRAMES-1)
 assert.equal(nextBargeInFrameCount(bargeFrames,.9),BARGE_IN_CONFIRM_FRAMES)
 assert.equal(nextBargeInFrameCount(bargeFrames,0),0)
+
+// Capture frame watchdog: a dead capture and a quiet room must stop rendering
+// identically. Frames of silence still arrive as blocks, so "no frames at all"
+// is the discriminator, and the clock is injected so the state machine is
+// testable without an audio graph.
+let clock=0
+const captureWatchdog=new CaptureFrameWatchdog(()=>clock)
+clock=CAPTURE_STALL_MS-1
+assert.deepEqual(captureWatchdog.check(),{action:'none',silentMs:CAPTURE_STALL_MS-1})
+assert.equal(captureWatchdog.isStalled,false)
+clock=CAPTURE_STALL_MS
+assert.equal(captureWatchdog.check().action,'stall','the threshold crossing reports exactly one stall')
+assert.equal(captureWatchdog.isStalled,true)
+assert.equal(captureWatchdog.recoveryAttempts,1)
+assert.equal(captureWatchdog.check().action,'retry','later polls retry instead of re-reporting')
+assert.equal(captureWatchdog.recoveryAttempts,2)
+assert.equal(captureWatchdog.frame(),true,'the first frame after an outage ends the stall')
+assert.equal(captureWatchdog.isStalled,false)
+assert.equal(captureWatchdog.recoveryAttempts,2,'the outage keeps its attempt count for the recovery report')
+assert.equal(captureWatchdog.frame(),false,'healthy frames report nothing')
+assert.equal(captureWatchdog.check().action,'none')
+clock+=CAPTURE_STALL_MS
+assert.equal(captureWatchdog.check().action,'stall','a fresh outage is reported again')
+assert.equal(captureWatchdog.recoveryAttempts,1,'and restarts the attempt counter')
 
 console.log('conversation tests passed')

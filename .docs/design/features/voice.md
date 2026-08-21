@@ -218,6 +218,23 @@ affect the PTY, session state, transcripts, history, or projects.
   terminate in a muted gain node feeding the destination, because the graph is rendered by
   pulling backwards from the destination and a capture node with nothing downstream is not
   guaranteed to run.
+- **A frame watchdog separates a dead capture from a quiet room** (`CaptureFrameWatchdog`).
+  The audio graph pulls continuously, so silence still delivers blocks of zeros at a steady
+  rate; no blocks at all means the capture path itself is dead — a suspended `AudioContext`,
+  a released track, a killed graph.
+  Without the watchdog the two rendered identically as `listening`, and the observed outage
+  (2026-08-20) left a phone claiming to listen for minutes while the daemon's access log
+  showed zero `transcribe` posts.
+  The watchdog is symptom-level by design: `AudioContext` suspension under memory pressure is
+  a hypothesis for the cause, so recovery does not depend on it being right.
+  Every 2 s poll with no frame for 5 s reports a stall exactly once, attempts
+  `context.resume()` on every poll, and a `statechange` away from `running` triggers an
+  immediate resume attempt as well.
+  The UI renders the `stalled` phase (never `listening`) with a detail that says whether the
+  track was released (only a Talk restart can reacquire it) or merely silent, and each
+  stall/recovery posts a bounded diagnostic to `POST /api/voice/capture-diagnostic` so the
+  outage is in `daemon.log` at the moment it happens rather than reconstructed from the
+  access log afterwards.
 - Both paths then share one resampler and one framing rule (`audioFrames.ts`): a streaming
   averaging decimator to 16 kHz that carries its partial output across blocks, and a frame
   assembler that emits exactly 512 samples (32 ms) — the only length Silero accepts. The
@@ -599,6 +616,7 @@ and never touches the daemon or an LLM.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
   record one browser-measured sample, start a fresh run.
 - `POST /api/voice/barge-in-diagnostic` - bounded confirmed/rejected playback probe diagnostics written to `daemon.log`.
+- `POST /api/voice/capture-diagnostic` - bounded stalled/recovered capture watchdog reports; a stall is written to `daemon.log` at WARNING because it is the durable evidence a dead microphone leaves.
 - `POST /api/sessions/{sid}/voice/prepare-submit` - side-effect-free safety validation before Talk uses the mounted terminal path.
 - `POST /api/sessions/{sid}/voice/submit` - compatibility-only idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.

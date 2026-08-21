@@ -766,7 +766,8 @@ interface SpawnRequest {
   cwd?: string                      // must resolve inside the owning Project root
   env?: Record<string, string>      // ≤ 64 entries; scalar values stringified
   completion_mode?: 'interactive' | 'one_shot'
-  seed_text?: string                // agent backends only; ≤ 500k chars
+  seed_text?: string                // agent backends only; ≤ 500k chars; the agent RUNS it
+  stage_text?: string               // agent backends only; ≤ 500k chars; parked unsent
 }
 ```
 
@@ -802,6 +803,19 @@ under that bound into argv itself (with the leading-dash guard) and stages a lon
 the workspace at `.swe-mux/seeds/` (gitignored, aged out after 14 days), seeding a short
 prompt that reads the staged file — which also removes the quoting-inflation risk a long
 Windows command line carries.
+Because the seed rides argv, the agent runs it: `seed_text` submits by construction and can
+never leave text waiting for review.
+
+`stage_text` is the stage-without-send counterpart, mutually exclusive with `seed_text`.
+The daemon spawns the session, waits up to 15 s for it to read `idle` (a fresh Claude
+composer arrives in ~1 s), then writes a bracketed paste with no carriage return through the
+operator-input path, so composer shadowing and delivery-readiness accounting see the parked
+text as partial input.
+Nothing is submitted; the operator reviews and presses Enter.
+A session that never reads ready still gets the paste — the PTY buffers input written before
+the CLI listens — and the `spawn_text_staged` event records `ready: false` for that case.
+The spawn response returns after staging completes, and a session that dies before staging
+fails the request rather than reporting a spawn that silently lost its text.
 
 `POST /sessions/{id}/input` is the only raw-input path that reaches a session whose pane is
 not mounted in the caller's browser; the browser uses it for composer fill (insert without
@@ -1213,6 +1227,7 @@ GET    /voice/stt-latency
 POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
 POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
+POST   /voice/capture-diagnostic         bounded stalled/recovered capture watchdog report
 GET    /voice/clips[?session=&run=&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
@@ -1295,6 +1310,13 @@ a restart.
 `/voice/barge-in-diagnostic` records the result of the browser's playback sidechain probe.
 It accepts a confirmed/rejected outcome, Silero/energy detector, optional agent/system origin, peak probability, and peak RMS.
 The daemon validates and clamps the browser-supplied values before writing the record to `daemon.log`.
+
+`/voice/capture-diagnostic` records the client frame watchdog's stalled/recovered reports:
+event, detector, silent milliseconds, `AudioContext` state, track state and muted flag, and
+the recovery-attempt count, each clamped on arrival.
+A stall logs at WARNING because it is the durable evidence a dead phone microphone leaves at
+the moment it dies — the failure this exists for was reconstructed from the access log hours
+later while the UI said "listening" throughout.
 
 The Talk client first calls `/voice/prepare-submit` to recheck the live Agent target, bounded text, and non-overridable delivery protections without writing input.
 It then sends Agent drafts through the mounted terminal's ordinary xterm/WebSocket input path, not through `/voice/submit`.

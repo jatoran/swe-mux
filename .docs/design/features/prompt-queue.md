@@ -177,6 +177,12 @@ separately opt-in.
 - **New-session seeds** travel as `seed_text` on the spawn request; the daemon inlines
   short bodies into argv and stages long ones into `.swe-mux/seeds/` with a reader prompt
   (`stage_seed_argv`), removing the former 20,000-character client-side ceiling.
+  Either way the agent runs the seed — it is submitted by construction.
+  Text that must open a session *unsent* travels as `stage_text` instead: the spawn
+  handler waits for readiness and writes the queue's bracketed-paste bytes with no
+  carriage return (`_stage_spawn_text`, `interfaces.md`), through
+  `_record_operator_input` so the parked text counts as partial input for
+  delivery readiness.
 
 ## Boundaries
 
@@ -221,8 +227,10 @@ write after a settle.
   event-driven stranding, startup reconcile), `stage_seed_argv`.
 - `src/swe_mux/server.py` — thin `queue_*` handlers, `QueueError` → typed JSON in
   `error_middleware`, service wiring + `_record_operator_input(source="queue")` injection,
-  retention loop, `seed_text` handling in `_spawn_from_body`.
-- `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text`.
+  retention loop, `seed_text`/`stage_text` handling in `_spawn_from_body` +
+  `_stage_spawn_text`.
+- `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text` / `SpawnRequest.stage_text`
+  (mutually exclusive).
 - `frontend/src/queueApi.ts` - typed session-queue and fleet-queue clients plus refusal mapping.
 - `frontend/src/QueuePane.tsx` - session-scoped Queue in drawer-following and pinned-pop-out renderings, the install-wide auto-delivery brakes, and the control that opens the fleet queue.
 - `frontend/src/FleetQueue.tsx` - the fleet-wide modal: authorship and target filters, provenance rows, revocation.

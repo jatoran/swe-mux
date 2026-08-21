@@ -213,6 +213,14 @@ export type CaptureHandlers={
   onError(message:string):void
   /** Reports how capture settled, once the detector is known. */
   onDetector(detector:CaptureDetector,diagnostic:string):void
+  /**
+   * No audio frames have arrived for CAPTURE_STALL_MS while capture should be
+   * running: the microphone is dead, whatever the UI's detector-derived phase
+   * says. Raised once per outage; recovery is being attempted alongside.
+   */
+  onCaptureStall?(diagnostic:CaptureStallDiagnostic):void
+  /** Frames are flowing again after a reported stall. */
+  onCaptureRecovered?(diagnostic:CaptureStallDiagnostic):void
   playbackActive():boolean
   playbackOrigin?():'agent'|'system'|null
   /**
@@ -234,6 +242,77 @@ export type PlaybackProbeResult={
 }
 
 const newUtteranceId=():string=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+/**
+ * No audio frames for this long while capture is supposed to be running means the
+ * capture path is dead, not the room quiet: the audio graph pulls continuously, so
+ * silence still delivers blocks of zeros at a steady ~21 Hz. Only a suspended
+ * AudioContext, a released track, or a killed graph stops the flow entirely.
+ */
+export const CAPTURE_STALL_MS=5_000
+export const CAPTURE_WATCHDOG_POLL_MS=2_000
+
+export type CaptureStallDiagnostic={
+  event:'stalled'|'recovered'
+  silentMs:number
+  contextState:string
+  trackState:string
+  trackMuted:boolean
+  detector:CaptureDetector
+  recoveryAttempts:number
+}
+
+export type CaptureWatchdogAction='none'|'stall'|'retry'
+
+/**
+ * Frame-liveness accounting for the persistent microphone, symptom-level by design.
+ *
+ * The observed failure (2026-08-20): the phone stopped POSTing audio at 21:53:30
+ * while the UI said "listening" for minutes — a dead capture and a quiet room
+ * rendered identically because the phase derived only from the speech detector.
+ * This class watches the one signal that separates them: whether raw audio blocks
+ * are arriving at all. It does not guess *why* they stopped (AudioContext
+ * suspension is a hypothesis, not a finding); the caller reports the stall and
+ * attempts recovery whatever the cause was.
+ *
+ * Pure and clock-injected so the stall/recover state machine is unit-testable
+ * without an audio graph.
+ */
+export class CaptureFrameWatchdog{
+  // A plain assigned field, not a constructor parameter property: the frontend
+  // unit tests run under node's type stripping, which refuses parameter properties.
+  private readonly now:()=>number
+  private lastFrameAt:number
+  private stalled=false
+  private attempts=0
+
+  constructor(now:()=>number=()=>performance.now()){this.now=now;this.lastFrameAt=this.now()}
+
+  get isStalled():boolean{return this.stalled}
+  get recoveryAttempts():number{return this.attempts}
+
+  /**
+   * A raw audio block arrived. Returns true when it ends a reported stall.
+   * `recoveryAttempts` keeps the finished outage's count until the next stall
+   * begins, so a recovery report can say how many retries the outage took.
+   */
+  frame():boolean{
+    this.lastFrameAt=this.now()
+    if(!this.stalled)return false
+    this.stalled=false
+    return true
+  }
+
+  /** Periodic poll: 'stall' exactly once per outage, 'retry' on each later poll. */
+  check():{action:CaptureWatchdogAction;silentMs:number}{
+    const silentMs=this.now()-this.lastFrameAt
+    if(silentMs<CAPTURE_STALL_MS)return{action:'none',silentMs}
+    if(this.stalled){this.attempts++;return{action:'retry',silentMs}}
+    this.stalled=true
+    this.attempts=1
+    return{action:'stall',silentMs}
+  }
+}
 
 /** Audio kept before speech starts, so the leading phoneme is not clipped. */
 const PRE_ROLL_MS=320
@@ -289,6 +368,8 @@ export class PersistentVoiceCapture{
   private stopped=false
   /** Push-to-talk suspends endpointing entirely; the key release is the endpoint. */
   private pushToTalk=false
+  private watchdog=new CaptureFrameWatchdog()
+  private watchdogTimer:ReturnType<typeof setInterval>|null=null
 
   constructor(handlers:CaptureHandlers){this.handlers=handlers}
 
@@ -300,9 +381,21 @@ export class PersistentVoiceCapture{
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false})
     this.context=new AudioContext({latencyHint:'interactive'})
     await this.context.resume()
+    // Mobile browsers suspend an AudioContext on memory pressure or audio-focus
+    // loss and never resume it for you; the one resume() above was the only one
+    // this class ever issued, which is how a dead capture kept reporting
+    // "listening". Re-resume on every non-running transition, and let the frame
+    // watchdog below catch whatever a resume() cannot fix.
+    this.context.onstatechange=()=>{
+      const context=this.context
+      if(!context||this.stopped)return
+      if(context.state!=='running')void context.resume().catch(()=>{/* the watchdog reports it */})
+    }
     this.resampler=new StreamingDownsampler(this.context.sampleRate)
     this.source=this.context.createMediaStreamSource(this.stream)
     await this.attachSource()
+    this.watchdog=new CaptureFrameWatchdog()
+    this.watchdogTimer=setInterval(()=>this.checkCapture(),CAPTURE_WATCHDOG_POLL_MS)
     // Started after capture is live rather than before it: the model is 2.3 MB over
     // whatever link a phone is on, and blocking the microphone on that download would
     // make Talk look broken for seconds. The energy detector is already running until
@@ -312,7 +405,9 @@ export class PersistentVoiceCapture{
 
   stop():void{
     this.stopped=true
+    if(this.watchdogTimer!==null){clearInterval(this.watchdogTimer);this.watchdogTimer=null}
     if(this.playbackProbe.reset())this.handlers.onPlaybackProbe?.(false)
+    if(this.context)this.context.onstatechange=null
     if(this.processor)this.processor.onaudioprocess=null
     if(this.worklet)this.worklet.port.onmessage=null
     try{this.source?.disconnect();this.worklet?.disconnect();this.processor?.disconnect();this.sink?.disconnect()}catch{/* already disconnected */}
@@ -322,6 +417,30 @@ export class PersistentVoiceCapture{
     this.context=null;this.stream=null;this.source=null;this.worklet=null;this.processor=null;this.sink=null;this.resampler=null
     this.detector='energy';this.gateConfig=ENERGY_GATE
     this.resetUtterance();this.preRoll=[];this.frames.reset();this.pushToTalk=false
+  }
+
+  /** Periodic liveness check: no frames for CAPTURE_STALL_MS → report + try to recover. */
+  private checkCapture():void{
+    if(this.stopped||!this.context)return
+    const verdict=this.watchdog.check()
+    if(verdict.action==='none')return
+    // resume() is idempotent and the least invasive recovery; a track the browser
+    // released ('ended') cannot be revived here, and the diagnostic says so.
+    void this.context.resume().catch(()=>{/* reported through the diagnostic */})
+    if(verdict.action==='stall')this.handlers.onCaptureStall?.(this.captureDiagnostic('stalled',verdict.silentMs))
+  }
+
+  private captureDiagnostic(event:'stalled'|'recovered',silentMs:number):CaptureStallDiagnostic{
+    const track=this.stream?.getAudioTracks()[0]
+    return{
+      event,
+      silentMs:Math.round(silentMs),
+      contextState:this.context?.state||'missing',
+      trackState:track?.readyState||'missing',
+      trackMuted:!!track?.muted,
+      detector:this.detector,
+      recoveryAttempts:this.watchdog.recoveryAttempts,
+    }
   }
 
   /**
@@ -418,8 +537,12 @@ export class PersistentVoiceCapture{
 
   /** Resample and frame one block of microphone audio, then queue it for detection. */
   private ingest(block:Float32Array):void{
+    if(this.stopped)return
+    // Liveness first: a block arriving at all is the fact the watchdog needs,
+    // whatever the detector later makes of its contents.
+    if(this.watchdog.frame())this.handlers.onCaptureRecovered?.(this.captureDiagnostic('recovered',0))
     const resampler=this.resampler
-    if(!resampler||this.stopped)return
+    if(!resampler)return
     const frames=this.frames.push(resampler.push(block))
     if(!frames.length)return
     // Serialized: Silero carries recurrent state between frames, so two overlapping

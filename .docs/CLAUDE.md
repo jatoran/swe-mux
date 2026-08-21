@@ -348,6 +348,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.
+  A capture frame watchdog (`CaptureFrameWatchdog`, `conversation.ts`) separates a dead capture from a quiet room: no raw blocks for 5 s renders the `stalled` phase (never `listening`), attempts `context.resume()`, and posts a bounded report to `POST /api/voice/capture-diagnostic` (stall = WARNING in `daemon.log`).
   `voiceQueries.ts` adds the non-configurable deterministic query grammar for help, scoped fleet lists/status, numbered navigation, and one-shot summary/verbatim reply reading.
   Routing is three tiers: this deterministic grammar, a conservative fuzzy pass (`voiceFuzzy.ts`), and — only on no-match, only when enabled — the Mux assistant (`design/features/assistant.md`), whose replies render in the voice panel's `chat` mode and speak through the application-speech path.
 

@@ -825,6 +825,48 @@ class VoiceService:
         log.info("voice barge-in %s", json.dumps(sample, sort_keys=True))
         return sample
 
+    def record_capture_diagnostic(self, raw: Any) -> dict[str, Any]:
+        """Durably log one browser-side capture stall or recovery.
+
+        The failure this exists for (2026-08-20): the phone's last
+        `/api/voice/transcribe` was at 21:53:30, zero followed, and the UI said
+        "listening" throughout — the daemon had no evidence the microphone had
+        died until the access log was read after the fact. The client's frame
+        watchdog now reports the stall here, so the outage is in daemon.log at
+        the moment it happens, with the AudioContext and track state that
+        distinguish a suspension from a released device.
+        """
+        if not isinstance(raw, dict):
+            raise VoiceError("capture diagnostic must be an object")
+        event = str(raw.get("event") or "")
+        if event not in {"stalled", "recovered"}:
+            raise VoiceError("capture event must be stalled or recovered")
+        detector = str(raw.get("detector") or "")
+        if detector not in {"silero", "energy"}:
+            raise VoiceError("capture detector must be silero or energy")
+
+        def bounded_int(value: Any, ceiling: int) -> int:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                return 0
+            return max(0, min(number, ceiling))
+
+        sample: dict[str, Any] = {
+            "event": event,
+            "detector": detector,
+            "silent_ms": bounded_int(raw.get("silentMs"), 86_400_000),
+            "context_state": str(raw.get("contextState") or "unknown")[:32],
+            "track_state": str(raw.get("trackState") or "unknown")[:32],
+            "track_muted": bool(raw.get("trackMuted")),
+            "recovery_attempts": bounded_int(raw.get("recoveryAttempts"), 100_000),
+        }
+        if event == "stalled":
+            log.warning("voice capture stall %s", json.dumps(sample, sort_keys=True))
+        else:
+            log.info("voice capture recovered %s", json.dumps(sample, sort_keys=True))
+        return sample
+
     def stt_latency_report(self) -> dict[str, Any]:
         return latency_report(list(self._stt_latency))
 

@@ -994,6 +994,7 @@ def create_app(
             web.post("/api/voice/stt-latency", voice_latency),
             web.delete("/api/voice/stt-latency", voice_latency),
             web.post("/api/voice/barge-in-diagnostic", voice_barge_in_diagnostic),
+            web.post("/api/voice/capture-diagnostic", voice_capture_diagnostic),
             web.post("/api/sessions/{sid}/voice/prepare-submit", voice_prepare_submit),
             web.post("/api/sessions/{sid}/voice/submit", voice_submit),
             web.post("/api/sessions/{sid}/voice/approval", voice_approval),
@@ -6134,8 +6135,11 @@ async def _spawn_from_body(
         if not is_agent_harness(backend):
             raise ValueError({"seed_text": "seed prompts require an agent backend"})
         # Short bodies ride argv; over-bound ones are staged into the workspace
-        # with a reader prompt (file I/O off-loop).
+        # with a reader prompt (file I/O off-loop). Either way the agent RUNS
+        # the prompt — text that must stay unsent travels as `stage_text`.
         argv = [*argv, await asyncio.to_thread(stage_seed_argv, cwd, spec.seed_text)]
+    if spec.stage_text and not is_agent_harness(backend):
+        raise ValueError({"stage_text": "staged prompts require an agent backend"})
     if worktree_project_root is not None:
         adapter = manager.adapters.get(backend)
         if adapter is not None:
@@ -6179,7 +6183,57 @@ async def _spawn_from_body(
     if spec.completion_mode != "interactive":
         spawn_values["completion_mode"] = spec.completion_mode
     session = await manager.spawn(**spawn_values)
+    if spec.stage_text:
+        await _stage_spawn_text(app, session, spec.stage_text)
     return session
+
+
+# A freshly spawned Claude reaches its composer in about a second (measured live
+# 2026-08-20: readiness at ~1.0s). The timeout is generous because a slow disk or
+# an MCP handshake can stretch startup; hitting it does not fail the spawn.
+STAGE_READY_TIMEOUT_SECONDS = 15.0
+STAGE_READY_POLL_SECONDS = 0.05
+
+
+async def _stage_spawn_text(app: web.Application, session: Any, text: str) -> None:
+    """Leave `text` waiting in a just-spawned agent's composer, unsent.
+
+    Spawn → wait for readiness → bracketed paste with NO carriage return, all
+    daemon-side: no mounted pane is involved, so this works headless and from
+    any device (proven live 2026-08-20 — the staged session stayed idle with
+    zero user messages, and a later Enter submitted exactly the staged text).
+    The paste goes through `_record_operator_input` so composer shadowing and
+    delivery-readiness accounting see it as the partial input it is.
+
+    A session that never reads ready still gets the paste: the PTY buffers
+    input written before the CLI listens, and the live probe showed an
+    immediate-after-spawn paste arriving intact. The `ready` flag on the event
+    records which case this was.
+    """
+    deadline = time.monotonic() + STAGE_READY_TIMEOUT_SECONDS
+    ready = False
+    while time.monotonic() < deadline:
+        if session.record.state in {"exited", "crashed"}:
+            raise ValueError({"stage_text": "the session ended before its text could be staged"})
+        if session.record.state == "idle":
+            ready = True
+            break
+        await asyncio.sleep(STAGE_READY_POLL_SECONDS)
+    if not ready:
+        log.warning(
+            "spawn_stage_not_ready session=%s state=%s waited=%.1fs",
+            session.record.id,
+            session.record.state,
+            STAGE_READY_TIMEOUT_SECONDS,
+        )
+    _record_operator_input(app["events"], session, paste_payload(text), source="spawn_stage")
+    await app["events"].emit(
+        "spawn_text_staged",
+        session_id=session.record.id,
+        source="spawn_stage",
+        characters=len(text),
+        ready=ready,
+    )
 
 
 async def spawn_session(request: web.Request) -> web.Response:
@@ -10491,6 +10545,16 @@ async def voice_barge_in_diagnostic(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     try:
         sample = voice.record_barge_in_diagnostic(await request.json())
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(sample)
+
+
+async def voice_capture_diagnostic(request: web.Request) -> web.Response:
+    """Record a browser-side capture stall or recovery from the frame watchdog."""
+    voice: VoiceService = request.app["voice"]
+    try:
+        sample = voice.record_capture_diagnostic(await request.json())
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 400)
     return json_response(sample)

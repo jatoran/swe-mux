@@ -2554,6 +2554,9 @@ body {
 .dictation-phase.starting,.dictation-phase.warming,.dictation-phase.transcribing,.dictation-phase.heard,.dictation-phase.sending{color:var(--blue,#7aa2f7)}
 .dictation-phase.standby{color:var(--amber)}
 .dictation-phase.error{color:var(--error,#f07178)}
+/* A stalled microphone must not read as calm: same alarm color as an error, pulsing
+   because recovery is being attempted rather than given up on. */
+.dictation-phase.stalled{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
 /* End of speech to action for the last utterance. Present because Phase 1 of the
    voice roadmap is judged on this number, and a breakdown nobody can see while
    speaking is a breakdown nobody tunes against. */

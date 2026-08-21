@@ -209,11 +209,14 @@ twice. When a request names several targets — three sessions, two notes — em
 independent tool calls in one response rather than one per round. If the rounds run low, \
 stop starting new work and say plainly what is done and what is not.
 
-To open a session with a prompt already written but unsent, pass seed_text to \
-spawn_session. That is the one call that both creates the session and stages the text, and \
-it is what "put this in the chat without sending it" means. type_into_session also stages \
-text, but only into a session whose terminal is already open on the operator's device, so \
-it is the wrong tool immediately after a spawn.
+spawn_session has two prompt parameters and they are not interchangeable. stage_text \
+leaves the prompt waiting in the new session's composer WITHOUT sending it, so the \
+operator reviews and presses Enter — it is what "put this in the chat without sending it" \
+means. seed_text SUBMITS the prompt: the new agent starts running it immediately, with no \
+chance to review. When the operator asks for text staged, input, or left unsent, use \
+stage_text and never seed_text. type_into_session also stages text, but only into a \
+session whose terminal is already open on the operator's device, so it is the wrong tool \
+immediately after a spawn.
 
 Confirmation is not yours to restate. A mutating tool that returns pending_confirmation has \
 already put a card in front of the operator and their device reads that card out, so do not \
@@ -224,11 +227,13 @@ required, not optional. mode "confirm" means it runs only if the operator agrees
 "cancel_window" means it runs on its own shortly unless they stop it, so do not ask them to \
 confirm it. A result carrying duplicate or already_done means the operator has seen or \
 accepted this exact action already: say so in one short sentence and do not propose it again.
-To stage text in a session's input without sending it, use type_into_session — repeated \
-calls append, nothing reaches the agent, and the session's terminal must be open on the \
-operator's device (focus it first with run_ui_command if needed). submit_session_composer \
-presses Enter on that staged text and always confirms. Prefer this pair over \
-send_to_session when the operator says "type", "enter", or "without sending"."""
+To stage text in an EXISTING session's input without sending it, use type_into_session — \
+repeated calls append, nothing reaches the agent, and the session's terminal must be open \
+on the operator's device (focus it first with run_ui_command if needed). \
+submit_session_composer presses Enter on that staged text and always confirms. Prefer \
+this pair over send_to_session when the operator says "type", "enter", or "without \
+sending"; for a session that does not exist yet, spawn_session with stage_text does the \
+same thing in one call."""
 
 
 class AssistantError(RuntimeError):
@@ -621,7 +626,9 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
     the visible card describes. Reading a note body aloud to announce that a
     note is about to be written is the slowest possible way to say nothing new.
     """
-    text = str(arguments.get("text") or arguments.get("seed_text") or "")
+    text = str(
+        arguments.get("text") or arguments.get("stage_text") or arguments.get("seed_text") or ""
+    )
     preview = "" if spoken else (
         f' "{text[:120]}{"…" if len(text) > 120 else ""}"' if text else ""
     )
@@ -631,6 +638,12 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
         return f"{mode} to {target}:{preview}" if preview else f"{mode} to {target}"
     if kind == "spawn_session":
         backend = str(arguments.get("backend") or "default harness")
+        # The card is where the operator learns whether the prompt will run or
+        # wait: the two parameters differ in exactly that, so the card says it.
+        if str(arguments.get("stage_text") or ""):
+            return f"spawn a {backend} session in {target}, prompt staged unsent{preview}"
+        if str(arguments.get("seed_text") or ""):
+            return f"spawn a {backend} session in {target}, running the prompt{preview}"
         return f"spawn a {backend} session in {target}{preview}"
     if kind == "create_project":
         # The absolute path is the whole point of this card: the operator
@@ -1345,8 +1358,9 @@ class AssistantService:
             ),
             tool(
                 "spawn_session",
-                "Start a new agent session in a project, optionally with a prompt "
-                "already staged in its composer but not sent.",
+                "Start a new agent session in a project — empty, with a prompt it "
+                "immediately runs (seed_text), or with a prompt staged in its "
+                "composer but not sent (stage_text).",
                 {
                     "project": project_property,
                     "backend": {
@@ -1355,16 +1369,30 @@ class AssistantService:
                             "Harness name, e.g. claude or codex; omit for the project default"
                         ),
                     },
+                    # This parameter was first documented (2026-08-20) as staging
+                    # without sending, after reading its summary instead of tracing
+                    # its delivery path; the seed is an argv prompt the CLI runs.
+                    # Three sessions were spawned with their prompts already
+                    # submitted while the operator asked for them left unsent. The
+                    # description now states what the code does, and stage_text
+                    # below is the real stage-without-send path.
                     "seed_text": {
                         "type": "string",
-                        # Undescribed, this was passed as "" by a model asked to do
-                        # exactly what it does (2026-08-20): open sessions with text
-                        # waiting in them. The capability existed and was invisible.
                         "description": (
-                            "Text to place in the new session's composer without "
-                            "sending it, so the operator presses Enter themselves. "
-                            "This is how to open a session with a prompt already "
-                            "written. Omit for an empty session."
+                            "A first prompt the new agent starts RUNNING immediately "
+                            "— this submits it, with no chance for the operator to "
+                            "review. Use stage_text instead whenever they want the "
+                            "text left unsent. Omit both for an empty session."
+                        ),
+                    },
+                    "stage_text": {
+                        "type": "string",
+                        "description": (
+                            "Text left waiting in the new session's composer WITHOUT "
+                            "sending it, so the operator can review, edit, and press "
+                            "Enter themselves. This is what 'put this in the chat "
+                            "without sending it' means. Cannot be combined with "
+                            "seed_text."
                         ),
                     },
                 },
@@ -1811,6 +1839,16 @@ class AssistantService:
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
             arguments["project"] = project.name
+        if kind == "spawn_session" and (
+            str(arguments.get("seed_text") or "").strip()
+            and str(arguments.get("stage_text") or "").strip()
+        ):
+            return {
+                "error": (
+                    "seed_text and stage_text cannot be combined: seed_text runs the "
+                    "prompt, stage_text leaves it unsent — pick the one the operator asked for"
+                )
+            }
         if kind == "create_project":
             refusal = await self._preflight_create_project(arguments)
             if refusal is not None:
@@ -1969,6 +2007,7 @@ class AssistantService:
                 project.default_backend or ""
             )
             seed = str(arguments.get("seed_text") or "").strip()
+            stage = str(arguments.get("stage_text") or "").strip()
             if str(arguments.get("client_id") or ""):
                 # The operator's device spawns through its own launch path, so
                 # the new session opens as a tab in the currently active pane
@@ -1976,12 +2015,15 @@ class AssistantService:
                 # daemon fallback on failure: a lost acknowledgement plus a
                 # daemon retry would spawn the session twice. The backend is
                 # fully resolved here — the frontend may not name harnesses.
+                # Staging still happens daemon-side (the client passes
+                # stage_text back on its spawn request), so it needs no pane.
                 outcome = await self._dispatch_client(
                     row,
                     {
                         "project_id": project.id,
                         "backend": backend or self.config.default_backend,
                         "seed_text": seed or None,
+                        "stage_text": stage or None,
                     },
                 )
                 return {"spawned": True, "detail": outcome.get("detail") or "spawned"}
@@ -1990,8 +2032,17 @@ class AssistantService:
                 body["backend"] = backend
             if seed:
                 body["seed_text"] = seed
+            if stage:
+                body["stage_text"] = stage
             session = await self.spawn_op(body)
-            return {"spawned": True, "session": session.record.name}
+            result: dict[str, Any] = {"spawned": True, "session": session.record.name}
+            if stage:
+                # Said explicitly so the model reports it truthfully: the text is
+                # parked in the composer and nothing has been submitted.
+                result["staged"] = "the text is in the composer, unsent"
+            elif seed:
+                result["submitted"] = "the agent is running the seed prompt"
+            return result
         if kind == "create_project":
             if self.create_project_op is None:
                 raise AssistantError("project creation is not wired on this daemon")

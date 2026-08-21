@@ -979,6 +979,89 @@ async def test_spawn_uses_the_ordinary_spawn_path(tmp_path: Path) -> None:
         service.store.close()
 
 
+async def test_spawn_stage_text_travels_and_reports_unsent(tmp_path: Path) -> None:
+    """stage_text reaches the spawn body and the result says the text is unsent.
+
+    The result field matters as much as the plumbing: the 2026-08-20 failure was
+    the model telling the operator "none of the messages will be sent" while
+    seed_text submitted all three, so the tool result must state which happened.
+    """
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps(
+                {"project": "pixel lab", "backend": "claude", "stage_text": "review me first"}
+            ),
+        },
+    }
+    service, _emitted, _queue, effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Spawned.")], trust="auto"
+    )
+    try:
+        await run_turn(service, "open a claude with this staged, do not send it")
+        assert effects["spawned"] == [
+            {"project_id": "p1", "backend": "claude", "stage_text": "review me first"}
+        ]
+        result = await service._execute_mutation(
+            "spawn_session",
+            {"project": "pixel lab", "backend": "claude", "stage_text": "park this"},
+            {"id": "a1"},
+        )
+        assert result["staged"] == "the text is in the composer, unsent"
+        result = await service._execute_mutation(
+            "spawn_session",
+            {"project": "pixel lab", "backend": "claude", "seed_text": "run this"},
+            {"id": "a2"},
+        )
+        assert result["submitted"] == "the agent is running the seed prompt"
+    finally:
+        service.store.close()
+
+
+async def test_spawn_card_says_whether_the_prompt_runs_or_waits() -> None:
+    from swe_mux.assistant import restate_action
+
+    staged = restate_action(
+        "spawn_session", {"project": "pixel lab", "backend": "claude", "stage_text": "park"}
+    )
+    running = restate_action(
+        "spawn_session", {"project": "pixel lab", "backend": "claude", "seed_text": "go"}
+    )
+    assert "staged unsent" in staged
+    assert "running the prompt" in running
+
+
+async def test_spawn_refuses_seed_and_stage_together(tmp_path: Path) -> None:
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        refusal = await service._preflight_mutation(
+            "spawn_session",
+            {"project": "pixel lab", "seed_text": "run", "stage_text": "park"},
+        )
+        assert refusal is not None and "cannot be combined" in refusal["error"]
+    finally:
+        service.store.close()
+
+
+async def test_spawn_schema_says_which_parameter_submits(tmp_path: Path) -> None:
+    # seed_text was documented as staging while actually submitting; the schema
+    # must now state the split so the model cannot repeat the 2026-08-20 mistake.
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        spawn = [
+            item for item in service._tool_definitions()
+            if item["function"]["name"] == "spawn_session"
+        ][0]
+        properties = spawn["function"]["parameters"]["properties"]
+        assert "RUNNING" in properties["seed_text"]["description"]
+        assert "WITHOUT" in properties["stage_text"]["description"]
+        assert "stage_text" in properties["seed_text"]["description"]
+    finally:
+        service.store.close()
+
+
 # --------------------------------------------------------------------------- #
 # Speaking a turn: what is said, once, and when
 # --------------------------------------------------------------------------- #
@@ -1671,7 +1754,11 @@ async def test_two_breaths_of_one_thought_become_one_turn(tmp_path: Path) -> Non
 
 async def test_seed_text_tells_the_model_what_it_is_for(tmp_path: Path) -> None:
     # It was an undescribed string, and a model asked to open sessions with text
-    # waiting in them passed "" twice. The capability was invisible.
+    # waiting in them passed "" twice. The capability was invisible. Then it was
+    # described as staging without sending — which it never did (the seed rides
+    # argv and the CLI runs it), so three sessions submitted prompts the
+    # operator asked to keep unsent (2026-08-20). The description must now say
+    # it runs, and point at stage_text for the unsent case.
     service, _emitted, _queue, _effects = make_service(tmp_path)
     try:
         spawn = [
@@ -1679,6 +1766,7 @@ async def test_seed_text_tells_the_model_what_it_is_for(tmp_path: Path) -> None:
             if item["function"]["name"] == "spawn_session"
         ][0]
         seed = spawn["function"]["parameters"]["properties"]["seed_text"]
-        assert "without" in seed["description"] and "sending" in seed["description"]
+        assert "submits" in seed["description"] and "stage_text" in seed["description"]
+        assert "without" not in seed["description"].split("stage_text")[0].lower()
     finally:
         service.store.close()

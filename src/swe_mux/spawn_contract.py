@@ -272,8 +272,14 @@ class SpawnRequest:
     # A new agent session's seed prompt as text, with no argv length ceiling:
     # the spawn handler turns it into an argv prompt directly, or stages an
     # over-bound body into the workspace with a short reader prompt
-    # (`prompt_queue.stage_seed_argv`). Agent backends only.
+    # (`prompt_queue.stage_seed_argv`). The agent RUNS this prompt — it is
+    # submitted by construction, not staged. Agent backends only.
     seed_text: str | None = None
+    # Text left waiting in the new agent's composer, unsent: the spawn handler
+    # waits for the session to become ready and writes a bracketed paste with
+    # no carriage return, so the operator reviews and presses Enter themselves.
+    # Mutually exclusive with ``seed_text``. Agent backends only.
+    stage_text: str | None = None
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SpawnRequest:
@@ -291,6 +297,7 @@ class SpawnRequest:
             "cwd",
             "env",
             "seed_text",
+            "stage_text",
         }
         unknown = set(body) - known
         if unknown:
@@ -326,6 +333,18 @@ class SpawnRequest:
                 raise ValueError({"seed_text": "must be a non-empty string"})
             if len(raw_seed) > 500_000:
                 raise ValueError({"seed_text": "must contain at most 500000 characters"})
+        raw_stage = body.get("stage_text")
+        if raw_stage is not None:
+            if not isinstance(raw_stage, str) or not raw_stage.strip():
+                raise ValueError({"stage_text": "must be a non-empty string"})
+            if len(raw_stage) > 500_000:
+                raise ValueError({"stage_text": "must contain at most 500000 characters"})
+        if raw_seed is not None and raw_stage is not None:
+            # One submits, the other deliberately does not; carrying both would
+            # make the session run one prompt with another parked on top of it.
+            raise ValueError(
+                {"stage_text": "cannot be combined with seed_text: one runs, one stages"}
+            )
         return cls(
             project_id=project_id,
             backend=backend,
@@ -337,4 +356,5 @@ class SpawnRequest:
             cwd=raw_cwd.strip() if isinstance(raw_cwd, str) else None,
             env=environment,
             seed_text=raw_seed,
+            stage_text=raw_stage,
         )

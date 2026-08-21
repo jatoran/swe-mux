@@ -2310,7 +2310,7 @@ export function App() {
   const assistantClientContext=()=>assistantContextRef.current
   // The dispatch executor below mounts once, so it reaches the launcher through
   // a ref that every render re-points at the fresh closure.
-  const spawnTerminalRef=useRef<((targetProject?:string,split?:false|SplitDirection|'stack',profileId?:string,targetSessionId?:string,position?:'before'|'after',backend?:string,options?:{argv?:string[];seedText?:string})=>Promise<Session|false>)|null>(null)
+  const spawnTerminalRef=useRef<((targetProject?:string,split?:false|SplitDirection|'stack',profileId?:string,targetSessionId?:string,position?:'before'|'after',backend?:string,options?:{argv?:string[];seedText?:string;stageText?:string})=>Promise<Session|false>)|null>(null)
   // The deterministic spoken verdict on a card is not a model turn, so it gets
   // its own one-shot stream rather than joining the turn's (assistantSpeech.ts).
   const speakAssistantReply=async(text:string)=>{
@@ -2405,7 +2405,7 @@ export function App() {
             // The device's own launch path, so the new session opens as a tab
             // in the currently active pane with the optimistic leaf and focus
             // every other launch entry point gets.
-            const spawned=projectTarget&&spawnBackend?await spawnTerminalRef.current?.(projectTarget,false,undefined,undefined,'after',spawnBackend,payload.seed_text?{seedText:String(payload.seed_text)}:undefined):false
+            const spawned=projectTarget&&spawnBackend?await spawnTerminalRef.current?.(projectTarget,false,undefined,undefined,'after',spawnBackend,payload.seed_text||payload.stage_text?{seedText:payload.seed_text?String(payload.seed_text):undefined,stageText:payload.stage_text?String(payload.stage_text):undefined}:undefined):false
             await reportUiResult(actionId,spawned
               ?{ok:true,detail:`spawned ${typeof spawned==='object'?spawned.name:'a session'} into the active pane`}
               :{ok:false,detail:'the device could not start the session'}).catch(()=>{})
@@ -3082,7 +3082,7 @@ export function App() {
   // the cross-vendor review spawn does. That is deliberately not an inject-then-Enter dance: a
   // freshly spawned TUI is not ready for input for seconds, and anything written before it is
   // would be swallowed.
-  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:string='shell', options?:{argv?:string[];seedText?:string}) => {
+  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:string='shell', options?:{argv?:string[];seedText?:string;stageText?:string}) => {
     if (spawning.current) return false
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target){setError('Project is not available yet.');return false}
@@ -3117,9 +3117,13 @@ export function App() {
         // match the requested one, which is the check the gate used to stand in for.
         profile_id: profileId || undefined,
         ...(options?.argv?.length ? { argv: options.argv } : {}),
-        // A first prompt as text: the daemon inlines short bodies into argv and stages long
-        // ones into the workspace with a reader prompt, so there is no client-side ceiling.
+        // A first prompt as text the agent RUNS: the daemon inlines short bodies into argv
+        // and stages long ones into the workspace with a reader prompt, so there is no
+        // client-side ceiling.
         ...(options?.seedText ? { seed_text: options.seedText } : {}),
+        // Text left waiting in the composer, unsent: the daemon waits for readiness and
+        // writes a bracketed paste with no Enter, so no pane involvement is needed.
+        ...(options?.stageText ? { stage_text: options.stageText } : {}),
       })
       markProjectRecent(targetProject)
       startupOrigins.current[next.id]=startupOrigin
