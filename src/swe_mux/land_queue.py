@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from .background_tasks import background
 from .clipboard_store import looks_like_secret
 from .git_operations import run_git_mutation
 from .land_preconditions import (
@@ -50,6 +51,7 @@ from .worktree_verify import (
 log = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_SECONDS = 5.0
+LAND_LOOP = "land_queue"
 
 #: Per-origin-session requests per hour. A land is expensive in wall-clock rather than
 #: in tokens, so the cap is about a runaway loop, not about spend.
@@ -140,21 +142,15 @@ class LandQueueService:
         self._record_fact = record_fact
         self._draft_request = draft_request
         self._clock = clock
-        self._task: asyncio.Task[None] | None = None
         self._roots_in_flight: set[str] = set()
 
     # -- lifecycle ------------------------------------------------------------
 
     def start(self) -> None:
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._run(), name="land-queue")
+        background.start(LAND_LOOP, self._run)
 
     async def stop(self) -> None:
-        if self._task is None:
-            return
-        self._task.cancel()
-        await asyncio.gather(self._task, return_exceptions=True)
-        self._task = None
+        await background.stop(LAND_LOOP)
 
     async def restore(self) -> None:
         """Return steps orphaned by a daemon restart to the queue."""
@@ -176,13 +172,12 @@ class LandQueueService:
 
     async def _run(self) -> None:
         while True:
-            try:
-                await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+            # The wait is outside the guard on purpose: time spent sleeping is not
+            # this loop's cost, and counting it as such is how a cheap loop ends up
+            # at the top of the `costliest` list (`background_tasks.py`).
+            await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+            with background.iteration(LAND_LOOP):
                 await self.tick()
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - a sweep failure must not stop the loop
-                log.exception("land_queue_sweep_failed")
 
     # -- authority ------------------------------------------------------------
 
@@ -234,6 +229,7 @@ class LandQueueService:
         origin: str = "operator",
         origin_session_id: str = "",
         origin_run_id: str = "",
+        reason: str = "",
     ) -> dict[str, Any]:
         """Enqueue a land, or draft it for a human, or refuse it.
 
@@ -265,6 +261,8 @@ class LandQueueService:
                     project_root=project_root,
                     worktree_root=worktree_root,
                     origin_session_id=origin_session_id,
+                    origin_run_id=origin_run_id,
+                    reason=reason,
                 )
 
         facts = await read_repository_facts(worktree_root, project_root)
@@ -315,6 +313,8 @@ class LandQueueService:
         project_root: str,
         worktree_root: str,
         origin_session_id: str,
+        origin_run_id: str = "",
+        reason: str = "",
     ) -> dict[str, Any]:
         """Write an inert approval request instead of acting.
 
@@ -323,13 +323,30 @@ class LandQueueService:
         """
         if self._draft_request is None:
             raise LandRefusal("draft_unavailable", "drafted land requests are not available here")
+        branch = ""
+        facts = await read_repository_facts(worktree_root, project_root)
+        if facts.readable:
+            branch = facts.worktree_branch
         result = await self._draft_request(
             project_root=project_root,
             project_id=project_id,
-            worktree_root=worktree_root,
+            worktree_root=facts.worktree_root or worktree_root,
+            branch=branch,
             origin_session_id=origin_session_id,
+            origin_run_id=origin_run_id,
+            reason=reason,
         )
-        return {"state": "drafted", "grant": "draft", **dict(result or {})}
+        return {
+            "state": "drafted",
+            "grant": "draft",
+            "branch": branch,
+            "note": (
+                "This wrote an inert approval request and started nothing. A human "
+                "approves it in the Fleet Queue, and the approval is what enqueues "
+                "the land."
+            ),
+            **dict(result or {}),
+        }
 
     async def cancel(self, request_id: str) -> dict[str, Any]:
         row = await self._store.transition(

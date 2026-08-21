@@ -1319,6 +1319,32 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "request_land",
+        "description": (
+            "Ask for your worktree branch to be landed on its Project's trunk. "
+            "This enqueues a request and performs nothing itself. The daemon then "
+            "merges the trunk into your branch, runs the repository's own "
+            "verification command, and fast-forwards the trunk - in that order, one "
+            "branch at a time, and only while your worktree is clean and no session "
+            "in it is mid-turn. A merge conflict or a failed verification comes back "
+            "to you as a message naming what stopped it, and your worktree is left "
+            "exactly as it was: nothing is committed for you and no conflict is "
+            "resolved for you. By default this is not granted, and the call writes "
+            "an inert request a human approves. Call it from a session whose cwd is "
+            "the worktree you want landed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why the branch is ready (recorded, shown to a human)",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 _DECLARED_TOOL_NAMES = {str(tool["name"]) for tool in TOOLS}
@@ -1386,6 +1412,7 @@ class McpService:
         automation_gate: Any = None,
         session_control: Any = None,
         code_graph: Any = None,
+        land_queue: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -1415,6 +1442,9 @@ class McpService:
         # Phase 7.9 code-structure graph store. Absent it, the structural reads
         # answer `unsupported` (the substrate is not running), never a fake empty.
         self.code_graph = code_graph
+        # Phase 14 land queue. Absent it, `request_land` answers unavailable rather
+        # than half-enqueueing - the same rule the other write tools follow.
+        self.land_queue = land_queue
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -3719,6 +3749,50 @@ class McpService:
         )
         return dict(result)
 
+    async def request_land(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.request_land`: enqueue a land of the caller's own worktree branch.
+
+        Deliberately has no target argument. An agent lands the checkout it is
+        working in and no other, so the worktree is read from the caller's own live
+        cwd rather than accepted from the call - there is nothing here to forge.
+        Every bound (install switch, Project opt-in, grant, budget, preconditions,
+        the git vocabulary itself) lives in the daemon service; this is a caller.
+        """
+        self.writes += 1
+        if self.land_queue is None:
+            raise QueueError(
+                "unavailable",
+                "the land queue is not available on this daemon.",
+                status=503,
+            )
+        record = caller.record
+        worktree_root = str(getattr(record, "git_cwd", "") or "")
+        if not worktree_root:
+            raise QueueError(
+                "no_worktree",
+                "this session has no working directory to land.",
+                status=409,
+            )
+        project = None
+        if self.projects is not None:
+            project = self.projects.projects.get(str(record.project_id or ""))
+        if project is None:
+            raise QueueError(
+                "no_project",
+                "this session is not owned by a registered Project.",
+                status=409,
+            )
+        result = await self.land_queue.request(
+            project_id=str(project.id),
+            project_root=str(project.root),
+            worktree_root=worktree_root,
+            origin="agent",
+            origin_session_id=str(record.id),
+            origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
+            reason=str(args.get("reason") or ""),
+        )
+        return dict(result)
+
     # ------------------------------------------------------------ protocol
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
@@ -3762,6 +3836,7 @@ class McpService:
             "run_action": self.run_action,
             "interrupt": self.interrupt,
             "end_session": self.end_session,
+            "request_land": self.request_land,
         }
         handler = handlers.get(name)
         if handler is None:

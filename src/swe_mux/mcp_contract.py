@@ -53,6 +53,12 @@ WRITE_TOOL_NAMES = (
     # and a human is what acts, until the Project raises the grant to `granted`.
     "interrupt",
     "end_session",
+    # Phase 14: ask for this worktree's branch to be landed. A request, not the
+    # action - it enqueues, and the daemon's fixed git vocabulary is what runs. Like
+    # interrupt/end it defaults to a per-Project `draft` grant, so the call writes an
+    # inert request a human approves. Deliberately session-scoped with no target
+    # argument: an agent lands the checkout it is working in, never another one.
+    "request_land",
 )
 
 

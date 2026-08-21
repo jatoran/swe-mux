@@ -42,8 +42,13 @@ _GRANT_CONFIG = (
     'session_control_grant = "granted"\n'
     'spawn_grant = "granted"\n'
     "\n"
+    'land_grant = "granted"\n'
+    "\n"
     "[automations]\n"
     "session_control = true\n"
+    # Phase 14: the land queue is its own capability with its own switch, so the
+    # scratch Project has to opt into it separately from session control.
+    "land_queue = true\n"
 )
 
 
@@ -76,14 +81,22 @@ class IsolatedDaemon:
         return str((await response.json())["id"])
 
     async def spawn(
-        self, project_id: str, backend: str, seed_text: str, name: str
+        self,
+        project_id: str,
+        backend: str,
+        seed_text: str,
+        name: str,
+        cwd: str | None = None,
     ) -> dict[str, Any]:
         response = await self.client.post(
             "/api/sessions",
             json={
                 "project_id": project_id,
                 "backend": backend,
-                "cwd": str(self.root),
+                # An explicit cwd is how a caller spawns into a worktree of this
+                # repository; containment admits it through `resolve_listed_cwd`,
+                # which asks Git rather than trusting the path.
+                "cwd": cwd or str(self.root),
                 "seed_text": seed_text,
                 "name": name,
             },

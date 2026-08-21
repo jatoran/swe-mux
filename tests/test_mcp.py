@@ -1278,6 +1278,7 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "run_action",
         "interrupt",
         "end_session",
+        "request_land",
     }
     assert names == {tool["name"] for tool in TOOLS}
     by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}
@@ -1435,3 +1436,64 @@ def test_shims_register_mcp_only_when_the_session_holds_a_token(
         "mcpServers"
     ]["mux"]
     assert server["headers"]["Authorization"] == "Bearer tok"
+
+
+# ------------------------------------------------------------ land requests
+
+
+class LandStub:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def request(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return {"state": "queued", "id": "lnd_1", "branch": "worktree-alpha"}
+
+
+def _land_service(session: Any, land: Any = None) -> McpService:
+    project = SimpleNamespace(id="p1", name="repo", root="D:/repo")
+    return McpService(
+        manager_for(session),
+        HistoryStub(),
+        projects=SimpleNamespace(projects={"p1": project}),
+        land_queue=land,
+    )
+
+
+async def test_request_land_reads_the_worktree_from_the_callers_own_cwd() -> None:
+    """There is no target argument, so there is nothing here to forge.
+
+    The checkout the daemon lands comes from the caller's own live cwd - the same
+    `git_cwd` every other per-checkout reading uses - which makes "an agent lands
+    the checkout it is working in, and no other" true by construction rather than
+    by a check something could be routed around.
+    """
+    land = LandStub()
+    caller = live_session("s1")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    result = await _land_service(caller, land).dispatch_tool(
+        caller, "request_land", {"reason": "ready"}
+    )
+    assert result["state"] == "queued"
+    assert land.calls[0]["worktree_root"] == "D:/worktrees/alpha"
+    assert land.calls[0]["origin"] == "agent"
+    assert land.calls[0]["origin_session_id"] == "s1"
+    assert land.calls[0]["project_root"] == "D:/repo"
+
+
+async def test_request_land_without_the_service_is_unavailable_not_a_partial_write() -> None:
+    caller = live_session("s1")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    with pytest.raises(QueueError) as caught:
+        await _land_service(caller, None).dispatch_tool(caller, "request_land", {})
+    assert caught.value.code == "unavailable"
+
+
+async def test_request_land_from_an_unregistered_project_refuses() -> None:
+    land = LandStub()
+    caller = live_session("s1", project_id="other")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    with pytest.raises(QueueError) as caught:
+        await _land_service(caller, land).dispatch_tool(caller, "request_land", {})
+    assert caught.value.code == "no_project"
+    assert land.calls == []

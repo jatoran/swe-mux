@@ -1429,7 +1429,7 @@ MAX_OBSERVATION_CHARS = 2000
 # summary line — today only `mux.requestSpawn` (`ROADMAP.md` Phase 5,
 # `CONTROL_PLANE_ROADMAP.md` §7.2/§16). The item is text until a human approves
 # it; nothing here starts anything.
-OBSERVATION_KINDS = ("note", "spawn_request", "control_request")
+OBSERVATION_KINDS = ("note", "spawn_request", "control_request", "land_request")
 MAX_SPAWN_REQUEST_PROMPT = 8000
 _REQUEST_STRING_FIELDS = (
     "prompt",
@@ -1451,6 +1451,13 @@ _REQUEST_STRING_FIELDS = (
     "target_session_id",
     "target_name",
     "outcome",
+    # Phase 14 land_request fields. A drafted land is reviewed by *checkout*, not by
+    # session, so the human needs the branch and the two roots to judge it - the same
+    # allowlist discipline, one more request shape.
+    "worktree_root",
+    "project_root",
+    "branch",
+    "request_id",
 )
 
 
