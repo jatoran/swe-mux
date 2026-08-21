@@ -5,13 +5,23 @@ design feature first, then the relevant technical page before changing code.
 
 ## Backend
 
-- `backend/packages.md`: package responsibilities and dependency direction.
+- `backend/packages.md`: the composition boundary, dependency direction, and the index of the
+  per-domain package maps under `backend/packages/`.
 - `backend/sqlite.md`: one-database concurrency, transaction, and worker rules.
 
 ## Frontend
 
-- `frontend/packages.md`: component/helper ownership and App orchestration boundaries.
+- `frontend/packages.md`: the composition boundary, the extraction rule, UI state boundaries, and
+  the index of the per-domain package maps under `frontend/packages/`.
 - `frontend/workspace-state.md`: layout-v6 state, persistence, pointer drag, and mobile projection.
+
+## Package map shape
+
+The package maps are the documents most branches touch at once, so they are written as per-feature
+sections with one sentence per line and no prose in table cells.
+That shape is what lets Git merge two branches' disjoint edits instead of conflicting over one
+enormous line, and `tests/test_package_map_shape.py` keeps it from regressing.
+Add a module to the domain file that owns it, and link any new domain file from its index.
 
 ## Validation rule
 
