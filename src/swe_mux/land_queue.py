@@ -35,6 +35,7 @@ from typing import Any
 from .background_tasks import background
 from .clipboard_store import looks_like_secret
 from .git_operations import run_git_mutation
+from .land_classify import GateChoice, classify_change_set, read_change_set
 from .land_preconditions import (
     DEFAULT_HOLD_TIMEOUT_SECONDS,
     evaluate_preconditions,
@@ -541,6 +542,78 @@ class LandQueueService:
         )
         return {**current, "reconciled_oid": head, "_already_current": already}
 
+    async def _classify(self, row: dict[str, Any], head: str) -> GateChoice:
+        """Decide which gate this land runs, and record the decision either way.
+
+        Between reconcile and verify, because the change set that matters is the one the
+        trunk will actually gain: after the reconcile the branch contains the trunk, so
+        the trunk's HEAD to the branch's tip is exactly what a fast-forward applies -
+        the branch's own commits plus anything it merged in from elsewhere.
+
+        The event is written on **both** outcomes and before either gate runs. A skipped
+        gate that left no trace would be indistinguishable in the trail from one that
+        passed, which is the failure this whole path is most able to cause and least able
+        to notice (`no silent caps`).
+        """
+        trunk_head = await self._head(row["project_root"])
+        entries = await read_change_set(row["project_root"], trunk_head, head)
+        choice = classify_change_set(entries)
+        await self._store.record_event(
+            request_id=row["id"],
+            project_id=row["project_id"],
+            step="classify",
+            outcome=choice.gate,
+            reason=choice.reason,
+            detail={**choice.public_dict(), "base": trunk_head, "tip": head},
+            now=self._clock(),
+        )
+        log.info(
+            "land_gate_classified request_id=%s branch=%s gate=%s paths=%d reason=%s",
+            row["id"],
+            row["branch"],
+            choice.gate,
+            choice.path_count,
+            choice.reason,
+        )
+        return choice
+
+    async def _skip_verification(
+        self, row: dict[str, Any], head: str, choice: GateChoice
+    ) -> dict[str, Any] | None:
+        """Move a documentation-only change set straight to the fast-forward.
+
+        The row never enters `verifying`, because it never verifies: a state that says
+        otherwise for a second and a half is a small lie in the one place the queue is
+        read for what actually happened. `verified_oid` is still set, and still means
+        what it always meant - the OID this request cleared its gate at - so the
+        branch-moved-after-clearing check in `_land` keeps working unchanged.
+        """
+        try:
+            updated = await self._store.transition(
+                row["id"],
+                expect=("reconciling",),
+                state="landing",
+                reason="",
+                reconciled_oid=head,
+                verified_oid=head,
+                verify_digest="",
+                verify_gate="docs_only",
+                now=self._clock(),
+            )
+        except LandConflict:
+            return None
+        await self._store.record_event(
+            request_id=row["id"],
+            project_id=row["project_id"],
+            step="verify",
+            outcome="skipped",
+            reason=choice.reason,
+            detail={"gate": "docs_only", "paths": list(choice.paths), "oid": head},
+            now=self._clock(),
+        )
+        await self._emit("land_changed", updated)
+        return updated
+
     async def _verify(self, row: dict[str, Any]) -> dict[str, Any] | None:
         request_id = row["id"]
         head = row.get("reconciled_oid") or await self._head(row["worktree_root"])
@@ -548,6 +621,12 @@ class LandQueueService:
         # contained the trunk, so the OID that passed before is the OID standing now.
         if row.get("_already_current") and row.get("verified_oid") == head:
             return {**row, "verified_oid": head}
+        # The other case, and the only one decided from the change set itself: every
+        # path this land would add to the trunk is documentation, so the gate would
+        # spend minutes proving that markdown does not fail pytest.
+        choice = await self._classify(row, head)
+        if choice.skips_verification:
+            return await self._skip_verification(row, head, choice)
         try:
             current = await self._store.transition(
                 request_id,
@@ -555,6 +634,7 @@ class LandQueueService:
                 state="verifying",
                 reason="",
                 reconciled_oid=head,
+                verify_gate="full",
                 now=self._clock(),
             )
         except LandConflict:

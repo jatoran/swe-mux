@@ -67,6 +67,9 @@ It opens itself only while landing is blocked - the install stop is off, or the 
 - A step total that is absent, malformed, or below the step already reached becomes `null` rather than a number, because a wrong total is the one failure that makes a progress reading worse than none.
 - `verifyProgressLabel` has exactly three forms (`step k of N · name · elapsed`, `step k · name · elapsed`, `elapsed · N lines`) and **never a percentage**, asserted rather than trusted in `test/gitLand.test.ts` and `test/renderer/git-land.spec.ts`.
 - A `waiting` row takes the idle tone rather than the warn one, so a normal hold does not train the operator to intervene.
+- `landGateNote` draws **only** a skipped gate, on the row, in the strip's queue and history, and on the summary line while it runs.
+  A full gate gets no note, because the states already narrate it and a chip on every row would bury the one that matters; a documentation-only land has no such state, going from merging the trunk straight to fast-forwarding.
+- An unrecognised `verify_gate` parses to `''` rather than to a gate that ran, so no value this build does not know can render as "nothing verified this".
 
 ## History
 

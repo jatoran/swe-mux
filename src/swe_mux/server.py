@@ -216,6 +216,7 @@ from .project_files import (
     ignored_project_path,
     list_project_directories,
     list_project_directory,
+    note_save_loop_sample,
     project_approval_ceiling,
     project_approval_rules,
     project_automations,
@@ -920,6 +921,7 @@ def create_app(
             web.get("/api/global-notes/{note_id}", get_global_note),
             web.put("/api/global-notes/{note_id}", put_global_note),
             web.get("/api/notes", list_notes),
+            web.post("/api/notes/save-loop-diagnostic", note_save_loop_diagnostic),
             web.post("/api/projects/{project_id}/notes", create_project_note),
             web.get("/api/projects/{project_id}/notes/{note_id}", get_note),
             web.put("/api/projects/{project_id}/notes/{note_id}", put_note),
@@ -5319,6 +5321,15 @@ async def list_notes(request: web.Request) -> web.Response:
             items.append({**summary, "project_id": project.id, "project_name": project.name})
     items.sort(key=lambda item: float(item["updated_at"]), reverse=True)
     return json_response({"items": items})
+
+
+async def note_save_loop_diagnostic(request: web.Request) -> web.Response:
+    """Record one browser-side note save loop the client's guards ended."""
+    try:
+        sample = note_save_loop_sample(await request.json())
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(sample)
 
 
 async def create_project_note(request: web.Request) -> web.Response:

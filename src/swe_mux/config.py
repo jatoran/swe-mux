@@ -784,6 +784,21 @@ class Config:
     # from the grant's creation instead disabled auto-delivery on every session
     # older than the window while it was actively in use.
     auto_delivery_session_ttl_minutes: int = 60
+    # How long a session that has just had a message *delivered* to a peer keeps
+    # its grant while it waits for the answer. A conversation waiting on a reply
+    # it is owed is not the untouched conversation the idle lapse exists to
+    # close - it is the middle of a bounded exchange - and losing the grant there
+    # is what stranded an orchestrator's hand-off on 2026-08-21: the notify armed,
+    # the worker answered, and nothing could deliver the answer back.
+    #
+    # This widens nothing on its own. It only holds off the *lapse*; the master
+    # switch, the emergency pause, quiet hours, head-of-line order, the stability
+    # window, readiness, and the consecutive-send cap all still decide every send.
+    # And it is capped by the exchange itself: a thread that has spent its
+    # `agent_message_max_thread_turns` budget opens no window, so the reply window
+    # can never outlive the conversation it belongs to. 0 disables it entirely and
+    # restores the pre-2026-08-21 behaviour.
+    auto_delivery_reply_window_minutes: int = 30
     # Local-time quiet window (HH:MM). Auto-delivery pauses inside it; manual
     # sends are unaffected.
     auto_delivery_quiet_start: str = ""
@@ -1448,6 +1463,11 @@ def _validate(config: Config) -> None:
         errors["auto_delivery_session_ttl_minutes"] = "must be between 1 and 1440 minutes"
     if not 0 <= config.auto_delivery_refusal_backoff_seconds <= 3600:
         errors["auto_delivery_refusal_backoff_seconds"] = "must be between 0 and 3600 seconds"
+    # 0 is legal here and nowhere else in this block: the reply window is the one
+    # bound that only ever *holds off* another bound, so switching it off is a
+    # narrowing rather than the unbounded grant the others must refuse.
+    if not 0 <= config.auto_delivery_reply_window_minutes <= 1440:
+        errors["auto_delivery_reply_window_minutes"] = "must be between 0 and 1440 minutes"
     # Approval bounds. Every lower bound here is the point: an unbounded grant or
     # an unbounded answer count is standing authority, which is the one thing
     # this feature must not become.

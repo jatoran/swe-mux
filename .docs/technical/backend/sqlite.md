@@ -105,9 +105,13 @@ That is what makes a fire idempotent across a daemon restart, which no in-memory
 `land_requests_inflight(project_root) WHERE state IN (<running states>)` is the stronger of the two: it makes "one land at a time per trunk" a property of the schema, so the losing `UPDATE` into a step state raises `IntegrityError` even if two workers both concluded they should proceed.
 A partial index is what allows both: the same `(project_root, branch)` pair recurs freely across finished requests, and only the live ones are constrained.
 
-`LandStore` is at schema version 2, which added `land_verify_plans(project_root, digest)` - what a verification gate's steps were the last time those exact bytes passed, so a running one can honestly report "step 3 of 7".
+`LandStore` reached schema version 2 with `land_verify_plans(project_root, digest)` - what a verification gate's steps were the last time those exact bytes passed, so a running one can honestly report "step 3 of 7".
 It is a new table under `CREATE TABLE IF NOT EXISTS` rather than a column migration, so an older database gains it on the next open and a database written by a newer build loses nothing when an older one opens it.
 The row is upserted, never accumulated, and only a *passing* run writes one (`../../design/features/land-queue.md` explains why a failing run's step list would poison the prediction).
+
+Version 3 added `land_requests.verify_gate`, which is a **column** and therefore needs the `PRAGMA table_info` check that `LandStore._migrate` runs: `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so a column added to the schema string alone reaches a fresh install and no other.
+It is backfilled to `''` - "this row was never classified" - rather than to `'full'`.
+Every pre-migration land did run the full gate, but that is a fact about history rather than about the column, and this is the one field whose entire job is making a *skipped* gate visible: a row asserting a classification nothing recorded is the wrong direction for it.
 
 `ScheduleStore` is at schema version 2 and migrates by reading `PRAGMA table_info` rather than by trusting a recorded version, so a database written by a newer build, opened by an older one, and opened again still gains each added column exactly once.
 The added columns are `ALTER TABLE ADD COLUMN` rather than a table rebuild because every default reads as the previous behaviour: a row written before the resume action existed *was* a deferred spawn with no target.

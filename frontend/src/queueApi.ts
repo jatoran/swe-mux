@@ -64,6 +64,27 @@ export interface QueueAutoSession {
   max_sends: number
   sends_remaining: number
   disabled_reason: string | null
+  /** Present only while the grant is off *for idleness*, which is the one disable
+   *  reason with no act behind it — so the only one nobody can look up afterwards.
+   *  Fields are individually null on a row that lapsed before the audit existed. */
+  lapse: {
+    at: number | null
+    idle_seconds: number | null
+    window_minutes: number | null
+    pending: number | null
+  } | null
+  /** Present while an active exchange is holding the idle lapse off: this session's
+   *  own message reached a peer recently and it is owed an answer. It authorizes
+   *  nothing — every other gate still decides each send. */
+  reply_window: {
+    thread_id: string | null
+    peer_session_id: string | null
+    sent_at: number
+    expires_at: number
+    window_minutes: number
+    thread_messages_used: number
+    thread_messages_limit: number
+  } | null
 }
 
 export interface QueueAutoStatus {
@@ -73,6 +94,7 @@ export interface QueueAutoStatus {
   stable_seconds: number
   max_consecutive: number
   session_ttl_minutes: number
+  reply_window_minutes: number
   sessions: QueueAutoSession[]
   counters: Record<string, number>
   promotion: {

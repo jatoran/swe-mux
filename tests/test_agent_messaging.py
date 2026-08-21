@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from swe_mux.agent_messaging import AgentMessagingService
-from swe_mux.auto_delivery import AutoDeliveryController
+from swe_mux.auto_delivery import LAPSED_REASON, AutoDeliveryController
 from swe_mux.config import Config
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.mcp import McpService
@@ -721,6 +721,153 @@ async def test_a_retried_notify_does_not_duplicate(harness: Harness) -> None:
     assert again["deduplicated"] is True
     view = await harness.store.messages_for_target("s2")
     assert len(view["messages"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_answers_the_same_question_and_stages_nothing(
+    harness: Harness,
+) -> None:
+    """The deliverability answer used to arrive strictly after the item was armed.
+
+    A sender learned that nothing would deliver its message only once the
+    message was already sitting in a peer's queue, so the stranded item had to
+    be cleaned up rather than never created. A dry run runs every bound and
+    reports the same verdict without staging anything or spending any budget.
+    """
+    await harness.auto.tick()
+    caller = harness.manager.sessions["s1"]
+    preview = await harness.messaging.notify(
+        caller, target="s2", body="ready to hand off?", dry_run=True
+    )
+    assert preview["dry_run"] is True
+    assert preview["would_arm"] is True
+    assert preview["state"] == "armed"
+    assert preview["target_session_id"] == "s2"
+    assert "message_id" not in preview
+    assert isinstance(preview["target_delivery"]["auto_delivery"], bool)
+
+    # Nothing staged, nothing queued, nothing charged against the hourly budget.
+    assert await harness.store.messages_for_target("s2") == {
+        **await harness.store.messages_for_target("s2"),
+        "messages": [],
+    }
+    assert await harness.store.sender_message_count("agent", "s1", 0) == 0
+    assert not harness.writes
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_refuses_exactly_where_a_real_send_would(
+    tmp_path: Path,
+) -> None:
+    """A preview that answered "fine" and then refused would be worse than none."""
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+        caller = harness.manager.sessions["s1"]
+        with pytest.raises(QueueError) as caught:
+            await harness.messaging.notify(
+                caller,
+                target="s2",
+                body="x" * (harness.config.agent_message_max_chars + 1),
+                dry_run=True,
+            )
+        assert caught.value.code == "body_too_large"
+
+        with pytest.raises(QueueError) as caught:
+            await harness.messaging.notify(
+                caller, target="s1", body="talking to myself", dry_run=True
+            )
+        assert caught.value.code == "self_notify"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_tells_the_sender_when_nothing_would_deliver_it(
+    harness: Harness,
+) -> None:
+    """The whole point: armed-but-unreachable becomes a choice, not a discovery.
+
+    And a lapse says how it lapsed, because "the grant lapsed while the
+    conversation was idle" cannot be acted on by itself.
+    """
+    await harness.auto.tick()
+    await harness.auto.disable_session(
+        "s2",
+        reason=LAPSED_REASON,
+        by="controller",
+        audit={"at": time.time(), "idle_seconds": 5400, "window_minutes": 60.0, "pending": 2},
+    )
+    preview = await harness.messaging.notify(
+        harness.manager.sessions["s1"], target="s2", body="please pick this up", dry_run=True
+    )
+    assert preview["target_delivery"]["auto_delivery"] is False
+    assert preview["target_delivery"]["lapse"]["pending"] == 2
+    assert "90 idle minute(s)" in preview["note"]
+    assert "60-minute window" in preview["note"]
+    assert "2 message(s) already waiting" in preview["note"]
+    assert "Nothing was staged" in preview["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_sender_can_withdraw_its_own_undelivered_message(
+    harness: Harness,
+) -> None:
+    """The stranded duplicate had no MCP-reachable cleanup at all.
+
+    Revoking is the narrowest write in this module: it cancels a message the
+    caller is already attributed as the author of, and nothing it touches has
+    reached anyone.
+    """
+    await harness.auto.tick()
+    caller = harness.manager.sessions["s1"]
+    staged = await harness.messaging.notify(caller, target="s2", body="handoff")
+    result = await harness.messaging.revoke(
+        caller, staged["message_id"], "reached them another way"
+    )
+    assert result["status"] == "revoked"
+    assert result["previous_state"] == "armed"
+
+    message = await harness.store.message(staged["message_id"])
+    assert message is not None
+    assert message["state"] == "cancelled"
+    assert message["cancel_kind"] == "revoked"
+    # Nothing was written to the target's terminal at any point.
+    assert not harness.writes
+    # And the sender re-reading its own outcome sees a withdrawal rather than a
+    # refusal: only one of the two means "try again differently".
+    status = await harness.messaging.message_status(caller, staged["message_id"])
+    assert status["status"] == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_only_the_attributed_sender_can_revoke(harness: Harness) -> None:
+    """Attribution is the whole check, and a miss confirms nothing."""
+    await harness.auto.tick()
+    staged = await harness.messaging.notify(
+        harness.manager.sessions["s1"], target="s2", body="handoff"
+    )
+    with pytest.raises(QueueError) as caught:
+        await harness.messaging.revoke(
+            harness.manager.sessions["s2"], staged["message_id"]
+        )
+    assert caught.value.code == "unknown_message"
+    still_there = await harness.store.message(staged["message_id"])
+    assert still_there is not None and still_there["state"] == "armed"
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_message_cannot_be_revoked(harness: Harness) -> None:
+    """The text is in someone else's terminal; saying otherwise would be a lie."""
+    await harness.auto.tick()
+    caller = harness.manager.sessions["s1"]
+    staged = await harness.messaging.notify(caller, target="s2", body="handoff")
+    await harness.service.send_next(
+        staged["message_id"], revision=1, initiator="user"
+    )
+    with pytest.raises(QueueError) as caught:
+        await harness.messaging.revoke(caller, staged["message_id"])
+    assert caught.value.code == "not_revocable"
+    assert caught.value.payload["state"] == "sent"
 
 
 @pytest.mark.asyncio

@@ -630,6 +630,11 @@ TOOLS: list[dict[str, Any]] = [
             "The result reports how many messages that exchange has left, and "
             "whether anything will actually deliver it - if it says nothing "
             "will, say so rather than waiting silently for a reply. "
+            "Pass dry_run:true first when it matters whether the message will "
+            "actually reach the target: it runs every check and reports the same "
+            "verdict without staging anything, so an unreachable peer is a choice "
+            "rather than something you discover afterwards. If a message you did "
+            "stage turns out to be unwanted, withdraw it with revoke_message. "
             "Your own Project is the default. To reach a session in another "
             'Project, pass project:"fleet" or the Project name, or address the '
             'target as "Project name/session name". The receiver is told which '
@@ -683,8 +688,41 @@ TOOLS: list[dict[str, Any]] = [
                         "always works."
                     ),
                 },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": (
+                        "Check without sending. Runs every bound - target, size, "
+                        "budgets, backlog, relay depth, exchange budget, mid-turn "
+                        "gates - and reports whether the message would arrive armed "
+                        "and whether anything would deliver it, staging nothing and "
+                        "spending no budget. Use it before a hand-off that matters."
+                    ),
+                },
             },
             "required": ["target", "body"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "revoke_message",
+        "description": (
+            "Withdraw a message you sent with notify that has not been delivered "
+            "yet. Only the attributed sender can revoke, and only a message still "
+            "waiting in the target's queue: once it has been delivered the text is "
+            "in someone else's terminal and cannot be taken back. Use it when you "
+            "reached the target another way and the queued copy would arrive out of "
+            "context."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "Message id from notify"},
+                "reason": {
+                    "type": "string",
+                    "description": "Short note on why you withdrew it (kept as provenance)",
+                },
+            },
+            "required": ["message_id"],
             "additionalProperties": False,
         },
     },
@@ -4142,7 +4180,11 @@ class McpService:
         not authority (`CONTROL_PLANE_ROADMAP.md` §7.1). The sender is the
         token's session; there is no sender argument to forge.
         """
-        self.writes += 1
+        dry_run = bool(args.get("dry_run"))
+        # A dry run stages nothing, so it is not a write. Counting it as one
+        # would make "check before you send" look like extra authority spent.
+        if not dry_run:
+            self.writes += 1
         target, project = await self._notify_target(
             caller,
             str(args.get("target") or ""),
@@ -4156,6 +4198,22 @@ class McpService:
             correlation_id=str(args.get("correlation_id") or "") or None,
             project=project,
             delivery=str(args.get("delivery") or "when_idle"),
+            dry_run=dry_run,
+        )
+        return dict(result)
+
+    async def revoke_message(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.revoke_message`: withdraw one undelivered message the caller sent.
+
+        Attribution and the revocable states both live in the daemon operation.
+        There is no target argument and no sender argument: the token names the
+        session, and the message names its own target.
+        """
+        self.writes += 1
+        result = await self._messaging().revoke(
+            caller,
+            str(args.get("message_id") or ""),
+            str(args.get("reason") or ""),
         )
         return dict(result)
 
@@ -4316,6 +4374,7 @@ class McpService:
             "code_context": self.code_context,
             "test_gap": self.test_gap,
             "notify": self.notify,
+            "revoke_message": self.revoke_message,
             "request_spawn": self.request_spawn,
             "run_action": self.run_action,
             "interrupt": self.interrupt,
@@ -4369,7 +4428,10 @@ class McpService:
                             "asked for. Two bounded write "
                             "tools exist: `notify` puts a message into another "
                             "session's prompt queue (it waits for that session's "
-                            "readiness and, by default, for a human to approve it), "
+                            "readiness and, by default, for a human to approve it; "
+                            "pass `dry_run` to see whether anything would deliver it "
+                            "before you stage it, and `revoke_message` to withdraw one "
+                            "that has not been delivered), "
                             "and `request_spawn` drafts a new-session request in the "
                             "Fleet Queue for a human to approve. It starts nothing."
                     ),

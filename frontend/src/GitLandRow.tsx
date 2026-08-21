@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import { api } from './api'
 import {
   isActiveLand,
+  landGateNote,
   landStateLabel,
   landStateTone,
   verifyProgressLabel,
@@ -107,6 +108,11 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
       <p>
         <em class={`git-land-state ${landStateTone(last.state)}`}>{landStateLabel(last.state)}</em>
         {last.reason && <span>{last.reason}</span>}
+        {/* A land that went round the gate says so on the row it landed from, where the
+            next person to press Land on this branch will read it. Without this, "Landed"
+            on a documentation branch and "Landed" after three minutes of pytest are the
+            same two words. */}
+        {landGateNote(last) && <small class="git-land-gate-note">{landGateNote(last)}</small>}
         {last.landedOid && <code>{shortSha(last.trunkBefore)} → {shortSha(last.landedOid)}</code>}
       </p>
       {last.paths.length > 0 && <ul class="git-land-paths">

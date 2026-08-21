@@ -48,6 +48,14 @@ READ_TOOL_NAMES = (
 
 WRITE_TOOL_NAMES = (
     "notify",
+    # Withdraw one still-undelivered message the caller itself sent. A write,
+    # and the narrowest one here: it can only cancel a message already attributed
+    # to the caller, and nothing it touches has reached anyone. It is on this
+    # list rather than the read list because it changes queue state, not because
+    # it grants anything - a sender that can stage a message can obviously
+    # un-stage it, and before this existed a stranded duplicate had no
+    # MCP-reachable cleanup at all.
+    "revoke_message",
     "request_spawn",
     # `run_action` is a write in the sense that matters here: it starts a process.
     # Its authority comes from the exact-bytes approval a human already gave the
