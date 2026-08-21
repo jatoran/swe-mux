@@ -31,7 +31,7 @@ import { GitLandPanel } from './GitLandPanel'
 import { GitReviewModal } from './GitReviewModal'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import {
-  comparisonSourceLabel, parseCommitChanges, parseGitOverview,
+  comparisonSourceLabel, parseCommitChanges, parseGitOverview, sortWorktreesByActivity,
   type GitCommitChanges, type GitWorktreeOverview,
   type ReviewChangeSummary, type ReviewFileChange,
 } from './gitWorktrees'
@@ -210,8 +210,14 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
 
   if(!project)return <><p class="drawer-status">no Project selected</p><p class="drawer-empty">Select a Project to inspect its repository.</p></>
 
-  const mainTree=overview?.worktrees.find(tree=>tree.main)
-  const linkedWorktrees=overview?.worktrees.filter(tree=>!tree.main)||[]
+  // Sorted once, here, and used by both surfaces that list checkouts: the Map's rows
+  // and the Land segment's launch buttons answer the same "which of these next"
+  // question, so they must not offer two different orders. Parsing stays faithful to
+  // the payload; presentation is what reorders (`sortWorktreesByActivity` says why the
+  // key is the branch tip's date rather than the directory's mtime).
+  const orderedWorktrees=sortWorktreesByActivity(overview?.worktrees||[])
+  const mainTree=orderedWorktrees.find(tree=>tree.main)
+  const linkedWorktrees=orderedWorktrees.filter(tree=>!tree.main)
   const comparisonLabel=overview?.comparison.available?(overview.comparison.display||overview.comparison.ref):null
 
   const saveComparison=async(value:string)=>{
@@ -350,7 +356,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     {adding&&<div class="git-add-form"><label>Absolute path<input value={addForm.path} onInput={event=>setAddForm(value=>({...value,path:event.currentTarget.value}))}/></label><label>New branch<input value={addForm.branch} onInput={event=>setAddForm(value=>({...value,branch:event.currentTarget.value}))}/></label><label>Start point<input value={addForm.start} onInput={event=>setAddForm(value=>({...value,start:event.currentTarget.value}))}/></label><div><button disabled={busy} onClick={()=>void create()}>Create</button><button onClick={()=>setAdding(false)}>Cancel</button></div></div>}
     {view==='map'&&<>
       {!overview&&!error&&<p class="git-state">Reading repository…</p>}
-      {overview?.worktrees.map(tree=>{
+      {overview&&orderedWorktrees.map(tree=>{
         const expanded=expandedTree===tree.path,{measured:localMeasured,total}=localMeasurement(tree)
         const branchRef=overview.comparison.available?overview.comparison.display||overview.comparison.ref:null
         const attached=sessionsFor(tree.path),upstream=attached.find(session=>session.git?.ahead||session.git?.behind)?.git
@@ -434,7 +440,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     </section>}
     {/* Land reads the Map's own worktree list rather than re-listing them: one answer
         about "which checkouts exist", so the two segments cannot disagree about it. */}
-    {view==='land'&&<GitLandPanel project={project} worktrees={(overview?.worktrees||[]).map(tree=>({path:tree.path,branch:tree.branch,main:tree.main}))}/>}
+    {view==='land'&&<GitLandPanel project={project} worktrees={orderedWorktrees.map(tree=>({path:tree.path,branch:tree.branch,main:tree.main}))}/>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
     {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>

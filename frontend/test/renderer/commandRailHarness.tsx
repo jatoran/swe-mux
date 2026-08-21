@@ -39,7 +39,7 @@ const LEADING = [
   { id: 'enter', label: '⏎', bytes: '\r' },
   { id: 'tab', label: 'Tab', bytes: '\t' },
   { id: 'ctrlC', label: '^C', bytes: '\x03' },
-  { id: 'clearInput', label: '^U', bytes: '\x15' },
+  { id: 'ctrlU', label: '^U', bytes: '\x15' },
   { id: 'restoreInput', label: '^Y', bytes: '\x19' },
 ]
 const TRAILING = [

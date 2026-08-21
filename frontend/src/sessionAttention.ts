@@ -222,6 +222,18 @@ export function pruneAcks(prev: AckMap, sessions: Session[]): AckMap {
   return changed ? next : prev
 }
 
+/**
+ * How many sessions are alive, across every Project.
+ *
+ * The same predicate the per-Project rail chip counts with (`projectSetRailStatus`),
+ * lifted out so the sidebar's fleet-wide chip and a Project's own badge cannot drift
+ * into disagreeing about what "live" means. Pending sessions are excluded for the
+ * reason they are everywhere else: a session still starting up has no process yet.
+ */
+export function liveSessionCount(sessions: Session[]): number {
+  return sessions.filter(session => !session.pending && !DEAD.includes(session.state)).length
+}
+
 /** Aggregate the orthogonal activity and read state shown by a collapsed-rail
  *  Project chip. Approval wins over work, work over ready/waiting, while unread
  *  remains a separate signal so unseen output is never hidden by activity. */

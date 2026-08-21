@@ -265,6 +265,12 @@ uncommitted work together.
   A session still starting up does occupy it.
 - The count is a control rather than a label: it opens that worktree's sessions at the pointer, and it is a sibling of the row's expand button rather than a span inside it.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
+- Worktrees list most recently active first, and the Land segment lists them in that same order, because both surfaces answer "which of these do I act on next" and two orders would make a reader hunt for a branch they had just found.
+  The main tree is pinned first regardless of its own date: it is the trunk the others are measured against and the Land segment excludes it outright, so it is an anchor rather than a candidate.
+  A tree whose tip date could not be read sorts last rather than as epoch-old, and ties fall back to path order so a refresh cannot shuffle the list under the pointer.
+- Activity is the **branch tip's committer date** (`head_committed_at`), never the worktree directory's modification time.
+  Windows freezes a file's `st_mtime` while a handle is open on it, so a checkout a live session is working in reports a directory timestamp hours stale while every Win32 API agrees with it - ordering by directory mtime would sink the busiest worktree to the bottom.
+  The tip date is read from the shared object database, so a locked or prunable checkout still reports when its branch last moved and does not sink for the wrong reason.
 - A prunable worktree is unmeasured and shown as unavailable rather than clean.
   Overview measurement first requires Git's reported top-level to equal the exact listed root, so a broken nested worktree cannot inherit status from an enclosing checkout.
 - Each collapsed Map row gives the branch identity its own bounded line and wraps status metrics on a separate line, so divergence and state cannot overlap the title at narrow drawer widths.

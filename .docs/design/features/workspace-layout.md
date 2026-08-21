@@ -146,6 +146,13 @@ PaneLeaf = terminal | note | preview | history | queue
   reattaches the same stable leaf beside the actual listener owner.
   Closing a terminal is an inline two-click confirmation: fixed-width `×` becomes `✓` without
   shifting the tab, then kills/removes the session.
+- Closing the *focused* terminal hands focus to the session most recently focused before it,
+  preferring one that shared the closed session's pane, and skipping any that have since ended.
+  Layout order is only the fallback, for a Project with nothing behind the closed session yet.
+  The operator's own back-and-forth is the best available statement of where they want to be
+  next; the previous rule took the leftmost live session in the layout, which is frequently one
+  nobody has touched all day. A recently focused session that has since left the layout still
+  ranks below anything on screen. Closing an unfocused tab never moves focus at all.
 - The per-tab close control is a hover-only overlay on hover-capable pointers: it is absolutely
   positioned over the tab's right edge, so tab width is identical whether or not it is showing,
   and it masks the label under it with a gradient in the tab's own background. Confirming and

@@ -1595,6 +1595,9 @@ Comparison inference tries the Project override, `origin/HEAD`, the single non-o
 It performs no fetch and returns no comparison ref when none resolves.
 The comparison object names the exact effective ref, source, candidates, and any unavailable reason.
 Each non-bare worktree separates `conflicted`, `unstaged`, `staged`, and merge-base `branch_delta` summaries, with comparison ahead and behind counts omitted when unavailable.
+Every listed worktree - including bare, locked, and prunable ones - also carries `head_committed_at`, the committer date of its HEAD in Unix seconds, read from the shared object database in one batched call rather than from the checkout directory.
+It is `null` when there is no commit to date (an unborn branch) or the read failed, which is deliberately distinct from an old timestamp.
+This is the field an activity ordering must sort on: a worktree directory's `st_mtime` is frozen by Windows while a live session holds a file open there, so directory timestamps report the busiest checkout as the most dormant one.
 Each summary reports totals, additions, deletions, binary and submodule counts, the first 200 files, and a truncation flag.
 Content-derived counts for untracked files inspect only those first 200 rows and stop after 16 MiB across the summary.
 Concurrent requests with the same Project root and comparison ref await one shared overview task rather than launching duplicate Git subprocess sets.

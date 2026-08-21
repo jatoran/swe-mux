@@ -164,20 +164,34 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
   { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it', voicePhrases: ['insert markdown divider'] },
   { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines', voicePhrases: ['insert code fence', 'start code fence'] },
-  // Copy / Clear the composer. Both read the draft off the terminal grid, because
-  // no harness publishes its composer and the daemon's write log deliberately
-  // keeps only a count (`composerText.ts`, `composer_input.py`).
+  // Copy the composer. Reads the draft off the terminal grid, because no harness
+  // publishes its composer and the daemon's write log deliberately keeps only a
+  // count (`composerText.ts`, `composer_input.py`).
   //
-  // Neither carries a voice phrase, and adding one would be dead config: the voice
+  // It carries no voice phrase, and adding one would be dead config: the voice
   // adapter passes `action` items through only for Paste (`railVoice.ts`). Copy
   // would also be a poor spoken command — its whole result is on a clipboard the
   // speaker cannot see.
   { id: 'copyInput', type: 'action', action: 'copyInput', label: 'Copy input', agentOnly: true, title: 'Copy the text sitting unsent in this composer' },
-  // Was a raw Ctrl+U, which is only a whole-composer clear on single-line drafts:
-  // measured against Claude Code v2.1.238, Ctrl+U kills one line of a four-line
-  // draft. The sequence is per-harness now, and the discarded text is captured to
-  // clipboard history first so the button is recoverable rather than destructive.
-  { id: 'clearInput', type: 'action', action: 'clearInput', label: 'Clear', title: 'Clear the composer, keeping its text in clipboard history' },
+  // The raw kill-line key, restored in place of the Clear button that briefly
+  // occupied this slot (`clearInput`, migrated below).
+  //
+  // Clear sent the harness's declared whole-composer discard sequence
+  // (`composer_clear_keys`), and for Claude that sequence is a double Esc — which
+  // interrupts a running turn. A button that can abort work while claiming to tidy
+  // a draft is the wrong shape of mistake to leave one tap from the arrow keys, and
+  // making it turn-state-aware was declined in favour of removing it: the operator
+  // is better served by a key that does exactly and only what its label says.
+  //
+  // So this is honest about being Ctrl+U and nothing more. It kills to the start of
+  // the line, which clears a single-line draft outright and leaves the other lines
+  // of a multi-line one standing (measured against Claude Code v2.1.238).
+  //
+  // No voice phrase, deliberately, and that is the pre-existing rule rather than a
+  // new one: composer-clearing is on Talk's excluded list (`design/features/voice.md`)
+  // because a spoken caller cannot see the draft they would be destroying, and
+  // `restoreInput` below is voiced precisely because it is the recovering half.
+  { id: 'ctrlU', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Kill to start of line (Ctrl+U) — clears a single-line draft' },
   { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)', voicePhrases: ['restore input', 'yank input'] },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left', voicePhrases: ['left arrow', 'press left'] },
   { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right', voicePhrases: ['right arrow', 'press right'] },
@@ -201,6 +215,33 @@ export const BUILTIN_RAIL: RailItem[] = [
 ]
 
 const BUILTIN_BY_ID = new Map(BUILTIN_RAIL.map(item => [item.id, item]))
+
+/**
+ * Where a stored Action id lands now.
+ *
+ * Every built-in this catalog has retired *and replaced* is one row here, and each
+ * must stay forever: a rail layout is device-local, per-Project, and can be
+ * arbitrarily old, and rows are normalized against the live catalog — so an id with
+ * no entry here is silently dropped from whichever row the operator had dragged it
+ * into. Same durability rule as the drawer's `migratedTabTarget` and the daemon's
+ * `_COMMAND_MIGRATIONS`.
+ *
+ * Only a *replacement* belongs here. A built-in that was retired outright
+ * (`draftToggle`) has nothing to migrate to, and dropping it is the correct answer.
+ *
+ * Mapping rather than dropping is also what keeps position: `clearInput` was
+ * removed and Ctrl+U put back in its place, so the operator finds a key where the
+ * button was instead of a hole plus a stranger appended to the end of row one.
+ */
+const RETIRED_RAIL_IDS: Readonly<Record<string, string>> = {
+  clearInput: 'ctrlU',
+}
+
+/** Resolve a stored id through the retirement table. Unknown ids pass through
+ *  unchanged; whether they exist is the caller's separate question. */
+export function migratedRailItemId(id: string): string {
+  return RETIRED_RAIL_IDS[id] ?? id
+}
 
 /** True for built-in item ids whose behaviour (type/bytes/action/label) is
  *  owned by the app; users may place and reorder them but not edit them. */
@@ -255,13 +296,18 @@ export function mergeRailCatalog(saved: unknown): { items: RailItem[]; addedBuil
   const seen = new Set<string>()
   const items: RailItem[] = []
   for (const raw of entries) {
-    if (!isRecord(raw) || typeof raw.id !== 'string' || seen.has(raw.id)) continue
-    const builtin = BUILTIN_BY_ID.get(raw.id)
-    if (builtin) { seen.add(raw.id); items.push({ ...builtin }); continue }
-    // Custom items may only be safe injection types, never 'action'.
+    if (!isRecord(raw) || typeof raw.id !== 'string') continue
+    // Resolved before the dedupe, so a config holding both the retired id and its
+    // replacement collapses to one catalog entry rather than two of the same item.
+    const id = migratedRailItemId(raw.id)
+    if (seen.has(id)) continue
+    const builtin = BUILTIN_BY_ID.get(id)
+    if (builtin) { seen.add(id); items.push({ ...builtin }); continue }
+    // Custom items may only be safe injection types, never 'action'. They are never
+    // migrated: the retirement table covers built-ins, whose behaviour this module owns.
     const entry = raw as unknown as RailItem
     if (!CUSTOM_RAIL_TYPES.includes(entry.type)) continue
-    seen.add(entry.id)
+    seen.add(id)
     items.push({ ...entry })
   }
   // Built-ins introduced after this config was saved. Returned separately so the
@@ -273,8 +319,13 @@ export function mergeRailCatalog(saved: unknown): { items: RailItem[]; addedBuil
 
 function normalizeRow(raw: unknown, known: Set<string>): RailRow | null {
   if (!isRecord(raw) || typeof raw.id !== 'string' || !raw.id) return null
+  // A retired id is resolved to its replacement *here*, where placement is decided,
+  // so the replacement inherits the exact slot the retired button occupied.
   const items = Array.isArray(raw.items)
-    ? raw.items.filter((id): id is string => typeof id === 'string' && known.has(id))
+    ? raw.items
+      .filter((id): id is string => typeof id === 'string')
+      .map(migratedRailItemId)
+      .filter(id => known.has(id))
     : []
   const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : undefined
   return { id: raw.id, ...(label ? { label } : {}), items }
@@ -347,7 +398,10 @@ export interface LegacyRailItem extends RailItem {
   enabled?: boolean
 }
 
-const LEGACY_EDITING_CLUSTER = ['markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput'] as const
+// `ctrlU` here is the migrated spelling of the cluster's third member, which these
+// saves stored as `clearInput` (`RETIRED_RAIL_IDS`). The cluster is about position,
+// so it names ids as they exist *now*; `mergeLegacyRail` migrates before it looks.
+const LEGACY_EDITING_CLUSTER = ['markdownDivider', 'markdownCodeFence', 'ctrlU', 'restoreInput'] as const
 const LEGACY_NEW_EDITING_CLUSTER = ['markdownDivider', 'markdownCodeFence', 'restoreInput'] as const
 
 const legacyBuiltin = (item: RailItem): LegacyRailItem =>
@@ -374,9 +428,11 @@ export function mergeLegacyRail(saved: LegacyRailItem[] | undefined | null): Leg
   const seen = new Set<string>()
   const out: LegacyRailItem[] = []
   for (const entry of saved) {
-    if (!entry || typeof entry.id !== 'string' || seen.has(entry.id)) continue
-    seen.add(entry.id)
-    const builtin = BUILTIN_BY_ID.get(entry.id)
+    if (!entry || typeof entry.id !== 'string') continue
+    const id = migratedRailItemId(entry.id)
+    if (seen.has(id)) continue
+    seen.add(id)
+    const builtin = BUILTIN_BY_ID.get(id)
     if (builtin) {
       out.push({ ...legacyBuiltin(builtin), ...adoptLegacyPlacement(entry), platforms: entry.platforms, backends: entry.backends })
     } else if (CUSTOM_RAIL_TYPES.includes(entry.type)) {
@@ -394,7 +450,7 @@ export function mergeLegacyRail(saved: LegacyRailItem[] | undefined | null): Leg
       const index = out.findIndex(item => item.id === id)
       if (index < 0) continue
       const [item] = out.splice(index, 1)
-      cluster.push({ ...item, placement: item.id === 'clearInput' && item.enabled !== false ? 'strip' : item.placement })
+      cluster.push({ ...item, placement: item.id === 'ctrlU' && item.enabled !== false ? 'strip' : item.placement })
     }
     const downIndex = out.findIndex(item => item.id === 'down')
     out.splice(downIndex < 0 ? out.length : downIndex + 1, 0, ...cluster)

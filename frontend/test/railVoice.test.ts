@@ -14,9 +14,13 @@ test('default rail voice exposes only explicit safe session actions', () => {
   assert.equal(ids.includes('ctrlC'),true)
   assert.equal(ids.includes('newline'),true)
   assert.deepEqual(entries.find(entry=>entry.item.id==='paste')?.request,{action:'pasteText'})
-  for(const excluded of ['attach','kbdToggle','endSession','relaunch','branch','clearInput','copyReply','copyResume']){
+  // `ctrlU` is a raw key and would be voice-reachable the moment it grew a phrase, so
+  // its omission is the enforced half of the rule: destroying an unseen draft is not a
+  // thing a spoken caller may do, while `restoreInput` — the recovering half — is voiced.
+  for(const excluded of ['attach','kbdToggle','endSession','relaunch','branch','ctrlU','copyInput','copyReply','copyResume']){
     assert.equal(ids.includes(excluded),false,`${excluded} must not be voice-accessible`)
   }
+  assert.equal(ids.includes('restoreInput'),true)
 })
 
 test('placement controls voice availability and duplicate placements collapse', () => {

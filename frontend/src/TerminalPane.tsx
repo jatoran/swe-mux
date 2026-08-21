@@ -122,7 +122,7 @@ import {
   type TerminalCaretPosition,
   type TerminalCaretSnapshot,
 } from './terminalCaretPlacement'
-import { composerClearSequence, composerIsReadable, readComposerText } from './composerText'
+import { composerIsReadable, readComposerText } from './composerText'
 import { ClipboardDropup } from './ClipboardDropup'
 import { SkillsDropup } from './SkillsDropup'
 
@@ -3167,15 +3167,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       showClipboardStatus(`Copied ${text.length.toLocaleString()} chars`)
     }else prepareClipboardFallback(text)
   }
-  // Clear never depends on the read succeeding. The keys go to the CLI either
-  // way, so a screen this cannot scrape still clears; only the clipboard-history
-  // safety net is lost, and the status line says which of the two happened.
-  const clearComposerInput = () => {
-    const text=readComposer()
-    if(text)captureCopy(text,'composer')
-    sendKey(composerClearSequence(session.backend))
-    showClipboardStatus(text?`Cleared · ${text.length.toLocaleString()} chars kept in clipboard history`:'Cleared')
-  }
+  // There is deliberately no Clear counterpart to the copy above. It sent the
+  // harness's declared whole-composer discard sequence, and for Claude that
+  // sequence is a double Esc, which interrupts a running turn — so a button
+  // labelled as tidying a draft could abort work. The rail carries a plain Ctrl+U
+  // key instead (`ctrlU` in `commandRail.ts`), which is honest about killing only
+  // to the start of the line. `composerClearSequence` stays measured and published
+  // for `composer_input.py`'s unsent-input accounting, which still needs to know
+  // which write discards a draft.
   /** Answer the approval this pane is showing, once.
    *
    *  Routed through the daemon rather than by writing Enter here, because the
@@ -3246,7 +3245,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       })
       else if (detail.action === 'copyReply') void copyLastReply()
       else if (detail.action === 'copyInput') void copyComposerInput()
-      else if (detail.action === 'clearInput') clearComposerInput()
       else if (detail.action === 'copyResume') void copyResumeCommand()
       else if (detail.action === 'branch') onBranch?.()
       else if (detail.action === 'approveOnce') void approveOnce()
@@ -3492,7 +3490,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         const readable=composerIsReadable(session.backend)
         return <button key={key} class="rail-icon" disabled={!readable} aria-label="Copy composer text" title={readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>void copyComposerInput()}><CopyInputIcon/></button>
       }
-      case 'clearInput':return <button key={key} title={item.title||'Clear the composer'} onClick={clearComposerInput}>{item.label}</button>
       case 'actionsDrawer':return <button key={key} title={item.title} onClick={()=>runCommand('drawer.peekActions')}>Actions</button>
       case 'endSession':{
         // Ended sessions keep the button: the same command removes their row from the

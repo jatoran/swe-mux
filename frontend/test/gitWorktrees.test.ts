@@ -28,6 +28,7 @@ import {
   repoSessions,
   sessionGitCwd,
   shortBranch,
+  sortWorktreesByActivity,
   worktreeForPath,
   type GitProvenance,
   type GitRefMove,
@@ -529,6 +530,49 @@ test('the project-scoped overview parser keeps null measurements distinct from c
   assert.equal(fileStatLabel(overview!.worktrees[0].unstaged!.files[1]),'binary')
   assert.equal(comparisonSourceLabel(overview!.comparison),'origin default: origin/main')
   assert.equal(parseGitOverview({repository:{}}),null)
+})
+
+test('the overview parser carries each tree\'s branch tip date, or null when unread',()=>{
+  const overview=parseGitOverview({
+    repository:{root:'/repo',common_dir:'/repo/.git'},
+    comparison:{ref:'main',display:'main',source:'local_fallback',available:true,reason:null,candidates:['main']},
+    worktrees:[
+      {worktree:'/repo',HEAD:'a'.repeat(40),branch:'refs/heads/main',main:true,head_committed_at:1787000000,comparison_counts:null,unstaged:null,staged:null,conflicted:null,branch_delta:null},
+      // An older daemon serving a newer UI omits the field entirely; an unborn branch
+      // has no commit to date. Both are "unmeasured", never "the epoch".
+      {worktree:'/wt/unborn',HEAD:null,branch:'refs/heads/fresh',main:false,comparison_counts:null,unstaged:null,staged:null,conflicted:null,branch_delta:null},
+      {worktree:'/wt/junk',HEAD:'b'.repeat(40),branch:'refs/heads/junk',main:false,head_committed_at:'yesterday',comparison_counts:null,unstaged:null,staged:null,conflicted:null,branch_delta:null},
+    ],
+  })!
+  assert.equal(overview.worktrees[0].headCommittedAt,1787000000)
+  assert.equal(overview.worktrees[1].headCommittedAt,null)
+  assert.equal(overview.worktrees[2].headCommittedAt,null)
+})
+
+test('worktrees order by branch tip date, with the main tree pinned first',()=>{
+  const tree=(path:string,headCommittedAt:number|null,main=false)=>({path,main,headCommittedAt})
+  const ordered=sortWorktreesByActivity([
+    tree('/wt/stale',1787000000),
+    tree('/repo',1000,true),
+    tree('/wt/undated',null),
+    tree('/wt/fresh',1787999999),
+  ])
+  // The trunk anchors the list whatever its own tip says; the rest run newest-first,
+  // and a tree whose tip could not be read sinks rather than sorting as epoch-old.
+  assert.deepEqual(ordered.map(item=>item.path),['/repo','/wt/fresh','/wt/stale','/wt/undated'])
+})
+
+test('worktree ordering is stable across refreshes when dates tie',()=>{
+  const tree=(path:string,headCommittedAt:number|null)=>({path,main:false,headCommittedAt})
+  // Two undated trees and two committed in the same second: without a tie-break these
+  // would swap places on every poll, which reads as the list moving under the cursor.
+  const trees=[tree('/wt/b',5),tree('/wt/a',5),tree('/wt/z',null),tree('/wt/y',null)]
+  const once=sortWorktreesByActivity(trees).map(item=>item.path)
+  assert.deepEqual(once,['/wt/a','/wt/b','/wt/y','/wt/z'])
+  assert.deepEqual(sortWorktreesByActivity([...trees].reverse()).map(item=>item.path),once)
+  // And the input array is never reordered in place: the parsed overview stays faithful
+  // to the payload, and ordering is a presentation decision on top of it.
+  assert.deepEqual(trees.map(item=>item.path),['/wt/b','/wt/a','/wt/z','/wt/y'])
 })
 
 test('an unmeasured prunable worktree is unavailable rather than clean',()=>{

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig, itemDefaultSurface,
-  mergeRailCatalog, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
+  mergeRailCatalog, migratedRailItemId, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
   railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
   type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem,
 } from '../src/commandRail.ts'
@@ -30,7 +30,7 @@ test('default rail groups editing helpers after Down and ends with Attach', () =
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
     'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'skills', 'actionsDrawer', 'kbdToggle',
     'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down',
-    'markdownDivider', 'markdownCodeFence', 'copyInput', 'clearInput', 'restoreInput',
+    'markdownDivider', 'markdownCodeFence', 'copyInput', 'ctrlU', 'restoreInput',
     'left', 'right', 'attach',
   ])
 })
@@ -117,16 +117,19 @@ test('the drawer newline and editing helpers use non-submitting agent keys', () 
   assert.equal(divider?.bytes, `${AGENT_NEWLINE}${AGENT_NEWLINE}---${AGENT_NEWLINE}${AGENT_NEWLINE}`)
   assert.equal(codeFence?.bytes, `${AGENT_NEWLINE}${AGENT_NEWLINE}\`\`\`${AGENT_NEWLINE}`)
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'restoreInput')?.bytes, '\x19')
-  // Clear is deliberately *not* a raw key any more. Ctrl+U is a whole-composer
-  // clear only on single-line drafts (measured: it kills one line of a four-line
-  // Claude draft), so the sequence is resolved per harness at click time by
-  // `composerClearSequence`, and this item carries no bytes of its own.
-  const clearInput = BUILTIN_RAIL.find(item => item.id === 'clearInput')
-  assert.equal(clearInput?.type, 'action')
-  assert.equal(clearInput?.bytes, undefined)
-  assert.equal(composerClearSequence('claude'), '\x1b\x1b')
-  assert.equal(composerClearSequence('codex'), '\x15')
-  assert.equal(composerClearSequence('shell'), '\x15')
+  // The rail's kill-line key is a raw Ctrl+U and nothing else. The Clear button that
+  // briefly stood here sent the harness's declared whole-composer discard sequence,
+  // which on Claude is a double Esc — an interrupt of whatever turn is running. That
+  // is why no rail item may carry `composerClearSequence` again without being aware
+  // of the session's state; the sequence itself stays published for the daemon's
+  // unsent-input accounting.
+  const ctrlU = BUILTIN_RAIL.find(item => item.id === 'ctrlU')
+  assert.equal(ctrlU?.type, 'key')
+  assert.equal(ctrlU?.bytes, '\x15')
+  assert.equal(ctrlU?.className, 'term-key')
+  for (const item of BUILTIN_RAIL) {
+    assert.notEqual(item.bytes, composerClearSequence('claude'), `${item.id} must not send Claude's composer discard`)
+  }
 })
 
 test('a newly shipped built-in is placed, not merely catalogued', () => {
@@ -155,6 +158,46 @@ test('normalization removes the retired separate Draft action from saved rails',
     const strip = ids(config, 'strip', { device, backend: 'claude' })
     assert.equal(strip.includes('draftToggle'), false)
   }
+})
+
+test('a retired built-in id keeps its exact slot under its replacement', () => {
+  // `clearInput` (the Clear button) was retired in favour of a raw Ctrl+U key. A
+  // layout is per-device and per-Project and can be arbitrarily old, so the stored id
+  // has to resolve rather than be dropped — and it has to resolve *in place*, or the
+  // operator finds a hole where the button was.
+  const saved = defaultRailConfig()
+  const withOldId = (ids: string[]) => ids.map(id => (id === 'ctrlU' ? 'clearInput' : id))
+  for (const device of ['desktop', 'mobile'] as const) {
+    saved.layouts[device].strip[0].items = withOldId(saved.layouts[device].strip[0].items)
+  }
+  saved.items = saved.items.map(item =>
+    item.id === 'ctrlU' ? { id: 'clearInput', type: 'action', action: 'clearInput', label: 'Clear' } : item)
+  const config = normalizeRailConfig(saved)
+  assert.equal(migratedRailItemId('clearInput'), 'ctrlU')
+  assert.equal(config.items.some(item => item.id === 'clearInput'), false)
+  const ctrlU = config.items.find(item => item.id === 'ctrlU')
+  assert.equal(ctrlU?.type, 'key')
+  assert.equal(ctrlU?.bytes, '\x15')
+  for (const device of ['desktop', 'mobile'] as const) {
+    // Same position as the shipped default, and appearing exactly once: the migration
+    // must not also append the "newly shipped built-in" copy on top of the migrated one.
+    const strip = ids(config, 'strip', { device, backend: 'claude' })
+    assert.deepEqual(strip, ids(defaultRailConfig(), 'strip', { device, backend: 'claude' }))
+    assert.equal(strip.filter(id => id === 'ctrlU').length, 1)
+  }
+})
+
+test('a pre-layout save holding the retired id migrates it too', () => {
+  const migrated = migrateLegacyRail([
+    { id: 'clearInput', type: 'key', label: '^U', bytes: '\x15', placement: 'strip' },
+    { id: 'restoreInput', type: 'key', label: '^Y', bytes: '\x19', placement: 'strip' },
+    { id: 'markdownDivider', type: 'key', label: '---', placement: 'strip' },
+    { id: 'markdownCodeFence', type: 'key', label: '```', placement: 'strip' },
+  ] as LegacyRailItem[])
+  const strip = ids(migrated, 'strip')
+  assert.equal(strip.includes('clearInput'), false)
+  assert.equal(strip.filter(id => id === 'ctrlU').length, 1)
+  assert.equal(migrated.items.filter(item => item.id === 'ctrlU').length, 1)
 })
 
 test('normalization drops dangling references and unknown custom types', () => {
@@ -260,7 +303,7 @@ test('the editing-helper catalog migration still reorders old saved rails once',
   const migrated = migrateLegacyRail([{ id: 'paste', type: 'action', action: 'paste', label: 'Paste' }])
   const strip = ids(migrated, 'strip')
   const down = strip.indexOf('down')
-  assert.deepEqual(strip.slice(down + 1, down + 5), ['markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput'])
+  assert.deepEqual(strip.slice(down + 1, down + 5), ['markdownDivider', 'markdownCodeFence', 'ctrlU', 'restoreInput'])
   assert.equal(strip.at(-1), 'attach')
 })
 

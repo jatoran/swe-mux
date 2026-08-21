@@ -138,6 +138,7 @@ A segment rather than a strip inside Map, for the same watch-here/act-there spli
 The verification gate is drawn above the queue, because nothing below it can run until its bytes are approved and a queue drawn first would read as ready.
 Reviewing it shows the approved bytes beside the current ones.
 A detached worktree is omitted from the launch list rather than offered and then refused.
+The launch list is in Map's order - most recently committed branch first, by tip date rather than directory mtime (`git.md`) - because the branch a reader just finished work on is the one they came here to land, and the two lists disagreeing about order would make them hunt for it twice.
 
 Nothing in the surface lands anything: the daemon's own supervised sweep is the only thing that moves a trunk.
 

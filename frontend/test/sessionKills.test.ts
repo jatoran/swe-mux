@@ -114,6 +114,76 @@ test('focus never crosses into another project', () => {
   assert.equal(next, null)
 })
 
+test('focus follows the previously focused session, not the first one in the layout', () => {
+  // s1 is leftmost and was the old fallback. The operator had been bouncing between s3
+  // and s2, so closing s3 belongs on s2.
+  const layout = splitTerminal(splitTerminal(stacked('s1'), 's1', 's2', 'horizontal'), 's2', 's3', 'horizontal')
+  const next = nextActiveAfterKill({
+    layout: afterKilling(layout, 's3'),
+    sessions: [session('s1'), session('s2'), session('s3')],
+    killedId: 's3', projectId: 'p1', activeId: 's3',
+    recent: ['s3', 's2', 's1'],
+  })
+  assert.equal(next, 's2')
+})
+
+test('the vacated pane wins over a more recent session elsewhere', () => {
+  // s2 and s3 are tabs of one stack; s1 is its own pane and was focused more recently
+  // than s2. Closing s3 settles inside the split it was in rather than jumping across.
+  const layout = splitTerminal(stacked('s2', 's3'), 's2', 's1', 'horizontal')
+  const next = nextActiveAfterKill({
+    layout: afterKilling(layout, 's3'),
+    sessions: [session('s1'), session('s2'), session('s3')],
+    killedId: 's3', projectId: 'p1', activeId: 's3',
+    recent: ['s3', 's1', 's2'],
+    paneIds: ['s2', 's3'],
+  })
+  assert.equal(next, 's2')
+})
+
+test('a recently focused session that has since died is skipped', () => {
+  const layout = splitTerminal(splitTerminal(stacked('s1'), 's1', 's2', 'horizontal'), 's2', 's3', 'horizontal')
+  const next = nextActiveAfterKill({
+    layout: afterKilling(layout, 's3'),
+    sessions: [session('s1'), session('s2', { state: 'crashed' }), session('s3')],
+    killedId: 's3', projectId: 'p1', activeId: 's3',
+    recent: ['s3', 's2', 's1'],
+  })
+  assert.equal(next, 's1')
+})
+
+test('what is on screen outranks a recent session that has left the layout', () => {
+  // s2 was focused more recently, but it is no longer placed anywhere; s1 is visible.
+  const next = nextActiveAfterKill({
+    layout: afterKilling(stacked('s1', 's3'), 's3'),
+    sessions: [session('s1'), session('s2'), session('s3')],
+    killedId: 's3', projectId: 'p1', activeId: 's3',
+    recent: ['s3', 's2', 's1'],
+  })
+  assert.equal(next, 's1')
+})
+
+test('an empty recency stack falls back to layout order exactly as before', () => {
+  const layout = splitTerminal(stacked('s1'), 's1', 's2', 'horizontal')
+  const next = nextActiveAfterKill({
+    layout: afterKilling(layout, 's2'),
+    sessions: [session('s1'), session('s2')],
+    killedId: 's2', projectId: 'p1', activeId: 's2',
+    recent: [],
+  })
+  assert.equal(next, 's1')
+})
+
+test('killing an unfocused session ignores recency entirely', () => {
+  const next = nextActiveAfterKill({
+    layout: afterKilling(stacked('s1', 's2', 's3'), 's3'),
+    sessions: [session('s1'), session('s2'), session('s3')],
+    killedId: 's3', projectId: 'p1', activeId: 's1',
+    recent: ['s2', 's1'],
+  })
+  assert.equal(next, 's1')
+})
+
 test('a session outside the layout is still a better landing spot than nothing', () => {
   const next = nextActiveAfterKill({
     layout: emptyLayout,

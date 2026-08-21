@@ -23,7 +23,11 @@ import type { Project } from './types'
 
 type Props = {
   project: Project | null
-  /** Worktree roots the Map already knows about, so a request names a real checkout. */
+  /** Worktree roots the Map already knows about, so a request names a real checkout.
+   *  Handed over in the Map's own order — most recently committed first
+   *  (`sortWorktreesByActivity`) — because the two lists answer the same question and
+   *  a reader who found a branch near the top of one must not have to hunt for it in
+   *  the other. */
   worktrees: { path: string; branch: string | null; main: boolean }[]
 }
 

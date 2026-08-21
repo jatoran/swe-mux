@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Session } from '../src/types.ts'
-import { ackedSeq, isUnread, pendingAcks, projectRailStatus, projectSetRailStatus, pruneAcks, trackPinVisits, turnSeq, type AckMap, type PinVisits } from '../src/sessionAttention.ts'
+import { ackedSeq, isUnread, liveSessionCount, pendingAcks, projectRailStatus, projectSetRailStatus, pruneAcks, trackPinVisits, turnSeq, type AckMap, type PinVisits } from '../src/sessionAttention.ts'
 
 const session = (
   id: string,
@@ -198,6 +198,26 @@ test('project rail activity keeps unread independent from the strongest live sta
   assert.deepEqual(projectRailStatus(sessions, 'p2', {}), {
     activity: 'working', unread: false, liveCount: 1, agentCount: 1,
   })
+})
+
+test('the fleet-wide live count crosses projects and agrees with the per-project chip', () => {
+  const sessions = [
+    session('working', 'claude', 1, { project_id: 'p1', state: 'working' }),
+    session('shell', 'shell', 0, { project_id: 'p1', state: 'running' }),
+    session('starting', 'codex', 0, { project_id: 'p2', state: 'idle', pending: true }),
+    session('gone', 'claude', 3, { project_id: 'p2', state: 'exited' }),
+    session('broken', 'claude', 3, { project_id: 'p3', state: 'crashed' }),
+    session('elsewhere', 'codex', 1, { project_id: 'p3', state: 'awaiting' }),
+  ] as Session[]
+  // The sidebar's resource chip counts the whole fleet, so a shell counts as much as
+  // an agent, while a pending spawn and both flavours of ended row do not.
+  assert.equal(liveSessionCount(sessions), 3)
+  assert.equal(liveSessionCount([]), 0)
+  // And it is the same predicate a Project's own badge uses: summing the per-Project
+  // counts must reproduce the fleet-wide one, or the two chips would contradict.
+  const perProject = ['p1', 'p2', 'p3']
+    .reduce((sum, id) => sum + projectRailStatus(sessions, id, {}).liveCount, 0)
+  assert.equal(perProject, liveSessionCount(sessions))
 })
 
 test('a collapsed section answers for every project it folded away', () => {

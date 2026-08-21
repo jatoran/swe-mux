@@ -136,6 +136,88 @@ async def test_overview_separates_staged_unstaged_and_untracked(repository: Path
 
 
 @pytest.mark.asyncio
+async def test_overview_dates_every_worktree_from_its_branch_tip(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each tree reports its tip's committer date, and reports it from the object database.
+
+    The directory's own mtime is deliberately not the source: Windows freezes
+    ``st_mtime`` on a file held open, so a checkout an agent is working in reports a
+    stale timestamp and would sort as the most dormant tree in the list.
+    """
+    (repository / ".gitignore").write_text(".claude/\n", encoding="utf-8")
+    git(repository, "add", ".gitignore")
+    git(repository, "commit", "-m", "ignore managed worktrees")
+    worktree = repository / ".claude" / "worktrees" / "feature"
+    worktree.parent.mkdir(parents=True)
+    git(repository, "worktree", "add", "-b", "feature", str(worktree))
+    (worktree / "work.txt").write_text("branch work\n", encoding="utf-8")
+    git(worktree, "add", "work.txt")
+    # `--date` moves only the *author* date; the sort key is the committer date, which
+    # is the one that actually tracks when the branch last moved.
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2030-01-01T00:00:00+00:00")
+    git(worktree, "commit", "-m", "branch work")
+    monkeypatch.delenv("GIT_COMMITTER_DATE")
+
+    overview = await git_review.worktree_overview("project", str(repository), None)
+    rows = {Path(str(row["worktree"])).resolve(): row for row in overview["worktrees"]}
+    main_row = rows[repository.resolve()]
+    branch_row = rows[worktree.resolve()]
+    assert isinstance(main_row["head_committed_at"], int)
+    assert isinstance(branch_row["head_committed_at"], int)
+    # The branch committed after the trunk, so it must date later - which is the whole
+    # point of the field, and is what puts it on top of an activity-ordered list.
+    assert branch_row["head_committed_at"] > main_row["head_committed_at"]
+    expected = int(git(worktree, "show", "-s", "--format=%ct", "HEAD"))
+    assert branch_row["head_committed_at"] == expected
+
+
+@pytest.mark.asyncio
+async def test_head_commit_dates_ignores_junk_and_keys_by_requested_spelling(
+    repository: Path,
+) -> None:
+    oid = git(repository, "rev-parse", "HEAD")
+    dates = await git_review.head_commit_dates(
+        str(repository), [oid.upper(), oid, "not-an-oid", ""]
+    )
+    # Deduplicated by the spelling asked for, and a malformed entry never reaches Git.
+    assert set(dates) == {oid.upper(), oid}
+    assert dates[oid.upper()] == dates[oid]
+    assert await git_review.head_commit_dates(str(repository), []) == {}
+    # An oid Git does not have is simply absent rather than an error the caller has to
+    # handle: the row renders as unmeasured and sorts last.
+    missing = "0" * 40
+    assert await git_review.head_commit_dates(str(repository), [missing]) == {}
+
+
+@pytest.mark.asyncio
+async def test_prunable_worktree_still_reports_its_tip_date(repository: Path) -> None:
+    """A checkout Git cannot use still says when its branch last moved.
+
+    Its commit lives in the shared object database, so nothing about reading the date
+    needs the broken directory - and a damaged tree that reported no date at all would
+    sink to the bottom of an activity-ordered list for the wrong reason.
+    """
+    (repository / ".gitignore").write_text(".codex/\n", encoding="utf-8")
+    git(repository, "add", ".gitignore")
+    git(repository, "commit", "-m", "ignore managed worktrees")
+    worktree = repository / ".codex" / "worktrees" / "broken"
+    worktree.parent.mkdir(parents=True)
+    git(repository, "worktree", "add", "-b", "broken", str(worktree))
+    (worktree / ".git").rename(worktree / ".git.moved")
+
+    overview = await git_review.worktree_overview("project", str(repository), None)
+    row = next(
+        item
+        for item in overview["worktrees"]
+        if Path(str(item["worktree"])).resolve() == worktree.resolve()
+    )
+    assert row["prunable"]
+    assert row["unstaged"] is None
+    assert isinstance(row["head_committed_at"], int)
+
+
+@pytest.mark.asyncio
 async def test_prunable_nested_worktree_never_inherits_parent_status(repository: Path) -> None:
     (repository / ".gitignore").write_text(".codex/\n", encoding="utf-8")
     git(repository, "add", ".gitignore")

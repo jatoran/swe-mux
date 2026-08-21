@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypedDict
@@ -796,6 +797,49 @@ async def _local_summaries(
     return change_summary(unstaged), change_summary(staged), change_summary(conflicted)
 
 
+async def head_commit_dates(
+    repository: str | Path, oids: Sequence[str]
+) -> dict[str, int]:
+    """Committer date (Unix seconds) of each given commit, keyed by the oid asked for.
+
+    This is how "when was this worktree last active" is answered, and the alternative
+    is a trap rather than a shortcut: **the worktree directory's mtime is not usable
+    on Windows.** Windows freezes ``st_mtime`` on a file while a handle is open, so a
+    checkout an agent is actively working in reports a timestamp hours stale - every
+    Win32 API agrees with it, and a naive repro says it does not happen. The busiest
+    tree would sort as the most dormant one, which is exactly backwards.
+
+    The branch tip's committer date has no such problem: it is recorded in the commit
+    object, comes from the shared object database, and needs no access to the worktree
+    directory at all - so a locked, prunable, or unreachable checkout still reports it.
+
+    One batched ``git show``: the oids come from Git's own worktree list, so a partial
+    read means real repository damage rather than an ordinary miss, and the caller
+    treats every absent oid as unmeasured.
+    """
+    unique = list(dict.fromkeys(oid for oid in oids if _OID.fullmatch(oid or "")))
+    if not unique:
+        return {}
+    result = await _run_git_bytes(repository, "show", "-s", "--format=%H %ct", *unique)
+    dates: dict[str, int] = {}
+    for line in result.stdout.decode("utf-8", "replace").splitlines():
+        oid, _, stamp = line.strip().partition(" ")
+        if not stamp.isdigit():
+            continue
+        dates[oid.lower()] = int(stamp)
+    if result.code:
+        log.warning(
+            "git_review head_commit_dates partial repository=%s asked=%d got=%d stderr=%s",
+            repository,
+            len(unique),
+            len(dates),
+            result.stderr.decode("utf-8", "replace").strip()[:200],
+        )
+    # Keyed back by the spelling the caller passed, so a short-vs-full or cased oid
+    # still finds its row.
+    return {oid: dates[oid.lower()] for oid in unique if oid.lower() in dates}
+
+
 async def worktree_overview(
     project_id: str, project_root: str, compare_override: str | None
 ) -> dict[str, Any]:
@@ -804,6 +848,15 @@ async def worktree_overview(
     comparison = await infer_comparison(repository, compare_override)
     items = await listed_worktrees(repository)
     semaphore = asyncio.Semaphore(GIT_CONCURRENCY)
+
+    # Tip dates are read for *every* listed tree, including the ones below that return
+    # unmeasured: the commit object is in the shared database, so a locked or prunable
+    # checkout can still say when its branch last moved, and a reader ordering trees by
+    # activity should not have the damaged ones silently sink to the bottom.
+    tip_dates = await head_commit_dates(
+        repository,
+        [head for item in items if isinstance(head := item.get("HEAD"), str)],
+    )
 
     def unmeasured(row: dict[str, Any]) -> dict[str, Any]:
         row.update(
@@ -818,6 +871,10 @@ async def worktree_overview(
     async def measure(index: int, item: dict[str, Any]) -> dict[str, Any]:
         row = dict(item)
         row["main"] = index == 0
+        head = row.get("HEAD")
+        # Explicit `None` rather than an absent key: "unmeasured" and "unborn branch"
+        # both have to be distinguishable from "the field is not served yet".
+        row["head_committed_at"] = tip_dates.get(head) if isinstance(head, str) else None
         worktree = row.get("worktree")
         if (
             not isinstance(worktree, str)

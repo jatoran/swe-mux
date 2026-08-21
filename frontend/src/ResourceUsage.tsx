@@ -5,6 +5,7 @@ import type { FleetSnapshot } from './processFleet'
 import { memoryLabel } from './processRows'
 import type { Project, Session } from './types'
 import { anchoredPopoverStyle } from './providerAccountDisplay'
+import { liveSessionCount } from './sessionAttention'
 import { combinedResourceTotals, projectResourceTotals } from './resourceTotals'
 import { duplicateToolingGroups } from './resourceTooling'
 
@@ -12,12 +13,16 @@ import { duplicateToolingGroups } from './resourceTooling'
 export const compactMemoryLabel=(bytes:number)=>
   bytes>=1073741824?`${(bytes/1073741824).toFixed(1)}G`:`${Math.round(bytes/1048576)}M`
 
-const resourceSummaryLabel=(snapshot:FleetSnapshot|null)=>{
-  if(!snapshot)return 'Loading resource usage - click to see usage details'
-  if(!snapshot.available)return 'Resource usage unavailable - click to see usage details'
+// The session count leads because it is the one figure here that is always knowable:
+// it is counted from the fleet the sidebar is already rendering, while every other
+// figure comes from process inspection that can be unavailable outright.
+const resourceSummaryLabel=(snapshot:FleetSnapshot|null,liveSessions:number)=>{
+  const sessions=`${liveSessions} live session${liveSessions===1?'':'s'}`
+  if(!snapshot)return `${sessions}, loading resource usage - click to see usage details`
+  if(!snapshot.available)return `${sessions}, resource usage unavailable - click to see usage details`
   const total=combinedResourceTotals(snapshot)
   const cpu=typeof snapshot.system_cpu_pct==='number'?`${Math.round(snapshot.system_cpu_pct)}% cpu`:'cpu sampling'
-  return `${total.processes} process${total.processes===1?'':'es'}, ${cpu}, ${memoryLabel(total.memory_bytes)} ram - click to see usage details`
+  return `${sessions}, ${total.processes} process${total.processes===1?'':'es'}, ${cpu}, ${memoryLabel(total.memory_bytes)} ram - click to see usage details`
 }
 
 const CpuIcon=()=>
@@ -30,6 +35,15 @@ const ProcessesIcon=()=>
   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <circle cx="12" cy="5" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/>
     <path d="M12 7.5V12M6 15.5V12h12v3.5"/>
+  </svg>
+
+/** A terminal window with a shell prompt in it. The sessions this counts are panes the
+ *  operator opens and types into, so the glyph is the pane rather than another abstract
+ *  node diagram - the process tree next to it already owns that shape. */
+const SessionsIcon=()=>
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="2.5" y="4" width="19" height="16" rx="1.5"/>
+    <path d="M6.5 10.5 9 13l-2.5 2.5M12 15.5h5.5"/>
   </svg>
 
 const RamIcon=()=>
@@ -53,7 +67,10 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
   const combined=combinedResourceTotals(shown)
   const systemCpu=typeof shown?.system_cpu_pct==='number'?`${shown.system_cpu_pct.toFixed(1)}%`:'sampling…'
   const summaryCpu=typeof snapshot?.system_cpu_pct==='number'?`${Math.round(snapshot.system_cpu_pct)}%`:'…'
-  const summaryTitle=resourceSummaryLabel(snapshot)
+  // Counted from the fleet the sidebar already holds, not from the process snapshot:
+  // this stays truthful on a host where process inspection is refused.
+  const liveSessions=liveSessionCount(sessions)
+  const summaryTitle=resourceSummaryLabel(snapshot,liveSessions)
   const reclaimableRam=typeof combined.memory_unique_bytes==='number'?combined.memory_unique_bytes:null
   const projectTotals=projectResourceTotals(shown,sessions,projects)
   const tooling=duplicateToolingGroups(shown)
@@ -112,6 +129,11 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
         <span aria-hidden="true">ws</span><strong>{snapshot?.available?compactMemoryLabel(combined.memory_bytes):'—'}</strong>
       </button>
     : <button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={summaryTitle} title={summaryTitle}>
+        {/* Sessions first, then the processes they add up to: the operator's own unit
+            of work leads, and the machine's reading of it follows. It carries no
+            em-dash fallback because it never needs one — nothing about it depends on
+            the process snapshot having arrived. */}
+        <span class="resource-session-count" aria-hidden="true"><SessionsIcon/>{liveSessions}</span>
         <span class="resource-process-count" aria-hidden="true"><ProcessesIcon/>{snapshot?.available?combined.processes:'—'}</span>
         <span class="resource-summary-metric" aria-hidden="true"><CpuIcon/><strong>{summaryCpu}</strong></span>
         <span class="resource-summary-metric" aria-hidden="true"><RamIcon/><strong>{snapshot?.available?memoryLabel(combined.memory_bytes):'—'}</strong></span>

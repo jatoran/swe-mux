@@ -125,6 +125,9 @@ import {
   KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
   nextActiveAfterKill, type KillTombstones,
 } from './sessionKills'
+import {
+  forgetFocusedSession, recentFocusedSessions, recordFocusedSession, type SessionFocusHistory,
+} from './sessionFocusHistory'
 import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
@@ -2607,6 +2610,22 @@ export function App() {
     if(`${location.pathname}${location.search}${location.hash}`!==next)window.history.replaceState(window.history.state,'',next)
   },[focusHydrated,projectId,activeId,focusedViewId,sessions,layoutMap])
 
+  // Feed the most-recently-focused stack a close consults (`sessionFocusHistory.ts`).
+  //
+  // Observed from the *settled* active session for the same reason the navigation rung
+  // below is: `setActiveId` has a couple of dozen call sites - spawn, resume, branch,
+  // a tab click, a closing pane handing focus on - and recording at each of them would
+  // rot the first time a new flow forgot to. A ref rather than state because nothing
+  // renders from it; it is only ever read at close time.
+  const sessionFocusHistory=useRef<SessionFocusHistory>({})
+  useEffect(()=>{
+    if(!focusHydrated||!activeId||!projectId)return
+    // Only a session that is really there: an id still settling, or one already
+    // tombstoned by a kill, would otherwise be handed back as "where you were".
+    if(!sessions.some(item=>item.id===activeId&&item.project_id===projectId&&!isEndedSession(item)))return
+    sessionFocusHistory.current=recordFocusedSession(sessionFocusHistory.current,projectId,activeId)
+  },[focusHydrated,projectId,activeId,sessions])
+
   // Feed the navigation rung of back (`viewHistory.ts`).
   //
   // Recorded from the *committed* (Project, view) pair rather than at the two dozen
@@ -3672,10 +3691,19 @@ export function App() {
       projects.find(project => project.id === session.project_id)?.layout,
     )
     let nextLayout = removeLeaf(currentLayout, 'terminal', session.id)
+    // Read from the layout *before* the leaf came out: a stack that held only this
+    // session no longer exists in `nextLayout`, and one that survives has already
+    // forgotten which of its tabs the kill was about.
+    const paneIds = stackForView(currentLayout, session.id)?.children.map(child => child.id) || []
     const nextActiveId = nextActiveAfterKill({
       layout: nextLayout, sessions, killedId: session.id,
       projectId: session.project_id, activeId,
+      recent: recentFocusedSessions(sessionFocusHistory.current, session.project_id),
+      paneIds,
     })
+    // Dropped before the focus is handed on, so the recording effect below cannot see
+    // the killed id at the head of the stack and re-offer it to the next close.
+    sessionFocusHistory.current = forgetFocusedSession(sessionFocusHistory.current, session.id)
     if (nextActiveId && terminalIds(nextLayout).includes(nextActiveId)) {
       nextLayout = activateContainingStack(nextLayout, nextActiveId)
     }

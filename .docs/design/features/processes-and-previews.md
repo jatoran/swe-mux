@@ -174,6 +174,10 @@
   they allow PID copy but never interrupt/terminate actions against the swe-mux runtime.
 - The bottom-sidebar resource summary reuses the cached fleet snapshot and reports normalized
   whole-system CPU utilization alongside aggregate RSS for owned session and daemon processes.
+  It leads with a live session count, which comes from the session fleet rather than from this
+  snapshot: it is the one figure in the row that survives process inspection being unavailable,
+  and reading it beside the process count is what answers "how many processes is one session
+  costing me" without opening the dialog (`features/ui.md`).
   System CPU comes from deltas between cumulative OS CPU counters and therefore stays on the
   familiar 0–100% whole-machine scale regardless of logical processor count.
   The first sample is unavailable until a second counter reading establishes an interval.

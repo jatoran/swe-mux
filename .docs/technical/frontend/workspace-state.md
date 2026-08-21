@@ -211,6 +211,22 @@ Two rules keep a tombstone from outliving what it stands for, since a tombstone 
 
 Bulk close (`closeWorkAndHideProject`) tombstones its sessions but still awaits every DELETE, because hiding a Project is refused while live work is attached.
 
+### Where focus lands, and why it is not layout order
+
+`nextActiveAfterKill` prefers **recency over position**: the most recently focused surviving session, preferring one that shared the killed session's pane.
+Layout order is only the fallback (visible in the layout, then anywhere in it, then any survivor in the Project), and it used to be the whole rule - which meant closing the pane you were working in dropped you on whatever happened to be leftmost, often a session untouched since the morning.
+A recent session that has since left the layout ranks *below* the layout fallbacks: something on screen beats something that is not, whatever was last touched.
+Focus still moves only when the killed session held it.
+
+`sessionFocusHistory.ts` is the small most-recently-focused stack behind that, one per Project, bounded and held in a ref.
+
+- **Per Project**, because focus never crosses a Project boundary on a close, so fleet-wide entries would only ever be discarded.
+- **Not keyed by pane.** A session moves between panes - dragged into a split, stacked as a tab, dissolved back out - so a pane-keyed stack would strand its entries the moment the layout changed; the pane preference is applied at read time against `stackForView` on the *pre-kill* layout, which is the only version of the pane still true.
+- **In memory, not persisted.** It answers "where was I just now", a question about this sitting at this device; surviving a reload would make it a claim about a session nobody has looked at since.
+
+It is fed from the *settled* active session in an effect, the same discipline `viewHistory.ts` uses, because `setActiveId` has dozens of call sites and per-call-site recording rots the first time a new flow forgets.
+`killNow` drops the killed id from every Project's stack before handing focus on, so a dead id cannot sit at the head shadowing the live session behind it; reads additionally skip anything not in the surviving set.
+
 ## Worktree file leaves
 
 Canonical `file:` resource IDs are unchanged.
@@ -298,7 +314,12 @@ handler stayed API-free.
   surface untouched and `reflowVisibleTerminalRenderer` restores it.
 - `frontend/test/previewLinks.test.ts`: loopback-only terminal link normalization.
 - `frontend/test/sessionKills.test.ts`: tombstone filtering and TTL expiry, 404-means-removed, and
-  every branch of the post-kill focus choice (unfocused kill, visible sibling, stacked-behind
-  fallback, ended and cross-Project exclusions, last session in a Project).
+  every branch of the post-kill focus choice (unfocused kill, recency over layout order, the
+  vacated pane outranking a more recent session elsewhere, a dead entry in the stack being
+  skipped, on-screen outranking a recent session that left the layout, visible sibling,
+  stacked-behind fallback, ended and cross-Project exclusions, last session in a Project).
+- `frontend/test/sessionFocusHistory.test.ts`: the recency stack itself - head ordering without
+  duplicates, identity on an unchanged head, per-Project separation, the bound, and forgetting a
+  killed session everywhere.
 - Pointer behavior tests/inspection must cover threshold, exact insertion, split edges, cross-pane
   movement, Escape, lost capture, and cleanup after responsive changes.

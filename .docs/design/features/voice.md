@@ -453,7 +453,9 @@ executed action — so that number is measured rather than estimated.
   The shipped subset is terminal copy/paste plus non-destructive terminal keys: Escape, Enter, Tab, Ctrl+C, arrows, cursor navigation, restore input, newline, and the Markdown insertion helpers.
   Non-submitting configured agent `skill` and `slash` entries derive deterministic aliases from their command name and preserve the rail item's backend-specific payload, so `Mux, learn` inserts `$learn` in Codex and `/learn` in Claude when that item is configured.
   A configured entry that submits requires an explicit `voicePhrases` opt-in instead of becoming executable from its label alone.
-  Literal text, prompt templates, clear-input, attachments, keyboard mode, relaunch, branch, clipboard-history UI, reply-copy helpers, and end-session never cross this adapter.
+  Literal text, prompt templates, composer-clearing keys, attachments, keyboard mode, relaunch, branch, clipboard-history UI, copy-input, reply-copy helpers, and end-session never cross this adapter.
+  The rail's `^U` is the case that makes the exclusion an active rule rather than a side effect of its type: it is a raw key, so it would become voice-reachable the moment it carried a phrase, and it deliberately carries none - a spoken caller cannot see the draft they would be destroying.
+  Restore input is voiced precisely because it is the recovering half of that pair.
   Execution goes back through the mounted `TerminalPane` action bus instead of writing to the PTY directly, and Talk waits for an acknowledgement before reporting success.
   Voice Paste reads clipboard text only and cannot take the visible Paste button's image-attachment branch.
   A missing pane, missing copy selection, or blocked browser clipboard is therefore reported as a failure instead of a false success.

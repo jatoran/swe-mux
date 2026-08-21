@@ -282,8 +282,11 @@ responsive controls.
   beside it at exactly the threshold people watch for.
 - The resource chip reports RAM rather than CPU, since a percentage that moves every sample is
   not worth a permanent glance, and abbreviates it (`3.2G`) to fit the strip.
-- The expanded sidebar resource trigger is one row: boxed process-tree icon and count, CPU icon and rounded system CPU percentage, then RAM icon and swe-mux process-tree working set.
+- The expanded sidebar resource trigger is one row: boxed terminal-window icon and live session count, boxed process-tree icon and count, CPU icon and rounded system CPU percentage, then RAM icon and swe-mux process-tree working set.
   Its tooltip and accessible name expand the icon-only values and state that clicking opens usage details.
+- The session count leads the row, and is the only value in it with no unavailable fallback.
+  It is the operator's own unit of work, so it reads before the machine's accounting of it; and it is counted from the fleet the sidebar already renders rather than from process inspection, so it stays truthful on a host where process inspection is refused and the rest of the row reads `—`.
+  A session counts as live by exactly the rule a Project's own collapsed badge uses: not pending, not exited, not crashed.
 - The resource popover separates machine and process-tree scope explicitly.
   System CPU covers the whole machine; process count, reclaimable RAM, and working set cover swe-mux plus everything it started.
   Reclaimable RAM and working set are separate metric boxes because working set counts shared pages in every process while reclaimable RAM excludes them.
@@ -1412,7 +1415,7 @@ Its rules, and what each one is defending:
   It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, the clipboard-history picker (`Clip`), and the session's skill picker (`Skills`).
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
-  Immediately after Up/Down, five editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, copy the composer, clear the composer, and send Ctrl+Y in that order.
+  Immediately after Up/Down, five editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, copy the composer, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout and the customize gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into configuration.
@@ -1572,10 +1575,15 @@ Its rules, and what each one is defending:
   A row does the one obvious thing and closes: Clipboard inserts the entry, Skills inserts the invocation without submitting.
   Reading, searching, pinning and deleting stay in the drawer section - a drop-up that also expanded rows would rebuild the surface it is a shortcut past.
   Inserting from the ring never touches `navigator.clipboard`, which is what makes it the working paste path on a plain-HTTP tailnet client and on mobile Safari.
-- **Copy input and Clear input read the draft off the terminal grid.**
+- **Copy input reads the draft off the terminal grid.**
   Nothing else can answer the question: no harness publishes its composer, and the daemon's write log deliberately keeps a character count rather than text (`features/terminal-input.md`).
-  Copy is disabled with its reason on a harness whose composer geometry has not been measured, rather than hidden - a missing button reads as "not built", a disabled one reads as "not here yet", and only the second is true.
-  Clear never depends on the read succeeding: the keys reach the CLI either way, and the status line says whether the discarded text was captured to clipboard history or only cleared.
+  It is disabled with its reason on a harness whose composer geometry has not been measured, rather than hidden - a missing button reads as "not built", a disabled one reads as "not here yet", and only the second is true.
+- **There is deliberately no Clear-composer button.**
+  The rail carries a raw `^U` key beside `^Y`, and `^U` is all it claims to be: it kills to the start of the line, which clears a single-line draft and leaves the other lines of a multi-line one standing.
+  A Clear button existed briefly and sent the harness's declared whole-composer discard sequence (`composer_clear_keys`, `features/backends.md`), which on Claude is a double Esc - and a double Esc interrupts a running turn.
+  A button labelled as tidying a draft that can abort work is the wrong shape of mistake to leave one tap from the arrow keys, and making it turn-state-aware was declined in favour of removing it: an honest key beats a clever button.
+  The declared sequence itself stays published, because the daemon's unsent-input accounting still needs to know which write discards a draft.
+  A saved rail layout holding the retired button migrates to the `^U` key in the same slot rather than losing the position (`technical/frontend/packages.md`).
 - Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
   rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
   most of a screen's worth of rail before the terminal keys begin — and their marks (offset

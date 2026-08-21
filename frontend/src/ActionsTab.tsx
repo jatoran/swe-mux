@@ -120,7 +120,6 @@ const ACTION_LABELS: Record<string, string> = {
   toggleKeyboard: 'Keyboard',
   clipboardHistory: 'Clipboard',
   copyInput: 'Copy input',
-  clearInput: 'Clear input',
   endSession: 'End session',
 }
 

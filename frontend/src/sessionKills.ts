@@ -85,18 +85,41 @@ export type NextActiveInput = {
   killedId: string
   projectId: string
   activeId: string | null
+  /**
+   * This Project's most-recently-focused session ids, newest first
+   * (`sessionFocusHistory.ts`). Optional: an empty list is not an error, it is a
+   * fresh tab that has nothing behind it yet, and the layout fallbacks answer.
+   */
+  recent?: readonly string[]
+  /**
+   * Terminal ids that shared the killed session's pane, read from the layout as it
+   * stood *before* the leaf was removed - the post-kill layout can no longer say
+   * which pane the session was in, and a stack that emptied is gone from it entirely.
+   */
+  paneIds?: readonly string[]
 }
 
 /**
  * Which session takes focus once a killed one leaves.
  *
- * Preference order is visible-in-the-layout, then anywhere in the layout, then any
- * surviving session in the project - a tab that is merely stacked behind another is
- * still a better landing spot than nothing. Focus only moves when the killed session
- * held it; killing an unfocused tab must not yank the operator elsewhere.
+ * Recency first, position second. The operator's own back-and-forth is the best
+ * available statement of where they want to be next, so the most recently focused
+ * surviving session wins - preferring one in the pane just vacated, because closing
+ * the last tab of a split should settle inside that split rather than jump across the
+ * screen. Only when recency knows nothing does this fall back to reading the layout:
+ * visible-in-the-layout, then anywhere in the layout, then any surviving session in
+ * the project - a tab that is merely stacked behind another is still a better landing
+ * spot than nothing.
+ *
+ * A recent id that has left the layout ranks *below* those two fallbacks rather than
+ * above: something on screen beats something that is not, whatever the operator last
+ * touched.
+ *
+ * Focus only moves when the killed session held it; killing an unfocused tab must not
+ * yank the operator elsewhere.
  */
 export function nextActiveAfterKill(
-  { layout, sessions, killedId, projectId, activeId }: NextActiveInput,
+  { layout, sessions, killedId, projectId, activeId, recent = [], paneIds = [] }: NextActiveInput,
 ): string | null {
   if (activeId !== killedId) return activeId
   const surviving = sessions.filter(session =>
@@ -104,8 +127,16 @@ export function nextActiveAfterKill(
     && session.project_id === projectId
     && session.state !== 'exited' && session.state !== 'crashed')
   const survivingIds = new Set(surviving.map(session => session.id))
-  return visibleTerminalIds(layout).find(id => survivingIds.has(id))
+  // Dead and killed ids are skipped rather than trusted: the stack records what was
+  // focused, and says nothing about what is still alive.
+  const recentLive = recent.filter(id => id !== killedId && survivingIds.has(id))
+  const pane = new Set(paneIds)
+  const placed = new Set(terminalIds(layout))
+  return recentLive.find(id => pane.has(id) && placed.has(id))
+    ?? recentLive.find(id => placed.has(id))
+    ?? visibleTerminalIds(layout).find(id => survivingIds.has(id))
     ?? terminalIds(layout).find(id => survivingIds.has(id))
+    ?? recentLive[0]
     ?? surviving[0]?.id
     ?? null
 }

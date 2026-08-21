@@ -688,6 +688,12 @@ export type GitOverviewWorktree = {
   locked: string | null
   prunable: string | null
   main: boolean
+  /** Committer date of this tree's HEAD, Unix seconds, or null when the daemon could
+   *  not read it (an unborn branch, or an older daemon that does not serve the field).
+   *  This is the tree's activity clock — deliberately *not* the checkout directory's
+   *  mtime, which Windows freezes on files a live session holds open and which would
+   *  therefore report the busiest worktree as the most dormant one. */
+  headCommittedAt: number | null
   comparisonCounts: { ahead: number; behind: number } | null
   unstaged: ReviewChangeSummary | null
   staged: ReviewChangeSummary | null
@@ -777,6 +783,46 @@ export function graphDecorations(
   return refs
 }
 
+/**
+ * Order worktrees by how recently they were worked in, most recent first.
+ *
+ * Git lists worktrees in registration order, which after a few weeks of parallel work
+ * is neither alphabetical nor useful: the tree an agent committed to a minute ago sits
+ * wherever it was created, several screens down from the reader who wants it. The Map
+ * and the Land list are both "which of these do I act on next" surfaces, so both are
+ * ordered by the same key.
+ *
+ * That key is the **branch tip's committer date** (`headCommittedAt`), and the obvious
+ * alternative is a measured trap rather than a simplification: Windows freezes a
+ * file's `st_mtime` while a handle is open on it, so a worktree a live session is
+ * actively working in reports a directory timestamp hours stale — every Win32 API
+ * agrees, and a naive repro does not reproduce it. Ordering by directory mtime would
+ * therefore push the busiest checkout to the bottom, which is exactly backwards.
+ *
+ * Two deliberate exceptions to the pure sort:
+ *
+ *  * the **main tree stays first**. It is the trunk the rest are measured against, it
+ *    carries its own rail glyph and "main tree" label, and the Land list excludes it
+ *    outright — it is an anchor rather than a candidate, so it does not compete.
+ *  * a tree with **no readable tip date sinks to the bottom** rather than sorting as
+ *    epoch-old among the rest, and ties (including all the undated ones) fall back to
+ *    path order so the list is stable across refreshes instead of shuffling.
+ */
+export function sortWorktreesByActivity<T extends Pick<GitOverviewWorktree, 'path' | 'main' | 'headCommittedAt'>>(
+  worktrees: readonly T[],
+): T[] {
+  return [...worktrees].sort((left, right) => {
+    if (left.main !== right.main) return left.main ? -1 : 1
+    const leftDate = left.headCommittedAt, rightDate = right.headCommittedAt
+    if (leftDate !== rightDate) {
+      if (leftDate === null) return 1
+      if (rightDate === null) return -1
+      return rightDate - leftDate
+    }
+    return normalizePath(left.path).localeCompare(normalizePath(right.path))
+  })
+}
+
 export function localMeasurement(tree: GitOverviewWorktree): { measured: boolean; total: number } {
   const summaries=[tree.conflicted,tree.unstaged,tree.staged]
   return {
@@ -861,6 +907,7 @@ export function parseGitOverview(value:unknown):GitWorktreeOverview|null {
     worktrees.push({
       path:item.worktree,head:textOrNull(item.HEAD),branch:textOrNull(item.branch)?.replace(/^refs\/heads\//,'')||null,
       detached:item.detached===true,bare:item.bare===true,locked:reason(item.locked),prunable:reason(item.prunable),main:item.main===true,
+      headCommittedAt:finiteNonnegative(item.head_committed_at),
       comparisonCounts:ahead===null||behind===null?null:{ahead,behind},
       unstaged:parseReviewSummary(item.unstaged),staged:parseReviewSummary(item.staged),conflicted:parseReviewSummary(item.conflicted),branchDelta:parseReviewSummary(item.branch_delta),
     })
