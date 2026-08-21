@@ -138,12 +138,24 @@ The assistant is text-first and voice-attached, not voice-only:
 - In the voice overlay, a `talk`/`chat` mode toggle switches the same floating panel between the dictation draft and the conversation view (`AssistantPanel`); the chat is also reachable with the microphone off (`assistant.toggle`).
   **Chat is the default mode** (device-local, persisted; a deliberate switch sticks): the assistant lane is the primary one, and talk — free, deterministic, model-less — stays one tab away as the degradation path for budget exhaustion, provider outages, and verbatim dictation. Talk mode is deliberately not removed: the tier-1 grammar it carries is load-bearing inside chat mode too ("Mux, stop", confirm/cancel, navigation), and the assistant's composer tools execute through the same acknowledged terminal path.
   Chat mode is bounded to roughly half the viewport — a dialog consulted beside the terminals, never a takeover — and collapses to its header (device-local, persisted); the collapsed body stays mounted so streaming, card speech, and earcons keep working while folded.
-- **Thinking out loud is not answered at every pause.** Two deterministic client mechanisms
-  (both in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
-  assistant is the addressee (commands keep short-circuiting it), and the `hold`/`proceed`
+- **Thinking out loud is not answered at every pause.** Three deterministic client mechanisms
+  (all in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
+  assistant is the addressee (commands keep short-circuiting it); a **completeness heuristic
+  runs before the turn is dispatched**, so an utterance ending mid-clause earns exactly one
+  adaptive patience extension instead of becoming a turn; and the `hold`/`proceed`
   brainstorm pair buffers plain speech until a "go ahead" cue releases it as one consolidated
   turn. Deliberately not an assistant tool: a wait tool runs *inside* a turn, so every pause
   would still cost a model call — the same reason confirm/cancel keeps the model out of the loop.
+- **The model is never instructed to return nothing.** Incomplete fragments are handled *before*
+  the model by the heuristic above, because a model told to sometimes withhold a reply will
+  withhold one when it should have answered, and a model asked "are you finished?" is the
+  round-trip spam the whole design avoids. The primer teaches exactly one thing here: when a turn
+  reads as an unfinished thought, **offer the brainstorm hold once**, in one short sentence,
+  while still answering the turn - suggest it, never emulate it, and never repeat the offer
+  later in the same conversation.
+- **Queue-merge is the safety net under both.** A fragment the heuristic does not recognize
+  becomes a turn, and the next breath merges into the waiting turn rather than opening a second
+  one; barge-in already silences a reply to fragment one.
 - **The mode toggle is the microphone's addressee switch.**
   While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
   A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.

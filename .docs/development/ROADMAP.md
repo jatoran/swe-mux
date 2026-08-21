@@ -3820,18 +3820,31 @@ The defining voice-agent complaint: the operator rushes because a pause becomes 
 The design is deterministic-first, because a model-arbitrated "are you done" loop is the
 round-trip spam the feature exists to avoid.
 
-- [ ] A completeness heuristic runs before a chat turn is dispatched: an utterance ending
+- [x] A completeness heuristic runs before a chat turn is dispatched: an utterance ending
   mid-clause (dangling conjunction, preposition, or article) earns one adaptive patience
   extension instead of submitting.
   At most one deferral per utterance, so unbounded round-trips are structurally impossible.
-- [ ] Queue-merge stays the safety net for fragments that slip through: the second breath merges
+- [x] Queue-merge stays the safety net for fragments that slip through: the second breath merges
   into the pending turn, and barge-in already silences a reply to fragment one.
-- [ ] The model is never instructed to return nothing - incomplete fragments are handled before
+- [x] The model is never instructed to return nothing - incomplete fragments are handled before
   the model, not by it.
-- [ ] The primer teaches the model to suggest hold/proceed once when the operator is clearly
+- [x] The primer teaches the model to suggest hold/proceed once when the operator is clearly
   thinking aloud, rather than emulating it.
-- [ ] Every deferral is logged with the trigger token, so the heuristic's false-positive rate is
+- [x] Every deferral is logged with the trigger token, so the heuristic's false-positive rate is
   measurable before anyone tunes it.
+
+Shipped (`design/features/voice.md`, endpointing). `utteranceCompleteness.ts` is the pure rule
+set, `utteranceDeferral.ts`'s clock-injected `DeferralPen` owns the one-deferral-per-utterance
+decisions, and `ConversationControl.tsx` keeps the effects; the extension is the operator's own
+`voice_chat_patience_ms` (floored at 600 ms, capped at 5 s) rather than a second knob, and it
+also raises the gate's `endpointPatienceMs` while a fragment is held so the second breath is not
+itself chopped in half.
+Two structural guards keep false positives down without a parser - questions strand prepositions
+legitimately, and prepositions that double as verb particles need a five-word clause - and the
+resolution report (`POST /api/voice/deferral-diagnostic`) carries the trigger plus the outcome
+that judges it, since `merged` versus `submitted` IS the false-positive rate.
+The release timer re-arms while speech is still arriving or an utterance is mid-decode, bounded
+by a hard 15 s hold ceiling.
 
 ### Token caps and cost caps everywhere
 

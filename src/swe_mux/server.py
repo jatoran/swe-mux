@@ -995,6 +995,7 @@ def create_app(
             web.delete("/api/voice/stt-latency", voice_latency),
             web.post("/api/voice/barge-in-diagnostic", voice_barge_in_diagnostic),
             web.post("/api/voice/capture-diagnostic", voice_capture_diagnostic),
+            web.post("/api/voice/deferral-diagnostic", voice_deferral_diagnostic),
             web.post("/api/sessions/{sid}/voice/prepare-submit", voice_prepare_submit),
             web.post("/api/sessions/{sid}/voice/submit", voice_submit),
             web.post("/api/sessions/{sid}/voice/approval", voice_approval),
@@ -10555,6 +10556,16 @@ async def voice_capture_diagnostic(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     try:
         sample = voice.record_capture_diagnostic(await request.json())
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(sample)
+
+
+async def voice_deferral_diagnostic(request: web.Request) -> web.Response:
+    """Record one unfinished-utterance deferral and the outcome that judges it."""
+    voice: VoiceService = request.app["voice"]
+    try:
+        sample = voice.record_deferral_diagnostic(await request.json())
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 400)
     return json_response(sample)

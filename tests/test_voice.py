@@ -1311,6 +1311,70 @@ def test_service_validates_and_logs_barge_in_diagnostics(
         service.store.close()
 
 
+def test_service_validates_and_logs_deferral_diagnostics(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The deferral heuristic is a word list, so it needs measurable evidence.
+
+    Every held utterance lands here with the token that triggered it and the
+    outcome that judges it: `merged` caught a real trail-off, `submitted` cost
+    the operator one extension for nothing. The ratio is the false-positive
+    rate, which is what makes this rule set tunable rather than a matter of
+    opinion - so the trigger is required, and junk numbers are bounded rather
+    than trusted.
+    """
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger="swe_mux.voice"):
+            merged = service.record_deferral_diagnostic(
+                {
+                    "outcome": "merged",
+                    "kind": "conjunction",
+                    "trigger": "  AND  ",
+                    "words": 9,
+                    "heldMs": 840.6,
+                }
+            )
+        assert merged == {
+            "outcome": "merged",
+            "kind": "conjunction",
+            "trigger": "and",
+            "words": 9,
+            "held_ms": 840,
+        }
+        assert '"trigger": "and"' in caplog.text
+        # A transcript fragment reaches a log line, so control characters and
+        # punctuation are stripped rather than written through.
+        cleaned = service.record_deferral_diagnostic(
+            {
+                "outcome": "submitted",
+                "kind": "preposition",
+                "trigger": "to\nDROP TABLE;",
+                "words": -3,
+                "heldMs": 10**12,
+            }
+        )
+        assert cleaned["trigger"] == "todrop table"
+        assert cleaned["words"] == 0
+        assert cleaned["held_ms"] == 3_600_000
+        with pytest.raises(VoiceError, match="outcome"):
+            service.record_deferral_diagnostic(
+                {"outcome": "maybe", "kind": "article", "trigger": "the"}
+            )
+        with pytest.raises(VoiceError, match="kind"):
+            service.record_deferral_diagnostic(
+                {"outcome": "merged", "kind": "vibes", "trigger": "the"}
+            )
+        with pytest.raises(VoiceError, match="trigger"):
+            service.record_deferral_diagnostic(
+                {"outcome": "merged", "kind": "article", "trigger": "!!!"}
+            )
+        with pytest.raises(VoiceError, match="object"):
+            service.record_deferral_diagnostic("merged")
+    finally:
+        service.store.close()
+
+
 def test_service_validates_and_logs_capture_diagnostics(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

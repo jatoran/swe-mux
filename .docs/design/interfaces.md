@@ -1228,6 +1228,7 @@ POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
 POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
 POST   /voice/capture-diagnostic         bounded stalled/recovered capture watchdog report
+POST   /voice/deferral-diagnostic        one resolved unfinished-utterance deferral
 GET    /voice/clips[?session=&run=&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
@@ -1317,6 +1318,16 @@ the recovery-attempt count, each clamped on arrival.
 A stall logs at WARNING because it is the durable evidence a dead phone microphone leaves at
 the moment it dies — the failure this exists for was reconstructed from the access log hours
 later while the UI said "listening" throughout.
+
+`/voice/deferral-diagnostic` records one resolved unfinished-utterance deferral:
+`{outcome, kind, trigger, words, heldMs}`, where `outcome` is `merged`, `submitted`, `held`, or
+`discarded` and `kind` is `conjunction`, `preposition`, or `article`.
+The trigger token is required and is narrowed to alphanumerics, spaces, apostrophes, and hyphens
+before it reaches a log line; the counts are clamped.
+It is posted on resolution rather than at the deferral, because the outcome is what judges the
+heuristic: `merged` caught a real trail-off while `submitted` cost the operator one patience
+extension for nothing, so the ratio of the two is the false-positive rate the word lists are
+tuned against (`design/features/voice.md`).
 
 The Talk client first calls `/voice/prepare-submit` to recheck the live Agent target, bounded text, and non-overridable delivery protections without writing input.
 It then sends Agent drafts through the mounted terminal's ordinary xterm/WebSocket input path, not through `/voice/submit`.

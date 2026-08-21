@@ -303,6 +303,51 @@ affect the PTY, session state, transcripts, history, or projects.
   instant and feeling stuck. The real decode stays on the `dictation` profile — an answer that
   turns out to be conversational still has to be transcribed accurately, and the speculation
   already carries the latency win.
+- **Unfinished-utterance deferral** (`utteranceCompleteness.ts`, dispatched from
+  `ConversationControl.tsx`): the defining voice-agent complaint is that a pause becomes a reply,
+  so the operator rushes to beat the endpoint.
+  A **completeness heuristic runs before a chat turn is dispatched**, and an utterance that ends
+  mid-clause - on a dangling conjunction, preposition, or article - earns exactly **one** adaptive
+  patience extension instead of submitting.
+  The design is deterministic-first and pre-model for two reasons: a model-arbitrated "are you
+  done?" loop is the round-trip spam the feature exists to remove, and a model instructed to
+  sometimes return nothing will return nothing when it should have answered.
+  **The model is never told to withhold a reply**; it is taught one thing instead - to offer the
+  brainstorm hold once when a turn reads as an unfinished thought (`assistant.md`).
+  - **One deferral per utterance, structurally.** The decisions live in `DeferralPen`
+    (`utteranceDeferral.ts`) and the effects stay in `ConversationControl.tsx`, so the invariant
+    is tested rather than asserted. The held fragment resolves exactly once:
+    merged into the next plain chat utterance, submitted alone when the extension expires, folded
+    into the brainstorm buffer if the operator says "hold on", or dropped by cancel, standby, or
+    Talk stopping. The merge path deliberately does **not** re-run the heuristic, so a chain of
+    fragments cannot compound into an unbounded wait.
+  - **The extension is the operator's own `voice_chat_patience_ms`, not a second knob** (floored
+    at 600 ms, capped at 5 s): an unfinished thought waits its normal patience at the gate and one
+    more patience-length window at the dispatch layer, so "how long before Mux answers" stays one
+    number to turn. While the fragment is held, the gate's `endpointPatienceMs` returns
+    patience + extension (capped at 10 s), so the second breath is not itself chopped in half.
+  - **The release timer re-arms while speech is still arriving or an utterance is mid-decode**,
+    because answering half a sentence whose other half is already in flight is the exact failure
+    being fixed. It is bounded by a hard 15 s hold ceiling, so a detector wedged in "speaking"
+    cannot hold a turn forever.
+  - **Queue-merge stays the safety net** for fragments the rule set does not recognize: the
+    daemon coalesces consecutive arrivals into one waiting turn, and barge-in already silences a
+    reply to fragment one (`assistant.md`).
+  - **Two guards keep the false-positive rate low without a parser.** Questions strand
+    prepositions legitimately ("what is this for"), so a trailing `?` or an interrogative opener
+    disqualifies the preposition rule - never the article or conjunction rules, because nothing
+    ends on "the". And prepositions that double as verb particles ("I'm in", "come on") count
+    only in an utterance of at least five words, where they read as a clause rather than an idiom.
+    Words that are commonly sentence-final are absent from the lists on purpose ("yet", "though",
+    bare "then", "that", "some"), and the two idioms that survive are exempted on the *preceding*
+    token ("I think so", "it's been a while") rather than by loosening the word.
+  - **Every deferral is logged with its trigger token**, on resolution rather than at the
+    deferral, because the outcome is what judges it: `merged` caught a real trail-off while
+    `submitted` cost the operator one extension for nothing, and the ratio of the two is the
+    false-positive rate. Tune the lists from `POST /api/voice/deferral-diagnostic` records in
+    `daemon.log`, not from intuition.
+  - The chat panel shows the held fragment as an `unfinished · "and"` chip beside the phase, so a
+    turn that is waiting rather than ignored is legible at a glance.
 - **Push-to-talk** (hold `Ctrl`+`Alt`+`Space`) suspends endpointing entirely: the key release is
   the endpoint. It is the escape hatch for when detection is the problem rather than the fix — a
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
@@ -617,6 +662,7 @@ and never touches the daemon or an LLM.
   record one browser-measured sample, start a fresh run.
 - `POST /api/voice/barge-in-diagnostic` - bounded confirmed/rejected playback probe diagnostics written to `daemon.log`.
 - `POST /api/voice/capture-diagnostic` - bounded stalled/recovered capture watchdog reports; a stall is written to `daemon.log` at WARNING because it is the durable evidence a dead microphone leaves.
+- `POST /api/voice/deferral-diagnostic` - one resolved unfinished-utterance deferral: the trigger token, its kind, the word count, how long it was held, and the outcome (`merged`, `submitted`, `held`, `discarded`) that judges it. Written to `daemon.log`, because the completeness heuristic is a word list and a word list is only tunable against a measured false-positive rate.
 - `POST /api/sessions/{sid}/voice/prepare-submit` - side-effect-free safety validation before Talk uses the mounted terminal path.
 - `POST /api/sessions/{sid}/voice/submit` - compatibility-only idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.
@@ -641,7 +687,8 @@ built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`
 `stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
 `stt_routing_model` (spoken commands; blank falls back to the dictation model);
 `voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases),
-`voice_chat_patience_ms` (extra endpoint patience while the assistant is the addressee).
+`voice_chat_patience_ms` (extra endpoint patience while the assistant is the addressee, and the
+size of the single extension an unfinished utterance earns - deliberately one number, not two).
 The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 
 ## Key files
@@ -666,6 +713,15 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `frontend/src/audioFrames.ts` — streaming resampler and 512-sample framing.
 - `frontend/src/speechGate.ts` — the frame-counted endpointing state machine and both gate
   configurations.
+- `frontend/src/utteranceCompleteness.ts` - the pure completeness heuristic (dangling
+  conjunction, preposition, article), its two false-positive guards, and the patience/extension
+  arithmetic. No timers, no capture, no dialog: the whole rule set is unit-testable from a
+  string.
+- `frontend/src/utteranceDeferral.ts` - `DeferralPen`, the holding pen for the one unfinished
+  utterance. Clock-injected like `CaptureFrameWatchdog`, and deliberately effect-free: it never
+  dispatches a turn, posts a diagnostic, or owns a timer. It answers what should happen to an
+  utterance, whether a release is due, and who holds the fragment now, so the structural claim
+  (at most one deferral per utterance) is testable without a microphone.
 - `frontend/src/sileroVad.ts`, `frontend/src/voiceCaptureWorklet.ts` — the ONNX detector and the
   audio-thread capture worklet.
 - `frontend/src/voiceLatency.ts`, `frontend/src/VoiceLatencyReport.tsx` — the stage sample and its
