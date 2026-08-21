@@ -675,7 +675,7 @@ async def test_streamed_tool_calls_are_merged_by_index_not_appended() -> None:
                     {
                         "choices": [{"delta": {"tool_calls": [
                             {"index": 0, "id": "call-1", "type": "function",
-                             "function": {"name": "append_project_note", "arguments": ""}}
+                             "function": {"name": "write_project_note", "arguments": ""}}
                         ]}}]
                     },
                     {
@@ -699,7 +699,7 @@ async def test_streamed_tool_calls_are_merged_by_index_not_appended() -> None:
     assert len(turn.tool_calls) == 1
     call = turn.tool_calls[0]
     assert call["id"] == "call-1"
-    assert call["function"]["name"] == "append_project_note"
+    assert call["function"]["name"] == "write_project_note"
     assert json.loads(call["function"]["arguments"]) == {"project": "pixel lab"}
     assert turn.message["tool_calls"] == turn.tool_calls
 

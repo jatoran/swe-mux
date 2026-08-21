@@ -259,6 +259,7 @@ A phase here may depend on one, but none of them is a phase.
 | `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
+| `USABILITY_AUDIT_2026-08-20.md` | audit report, findings open | The deliverable of Phase 15's "Global usability audit session". Twelve ranked first-use and overwhelm findings, each anchored to a file and line, split into quick polish and needs-design. Nothing in it is scheduled; a maintainer decides which findings earn work. |
 
 ## Phase 1 — Evidence replay and delivery readiness
 
@@ -3868,11 +3869,19 @@ ask.
 
 ### Global usability audit session
 
-- [ ] Spawn a dedicated audit session - prompt staged for operator review, per `stage_text` -
+- [x] Spawn a dedicated audit session - prompt staged for operator review, per `stage_text` -
   charged with an app-wide first-use/overwhelm audit: every surface with complex functionality,
   not voice alone, drawing on the continuity project's UI/UX-psychology documentation and its own
   research, producing a written report with ranked recommendations.
   This is a session to run, not code to write; it is in the phase so it is not lost.
+  Delivered 2026-08-20 as `USABILITY_AUDIT_2026-08-20.md`: twelve ranked findings, each anchored
+  to a file and line, split into quick polish and needs-design.
+  The report is the deliverable and nothing in it is scheduled here; acting on a finding is a
+  separate decision.
+  Two findings are deliberately handed to the in-flight gated-feature enablement work rather than
+  acted on (Run with no harness enabled, and the assistant's off-state naming a Settings tab that
+  does not exist), and the report asks only that the Voice-tab split be sequenced before the
+  global TTS master switch in this phase.
 
 ### Bring-your-own LLM endpoint, and gating on a verified provider
 
