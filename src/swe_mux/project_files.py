@@ -53,6 +53,14 @@ PROJECT_CONFIG_FIELDS = {
     # approves; "granted" lets an agent create a session here directly, inside a
     # per-origin budget. Authority is by target Project, as for interrupt/end.
     "spawn_grant",
+    # Phase 14: the authority level for agent-initiated landing of a worktree branch
+    # into this Project's trunk, once the `land_queue` automation is opted in.
+    # "draft" (the default) makes `request_land` write an inert request a human
+    # approves; "granted" lets the pipeline start on the agent's word, inside a
+    # per-origin hourly budget. Its own field rather than a level of
+    # `session_control_grant` for the same reason it is its own automation: that one
+    # acts on a session, this one moves a repository's trunk.
+    "land_grant",
     # Whether an agent in another session may have a message delivered into a
     # *running* turn here (`mux.notify(delivery="now")`). "off" (the default) is
     # the behaviour that existed before the mode did: every agent message waits
@@ -821,6 +829,26 @@ def project_spawn_grant(root: str | Path) -> str:
     return "draft"
 
 
+def project_land_grant(root: str | Path) -> str:
+    """The agent-initiated-landing authority level for a Project.
+
+    "draft" (the default and the fallback for a malformed config) makes an agent's
+    `request_land` write an inert request a human approves; "granted" lets the
+    pipeline start on the agent's word. Whether the capability exists at all is the
+    `land_queue` automation opt-in, checked separately by the caller.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            grant = values.get("land_grant")
+            if grant in SESSION_CONTROL_GRANTS:
+                return str(grant)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        pass
+    return "draft"
+
+
 def project_interject_grant(root: str | Path) -> str:
     """Whether agents may have messages delivered mid-turn to this Project.
 
@@ -1204,6 +1232,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("session_control_grant must be draft or granted")
     if parsed.get("spawn_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError("spawn_grant must be draft or granted")
+    if parsed.get("land_grant") not in {None, *SESSION_CONTROL_GRANTS}:
+        raise ValueError("land_grant must be draft or granted")
     if parsed.get("interject_grant") not in {None, *INTERJECT_GRANTS}:
         raise ValueError("interject_grant must be off or granted")
     if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
@@ -1251,16 +1281,15 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         worktree = parsed["worktree"]
         if not isinstance(worktree, dict):
             raise ValueError("worktree must be a table")
-        unknown_worktree = sorted(set(worktree) - {"setup_command"})
+        unknown_worktree = sorted(set(worktree) - {"setup_command", "verify_command"})
         if unknown_worktree:
             raise ValueError(f"unknown worktree fields: {', '.join(unknown_worktree)}")
-        setup_command = worktree.get("setup_command")
-        if setup_command is not None and (
-            not isinstance(setup_command, str)
-            or not setup_command.strip()
-            or len(setup_command) > 4096
-        ):
-            raise ValueError("worktree.setup_command must be a non-empty string")
+        for field in ("setup_command", "verify_command"):
+            command = worktree.get(field)
+            if command is not None and (
+                not isinstance(command, str) or not command.strip() or len(command) > 4096
+            ):
+                raise ValueError(f"worktree.{field} must be a non-empty string")
     return parsed
 
 
@@ -1280,6 +1309,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "prompt_library_scope",
         "session_control_grant",
         "spawn_grant",
+        "land_grant",
         "interject_grant",
         "approval_ceiling",
     ):
@@ -1318,9 +1348,15 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         )
         lines.append(f"automations = {{ {pairs} }}")
     worktree = values.get("worktree")
-    if isinstance(worktree, dict) and worktree.get("setup_command"):
-        lines.extend(["", "[worktree]"])
-        lines.append(f"setup_command = {json.dumps(str(worktree['setup_command']))}")
+    if isinstance(worktree, dict):
+        declared = [
+            (field, str(worktree[field]))
+            for field in ("setup_command", "verify_command")
+            if worktree.get(field)
+        ]
+        if declared:
+            lines.extend(["", "[worktree]"])
+            lines.extend(f"{field} = {json.dumps(value)}" for field, value in declared)
     data = ("\n".join(lines) + "\n").encode("utf-8")
     parse_project_config(data)
     return data
@@ -1393,7 +1429,7 @@ MAX_OBSERVATION_CHARS = 2000
 # summary line — today only `mux.requestSpawn` (`ROADMAP.md` Phase 5,
 # `CONTROL_PLANE_ROADMAP.md` §7.2/§16). The item is text until a human approves
 # it; nothing here starts anything.
-OBSERVATION_KINDS = ("note", "spawn_request", "control_request")
+OBSERVATION_KINDS = ("note", "spawn_request", "control_request", "land_request")
 MAX_SPAWN_REQUEST_PROMPT = 8000
 _REQUEST_STRING_FIELDS = (
     "prompt",
@@ -1415,6 +1451,13 @@ _REQUEST_STRING_FIELDS = (
     "target_session_id",
     "target_name",
     "outcome",
+    # Phase 14 land_request fields. A drafted land is reviewed by *checkout*, not by
+    # session, so the human needs the branch and the two roots to judge it - the same
+    # allowlist discipline, one more request shape.
+    "worktree_root",
+    "project_root",
+    "branch",
+    "request_id",
 )
 
 

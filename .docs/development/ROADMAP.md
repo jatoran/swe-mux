@@ -167,7 +167,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                     -> Phase 7.8  Git provenance re-attribution: committer + contributors [done]
                                       -> Phase 7.9  Code-structure graph: blast radius + per-session change map [done]
                                       -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [done]
-                                      -> Phase 7.11 Scan timeline as an agent-readable surface + window-scoped fields [open]
+                                      -> Phase 7.11 Scan timeline as an agent-readable surface + run-level field continuity [built, not landed]
                                       -> Phase 7.12 Code-analysis expansion: conflict prediction + entity change facts + quality deltas [open]
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
@@ -175,6 +175,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                             -> Phase 10.5 Distribution licensing + voice-stack replacement [voice stack done+deployed; license paperwork open]
                                               -> Phase 10.6 Mux assistant: conversational fleet operation [done+deployed 2026-08-18]
                                                 -> Phase 11  Public packaging and release  [open]
+
+Phase 14  Land queue: serialized branch landing   [built, not landed; live run outstanding]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -2521,80 +2523,104 @@ It depends only on shipped substrate (Phase 3.7 deterministic consumers, Phase 7
 - [x] The Insight tab exposes Timeline and Findings without losing a saved-workspace tab, and the Findings pane is read-only, scope-toggled, and always states what the scope excludes.
 - [x] The surface is verified on the isolated daemon in both scopes and from a live agent before redeploy. (Operator-confirmed 2026-08-17.)
 
-## Phase 7.11 — Scan timeline as an agent-readable surface, and window-scoped semantic fields
+## Phase 7.11 — Scan timeline as an agent-readable surface, and the run-level fields
 
-The scan timeline is the most compressed artifact swe-mux produces about a conversation, and it is the only one agents cannot read.
-All 27 mux MCP tools exist and none of them touches a scan record: `mcp.py` has no reference to `scan_timeline` or `search_scan_records`, so the only consumers are the Insight tab and three HTTP endpoints built for the human.
-An agent asked to review a sibling session, or to monitor an active one, must page `read_transcript` over the raw conversation while a distilled, semantically-labeled index of that same conversation already exists, paid for and stored.
-This phase exposes it, and fixes the one accuracy defect that measurement actually supports.
+The scan timeline is the most compressed artifact swe-mux produces about a conversation, and it was the only one agents could not read.
+All 27 mux MCP tools existed and none touched a scan record, so an agent asked to review or monitor a sibling had to page `read_transcript` over raw conversation while a distilled, semantically-labeled index of that same conversation already existed, paid for and stored.
+This phase exposes it, and fixes the accuracy defect that measurement actually supports.
 
 ### Measured baseline
 
-Session `c562f741` (Phase 10 execution, 218 records over roughly ten and a half hours) is the calibration sample.
-Numbers here are from that sample and should be re-derived before acting on any of them, because a single long session is one shape of run, not the distribution.
+Re-derived 2026-08-20 against the whole live store (`~/.mux/mux.db`): **379 records across 10 runs**, rather than the single 218-record session the first draft of this phase used.
+Where the two disagree, the fleet-wide numbers are authoritative and the differences are recorded, because a single long session is one shape of run and not the distribution.
 
-- The raw `GET /api/sessions/{sid}/scan-timeline` payload is 1.1 MB for those 218 records, which is why exposure is a projection problem before it is an endpoint problem.
-- Schema enforcement is already at its ceiling and is working: `complete_json` sends `response_format: json_schema` with `strict: true` plus `provider.require_parameters: true`, and `models()` filters the catalog to models advertising `response_format`/`structured_outputs`, so an unenforceable observer cannot be selected. Across all 218 records there were **zero** enum-fallback fires on `work_phase`/`blocked_on`/`approach_status` and zero missing-or-unknown-field repairs.
-- 31.2% of records (68) carry a repair, and 59 of those are `behavior repeated a label`, plus 8 unknown labels and 1 `summary` truncation. `maxItems`/`uniqueItems`/`maxLength` are assertion keywords that constrained decoding does not enforce, which `_normalize_behavior` already documents as expected rather than exceptional. This residue is repaired losslessly and is **not** a reason to change models.
-- Mean `messages_seen` per scan is **4.8**, and 149 of 218 scans fire on a single `tool_result`. `approach_status` and `dead_end` are run-level judgments ("was an approach tried and dropped within this same run") being answered from a delta that size, and the result is **61 `abandoned` against 3 `succeeded`**. `SYSTEM_PROMPT` already tries to restrain this in words and still lands 28% `abandoned`, so the prompt-wording fix has been tried and has failed; what remains is structural.
-- The annotation gate absorbs most of that: only **5 of the 61** `abandoned` records carry non-empty `dead_end` text, and the write requires both, so 5 dead-end annotations reached other agents rather than 61. The over-firing is real but its blast radius is small, which is why this phase is a correctness cleanup and not an incident.
+- Schema enforcement is at its ceiling and working. `complete_json` sends `response_format: json_schema` with `strict: true` plus `provider.require_parameters: true`, and `models()` filters the catalog to models advertising structured outputs, so an unenforceable observer cannot be selected. Across all 379 records there were **zero** enum-fallback fires on `work_phase`/`blocked_on`/`approach_status`.
+- 30.1% of records (114) carry a repair, and 99 of those are `behavior repeated a label`, plus 12 unknown labels and 3 text truncations. `maxItems`/`uniqueItems`/`maxLength` are assertion keywords constrained decoding does not enforce, which `_normalize_behavior` already documents as expected rather than exceptional. This residue is repaired losslessly and is **not** a reason to change models.
+- A stored record averages ~3.2 KB. `evidence_refs` (0.4 MB) and `tier0_fact_ids` (0.1 MB) are 42% of the 1.2 MB total; **`target` alone is 211 KB (17%)**, the single largest field, which the first draft treated as an aside. Even after dropping all of them the projection is ~730 bytes a row, so a 230-record run is ~41k tokens: **field selection alone does not bound the read** and the page limit is load-bearing.
+- The `catch_me_up` digest was **not** "a few hundred tokens". Measured on real runs it rendered 4,302 tokens (230 records), 3,433 (63), and 2,133 (58), because `progress` emitted one bullet per phase segment with unbounded summaries and `claims[:12]` was uncapped in length. Reusing it was right; reusing it unbounded was not.
 
-Two hypotheses were measured and **rejected**, recorded here so they are not re-proposed:
+Three hypotheses were measured and **rejected**, recorded so they are not re-proposed:
 
-- **Input starvation.** Only 3 of 218 records were truncated (1.4%), and `abandoned` records are truncated at 1.6% against 1.4% for `active`, so there is no correlation. `MAX_INPUT_MESSAGES`/`MAX_INPUT_BYTES` are not the cause and raising them fixes nothing.
-- **Window redundancy.** There are 216 distinct `(t0, t1)` windows across 218 records and only 2 exact duplicates. There is no overlapping-window dedup lever, so a projection must earn its token savings by field selection rather than by collapsing records.
+- **Input starvation.** 24 of 379 records were truncated (6.3%), and truncated records carry `abandoned` at 8.3% against 25.6% for whole ones - anti-correlated. `MAX_INPUT_MESSAGES`/`MAX_INPUT_BYTES` are not the cause and raising them fixes nothing.
+- **Window redundancy.** There is no overlapping-window dedup lever; a projection must earn its savings by field selection and paging.
+- **Window width as the cause of over-firing.** `abandoned` fires at **22.6% on the wide triggers** (`full_session`, `turn_ended`, `session_exited`) against **24.9% on narrow ones**. The trigger label does not separate them. Measured width does correlate (13.9% at `messages_seen >= 8`), but see "the run-level fields" below for why gating on it was not the right fix either.
 
-A stronger observer model is therefore **not** in scope: the fields enforcement covers are already clean, and a smarter model reading the same 4.8-message delta cannot answer a run-level question it has no evidence for.
-If the tiered idea is ever revisited, the shape is a cheap observer on `tool_result` deltas and a stronger one on the 16 wide-window scans per session that carry run-level fields, which is a budget-shaped decision and not this phase.
+A stronger observer model is therefore **not** in scope: the fields enforcement covers are already clean, and the residual repairs are `uniqueItems` artifacts no model choice fixes.
 
 ### Backend — the scan_timeline MCP tool
 
-- [ ] Add `scan_timeline` as the 28th mux MCP tool: session-scoped, gated on the `scan_timeline` per-Project opt-in through the same enablement DAG, answering `enabled: false` rather than a fake empty when off, matching the `doc_debt` / `dead_ends` pattern (`design/features/mux-mcp.md`).
-- [ ] Default `detail: "digest"` to the existing `catch_me_up` consumer (`scan_consumers.py`, `GET /api/sessions/{sid}/catch-me-up`) rather than writing a second digest. It already rolls up one run's phases, claims, and current blocker, which is the whole answer to "is this session healthy" in a few hundred tokens. Extend it only if the phase-transition timestamps are missing.
-- [ ] `detail: "records"` returns the compact projection: `id`, `t0`, `t1`, `trigger`, `work_phase`, `blocked_on`, `approach_status`, `behavior`, `intent`, `summary`, `confidence`, `repairs`, and a `target` count with at most a few paths. Drop `evidence_refs`, `tier0_fact_ids`, `prompt_hash`, `prompt_version`, `observer_model`, and `coverage` from the default: on the sample they are the majority of the bytes and carry nothing a reading agent can act on.
-- [ ] Keep `repairs` (or at minimum a `repaired` boolean) in the default projection, and say why in the tool description. `_ENUM_FALLBACKS` silently substitutes `unknown`/`none` for an out-of-range enum, and in the stored record a fallback is indistinguishable from a model assertion except through `repairs`. It is the only field that lets a reader calibrate trust, so it is not metadata to strip.
-- [ ] `detail: "full"` requires explicit `record_ids` and is bounded to a small number of records. Source rehydration stays behind the existing `GET /api/sessions/{sid}/scan-timeline/{record_id}?rehydrate=1` endpoint and is not folded into the tool, because it reparses a transcript and its cost does not belong behind a list read.
-- [ ] Filters shaped to the questions an agent actually asks, not a generic table query: a time window, `blocked_on != none`, `approach_status`, `work_phase`, a `target` path fragment, exclude-heartbeat, and a `since_t1` cursor. The cursor is what makes monitoring affordable: a poll returns only records newer than the last one seen.
-- [ ] Always return the enablement and liveness block alongside any result: `scanning`, `last_scan_at`, `skip_reason`, `run_decided`, and the closest-to-binding gate. This is the "off vs quiet" rule that `automation-enablement.md` already requires of every consumer, and it matters more here than anywhere else, because a scanner stopped by a budget cap and a session that is simply quiet both return an empty tail.
-- [ ] Default to the caller's own Project with the standard `project` widening argument (`"fleet"` or a named Project), consistent with the rest of the surface. Note in the design doc that distilled intent summaries are in some ways more revealing than a transcript excerpt, so the default scope carries more weight here than for a raw read.
+- [x] `scan_timeline` is the 28th mux MCP tool: session-scoped, answering a typed `disabled`/`unsupported` rather than a fake empty when off, matching the `doc_debt` / `dead_ends` pattern (`design/features/mux-mcp.md`).
+- [x] Gated on a **new `scan_reads` consumer** (`requires ("scan_timeline",)`), not on the `scan_timeline` substrate id. A distilled intent summary is in some ways more revealing than the transcript excerpt behind it, so a Project must be able to keep its timeline and still withhold it from sibling agents; gating on the substrate leaves no way to express that. `scan_search` instead reuses `semantic_history_search`, which already gates the identical query on the human surface.
+- [x] The gate is the **target session's** Project, not the caller's scoped Project set. `_memory_scope` answers "which of the Projects I may see opted in", which is right for a Project-wide read and wrong for one that names a single session; `_scan_target` is its session-scoped sibling.
+- [x] Default `detail: "digest"` reuses the existing `catch_me_up` consumer rather than writing a second digest — but bounded first (`DIGEST_MAX_*` in `scan_consumers.py`): most-recent phase segments, length-capped lines, and `phase_segments_omitted`/`claims_omitted` reporting what each bound dropped. The bounds apply to `GET /api/sessions/{sid}/catch-me-up` too, because a 4k-token digest is wrong in a drawer as well.
+- [x] `detail: "records"` returns the compact projection: `id`, `t0`, `t1`, `trigger`, `work_phase`, `blocked_on`, `approach_status` (when present), `behavior`, `intent`, `summary`, `confidence`, `repaired_fields`, and a `target_count` plus at most three paths. Drops `evidence_refs`, `tier0_fact_ids`, `prompt_hash`, `prompt_version`, `observer_model`, and the bulk of `coverage`.
+- [x] The page is bounded: 30 records by default, 100 at most, newest-first by default. The measurement above is why this is not optional.
+- [x] `repaired_fields` rather than the raw `repairs` list. `_ENUM_FALLBACKS` silently substitutes `unknown`/`none` for an out-of-range enum, so a stored fallback is indistinguishable from a model assertion except through repairs — but 99 of 114 repairs are a cosmetic `behavior` dedup, and an unclassified list on a third of records cries wolf. `repaired_fields` classifies each repair to the field it touched, so a `work_phase` fallback is distinguishable from a behavior dedup.
+- [x] `messages_seen` and `window_truncated` are kept for the same reason (two scalars): a `work_phase` decided from one `tool_result` and one decided from forty messages are not the same claim. The first draft dropped `coverage` wholesale.
+- [x] `detail: "full"` requires explicit `record_ids`, is bounded to five, and only returns records belonging to the session that was resolved and gated. Source rehydration stays behind `GET /api/sessions/{sid}/scan-timeline/{record_id}?rehydrate=1` and is not folded in, because it reparses a transcript and that cost does not belong behind a list read.
+- [x] Filters shaped to the questions an agent asks: a time window, `blocked_only`, `approach_status`, `work_phase`, a `target` path fragment, `exclude_heartbeat`, and a `since_t1` cursor. All of them run in SQL (`json_extract` for the semantic ones), so a bounded page means rows *returned*: a `blocked_only` page filtered in Python after the read would come back short of its limit and a caller could not tell that from the end of the run.
+- [x] `since_t1` is **exclusive**, so feeding back the newest `t1` seen returns strictly newer records and never repeats the boundary one. `next_since_t1` is taken from the page returned, not from the newest record in the store, so a filtered poll advances only past what it actually saw.
+- [x] Every result returns the enablement and liveness block — `scanning`, `last_scan_at`, `skip_reason`, `run_decided`, `run_enabled`, `project_enabled`, and the closest-to-binding gate. `ScanTimelineService.liveness()` is its single owner, shared with the drawer's `snapshot()`, so the two surfaces cannot disagree.
+- [x] An **ended** session is readable. `snapshot()` cannot serve one (it needs the live record for spend and gates), but records outlive their session and reviewing a finished sibling is the read this tool exists for. An ended session resolves through history, reports `session_live: false`, and reports its context-derived fields as unknown rather than `false` — a context that cannot be resolved is not an opt-in that is off.
+- [x] Defaults to the caller's own Project with the standard `project` widening argument. Noted in the design doc that distilled intent summaries are in some ways more revealing than a transcript excerpt, which is also why `scan_reads` exists.
 
 ### Backend — the scan_search MCP tool
 
-- [ ] Add `scan_search` as the 29th tool, exposing the already-shipped `search_scan_records` / `GET /api/history/scan-search` (Phase 7.7's `semantic_history_search` consumer) to agents. This is an exposure, not a new capability: the query over distilled `summary`/`intent`/`target` records exists and is human-only today.
-- [ ] Together with `scan_timeline` this mirrors the shipped `search_history` → `read_transcript` pair: search broadly across runs, then read one run's spine deeply. Each scan record carries `t0`/`t1`, so the timeline is also the index into `read_transcript` for the span worth zooming into; name that composition in the tool descriptions so an agent reaches for the cheap read first.
+- [x] `scan_search` is the 29th tool, exposing the already-shipped `search_scan_records` / `GET /api/history/scan-search` to agents. An exposure, not a new capability.
+- [x] Together with `scan_timeline` this mirrors the shipped `search_history` → `read_transcript` pair, and the composition is named in both tool descriptions with the **exact arguments that make it work**: a record's `t0`/`t1`/`agent_run_id` reach raw messages through `search_history(run_ids, message_after, message_before)` and then `read_transcript(hit_id)`. `read_transcript` has no time-window argument of its own, so an agent told only "use the window" would attempt something that does not exist.
 
 ### Backend — no write surface
 
-- [ ] Do **not** expose `POST /api/sessions/{sid}/scan-timeline/scan` or the backfill endpoint through MCP. Reads cost nothing, but a scan spends the human's gated budget against caps they set in Settings → Automation → Scan timeline, and an agent that can trigger scans can exhaust `scan_timeline_daily_budget_usd` for every Project on the host.
-- [ ] Add no generic record-dump tool. Every mux MCP tool stays a question, not a table (the Phase 7.10 rule).
+- [x] Neither `POST /api/sessions/{sid}/scan-timeline/scan` nor the backfill endpoint is exposed through MCP. Reads cost nothing, but a scan spends the human's gated budget against caps set in Settings → Automation → Scan timeline, and an agent that can trigger scans can exhaust `scan_timeline_daily_budget_usd` for every Project on the host.
+- [x] No generic record-dump tool. Every mux MCP tool stays a question, not a table (the Phase 7.10 rule).
 
-### Backend — window-scoped semantic fields
+### Backend — the run-level fields (`approach_status`, `dead_end`)
 
-- [ ] Gate `approach_status` and `dead_end` to wide-window triggers (`full_session`, `turn_ended`, `session_exited`) and stop soliciting them on narrow `tool_result`/`git_changed` deltas, where the observer has no evidence for a run-level judgment. On a narrow window the fields are absent rather than guessed, which is the same "empty beats plausible-but-wrong" rule the consumers already obey.
-- [ ] Decide and document how an absent field is stored so it stays distinguishable from an asserted one. A narrow-window record must not read as `approach_status: unknown` in a way that a reader confuses with the model having considered the question and declined.
-- [ ] Confirm the dead-end annotation path is unaffected in the direction that matters: it already requires `abandoned` plus non-empty `dead_end`, and restricting the fields to wide windows should reduce false dead ends without suppressing real ones. Re-measure the `abandoned`/`succeeded` ratio on a comparable session after the change; if it does not move, the diagnosis was wrong and this item reopens rather than being marked done.
-- [ ] Bump `PROMPT_VERSION` and leave existing v3 records untouched. Records from before the change keep their semantics, and any consumer reading `approach_status` across the boundary must tolerate both.
+The first draft of this phase proposed gating these to wide-window triggers. Measurement refuted both halves of that plan, and the diagnosis moved.
+
+- [x] **Root cause: no run-level memory, not too narrow a window.** `approach_status` and `dead_end` are judgments about the whole run, and they were the only run-level fields absent from the continuity payload: the observer was handed six prior windows' `summary`/`intent`/`claim`/`user_ask`/`blocked_on`/`work_phase` and never its own earlier verdict, so it re-derived "was an approach tried and dropped in this run" from scratch every ~5 messages. Prompt v4 adds both fields to `CONTINUITY_FIELDS` and instructs the observer to repeat a prior verdict unless the delta shows it changed. Cost: roughly six enum values per call.
+- [x] An absent field is storage-distinguishable from an asserted one. A withheld field is omitted from both the stored record and the continuity payload rather than sent as null or `unknown`, and the projection preserves that: `approach_status` missing means the question was not answered, never that it was answered "unknown".
+- [x] `PROMPT_VERSION` bumped to 4. Existing v3 records are untouched and keep their semantics; consumers reading `approach_status` across the boundary tolerate both (`.get`, never `[...]` — the annotation gate in `scan_timeline.py` read the key directly and would have raised on a withheld field).
+- [ ] **Deferred: gating the fields by window width.** Not scheduled, and this is a reversal of the original plan rather than a slip. Two measurements against it: the proposed trigger allowlist barely moves the error rate (22.6% wide vs 24.9% narrow), and — decisively — **all five records in the live store that satisfy `abandoned` plus a non-empty `dead_end` came from narrow windows**, several with correct text ("WSL instability; the WSL VM failed during the previous test run and repeated recovery attempts…"). The allowlist would suppress 5 of 5, i.e. the entire dead-end corpus rather than its false positives, which is the opposite of this item's own stated guard. Reopening precondition: evidence that v4 continuity did not move the **wide-window** `abandoned` rate. If it is reopened, the predicate is measured `messages_seen`, not the trigger label.
+- [ ] **Re-measure after v4 has run.** Compare the `abandoned` rate on wide-window records **before and after**, not the pooled fleet ratio: the pooled ratio moves for compositional reasons under any of these changes and would report success without any judgement improving. Baseline re-derived on the production store at redeploy time (437 v3 records): **wide-window 25.8% abandoned, 3 succeeded, n=62**; narrow 30.7%, n=375; pooled 30.0%. The five-point wide/narrow gap at this larger sample is the same refutation of the trigger-allowlist plan, now on more data. Query the bands with `prompt_version` to separate v3 from v4, since both will coexist in the store.
+
+### Corrections to the first draft of this phase, recorded
+
+- "5 dead-end annotations reached other agents" was wrong: `automation_annotations WHERE tag='dead-end'` is **empty**. Five records satisfy the gate, but `dead_end_memory` is not opted in on any Project here, so the real blast radius was zero and `mux.dead_ends` currently answers `disabled` on this host.
+- "the heavy fields are the majority of the bytes" overstated it: they are 42%, and `target` is another 17%.
+- The wide-trigger set was drawn from `SCAN_TRIGGERS`, which is the **event-bus** vocabulary. The store also holds `heartbeat`, `enabled`, `manual` and `full_session` — 84 of 379 records, 22% — so a classifier written from that constant silently mis-buckets every one of them. `STORED_TRIGGERS` now names the union.
+- Trigger name is not a proxy for window width: mean `messages_seen` runs from 1.25 (`turn_started`) to 35.6 (`full_session`), with `heartbeat` at 10.2 sitting among the "wide" ones.
 
 ### Deferred
 
-- [ ] Make `behavior` uniqueness structural instead of repaired (an object of booleans, or fixed enum slots) so the 31% repair rate goes to roughly zero. Deliberately not scheduled: the current repair is lossless and free, and this costs a schema change, a prompt-version bump, and a projection change for a cosmetic win.
-- [ ] Tiered observer models (cheap on deltas, stronger on wide-window scans). Precondition for reopening: evidence that a wide-window scan with the run-level fields restored is still mislabeling them, which would mean the defect survived the window fix and is genuinely about capability.
+- [ ] Make `behavior` uniqueness structural instead of repaired (an object of booleans, or fixed enum slots) so the 30% repair rate goes to roughly zero. Deliberately not scheduled: the current repair is lossless and free, and this costs a schema change, a prompt-version bump, and a projection change for a cosmetic win.
+- [ ] Tiered observer models (cheap on deltas, stronger on wide-window scans). Precondition for reopening: evidence that a wide-window scan with v4 continuity is still mislabeling the run-level fields, which would mean the defect is genuinely about capability.
 - [ ] A fleet-wide scan digest (one latest record per active session). `GET /api/attention/blockers` already aggregates live `blocked_on` across opted-in Projects, so this only earns a tool if a monitor agent is observed needing more than that.
 
 ### Docs, tests, and ship
 
-- [ ] Update `design/features/mux-mcp.md` (the two new tools, the projection contract, and why no scan trigger is exposed), `design/features/scan-timeline.md` (the agent-readable surface, the window-scoped fields, and the measured baseline above), `design/interfaces.md`, and `technical/backend/packages.md`.
-- [ ] Backend tests: the default projection strips the heavy fields and keeps `repairs`; each filter and the `since_t1` cursor; the disabled and unpermitted cases return `enabled: false` rather than empty; `record_ids` expansion is bounded; and a narrow-window scan does not solicit `approach_status`/`dead_end`.
-- [ ] Extend the live-automations tier (`tests/test_live_automations.py`), which already proves `dead_ends` against a real store round-trip, to cover both new tools over a seeded scan record with run attribution.
-- [ ] Verify on the isolated daemon that a live agent can read a sibling session's timeline digest and cursor a monitor poll, then commit and redeploy.
+- [x] Updated `design/features/mux-mcp.md` (the two tools, the projection contract, the composition, and why no scan trigger is exposed), `design/features/scan-timeline.md` (the agent-readable surface, the trigger vocabulary, the continuity change and the measured baseline), `design/features/automation-enablement.md` (`scan_reads`), `design/interfaces.md`, `design/CLAUDE.md` routing, and `technical/backend/packages.md`.
+- [x] Backend tests (`tests/test_mcp_scan_timeline.py`, plus additions to `tests/test_scan_timeline.py`): the projection strips the heavy fields and keeps the trust signals; an absent `approach_status` stays absent; repair classification including the unrecognized case; the digest bounds and what they report dropping; each filter, the exclusive cursor, and that a filtered page is bounded by rows returned; newest-first paging; the stored-trigger vocabulary; `disabled`/`unsupported` rather than empty; the gate reading the target session's Project; `record_ids` bounded and unable to reach another session's record; an ended session readable; no reachable scan trigger; and that continuity carries the verdict forward while omitting a withheld field.
+- [x] Extended the live-automations tier (`tests/test_live_automations.py`) to cover both tools over a real `AutomationStore` round-trip with run attribution — the SQL filters and the cursor really run in SQLite, which a stub cannot prove.
+- [x] Verified on the isolated daemon (8799 / `~/.mux-hardening`, 2026-08-20) with two freshly spawned Claude sessions in a scratch Project: a reader agent driving the real MCP wire under its own injected bearer token against an observed sibling's seeded spine. Confirmed `tools/list` returns 29 with both new tools; the digest, the newest-first records page, the `since_t1` cursor (0 new at the head, strictly-newer rows mid-run), every filter, `full` with its 5-id bound, `scan_search` including two-term narrowing, and the liveness block. Both gates are independent and each names itself: `scan_reads` off refuses `scan_timeline` while `scan_search` keeps working, and vice versa. The freshly spawned session's settings file carries both tools in its permission allowlist, confirming the spawn-order caveat applies only to older sessions. Measured cost on that spine: digest ~390 tokens, a 7-record page ~1080, five `full` records ~2503.
+- [x] Landed on master and redeployed to the frozen app 2026-08-20 (19 live sessions preserved through the staged swap; no supervisor rebuild was needed, since nothing here touches the supervisor's source closure).
+- [x] Verified again on the **live fleet** against real observer-produced records, which the isolated daemon cannot produce (no OpenRouter key there). `scan_search` returns real distilled hits with correct run attribution - `your_current_run` for the reading session's own records, `sibling_run` for others - and its AND really narrows once the default limit stops saturating: `worktree` 100 hits, `worktree pytest` 50, `worktree kokoro` 1. `scan_timeline` serves a live sibling's 13-record spine with a real `closest_gate` (the daily scan-token budget, 60% used). Measured on real data: a digest ~880 tokens, a 4-record page ~1228. Both opt-ins were switched on for the swe-mux Project as part of this (`scan_reads`, `semantic_history_search`); they are per-Project and off everywhere else.
+
+**Two defects the live run found that the unit tests did not** (fixed in 584d68a):
+
+- The digest reported `phase_segments_omitted: 0` beside a `progress` list that had silently dropped four of six segments. `items[len(items) - keep:]` slices a *negative* index whenever the list is shorter than the bound but longer than the shortfall; both the far-larger and far-smaller cases are correct by Python's clamping, which is why a test at 40 segments and a test at 1 both passed over it. The counters now derive from what the digest actually carries rather than from the bound.
+- A typo'd filter answered with an empty page: `detail` was validated and `work_phase`/`approach_status` were not, so `work_phase: "vibes"` read exactly like "no records are in that phase" - this surface's own silent-empty failure, arriving through an argument instead of a gate. Declaring the enums in the `inputSchema` is not enough; a server that leaves them to the client has the defect anyway.
+
+The pattern worth keeping: both were *shapes of honesty* the phase already committed to, broken in places the phase's own tests were aimed away from.
 
 ### Phase 7.11 exit criteria
 
-- [ ] `scan_timeline` and `scan_search` are mux MCP tools, per-Project gated, returning `enabled: false` rather than a fake empty, with a digest default that reuses `catch_me_up` and a records projection that omits `evidence_refs`/`tier0_fact_ids`/hashes while keeping `repairs`.
-- [ ] A monitor poll is bounded by the `since_t1` cursor, and every result states `scanning`, `last_scan_at`, `skip_reason`, and `run_decided`, so a budget-stopped scanner is never readable as a quiet session.
-- [ ] No scan-triggering or backfill capability is reachable through MCP, and no generic record-dump tool exists.
-- [ ] `approach_status` and `dead_end` are solicited only on wide-window triggers, an absent field is storage-distinguishable from an asserted one, `PROMPT_VERSION` is bumped, and the `abandoned`/`succeeded` ratio is re-measured on a comparable session to confirm the diagnosis.
-- [ ] The observer model is unchanged, and the reason is recorded: enum conformance was already clean at zero fallback fires, and the residual repairs are `uniqueItems` artifacts that no model choice fixes.
+- [x] `scan_timeline` and `scan_search` are mux MCP tools, per-Project gated, returning a typed `disabled` rather than a fake empty, with a bounded digest default that reuses `catch_me_up` and a records projection that omits `evidence_refs`/`tier0_fact_ids`/hashes while keeping the fields that let a reader calibrate a label.
+- [x] A monitor poll is bounded by the exclusive `since_t1` cursor and a page limit, and every result states `scanning`, `last_scan_at`, `skip_reason`, and `run_decided`, so a budget-stopped scanner is never readable as a quiet session.
+- [x] No scan-triggering or backfill capability is reachable through MCP, and no generic record-dump tool exists.
+- [x] An absent run-level field is storage-distinguishable from an asserted one, and `PROMPT_VERSION` is bumped.
+- [ ] The `abandoned`/`succeeded` ratio is re-measured **on wide-window records** on a comparable session after v4 has run, against the 22.6%/n=62 baseline recorded above.
+- [x] The observer model is unchanged, and the reason is recorded: enum conformance was already clean at zero fallback fires across 379 records, and the residual repairs are `uniqueItems` artifacts that no model choice fixes.
 
 ## Phase 7.12 - Code-analysis expansion: conflict prediction, entity-level change facts, and quality deltas
 
@@ -3609,50 +3635,115 @@ construction, which is the same property that already makes it the one merge sha
 outside a worktree.
 Every prerequisite is shipped: worktree tooling (`../design/features/git.md`), the Phase 7.6
 `off`/`draft`/`granted` authority grant, the Phase 4/5 queue and its readiness contract, the
-project-actions trust contract for repository-owned tasks, and Tier 0 fact capture.
+bounded daemon-owned subprocess runner worktree bootstrap already uses, the project-actions
+exact-content approval model, and Tier 0 fact capture.
+
+### Decisions taken before the build (2026-08-20)
+
+- **The verification task is not a Project Action.** The two mechanisms it would have needed are
+  both refused by their own designs: an action's cwd is bounded by the canonical Project root and
+  is *deliberately* denied the sibling-worktree widening that spawns get
+  (`../design/features/project-actions.md`), and an action step becomes a one-shot terminal
+  session rather than a captured subprocess. The pipeline needs an exit code and bounded output
+  inside a tree that lives outside the Project root, which is exactly what `worktree_setup.py`
+  already does for bootstrap.
+  The verify runner therefore mirrors setup - `[worktree].verify_command` in
+  `.swe-mux/config.toml` else the executable `.worktree-verify` convention - and borrows only the
+  *trust* half from project actions: a machine-local SHA-256 over the resolved command or script
+  bytes, keyed by canonical Project root, un-approved by any edit to it.
+  Say the widening out loud rather than inheriting it quietly: worktree setup runs once per
+  human-initiated create, while verify runs repeatedly on an agent's request, and the fingerprint
+  approval is what makes that acceptable. An agent that edits the verify script un-approves it,
+  so an agent still cannot approve its own command.
+- **One trunk per Project.** A land targets the Project's primary checkout on its effective
+  comparison ref (`git_review.resolve_comparison_ref`, the same inference the Git drawer and the
+  session monitor already share), and any other target refuses. One trunk is one serialization
+  domain, and fast-forward-only is only a safety proof against a trunk the daemon can identify.
+- **The agent-facing request ships in this phase.** Operator-only would leave the operator doing
+  the serializing, which is the whole thing the phase removes. The `draft` default is what makes
+  that safe to ship at once.
+- **A busy worktree waits rather than bouncing.** An agent that requests a land and keeps working
+  is the common case, not an error, so the item holds in a visible `waiting` state and retries
+  until a bounded timeout, and only then hands back.
 
 ### The request, not the action
 
-- [ ] Add a land request as the only entry point: a `mux.request_land` MCP tool scoped to the
+- [x] Add a land request as the only entry point: a `mux.request_land` MCP tool scoped to the
   caller's own session by the existing per-session token, and an operator Land control on the
   worktree surface. Neither performs the land; both enqueue it.
-- [ ] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
+- [x] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
   `off`/`draft`/`granted`, default `draft` so a human approves each land - registered as its own
   `land_queue` automation in the enablement DAG and capped by an hourly budget.
+  Its own automation id rather than a second meaning for `session_control`: that one acts on a
+  *session*, this one acts on a *repository*, and they deserve separate switches and separate
+  budgets.
+- [x] Bind the request to what it was made about: the worktree root and the branch tip OID at
+  request time, recorded as evidence of what was asked for. The tip is re-read at each step
+  rather than frozen - an agent that requests a land and keeps working is the case the hold
+  exists for, and refusing on any movement would contradict it. The refusal that protects
+  something is narrower and is in the pipeline below: a branch that moved past the OID that
+  *verified* never lands, because that is the one movement that would put unverified code on
+  the trunk.
 
 ### The pipeline
 
-- [ ] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
-  in arrival order.
-- [ ] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
+- [x] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
+  in arrival order. Verification is measured parallel-safe across worktrees, but `advance` re-runs
+  every remaining item after each land anyway, so concurrency buys only the first item and is left
+  as a config ceiling the store's shape permits rather than as v1 behaviour.
+- [x] Check preconditions before **every** mutation rather than once at enqueue, and fail closed:
+  the worktree is clean on tracked paths, its branch tip still matches the bound OID, the resolved
+  trunk is the main tree and not a worktree (the `--absolute-git-dir` versus `--git-common-dir`
+  test, never a name comparison), and no live session rooted in that worktree is `working`.
+  The last one is the hazard the pipeline exists inside: reconcile writes into a checkout an agent
+  owns and may be mid-turn writing to, and `delivery_readiness` already answers that question with
+  the same fail-closed predicate `interrupt` gates on.
+- [x] Hold a busy item in a visible `waiting` state with its reason, retrying on the ordinary tick
+  until a bounded timeout; only the timeout hands back. A wait is a state a human can read, never
+  an invisible sleep.
+- [x] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
   records the conflicting paths, and hands the request back to the originating agent session as a
   bounded deterministic template through the Phase 5 queue - a draft by default, promotable by the
   ordinary auto-delivery grant like any other item.
-- [ ] Verify: run the Project's declared verification task inside the worktree under the shipped
-  project-actions trust contract - exact-content approval, revoked by any change to the task file -
-  and record the exact commit OID that passed.
-- [ ] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
+- [x] Verify: run the Project's declared verification command inside the worktree through the
+  daemon's own bounded-subprocess runner, under the fingerprint approval above, and record the
+  exact commit OID that passed.
+  Run it verbatim and read its real exit code: never pipe it, never trim it, never wrap it in a
+  shell that can replace the status. A gate command trimmed inside its own pipeline has already
+  shipped a failing suite green in this repository once.
+  Running under the daemon's `base_session_env` rather than an agent shell also removes the known
+  intermittent false failure `.worktree-verify` shows in an agent shell, by construction.
+- [x] Skip re-verification only for a reconcile that reported nothing to merge. A verified OID
+  still standing is the one case where re-running the gate proves nothing.
+- [x] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
   the verified OID or the checkout is dirty on touched paths. A refusal is a reported failure,
   never a retried force.
-- [ ] Advance: after each successful land, re-run every remaining queued item from reconcile
+- [x] Advance: after each successful land, re-run every remaining queued item from reconcile
   against the new trunk automatically, so one landing does not strand the other agents' now-stale
   reconciles.
-- [ ] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
+- [x] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
   end: who asked, what verified, which OID moved the trunk.
+- [x] Keep the queue itself machine-local, like scheduled runs: a land queue committed to a
+  repository would arm itself in every clone and every worktree of it.
 
 ### Boundaries
 
-- [ ] The pipeline never resolves a conflict, never rebases, never forces, and executes no
+- [x] The pipeline never resolves a conflict, never rebases, never forces, and executes no
   model-chosen command; its git vocabulary is fixed, and fast-forward-only is the only trunk merge
   shape.
-- [ ] A verification failure hands back like a conflict, with the failing output attached. Retries
+- [x] A verification failure hands back like a conflict, with the failing output attached. Retries
   are bounded and explicit - at most one, and only when configured - never silent, because a flaky
   gate that loops is worse than one that stops.
-- [ ] The daemon is the single writer for the trunk merge, which also closes the race two sessions
+  A retry that fails *differently* from the first attempt stops rather than retrying again: two
+  unlike failures are evidence about the gate, not about the branch.
+- [x] A handback body is bounded and redacted before it becomes an agent's prompt: the tail of the
+  output at a few KiB through the same `looks_like_secret` gate every other excerpt uses, keyed by
+  the request id as its `correlation_id` so the queue's existing uniqueness index dedupes repeats.
+- [x] The daemon is the single writer for the trunk merge, which also closes the race two sessions
   otherwise have over the primary checkout's one index.
-- [ ] Kill switches at the config level and per Project, per the completion policy; `off` is inert
+- [x] Kill switches at the config level and per Project, per the completion policy; `off` is inert
   and produces no queue writes at all.
-- [ ] No decision-gated entry is crossed: execution authority is the already-trusted verification
+- [x] No decision-gated entry is crossed: execution authority is the already-trusted verification
   task plus the fixed git vocabulary, and the conflict handback rides Phase 5's bounded
   deterministic templates rather than a new agent-to-agent path.
 
@@ -3661,11 +3752,19 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
 - [ ] Three finished branches requested together land in sequence under `granted`: the second
   reconciles against the first's result automatically, and the conflicting third is handed back
   with its conflict list while the trunk stays clean.
-- [ ] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
-  failure - are covered by tests, and each reports rather than retries.
-- [ ] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
+  (Covered against real repositories and real worktrees in `tests/test_land_queue.py`; still
+  owed a live run on the isolated daemon with real agent sessions occupying the worktrees,
+  which is the half a test with no live session cannot prove.)
+- [x] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
+  failure, a trunk that resolves to a worktree - are covered by tests, and each reports rather than
+  retries.
+- [x] A worktree whose session is mid-turn holds in a readable `waiting` state and lands once that
+  session settles, and only a bounded timeout converts the wait into a handback.
+- [x] The verify command is refused until its exact bytes are approved, and editing it un-approves
+  it, so no agent can author the command its own land runs.
+- [x] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
   budget accounting.
-- [ ] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
+- [x] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
   the prompt-queue and mux-mcp documents name the handback template and the request tool.
 
 ## Decision-gated capabilities

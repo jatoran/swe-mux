@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 
 import psutil
@@ -58,7 +59,13 @@ def test_every_write_tool_is_covered_by_a_live_wire_test() -> None:
     other write tool is exercised through ``/mcp`` in this module. The partition is
     asserted exhaustively so adding a write tool without coverage fails here.
     """
-    driven_on_the_wire = {"notify", "request_spawn", "interrupt", "end_session"}
+    driven_on_the_wire = {
+        "notify",
+        "request_spawn",
+        "interrupt",
+        "end_session",
+        "request_land",
+    }
     covered_elsewhere = {"run_action"}
     assert set(WRITE_TOOL_NAMES) == driven_on_the_wire | covered_elsewhere
     assert not (driven_on_the_wire & covered_elsewhere)
@@ -239,3 +246,54 @@ async def test_request_spawn_granted_creates_then_ends(backend: str, tmp_path: P
         )
         assert not end_error, ended
         assert ended["status"] == "ended", ended
+
+
+@pytest.mark.live_agent
+@pytest.mark.live_mcp
+@pytest.mark.skipif(not RUN_MCP, reason="set SWEMUX_RUN_LIVE_MCP_TESTS=1")
+@pytest.mark.parametrize("backend", CONTROL_HARNESSES)
+async def test_request_land_enqueues_the_callers_own_worktree(
+    backend: str, tmp_path: Path
+) -> None:
+    """A granted request_land enqueues the checkout the caller is actually in.
+
+    The wire fact this proves is the one the tool's shape depends on: there is no
+    target argument, so the branch comes from the caller's own live cwd. An agent
+    spawned into a worktree lands *that* worktree, and a caller sitting in the
+    primary checkout is refused rather than landing the trunk into itself.
+    """
+    async with isolated_daemon(tmp_path) as daemon:
+        await asyncio.to_thread(
+            subprocess.run,
+            ["git", "commit", "-q", "--allow-empty", "-m", "initial"],
+            cwd=daemon.root,
+            check=True,
+        )
+        worktree = tmp_path / "wt-alpha"
+        await asyncio.to_thread(
+            subprocess.run,
+            ["git", "worktree", "add", "-b", "worktree-alpha", str(worktree)],
+            cwd=daemon.root,
+            check=True,
+        )
+        project_id = await daemon.register_project()
+        _sid, pid, token = await _spawn_agent(
+            daemon, project_id, backend, "brancher", _IDLE_SEED, cwd=str(worktree)
+        )
+        assert pid
+
+        payload, is_error = await daemon.call_tool(
+            token, "request_land", {"reason": "wire canary"}
+        )
+        assert not is_error, payload
+        assert payload["state"] == "queued", payload
+        assert payload["branch"] == "worktree-alpha", payload
+
+        # The same call from the trunk itself has nothing to land into.
+        _trunk_sid, _trunk_pid, trunk_token = await _spawn_agent(
+            daemon, project_id, backend, "in-trunk", _IDLE_SEED
+        )
+        refused, refused_error = await daemon.call_tool(
+            trunk_token, "request_land", {"reason": "wire canary"}
+        )
+        assert refused_error, refused

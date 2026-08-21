@@ -466,6 +466,10 @@ def test_unimplemented_automations_are_marked_so_the_toggle_cannot_mislead() -> 
         "catch_me_up",
         "live_blockers",
         "semantic_history_search",
+        # Phase 7.11: whether agents may read this Project's timeline at all.
+        # Its own consumer id, not the `scan_timeline` substrate, so a Project
+        # can keep its timeline and still withhold it from sibling agents.
+        "scan_reads",
     ):
         assert REGISTRY[automation_id].implemented is True, automation_id
         assert set(REGISTRY[automation_id].requires) == {"scan_timeline"}, automation_id

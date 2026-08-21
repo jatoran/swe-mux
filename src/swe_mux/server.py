@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast, get_args
+from typing import Any, NamedTuple, cast, get_args
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -46,6 +46,7 @@ from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
 from .approvals import DEFAULT_ALLOW_RULES, normalize_rules
 from .assistant import (
+    ASSISTANT_RULE_ID,
     AssistantError,
     AssistantService,
     AssistantStore,
@@ -69,11 +70,11 @@ from .automation_registry import dependency_closure
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
-from .behavioral_consumers import BehavioralConsumerService
+from .behavioral_consumers import ADAPTIVE_TITLE_RULE_ID, BehavioralConsumerService
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
-from .composer_input import note_composer_write
+from .composer_input import DEFAULT_CLEAR_KEYS, note_composer_write
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore, parse_device_report
@@ -118,6 +119,8 @@ from .keybindings import (
     keybinding_policy,
     normalize_binding,
 )
+from .land_queue import LandQueueService, LandRefusal
+from .land_store import LandConflict, LandStore
 from .launchers import (
     create_agent_shims,
     resolve_codex_pty_command,
@@ -155,6 +158,7 @@ from .observation import (
 )
 from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
+from .path_identity import same_path
 from .posix_firewall import inspect_posix_firewall, posix_firewall_supported
 from .prerequisites import detect_prerequisites
 from .preview_capture import (
@@ -198,6 +202,7 @@ from .project_files import (
     project_approval_rules,
     project_automations,
     project_interject_grant,
+    project_land_grant,
     project_note_summaries,
     project_path,
     project_session_control_grant,
@@ -330,6 +335,7 @@ from .windows_firewall import (
     repair_wsl_firewall,
 )
 from .worktree_setup import WorktreeSetupResult, run_worktree_setup
+from .worktree_verify import VerifyApprovalStore, describe_verify_command
 from .wsl_bridge import WslBridgeError, wsl_adapter_subnet
 from .wsl_bridge import clear_status_cache as clear_wsl_status_cache
 from .wsl_bridge import install_bridge as install_wsl_bridge
@@ -1041,6 +1047,15 @@ def create_app(
             web.post("/api/git/worktrees", create_worktree),
             web.post("/api/git/worktrees/session", spawn_worktree_session),
             web.delete("/api/git/worktrees", remove_worktree),
+            # Phase 14 land queue. Read the queue, ask for a land, cancel one, and
+            # approve the verification command's exact bytes. No route performs a
+            # land: the service's own sweep is the only thing that moves a trunk.
+            web.get("/api/land", list_land_requests),
+            web.post("/api/land", request_land),
+            web.delete("/api/land/{request_id}", cancel_land_request),
+            web.get("/api/land/{request_id}/events", land_request_events),
+            web.get("/api/land/verify-command", read_land_verify_command),
+            web.post("/api/land/verify-command/approve", approve_land_verify_command),
             web.post("/api/reveal", reveal_path),
             web.get("/pty/{sid}", pty_ws),
             web.get("/events", events_ws),
@@ -1442,6 +1457,121 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         read_observations=read_observations,
     )
     app["session_control"] = session_control
+
+    # Phase 14 land queue. Same shape as session control: every bound lives in the
+    # service and the MCP tool and HTTP route are thin callers. The trunk is the
+    # Project root and the ref is the one the Git drawer and the session monitor
+    # already share, so no third opinion about "the base" can appear here.
+    land_store = LandStore(config.data_dir / "land-queue.sqlite3")
+    app["land_store"] = land_store
+    verify_approvals = VerifyApprovalStore(config.data_dir)
+    app["verify_approvals"] = verify_approvals
+
+    async def _land_compare_ref(root: str) -> str | None:
+        project = next(
+            (item for item in projects.projects.values() if same_path(item.root, root)),
+            None,
+        )
+        override = getattr(project, "git_compare_ref", None) if project else None
+        resolved = await git_review.resolve_comparison_ref(root, override)
+        return resolved.get("ref")
+
+    async def _land_project_values(root: str) -> dict[str, Any]:
+        return await read_project_config(root)
+
+    async def _land_busy_sessions(worktree_root: str) -> tuple[str, ...]:
+        """Sessions living in this checkout that are not safe to merge underneath.
+
+        A session counts when its *live* cwd is the worktree, which is the same
+        `git_cwd` every other per-checkout reading uses, and when it is doing
+        something a merge would disturb. Starting up counts: a harness that has not
+        settled is exactly the one whose first act may be writing files.
+        """
+        busy: list[str] = []
+        for session in sessions.sessions.values():
+            record = session.record
+            if record.state in {"exited", "crashed"}:
+                continue
+            if not same_path(record.git_cwd, worktree_root):
+                continue
+            if record.state in {"starting", "working", "awaiting"}:
+                busy.append(str(record.id))
+        return tuple(busy)
+
+    async def _land_queue_message(**kwargs: Any) -> dict[str, Any]:
+        """The handback, through the ordinary Phase 5 queue and nothing else.
+
+        A `rule` sender, so it is a bounded deterministic template rather than a new
+        agent-to-agent path, and it lands as a draft unless the receiving session's
+        own auto-delivery grant promotes it - the same contract as every other queued
+        item. A target that has ended is not an error worth raising: the branch's
+        agent is gone, and the land row already records why it stopped.
+        """
+        try:
+            return await prompt_queue.enqueue(**kwargs)
+        except QueueError as exc:
+            if exc.code in {"target_ended", "unknown_target"}:
+                log.info("land_handback_target_gone code=%s", exc.code)
+                return {}
+            raise
+
+    async def _land_draft(
+        *,
+        project_root: str,
+        project_id: str,
+        worktree_root: str,
+        branch: str,
+        origin_session_id: str,
+        origin_run_id: str = "",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        origin = sessions.sessions.get(origin_session_id)
+        origin_name = origin.record.name if origin else origin_session_id
+        body = f"{origin_name} asks to land {branch or 'its branch'}" + (
+            f": {reason}" if reason.strip() else ""
+        )
+        appended = await append_observation(
+            project_root,
+            body,
+            kind="land_request",
+            request={
+                "action": "land",
+                "worktree_root": worktree_root,
+                "project_root": project_root,
+                "branch": branch,
+                "reason": str(reason or "")[:500],
+                "from_session": origin_session_id,
+                "from_name": origin_name,
+                "from_run_id": origin_run_id,
+                "project_id": project_id,
+                "status": "pending",
+            },
+        )
+        request_id = str(appended.get("appended_id") or "")
+        await events.emit(
+            "agent_land_drafted",
+            session_id=origin_session_id or None,
+            source="agent",
+            request_id=request_id,
+            project_id=project_id,
+        )
+        return {"request_id": request_id}
+
+    land_queue_service = LandQueueService(
+        store=land_store,
+        approvals=verify_approvals,
+        config=config,
+        events=events,
+        automation_gate=_enabled_automations,
+        grant_field=project_land_grant,
+        project_values=_land_project_values,
+        comparison_ref=_land_compare_ref,
+        busy_sessions=_land_busy_sessions,
+        queue_message=_land_queue_message,
+        record_fact=tier0.record_fact if tier0 is not None else None,
+        draft_request=_land_draft,
+    )
+    app["land_queue"] = land_queue_service
 
     # Phase 10.6 Mux assistant: daemon-owned dialogs behind the voice grammar's
     # tier-3 fallback and the workspace chat surface. Reuses the identical
@@ -1863,6 +1993,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # sweep, not the restore, decides whether it is replayed or recorded missed.
     await schedules.restore()
     schedules.start()
+    # Phase 14: return any step orphaned by a restart to the queue before the
+    # sweep begins, so a half-run land is re-checked from scratch rather than
+    # resumed from a position nothing recorded.
+    await land_queue_service.restore()
+    land_queue_service.start()
     # The auto-delivery controller starts regardless of the master switch: it
     # also sweeps message expiry, which is a promise the user made about any
     # delivery path, and it re-checks its own enablement every tick.
@@ -1947,6 +2082,14 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             # Phase 7.9: the structural graph the blast-radius/navigation/context/
             # test-gap reads answer from, gated on the same `code_graph` opt-in.
             code_graph=code_graph_store,
+            # Phase 14: `request_land` is a caller over this service, which owns
+            # every bound including the grant the tool defaults to drafting under.
+            land_queue=land_queue_service,
+            # Phase 7.11: the scan service, read for its enablement/liveness block
+            # only. The records themselves come from the store, so the drawer and
+            # the `scan_timeline` tool answer "is this timeline stopped" from one
+            # implementation rather than two that can disagree.
+            scan_timeline_service=scan_timeline,
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -2054,6 +2197,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await attention_ranking.stop()
     await auto_delivery.stop()
     await schedules.stop()
+    await land_queue_service.stop()
     await prompt_queue.stop()
     await assistant.stop()
     await voice.stop()
@@ -2098,6 +2242,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     automation_store.close()
     prompt_queue_store.close()
     schedule_store.close()
+    land_store.close()
     voice_store.close()
     assistant_store.close()
     telemetry.close()
@@ -3347,18 +3492,64 @@ async def automation_dry_run(request: web.Request) -> web.Response:
     return json_response({"event": normalized.snapshot(), "reports": reports})
 
 
-# Four features bill the same observer budget without being automation rules, so a spend
-# breakdown grouped by `rule_id` alone would print raw ids for them and leave the reader
-# unable to tell an expensive feature from an expensive rule.
-FEATURE_SPENDERS: dict[str, tuple[str, str]] = {
-    SCAN_RULE_ID: ("Scan timeline", "Per-run scans that extract timeline records"),
-    VOICE_RULE_ID: ("Read aloud", "Spoken summaries of agent replies"),
-    PROJECT_CARD_RULE_ID: ("Project card", "Generated Project context cards"),
-    NARRATION_RULE_ID: ("Attention narration", "Model narration of ranked attention"),
+class FeatureSpender(NamedTuple):
+    """A feature that bills the observer budget without being an automation rule.
+
+    Every field here exists because the spend table lies without it. Grouping by
+    `rule_id` alone prints a raw id, so a reader cannot tell an expensive feature
+    from an expensive rule. And `enabled` is the column that separates a live
+    bill from spent history, so it has to name the switch that actually governs
+    the feature rather than assert that features are always on.
+    """
+
+    label: str
+    detail: str
+    #: The install-wide config flag that turns this spender off. Per-project
+    #: opt-ins are deliberately not consulted: this column answers "is this
+    #: still running", and the honest install-wide answer is the global switch.
+    setting_key: str
+    setting_label: str
+
+
+# Anything that spends under its own rule id belongs here. A spender missing from
+# this table is indistinguishable from one that was retired, and the row says
+# "retired · off" about a feature the operator is actively using — which is what
+# `builtin:assistant` did between Phase 10.6 shipping and 2026-08-20.
+FEATURE_SPENDERS: dict[str, FeatureSpender] = {
+    SCAN_RULE_ID: FeatureSpender(
+        "Scan timeline", "Per-run scans that extract timeline records",
+        "scan_timeline_enabled", "Scan timeline",
+    ),
+    VOICE_RULE_ID: FeatureSpender(
+        "Read aloud", "Spoken summaries of agent replies",
+        "tts_enabled", "Read aloud",
+    ),
+    PROJECT_CARD_RULE_ID: FeatureSpender(
+        "Project card", "Generated Project context cards",
+        # No install-wide switch of its own: it is per-Project, under the
+        # automation kill switch, which is the only global truth to report.
+        "automation_enabled", "Automation",
+    ),
+    NARRATION_RULE_ID: FeatureSpender(
+        "Attention narration", "Model narration of ranked attention",
+        "attention_narration_enabled", "Attention narration",
+    ),
+    ASSISTANT_RULE_ID: FeatureSpender(
+        "Mux assistant", "Conversational fleet operation, typed and spoken",
+        "assistant_enabled", "Mux assistant",
+    ),
+    ADAPTIVE_TITLE_RULE_ID: FeatureSpender(
+        "Adaptive title", "Session titles rewritten from scan records",
+        # Per-Project beneath that, but it consumes scan records and cannot
+        # spend at all without the timeline that produces them.
+        "scan_timeline_enabled", "Scan timeline",
+    ),
 }
 
 
-def _label_spend_rows(rows: list[dict[str, Any]], engine: dict[str, Any]) -> list[dict[str, Any]]:
+def _label_spend_rows(
+    rows: list[dict[str, Any]], engine: dict[str, Any], config: Config
+) -> list[dict[str, Any]]:
     """Name every spending rule, and say what kind of thing it is.
 
     Cost is only actionable next to the control that turns it off, so each row also carries
@@ -3382,15 +3573,19 @@ def _label_spend_rows(rows: list[dict[str, Any]], engine: dict[str, Any]) -> lis
             "enabled": bool(rule.get("enabled")),
             "setting_label": "",
         }
-    for rule_id, (label, detail) in FEATURE_SPENDERS.items():
+    for rule_id, feature in FEATURE_SPENDERS.items():
         known.setdefault(
             rule_id,
             {
-                "label": label,
-                "detail": detail,
+                "label": feature.label,
+                "detail": feature.detail,
                 "kind": "feature",
-                "enabled": True,
-                "setting_label": "",
+                # Read from config rather than asserted: a feature switched off
+                # still has spend in the window, and calling that a live bill
+                # sends the reader looking for something to turn off that is
+                # already off.
+                "enabled": bool(getattr(config, feature.setting_key, False)),
+                "setting_label": feature.setting_label,
             },
         )
     labelled = []
@@ -3414,7 +3609,9 @@ async def automation_dashboard(request: web.Request) -> web.Response:
     store: AutomationStore = request.app["automation_store"]
     engine = request.app["automation"].status()
     breakdown = await store.spend_breakdown(days=7)
-    breakdown["rules"] = _label_spend_rows(breakdown["rules"], engine)
+    breakdown["rules"] = _label_spend_rows(
+        breakdown["rules"], engine, request.app["config"]
+    )
     return json_response(
         {
             **await store.dashboard(),
@@ -4772,6 +4969,57 @@ async def _approve_control_request(
     return json_response(updated)
 
 
+async def _approve_land_request(
+    request: web.Request,
+    project: Any,
+    identity: Any,
+    observation_id: str,
+    req: dict[str, Any],
+) -> web.Response:
+    """Enqueue a human-approved drafted land (Phase 14).
+
+    Approval is the human act that carries the authority, so this enqueues on the
+    operator path and the grant is not consulted again. The originating session is
+    retained as the request's origin, because a handback has to reach the agent that
+    asked rather than the human who approved.
+    """
+    app = request.app
+    try:
+        row = await app["land_queue"].request(
+            project_id=project.id,
+            project_root=str(req.get("project_root") or project.root),
+            worktree_root=str(req.get("worktree_root") or ""),
+            origin="agent_approved",
+            origin_session_id=str(req.get("from_session") or ""),
+            origin_run_id=str(req.get("from_run_id") or ""),
+            reason=str(req.get("reason") or ""),
+        )
+    except LandRefusal as exc:
+        return json_response({"error": exc.message, "code": exc.code}, 409)
+    updated = await update_observation_request(
+        project.root,
+        observation_id,
+        {
+            "status": "approved",
+            "decided_by": _human_sender_kind(request),
+            "outcome": "queued",
+            "request_id": str(row.get("id") or ""),
+        },
+        done=True,
+        project=identity,
+    )
+    await app["events"].emit(
+        "agent_land_decided",
+        session_id=str(req.get("from_session") or "") or None,
+        source="user",
+        request_id=observation_id,
+        project_id=project.id,
+        decision="approved",
+    )
+    updated.update({"project_id": project.id, "project_name": project.name, "land": row})
+    return json_response(updated)
+
+
 async def decide_observation_request(request: web.Request) -> web.Response:
     """Approve or dismiss a drafted `mux.requestSpawn` (Phase 5, CP §7.2).
 
@@ -4796,7 +5044,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             entry
             for entry in current["observations"]
             if entry.get("id") == observation_id
-            and entry.get("kind") in {"spawn_request", "control_request"}
+            and entry.get("kind") in {"spawn_request", "control_request", "land_request"}
         ),
         None,
     )
@@ -4821,9 +5069,10 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             project=identity,
         )
         await request.app["events"].emit(
-            "control_request_decided"
-            if kind == "control_request"
-            else "spawn_request_decided",
+            {
+                "control_request": "control_request_decided",
+                "land_request": "agent_land_decided",
+            }.get(kind, "spawn_request_decided"),
             session_id=str(pending_request.get("from_session") or "") or None,
             source="user",
             request_id=observation_id,
@@ -4836,6 +5085,12 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         # Phase 7.6: approving a drafted interrupt/end is the human act that
         # performs it, through the same daemon operation the granted path uses.
         return await _approve_control_request(
+            request, project, identity, observation_id, pending_request
+        )
+    if kind == "land_request":
+        # Phase 14: approving a drafted land is the human act that enqueues it,
+        # through the same service the granted path uses.
+        return await _approve_land_request(
             request, project, identity, observation_id, pending_request
         )
     spawn_request = pending_request
@@ -7779,7 +8034,11 @@ def _note_composer_write(events: EventBus, session: Any, data: str | bytes, sour
     if composer is None:
         return
     text = data.decode("utf-8", "ignore") if isinstance(data, bytes) else data
-    change = note_composer_write(composer, text, time.time())
+    # Which keys empty a composer is the harness's fact, not this module's. An
+    # unregistered backend keeps the historical Ctrl+U.
+    harness = HARNESSES.get(session.record.backend)
+    clear_keys = harness.composer_clear_keys if harness else DEFAULT_CLEAR_KEYS
+    change = note_composer_write(composer, text, time.time(), clear_keys)
     if change is None:
         return
     ledger = getattr(session, "state_transitions", None)
@@ -12593,7 +12852,8 @@ async def git_provenance(request: web.Request) -> web.Response:
         not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
     ):
         return json_response({"error": "commit must contain full Git object IDs"}, 400)
-    items = await request.app["history"].git_provenance(
+    history = request.app["history"]
+    items = await history.git_provenance(
         project_id=project.id,
         session_id=request.query.get("session_id") or None,
         agent_run_id=request.query.get("agent_run_id") or None,
@@ -12601,10 +12861,21 @@ async def git_provenance(request: web.Request) -> web.Response:
         limit=limit,
     )
     await _decorate_provenance_identity(request.app, items)
+    # Reference moves are checkout facts and are not filtered by session: asking
+    # "what did this session do" and "what happened to this checkout" are
+    # different questions, and answering the first with the second is what used to
+    # put a merge nobody in the checkout had made on every session's ledger.
+    moves = await history.git_ref_moves(project_id=project.id, commit_oids=commit_oids or None)
     # `items` stays one row per session per commit, which is what each piece of
     # evidence is about. `commits` answers the reader's question — who made this
     # commit and whose work is in it — without a second round trip.
-    return json_response({"items": items, "commits": summarize_git_provenance(items)})
+    return json_response(
+        {
+            "items": items,
+            "commits": summarize_git_provenance(items),
+            "ref_moves": moves,
+        }
+    )
 
 
 async def _decorate_provenance_identity(
@@ -13035,6 +13306,131 @@ async def create_worktree(request: web.Request) -> web.Response:
         (time.perf_counter() - started_at) * 1000,
     )
     return json_response(result, 201)
+
+
+def _land_project(request: web.Request) -> Any:
+    project_id = request.query.get("project_id") or ""
+    project = request.app["projects"].projects.get(project_id)
+    if project is None:
+        raise ValueError("unknown project")
+    return project
+
+
+async def list_land_requests(request: web.Request) -> web.Response:
+    """The queue, for the Git tab's Land panel. Read-only."""
+    service = request.app["land_queue"]
+    project_id = request.query.get("project_id") or None
+    return json_response(await service.status(project_id=project_id))
+
+
+async def request_land(request: web.Request) -> web.Response:
+    """Enqueue an operator-initiated land.
+
+    The operator *is* the authority the grant defers to, so this does not consult
+    it - but it consults nothing else differently either: the same preconditions,
+    the same fixed vocabulary, the same serialisation.
+    """
+    body = await request.json()
+    project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
+    if project is None:
+        raise ValueError("unknown project")
+    worktree_root = str(body.get("worktree_root") or "").strip()
+    if not worktree_root:
+        raise ValueError("worktree_root is required")
+    try:
+        row = await request.app["land_queue"].request(
+            project_id=project.id,
+            project_root=project.root,
+            worktree_root=worktree_root,
+            origin="operator",
+        )
+    except LandRefusal as exc:
+        return json_response({"error": exc.message, "code": exc.code}, 409)
+    return json_response(row, 201)
+
+
+async def cancel_land_request(request: web.Request) -> web.Response:
+    try:
+        row = await request.app["land_queue"].cancel(request.match_info["request_id"])
+    except LandConflict as exc:
+        return json_response({"error": str(exc), "code": "not_cancellable"}, 409)
+    return json_response(row)
+
+
+async def land_request_events(request: web.Request) -> web.Response:
+    """The per-step audit trail for one request: who asked, what verified, what moved."""
+    store: LandStore = request.app["land_store"]
+    return json_response({"events": await store.events(request.match_info["request_id"])})
+
+
+async def read_land_verify_command(request: web.Request) -> web.Response:
+    """What would run as this worktree's gate, and whether its bytes are approved.
+
+    Returns the approved snapshot beside the current one so the approval prompt can
+    show a diff. "The verify script changed" cannot separate a new test target from
+    a new `curl | sh`, which is the whole reason Project Action trust retains bytes.
+    """
+    project = _land_project(request)
+    worktree_root = request.query.get("worktree_root") or project.root
+    values = await read_project_config(project.root)
+    info = describe_verify_command(
+        Path(worktree_root),
+        values,
+        request.app["verify_approvals"],
+        project_root=project.root,
+    )
+    return json_response(
+        {
+            **info.public_dict(),
+            "project_id": project.id,
+            "worktree_root": worktree_root,
+            "approved_source": info.approved_snapshot,
+            "current_source": info.current_source,
+        }
+    )
+
+
+async def approve_land_verify_command(request: web.Request) -> web.Response:
+    """Approve the exact bytes that will run as the gate.
+
+    The digest must be the one the caller was shown. A stale digest means the file
+    moved between the prompt and the click, and approving it would grant authority
+    to bytes nobody read.
+    """
+    body = await request.json()
+    project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
+    if project is None:
+        raise ValueError("unknown project")
+    worktree_root = str(body.get("worktree_root") or project.root)
+    digest = str(body.get("digest") or "")
+    values = await read_project_config(project.root)
+    approvals: VerifyApprovalStore = request.app["verify_approvals"]
+    info = describe_verify_command(
+        Path(worktree_root), values, approvals, project_root=project.root
+    )
+    if not info.configured or info.digest is None:
+        return json_response(
+            {"error": "no verification command is configured", "code": "not_configured"}, 409
+        )
+    if digest != info.digest:
+        return json_response(
+            {
+                "error": "the verification command changed; review it again before approving",
+                "code": "digest_mismatch",
+                "digest": info.digest,
+            },
+            409,
+        )
+    await asyncio.to_thread(
+        approvals.approve, project.root, info.digest, snapshot=info.current_source
+    )
+    refreshed = describe_verify_command(
+        Path(worktree_root), values, approvals, project_root=project.root
+    )
+    await request.app["events"].emit(
+        "land_verify_approved", source="user", project_id=project.id
+    )
+    return json_response({**refreshed.public_dict(), "project_id": project.id})
 
 
 async def spawn_worktree_session(request: web.Request) -> web.Response:

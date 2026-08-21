@@ -24,7 +24,7 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
   `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`,
   `phase_transitions`, `timeline_handoff`, `catch_me_up`, `live_blockers`,
-  `semantic_history_search`, `scheduled_runs`).
+  `semantic_history_search`, `scan_reads`, `scheduled_runs`, `land_queue`).
   `observation_inbox` is a persisted compatibility id whose current label and surface are
   spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
 - **Memory-read opt-ins (Phase 7.5)**: each cross-session memory MCP read is gated by the
@@ -33,6 +33,14 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   earns its own id (`requires ("tier0",)`), because it reads the experience corpus that no
   detector produces. Where the automation is off the tool returns `disabled`, never a fake
   empty (`mux-mcp.md`).
+- **`scan_reads` (Phase 7.11)** gates the `scan_timeline` MCP read. It is its own consumer id
+  rather than the `scan_timeline` substrate id, because a distilled intent summary is in some
+  ways more revealing than the transcript excerpt behind it: a Project must be able to keep its
+  timeline running and still withhold it from sibling agents, which gating on the substrate
+  would make impossible. The sibling `scan_search` tool instead reuses
+  `semantic_history_search`, the opt-in that already gates the identical query on the human
+  surface. Being session-scoped, `scan_timeline` gates on the **target session's** Project
+  rather than the caller's scoped Project set (`mux-mcp.md`, `scan-timeline.md`).
 - **`session_control` (Phase 7.6)** gates a capability rather than a read, so it depends on no
   substrate (`requires ()`); the delivery-readiness predicate an interrupt gates on is
   intrinsic, not an opt-in. It is off by default (in no defaults template). Opting it in is
@@ -41,6 +49,13 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
   The same automation gates the Project's `spawn_grant`, which does the identical draft/granted
   split for agent-initiated `mux.requestSpawn` into that Project.
+- **`land_queue` (Phase 14)** gates a capability rather than a read, so it depends on no
+  substrate (`requires ()`) and is off by default. Its own id rather than a second meaning
+  for `session_control`: that one acts on a *session*, this one moves a *repository's
+  trunk*, and they deserve separate switches and separate budgets. Opting in is necessary
+  and not sufficient - the Project's separate `land_grant` field stays at the inert `draft`,
+  where an agent's `request_land` writes an approval row a human decides, until it is raised
+  to `granted` (`land-queue.md`).
 - **`scheduled_runs`** gates a capability rather than a read, like `session_control`, so it
   depends on no substrate (`requires ()`) and is off by default. Permission alone starts
   nothing: the schedules themselves are machine-local rows in the daemon's database, so a
@@ -55,6 +70,8 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   pivot or a flat-novelty stall, feeding attention), `timeline_handoff`, `catch_me_up`,
   `live_blockers`, and `semantic_history_search` each `requires ("scan_timeline",)` and is
   model-free; they are cheap derivations over the scan spine (`scan-timeline.md`).
+  Phase 7.11's `scan_reads` joins them on the same edge and is likewise model-free - it grants
+  a read, and grants no path to a scan.
 - **Enablement DAG**: `requires` edges. Import-time validation rejects cycles, dangling
   deps, and substrate depending on a consumer.
 - **Resolution**: a requested opt-in set → `enabled` (deps satisfied) + `blocked`

@@ -34,6 +34,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "--fork-session"
       ],
       "skill_invocation_prefix": "/",
+      "composer_clear_keys": "\u001b\u001b",
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -76,6 +77,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "mcp_servers.mux."
       ],
       "skill_invocation_prefix": "$",
+      "composer_clear_keys": "\u0015",
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -116,6 +118,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "--resume"
       ],
       "skill_invocation_prefix": "/skill:",
+      "composer_clear_keys": "\u0015",
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -157,6 +160,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "--resume"
       ],
       "skill_invocation_prefix": "/",
+      "composer_clear_keys": "\u0015",
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -195,6 +199,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "--session"
       ],
       "skill_invocation_prefix": "/",
+      "composer_clear_keys": "\u0015",
       "capabilities": {
         "observed": true,
         "transcript": true,

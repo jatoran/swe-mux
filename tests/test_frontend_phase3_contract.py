@@ -457,7 +457,7 @@ def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
     assert "quotaChip(provider,weeklyTitle(provider))" in accounts
     assert "quotaChip(provider,toolbarTitle(provider))" in accounts
     assert "toolbar-quota" not in accounts and "toolbar-quota" not in css
-    assert "providerGlyph(provider)" in accounts
+    assert "harnessMark(provider)" in accounts
     assert ".rail-quota .provider-glyph" in css
     # RAM, not CPU: a fluctuating percentage is not worth a permanent glance.
     assert "compactMemoryLabel(combined.memory_bytes)" in resources
@@ -570,9 +570,12 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
     # Adding a Project is reachable in one step from the empty-sidebar menu, above
     # the registry entry, rather than only through the registry.
     assert "id: 'project.add'" in app
-    assert "runNamedCommand('project.add')}}>Add project…" in app
+    # Each sidebar-menu row is an icon plus its own label element, so the label is
+    # asserted apart from the handler rather than as one contiguous string.
+    assert "runNamedCommand('project.add')}}><span class=\"menu-row-icon\"" in app
+    assert '<span class="menu-row-label">Add project…</span>' in app
     assert app.index("runNamedCommand('project.add')") < app.index(
-        "runNamedCommand('project.create')}}>Manage projects…"
+        "runNamedCommand('project.create')}}>"
     )
     # Ordering, not literal depths: the exact values must stay free to move above
     # persistent chrome. test_dialog_layers_stack_above_persistent_chrome owns the

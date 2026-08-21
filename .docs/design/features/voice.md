@@ -53,8 +53,10 @@ affect the PTY, session state, transcripts, history, or projects.
   `tts_verbatim_max_chars`). The global `tts_content` is the default; each session can
   override it volatilely (`voice_content` via `PATCH /sessions/{id}`, toggled from the player
   strip), and verbatim never touches an LLM. Summary calls check the daily budget
-  (`tts_daily_budget_usd`) before spending and need a model (`tts_summary_model` or the
-  automation cheap model).
+  (`tts_daily_budget_usd`) before spending and need a model. `tts_summary_model` is an
+  **override**, not a pin: blank means the routed cheap model, so it never has to be set.
+  It is edited in Settings → Voice → Spoken summary and indexed from
+  Settings → Accounts → Models.
 - Engines: `sapi` (the OS voice — offline Windows `System.Speech` through a generated
   PowerShell script; the default, because it speaks with no download and no network call) and
   `kokoro` (Kokoro-82M int8 through a **direct onnxruntime session** — no wrapper library,

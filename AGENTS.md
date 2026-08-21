@@ -64,6 +64,16 @@ Codex worktrees may begin detached but must create a named branch before committ
 Worktree agents commit only their own branch.
 Reconcile a finished branch with current `master`, verify it, and integrate branches one at a time.
 
+**Landing is meant to be cheap; do not re-verify what did not change.** `.worktree-verify` is
+~175s of pytest plus ~17s for ruff, mypy, tsc, and `npm test` together, so after `git merge
+master` scope the re-run to what actually arrived (`git diff --stat ORIG_HEAD..`): docs-only
+means land immediately, anything not touching `src/swe_mux` means the ~17s half is enough, and
+only an incoming backend change earns another full pytest. Run the gate once and read all of
+it — piping it through `tail` or `grep` hides the part you needed and costs a second full run.
+Land the moment it is green, because a 3-minute window is wide enough for master to move and
+refuse the fast-forward; when that happens, merge again and apply the same triage instead of
+re-running everything.
+
 **A worktree is for editing and testing, not for running the app.** Worktrees isolate the
 working tree, not the runtime. The daemon owns port 8765 and a single data dir at
 `~/.mux`, both of which are process-wide singletons. Never start `muxd`, run the frozen
@@ -104,4 +114,9 @@ These are exactly what `.worktree-verify` runs.
 The Playwright renderer suite (`npm run test:renderer`, in `frontend/`) is CI-only and
 binds a port: it drives a Vite dev server on 4174 with `reuseExistingServer`, so a second
 checkout that finds 4174 taken runs its whole suite against *the other checkout's* code.
-From a worktree, give it its own: `RENDERER_PORT=4176 npm run test:renderer`.
+From a worktree, give it a port **nothing else is on** — check with `netstat -ano | grep <port>`
+first and do not reuse a number a doc handed you, because a fixed alternate just moves the
+collision from checkout-vs-CI to worktree-vs-worktree: `RENDERER_PORT=<free> npm run
+test:renderer`. It takes about a minute, so while iterating run just your own
+file (`npx playwright test --config playwright.renderer.config.ts <spec>`, seconds) and keep the
+full suite for the end.

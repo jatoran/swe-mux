@@ -788,6 +788,30 @@ def test_a_config_predating_overlay_back_keeps_the_default_without_a_migration(
     assert load_config(path).mobile_gesture_overlay_back is True
 
 
+def test_view_history_back_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.mobile_back_view_history is True
+
+    hot, restart = update_config(config, {"mobile_back_view_history": False})
+    assert hot == {"mobile_back_view_history"}
+    assert restart == set()
+    assert config.mobile_back_view_history is False
+
+    reloaded = load_config(path)
+    assert reloaded.mobile_back_view_history is False
+
+
+def test_a_config_predating_view_history_back_keeps_the_default_without_a_migration(
+    tmp_path: Path,
+) -> None:
+    # Same reason as the overlay-back field above: an absent key falls through to the
+    # dataclass default, so there is nothing for a schema bump to migrate.
+    path = tmp_path / "config.toml"
+    path.write_text("schema_version = 21\n", encoding="utf-8")
+    assert load_config(path).mobile_back_view_history is True
+
+
 def test_the_back_command_can_be_bound_to_a_gesture_slot(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
     hot, _ = update_config(config, {"mobile_gestures": {"swipe_right": "nav.back"}})

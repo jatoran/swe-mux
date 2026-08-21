@@ -35,6 +35,16 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Adding or moving an OpenRouter model setting, or changing how one is chosen or priced:
+  `design/features/ui.md`, `technical/frontend/packages.md`, plus the owning feature's doc
+  (`design/features/scan-timeline.md`, `design/features/voice.md`,
+  `design/features/assistant.md`, `design/features/automation.md`).
+  The rule the split exists to enforce: only the two *routed* defaults (`openrouter_cheap_model`,
+  `openrouter_standard_model`) live in Settings -> Accounts. A model belonging to one feature is
+  edited with that feature, because a feature is configured in one pass; Accounts carries a
+  read-only index of them all instead of a second set of controls, and `modelRouting.ts` is that
+  index. Whether a blank value is legal is the whole distinction: an **override** falls through to
+  the cheap model, a **pin** is a validation error, and the two must never render the same.
 - Adding a surface that goes inert behind a switch, or changing how one reaches that switch
   (the deep link, the scroll-and-flash arrival, the `data-setting` marks):
   `design/features/setting-links.md`, `design/features/ui.md`,
@@ -121,6 +131,21 @@
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
   `technical/frontend/workspace-state.md`
+- Changing the land queue (its pipeline steps, preconditions, the verification gate and its
+  approval, the grant, or the Land segment): `design/features/land-queue.md`,
+  `design/features/git.md`, `design/features/project-actions.md`,
+  `design/features/prompt-queue.md`, `design/features/automation-enablement.md`,
+  `design/features/mux-mcp.md`, `design/interfaces.md`, `design/data-model.md`,
+  `technical/backend/packages.md`, `technical/backend/sqlite.md`.
+  The rule the design turns on: the pipeline executes a *fixed* git vocabulary and never
+  decides anything - fast-forward-only is what makes the trunk step safe for a machine,
+  because Git refuses it on divergence and refuses to overwrite local changes, so the
+  pipeline cannot lose work by construction. A conflict and a failed gate both need
+  intelligence and both belong to the branch's own agent, so they leave as a bounded
+  deterministic message rather than being resolved here. And the verification command is
+  *not* a Project Action: an action's cwd is bounded by the Project root and deliberately
+  denied the sibling-worktree widening, so it borrows only the exact-content approval,
+  which is what stops an agent approving the command its own land runs.
 - Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint
   detection, the absence digest, mined demotion rules, or model narration:
   `design/features/attention-ranking.md`, `design/features/deterministic-consumers.md`,
@@ -194,10 +219,17 @@
   (grammar bundling), `design/interfaces.md`
 - Changing the user-owned Project context card (its fixed file, editor, bounds, revision contract, setup prompt, or scan prefix): `design/features/project-card.md`, `design/features/automation-enablement.md`, `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing the scan timeline, per-run scan grant, rollover boundary, scan budgets, source
-  rehydration, or dead-end extraction: `design/features/scan-timeline.md`,
+  rehydration, dead-end extraction, or the agent-readable scan surface
+  (`scan_timeline`/`scan_search`, the record projection, the digest bounds):
+  `design/features/scan-timeline.md`, `design/features/mux-mcp.md`,
   `design/features/automation-enablement.md`, `design/features/automation.md`,
   `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`,
-  `technical/backend/sqlite.md`, `technical/frontend/packages.md`
+  `technical/backend/sqlite.md`, `technical/frontend/packages.md`.
+  Two rules the split exists to enforce: `ScanTimelineService.liveness()` is the single owner
+  of the enablement/liveness block, because a scanner stopped by a budget cap and a quiet
+  session both return an empty tail and two implementations would eventually disagree about
+  which one you are looking at; and no scan or backfill trigger is reachable from MCP, because
+  a read costs nothing while a scan spends the human's gated budget.
 - Changing the agent MCP surface (endpoint, tools, per-session tokens, CLI registration):
   `design/features/mux-mcp.md`, `design/interfaces.md`, `technical/backend/packages.md`
 - Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,

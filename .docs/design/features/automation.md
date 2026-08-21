@@ -115,10 +115,22 @@ and the declared minimum observation capability.
   exactly rather than approximating it from the truncated sample of recent calls. Rows rank by
   the 7-day window rather than by today, because the decision is about a habit rather than a
   day, and each carries its share of the window as a bar.
-  Four features bill that budget without being rules — Scan timeline, Read aloud, Project card,
-  and attention narration — so the daemon labels every row and tags it `observer`, `custom`,
-  `feature`, or `retired` (billed under an id the page has no control for). Before this they
-  were visible only inside the aggregate.
+  Several features bill that budget without being rules — Scan timeline, Read aloud, Project
+  card, attention narration, the Mux assistant, adaptive titles — so the daemon labels every row
+  and tags it `observer`, `custom`, `feature`, or `retired` (billed under an id the page has no
+  control for). Before this they were visible only inside the aggregate.
+- **A row's `enabled` is read from the switch that governs it, and a spender missing from the
+  table is the dangerous case.** `enabled` is what separates a live bill from spent history, so
+  a feature row asserting `True` regardless told the reader to go turn off something already
+  off. Worse, a spender absent from `FEATURE_SPENDERS` falls through to the `retired` default,
+  which is indistinguishable from the truth and says the opposite of it: `builtin:assistant`
+  shipped unlisted and Resources → Tokens described the assistant as `retired · off` while it
+  was running. `tests/test_spend_label_matrix.py` closes that by discovery rather than by
+  memory — every `builtin:` rule id in the source must have an entry, and every entry's
+  `setting_key` must be a real boolean `Config` field, since `getattr(…, default=False)`
+  otherwise swallows a typo into a permanent "off". The two id families are told apart by
+  punctuation: automation's own rules use `builtin.` and are labelled from the live engine,
+  feature spenders use `builtin:` and are labelled from the table.
 - Observer spend and agent-model spend are drawn as two tables and are never summed: the first
   is a metered OpenRouter key billed per call, the second is subscription usage the harness only
   ever estimates. Adding them would produce a number that is true of nothing.

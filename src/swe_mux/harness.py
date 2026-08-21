@@ -357,6 +357,18 @@ class HarnessDescriptor:
     # Claude Code moves three. A larger multiplier is a measured application-input
     # trait, not something the browser may infer from the harness name.
     touch_scroll_rows_per_report: int
+    # The key sequence that discards this CLI's *whole* composer.
+    #
+    # Declared rather than assumed, because the obvious answer is wrong on the
+    # harness most people use. Measured 2026-08-20 against Claude Code v2.1.238 on
+    # a four-line draft: Ctrl+U killed one line and left the other three, and a
+    # bare Esc did nothing at all; only a double Esc cleared it. Ctrl+U remains
+    # right for the shells mux also drives and for every harness measured so far.
+    #
+    # Two consumers read this and must agree: the Action rail's Clear button sends
+    # it, and `composer_input.py` decides from it whether a write emptied the
+    # composer. A browser-side copy is what this field exists to prevent.
+    composer_clear_keys: str
 
     native_hooks: bool
     transcript: str | None
@@ -378,6 +390,8 @@ class HarnessDescriptor:
             raise ValueError(f"harness {self.name} must declare how its CLI resumes")
         if not self.skill_invocation_prefix:
             raise ValueError(f"harness {self.name} must declare a skill invocation prefix")
+        if not self.composer_clear_keys:
+            raise ValueError(f"harness {self.name} must declare a composer clear sequence")
         if bool(self.spawn_id_argv) != self.assigns_conversation_id:
             # The two say the same thing from opposite ends. A harness that dictates
             # its conversation id has argv that carries it, and a harness with such
@@ -774,6 +788,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=3,
+        composer_clear_keys="",
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -862,6 +877,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=80,
         suppresses_late_color_response=True,
         touch_scroll_rows_per_report=1,
+        composer_clear_keys="",
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -942,6 +958,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
+        composer_clear_keys="",
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1029,6 +1046,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
+        composer_clear_keys="",
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1135,6 +1153,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
+        composer_clear_keys="",
         native_hooks=True,
         # Semantic records, read from the store rather than tailed from a file.
         # This is the automation-evidence label, not a claim that a byte-offset
@@ -1857,6 +1876,7 @@ def public_harness_registry(
                 # hint, and a browser older than the daemon simply shows no hint.
                 "reserved_launch_args": list(harness.reserved_launch_args),
                 "skill_invocation_prefix": harness.skill_invocation_prefix,
+                "composer_clear_keys": harness.composer_clear_keys,
                 "capabilities": {
                     "observed": harness.level >= HarnessLevel.observed,
                     "transcript": bool(harness.transcript),

@@ -85,6 +85,11 @@ A uniqueness violation is sometimes the *mechanism* rather than an error to swal
 `schedule_runs(schedule_id, fire_key)` is unique, and `ScheduleStore.claim_run` inserts that row before a scheduled session is spawned: the losing insert raises `IntegrityError`, rolls back, and is surfaced as a typed `ScheduleConflict` the caller treats as "already claimed" (`../../design/features/scheduled-runs.md`).
 That is what makes a fire idempotent across a daemon restart, which no in-memory guard can be.
 
+`LandStore` uses the same mechanism twice, through **partial** unique indexes scoped to a subset of states (`../../design/features/land-queue.md`).
+`land_requests_active(project_root, branch) WHERE state IN (<live states>)` makes enqueue itself the claim, so an agent asking twice for one branch gets a typed `LandConflict` rather than a second pipeline over one worktree.
+`land_requests_inflight(project_root) WHERE state IN (<running states>)` is the stronger of the two: it makes "one land at a time per trunk" a property of the schema, so the losing `UPDATE` into a step state raises `IntegrityError` even if two workers both concluded they should proceed.
+A partial index is what allows both: the same `(project_root, branch)` pair recurs freely across finished requests, and only the live ones are constrained.
+
 `ScheduleStore` is at schema version 2 and migrates by reading `PRAGMA table_info` rather than by trusting a recorded version, so a database written by a newer build, opened by an older one, and opened again still gains each added column exactly once.
 The added columns are `ALTER TABLE ADD COLUMN` rather than a table rebuild because every default reads as the previous behaviour: a row written before the resume action existed *was* a deferred spawn with no target.
 

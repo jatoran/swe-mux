@@ -85,6 +85,12 @@ async def _git(
         return 1, ""
 
 
+#: The read-only runner under its public name, for callers outside this module that
+#: need one bounded Git query. Exported rather than reimplemented so no second caller
+#: can forget `--no-optional-locks` and start writing to the repository it is reading.
+read_git = _git
+
+
 @dataclass(slots=True, frozen=True)
 class GitEvidence:
     """Deterministic Tier 0 git facts for one repository root.
@@ -188,8 +194,31 @@ _RAW_CHANGE = re.compile(
 _EMPTY_OID = re.compile(r"^0{40,64}$")
 
 
+async def read_is_ancestor(cwd: str, ancestor: str, descendant: str) -> bool | None:
+    """Whether `ancestor` is reachable from `descendant`. None when git cannot say.
+
+    This is the one question that separates a reference moving *forward* — a
+    commit, a fast-forward, a merge — from one that was rewritten out from under
+    its old position by a rebase or a reset. Guessing between those two produced
+    the "a merge or a rebase" non-answer; git decides it in a single call.
+    """
+    if not _FULL_OID.fullmatch(ancestor) or not _FULL_OID.fullmatch(descendant):
+        return None
+    code, _ = await _git(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
+    # 0 and 1 are the answer; anything else (a missing object, a timeout) is git
+    # declining to answer, and must not read as "no".
+    if code in (0, 1):
+        return code == 0
+    return None
+
+
 async def read_commit_range(
-    cwd: str, base: str | None, head: str, *, limit: int = COMMIT_RANGE_LIMIT
+    cwd: str,
+    base: str | None,
+    head: str,
+    *,
+    limit: int = COMMIT_RANGE_LIMIT,
+    first_parent: bool = False,
 ) -> tuple[GitCommitMetadata, ...]:
     """Commits reachable from `head` but not from `base`, newest first.
 
@@ -198,12 +227,23 @@ async def read_commit_range(
     after the command answers "what is on top now", which is a different question.
     An amend is covered by the same range — the replaced commit stops being an
     ancestor, so the rewritten one appears here.
+
+    `first_parent` walks only the reference's *own* line of development, and is
+    what tells a merge apart from a bulk arrival. Full ancestry counts the side
+    branch a merge absorbed, so `git merge master` creating one commit and a
+    two-commit fast-forward both report two — which is precisely the collision
+    that stamped the session that ran the merge `ambiguous`.
     """
     if not _FULL_OID.fullmatch(head) or (base is not None and not _FULL_OID.fullmatch(base)):
         return ()
     selector = f"{base}..{head}" if base else head
     code, output = await _git(
-        cwd, "log", f"--max-count={max(1, limit)}", "--format=%H%x00%P%x00%ct%x00%s", selector
+        cwd,
+        "log",
+        f"--max-count={max(1, limit)}",
+        *(("--first-parent",) if first_parent else ()),
+        "--format=%H%x00%P%x00%ct%x00%s",
+        selector,
     )
     if code:
         return ()

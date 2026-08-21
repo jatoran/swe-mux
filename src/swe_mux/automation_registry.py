@@ -109,6 +109,13 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Semantic history search",
         ("scan_timeline",),
     ),
+    # Phase 7.11: whether *agents* may read this Project's scan timeline through
+    # the `scan_timeline` MCP tool. Its own consumer id rather than the
+    # `scan_timeline` substrate id, because a distilled intent summary is in some
+    # ways more revealing than the transcript excerpt it was derived from, and
+    # gating agent reads on the substrate would leave no way to keep the timeline
+    # while withholding it from siblings. Off by default; costs no tokens.
+    Automation("scan_reads", CONSUMER, "Agent scan-timeline reads", ("scan_timeline",)),
     # "← everything" in the design: ranking has nothing to rank without the
     # detectors and the timeline that feed it. The old `("tier0",)` would have let
     # the toggle surface present a one-dependency tree as complete.
@@ -149,6 +156,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # database, so a clone that inherits this opt-in has none of them
     # (`schedule_store.py`).
     Automation("scheduled_runs", CONSUMER, "Scheduled runs", ()),
+    # Phase 14: serialized branch landing. Like `session_control` and
+    # `scheduled_runs` it gates a *capability* rather than a read over another
+    # automation's output, so it depends on no substrate. Its own id rather than a
+    # second meaning for `session_control`: that one acts on a session, this one
+    # acts on a repository, and they deserve separate switches and separate
+    # budgets. Off by default, and permission alone lands nothing - the Project's
+    # `land_grant` stays at the inert `draft` until a human raises it.
+    Automation("land_queue", CONSUMER, "Land queue", ()),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}

@@ -107,7 +107,15 @@
   An internal evidence rank permits only equal or stronger observations to replace classification fields while preserving the earliest observation time.
   Contributed paths are the one exception: they are evidence rather than classification, so they accumulate — an empty set never replaces a populated one, and a populated set fills a row that has none at any rank.
   Explicit transcript backfills use the same ranked upsert in batches of at most 1,000 rows, so rerunning an import cannot duplicate or weaken existing live evidence.
+  `retracted_at` and `retracted_reason` are the ledger's only weakening operation.
+  The ranked upsert can promote a row but never withdraw one, because "this session had nothing to do with it" is not a stronger claim than the one it replaces; without retraction a row that turned out to record occupancy had no way out.
+  Retraction is applied from an explicit id list produced by a pass that examined each row, never a predicate evaluated at read time, and reads exclude retracted rows unless asked for them.
+  The upsert clears a retraction only for evidence strictly stronger than what was withdrawn, so re-observing the same thing cannot undo a repair while a contributor match proving the session's bytes are in the commit does; the repair pass can additionally restore its own verdicts, because a reclassification offers the same strength of evidence and a different answer.
   Project removal retains Project and provenance rows as a tombstoned historical identity, and explicit History-entry deletion removes rows for that agent run.
+- `git_ref_moves`: what a *checkout's* reference did, which is a different question from what any session did.
+  It records the Project, canonical checkout root, the commit moved to, the previous HEAD, the classified kind (`created|merged|fast_forward|rebased|reset|unknown`), how many commits the reference's own first-parent line gained, how many of those the move authored, the tip's subject and Git commit time, and first/latest observation times, keyed uniquely by `(worktree_root, commit_oid, previous_head)`.
+  It exists because every session attached to a checkout watches the same reference move, so recording the move per session wrote one row each for sessions that had nothing to do with the commits involved — and a landing fast-forward, which authors nothing at all, wrote the most of them.
+  A move is classified from the repository rather than accumulated from sightings, so the newest reading replaces the previous one outright; taking a maximum of the counts pinned a miscount in place where a later classifier fix could never displace it.
 - `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
   `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
   Both FTS5 tables are external-content derivatives of `history_messages` and stay synchronized by triggers.
@@ -277,6 +285,26 @@
   `(schedule_id, fire_key)` is **unique, and that index is the idempotency mechanism**: the
   row is inserted before the spawn, so a daemon that dies mid-fire cannot start the same
   occurrence twice on restart.
+- `land_requests` / `land_events` (`features/land-queue.md`, `land-queue.sqlite3`): one row per
+  branch asked to land, and its per-step audit trail. A request carries the two checkout roots,
+  the branch and the OID it was requested at, the trunk ref, the origin (operator or agent, with
+  the requesting session and run), its state, the OID that passed verification, and the trunk's
+  before and after positions.
+  **Machine-local for the same reason schedules are**: a queue committed to a repository would
+  arm itself in every clone and worktree of it, while the `land_queue` opt-in stays portable and
+  is inert on its own.
+  Two **partial unique indexes carry the design rather than merely guarding it**.
+  `land_requests_active`, unique on `(project_root, branch)` over the live states, makes enqueue
+  itself the claim, so an agent asking twice cannot create a second pipeline over one worktree.
+  `land_requests_inflight`, unique on `project_root` over the running states, is what makes
+  "one land at a time per trunk" a property of the schema: two workers cannot both mark a step
+  running against one primary checkout even if both believe they should.
+  A row left in a step state by a daemon that died mid-flight returns to `queued` on restart
+  rather than resuming, because every step re-checks the repository from scratch and guessing
+  how far it got is the part that is not safe.
+  `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
+  the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
+  an originating session to attribute it to.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.

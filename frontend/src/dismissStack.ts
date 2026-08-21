@@ -23,6 +23,20 @@ export type DismissEntry = {
 
 export type PopResult = 'popped' | 'blocked' | 'pending' | 'empty'
 
+/**
+ * What "back" acts on: a depth to arm the history sentinel against, one step, and a
+ * signal that either may have changed.
+ *
+ * A `DismissStack` is one. `composeBackTarget` (`viewHistory.ts`) builds the composite
+ * that puts the view-history ring underneath this one, so `systemBack.ts` keeps talking
+ * to a single target and never learns that a second rung exists.
+ */
+export type BackTarget = {
+  depth: () => number
+  pop: () => unknown
+  subscribe: (listener: () => void) => () => void
+}
+
 export type DismissTraceEvent = {
   at: number
   action: 'register' | 'unregister' | 'activate' | 'deactivate' | 'pop'

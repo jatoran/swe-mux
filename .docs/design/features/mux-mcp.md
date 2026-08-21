@@ -10,8 +10,9 @@ bounded write tools added in Phase 5 and the session-control tools added in Phas
 Every tool answers within the caller's own Project until the caller asks for more with the
 shared `project` argument.
 Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), Phase 5
-(`notify`, `request_spawn`), Phase 7.5 (cross-session memory reads), and Phase 7.6
-(`interrupt`, `end_session`) / control-plane build-order steps 2.5, 8, and 9
+(`notify`, `request_spawn`), Phase 7.5 (cross-session memory reads), Phase 7.6
+(`interrupt`, `end_session`), and Phase 7.11 (`scan_timeline`, `scan_search`)
+/ control-plane build-order steps 2.5, 8, and 9
 (`CONTROL_PLANE_ROADMAP.md` §7.1–7.6). Registered automatically into every spawned Claude
 and Codex session — no user setup — and reachable by a user-typed `claude`/`codex` inside a
 mux shell session via the agent shims.
@@ -152,6 +153,8 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `prior_resolutions` | a previously verified fix for an exact normalized error signature, from the experience corpus (`automation_store.experiences`), matched on equality of the error fingerprint and never a substring. Low-confidence (<0.5) matches are withheld and only counted |
 | `dead_ends` | approaches abandoned or failed within a run with a recorded dead-end note, from scan records; `subsystem` matches as a substring of the record's target paths, intent, or summary. Low-confidence (<0.4) records are withheld. A conversation rollover writes a boundary not a record, so `/clear` never counts as an abandonment |
 | `doc_debt` | which docs owe an update for the Project's recently changed source files, as `{doc, changed_files}` pairs re-derived from each doc's "Key files" section (`build_doc_debt_map` over `build_doc_ownership`, inverted to `doc -> changed files` over a 24h Project fact window, a doc edited in that window excluded). Not scraped from the doc-debt annotation, whose content is a human sentence. Blind spot named in the description: a source file no doc lists produces no debt, so empty is not proof the docs are current (Phase 7.10) |
+| `scan_timeline` | one session's distilled behavioral spine instead of its raw conversation. `detail:"digest"` (the default) is the bounded `catch_me_up` rollup - phases, claims, current blocker; `detail:"records"` is the compact per-window projection, newest first, cursored by `since_t1`; `detail:"full"` expands at most five explicitly named `record_ids`. Filters: time window, `blocked_only`, `work_phase`, `approach_status`, a `target` path fragment, `exclude_heartbeat`. Every result carries the enablement/liveness block. Reads an ended session too. Gated on `scan_reads` (Phase 7.11) |
+| `scan_search` | runs found by what they were *doing*: a query resolved against distilled scan `summary`/`intent`/`target` records rather than raw transcript text, all terms required. Each hit names its `agent_run_id` and its `t0`/`t1` window. The agent-facing exposure of the shipped `GET /api/history/scan-search`. Gated on `semantic_history_search` (Phase 7.11) |
 | `blast_radius` | everything a change to one file can reach: reverse callers (hop-ordered), the git co-change net, covering tests among the reachable set, and owning docs, from the Phase 7.9 code-structure graph. The static reverse set is a lower bound and says so; named blind spots are `getattr`, dict dispatch, decorators, DI, dynamic imports. Gated on `code_graph` |
 | `find_definition` | where a symbol is defined, by leaf name or qualname, from the code graph. Gated on `code_graph` |
 | `find_callers` | the (file, symbol) pairs that call into a file or symbol, resolved import-aware so a same-named symbol in an unrelated module is not a false caller; unresolved same-name callers are reported separately. A lower bound. Gated on `code_graph` |
@@ -163,6 +166,11 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Under the default `draft` grant it writes an inert approval instead of acting |
+| `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
+
+`request_land` deliberately takes no target. The checkout comes from the caller's own live
+cwd, so "an agent lands the checkout it is working in, and no other" holds by construction
+rather than by a check that could be routed around. There is nothing in the call to forge.
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is
@@ -198,6 +206,73 @@ shipped in Phase 5.6.
   raises `unsupported` (503); when no Project in scope has opted the backing automation in it
   raises `disabled` (409) naming the automation. An agent that cannot tell "off" from "nothing
   here" trusts a silence it should not.
+
+## Scan-timeline reads (Phase 7.11)
+
+The scan timeline is the most compressed artifact swe-mux produces about a conversation, and
+until Phase 7.11 it was the only one agents could not read.
+An agent asked to review or monitor a sibling had to page `read_transcript` over raw
+conversation while a distilled, semantically-labeled index of that same conversation already
+existed, paid for and stored.
+`scan_timeline` and `scan_search` mirror the shipped `search_history` → `read_transcript`
+pair one level up: search broadly across runs, then read one run's spine deeply.
+
+- **Projection before endpoint.** A stored record averages ~3.2 KB and a long run holds
+  hundreds, so exposure is a projection problem first.
+  The compact projection drops `evidence_refs`, `tier0_fact_ids`, `prompt_hash`,
+  `prompt_version` and `observer_model` (42% of stored bytes, none of it actionable) and
+  collapses `target` to a count plus at most three paths (another 17%, and the single largest
+  field in a record).
+  Field selection alone is not enough: the page is bounded to 30 records by default and 100 at
+  most, because even the projection is ~730 bytes a row.
+- **Three fields survive that look like metadata and are not.**
+  `repaired_fields` says which fields were coerced rather than asserted - `_ENUM_FALLBACKS`
+  substitutes `unknown`/`none` for an out-of-range enum, and a stored fallback is otherwise
+  indistinguishable from a model assertion.
+  It is a per-field classification rather than the raw `repairs` list because most repairs are
+  a cosmetic `behavior` dedup and an unclassified list cries wolf.
+  `messages_seen` and `window_truncated` say how thin the window behind a judgement was: a
+  `work_phase` decided from one `tool_result` and one decided from forty messages are not the
+  same claim.
+- **An absent field is not an uncertain one.** A record that carries no `approach_status`
+  omits the key entirely rather than rendering as `unknown`, so the model's silence and the
+  model's uncertainty never read the same.
+- **The cursor is what makes monitoring affordable.** `since_t1` is exclusive, so feeding back
+  the newest `t1` already seen returns strictly newer records and never repeats the boundary
+  one. It, and every other filter, runs in SQL (`json_extract` for the semantic ones), so a
+  bounded page means "rows returned" rather than "rows scanned" - a filtered page that ran in
+  Python would come back short and a caller could not tell that from the end of the run.
+- **Off is never a quiet session.** Every result carries `scan_state`: `scanning`,
+  `last_scan_at`, `skip_reason`, `run_decided`, `run_enabled`, `project_enabled` and the
+  closest-to-binding gate. A scanner stopped by a budget cap and a session that is simply
+  quiet both return an empty tail, and only one of them is worth acting on. `liveness()` in
+  `scan_timeline.py` is the single owner of that block, shared with the drawer's snapshot, so
+  the two surfaces cannot disagree.
+- **Ended sessions are readable.** Records outlive their session and "what did that finished
+  sibling do" is the read the tool exists for, so an ended session resolves through history and
+  reports `session_live: false`. Its Project-context-derived fields report unknown rather than
+  `false`, because a context that cannot be resolved is not an opt-in that is off.
+- **`scan_timeline` gates on the target session's Project, not the caller's.** It is
+  session-scoped, so the question is "did *that* Project opt in", which is a different question
+  from the Project-wide memory reads' "which of the Projects I may see opted in".
+- **`scan_reads` is its own consumer id, not the `scan_timeline` substrate.** A distilled intent
+  summary is in some ways more revealing than the transcript excerpt behind it, so a Project
+  must be able to keep its timeline and still withhold it from sibling agents. `scan_search`
+  instead inherits `semantic_history_search`, the opt-in that already gates the identical query
+  on the human surface.
+- **No write surface, deliberately.** Neither `POST /api/sessions/{sid}/scan-timeline/scan`
+  nor the backfill endpoint is reachable through MCP. Reads cost nothing, but a scan spends
+  the human's gated budget against caps set in Settings → Automation → Scan timeline, and an
+  agent that could trigger scans could exhaust `scan_timeline_daily_budget_usd` for every
+  Project on the host. Source rehydration stays behind
+  `GET /api/sessions/{sid}/scan-timeline/{record_id}?rehydrate=1` for the same reason at
+  smaller scale: it reparses a transcript, and that cost does not belong behind a list read.
+  There is no generic record-dump tool either; every tool stays a question, not a table.
+- **Composition is named in the descriptions, because an agent reads answers more often than
+  schemas.** A scan record's `t0`/`t1`/`agent_run_id` reach the raw messages through
+  `search_history(run_ids, message_after, message_before)` and then `read_transcript(hit_id)`.
+  `read_transcript` has no time-window argument of its own, so an agent told only "use the
+  window" would try something that does not exist.
 
 ## Session control (Phase 7.6)
 
@@ -299,6 +374,12 @@ Both tiers are excluded from `.worktree-verify` and CI.
 ## Key files
 
 - Protocol + tools: `src/swe_mux/mcp.py`
+- Scan-record projection, the bounded digest, and the repair classifier:
+  `src/swe_mux/scan_consumers.py`
+- The enablement/liveness block both this surface and the drawer read:
+  `ScanTimelineService.liveness` in `src/swe_mux/scan_timeline.py`
+- Scan-record predicates and the `since_t1` cursor, in SQL:
+  `AutomationStore.scan_records` in `src/swe_mux/automation_store.py`
 - The `project` argument, shared by the read and write surfaces: `src/swe_mux/project_scope.py`
 - Closed read/write declarations and Claude read permissions: `src/swe_mux/mcp_contract.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
@@ -310,7 +391,8 @@ Both tiers are excluded from `.worktree-verify` and CI.
 - Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`
 - Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
   `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
-- Tests: `tests/test_mcp.py`, `tests/test_agent_messaging.py`, `tests/test_project_scope.py`;
+- Tests: `tests/test_mcp.py`, `tests/test_mcp_scan_timeline.py`,
+  `tests/test_agent_messaging.py`, `tests/test_project_scope.py`;
   live tiers `tests/test_live_automations.py`, `tests/test_live_mcp_control.py`, with the
   in-process fact and isolated-daemon harnesses in `tests/support/live_facts.py` and
   `tests/support/live_daemon.py`
@@ -327,6 +409,8 @@ Both tiers are excluded from `.worktree-verify` and CI.
 - `observations.md` - the drafted `control_request` storage, mirroring `spawn_request`.
 - `status-detection.md` — the status contract MCP reads through.
 - `history.md` — the archive `search_history` queries.
+- `scan-timeline.md` - the substrate `scan_timeline` and `scan_search` read, the record
+  contract, and why no scan trigger is exposed here.
 - `../development/CONTROL_PLANE_ROADMAP.md` §7 - the full return-path design: §7.5 for the
   v0.5 situational-awareness reads (`ROADMAP.md` Phase 5.6) and the v1 memory tools
   (Phase 7.5), §7.6 for the session-control tools and their authority grant (Phase 7.6).

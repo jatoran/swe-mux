@@ -1484,6 +1484,12 @@ POST   /git/init                     {project_id}
 POST   /git/worktrees
 POST   /git/worktrees/session
 DELETE /git/worktrees
+GET    /land[?project_id=]
+POST   /land                         {project_id, worktree_root}
+DELETE /land/{request_id}
+GET    /land/{request_id}/events
+GET    /land/verify-command          ?project_id=&worktree_root=
+POST   /land/verify-command/approve  {project_id, worktree_root, digest}
 GET    /processes[?session=&include_ended=1&unique_memory=1&summary=1]
 POST   /processes/action             {session_id, pid, identity_id, action}
 GET    /previews[?session=]
@@ -1499,6 +1505,19 @@ It re-resolves the folder's repository state inside the request: `404 project_no
 `404 root_unavailable`, `409 already_initialized` for a folder Git already tracks, and
 `400 git_error` carrying Git's own message. The reading that leads a client here is the
 `404 not_git_repository` code from `GET /git/worktrees`. See `features/git.md`.
+
+The `/land` routes are the land queue (`features/land-queue.md`). **None of them lands
+anything**: `POST /land` enqueues a request and the daemon's own sweep is the only thing that
+moves a trunk, so a client that gets `201` has been told the request was accepted, not that the
+branch is on the trunk. `GET /land` returns the queue plus its bounds (`hourly_budget`,
+`hold_timeout_seconds`, `retry_verification`); `409 already_queued` names an active request for
+that branch, and `DELETE` refuses with `409 not_cancellable` once a step is in flight.
+
+`GET /land/verify-command` reports the command a land would run, its digest, whether those exact
+bytes are approved, and both the approved and current text so the prompt can show a diff.
+`POST /land/verify-command/approve` requires the digest the caller was shown: `409
+digest_mismatch` means the bytes moved between the prompt and the click and returns the new
+digest, and `409 not_configured` means the repository declares no gate.
 
 `POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
 under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning
@@ -1547,7 +1566,7 @@ Concurrent requests with the same Project root and comparison ref await one shar
 Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`, `oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`.
 Git supplies the graph prefixes and the browser renders them without reconstructing topology.
 
-`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items, commits}` from the durable session-to-commit evidence ledger.
+`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items, commits, ref_moves}` from the durable session-to-commit evidence ledger.
 `project_id` is required and must name a registered Project, `limit` is 1 to 500 with a default of 200, and repeated `commit` parameters select multiple full 40-to-64-character object IDs.
 Every item carries its durable id, session id and captured label, nullable agent run id, Project, exact worktree root, full commit OID, parent OIDs, copied subject and commit time, previous HEAD, relationship, confidence, ambiguity flag, role, match method, contributed paths, source, nullable source event sequence and tool-call id, and first/latest observation times.
 Each item is additionally decorated on read with `display_name`, the session's current name under the rule every surface uses, resolved from the live session when the fleet holds it and from its History row otherwise, and with `history_id`, the conversation a reader can open.
@@ -1557,6 +1576,10 @@ Rows are newest-first by their first observation time.
 `commits` rolls the same rows up per commit into `{commit_oid, subject, committed_at, worktree_root, committer, contributors[], attribution}`, so a reader gets who made a commit and whose work is in it without a second request.
 `attribution` is `exact` when a committer was isolated, `correlated` when only contributions or occupancy are known, and `ambiguous` for a commit whose work mux never observed.
 `items` stays one row per session per commit because that is what each piece of evidence is about; the set is assembled for the reader rather than denormalized into every row.
+Retracted rows are absent from `items` and from the rollup: a withdrawn row is evidence the ledger no longer stands behind, and a reader asking who made a commit must not be handed one.
+`ref_moves` carries `{id, project_id, worktree_root, commit_oid, previous_head, kind, commit_count, authored_count, subject, committed_at, observed_at}` for the checkout reference movements in scope, newest first.
+It is deliberately **not** filtered by `session_id` or `agent_run_id`.
+"What did this session do" and "what happened to this checkout" are different questions, and answering the first with the second is what used to put a merge nobody in the checkout had made onto every session's ledger.
 The route rejects unknown parameters and never accepts a repository path from the caller.
 
 `GET /git/commits/{full_oid}/changes?project_id=ID[&parent=FULL_OID]` validates the commit and selected direct parent, then returns the complete parent list, the commit `message`, and a bounded file summary.
@@ -1709,11 +1732,18 @@ Ordinary reads default to 12 messages and 32 KiB of message text while preservin
 An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
 `get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
 Reads and writes default to the caller's own Project and reach another only through an explicit `project` argument; there is no mode, no config flag, and no implicit widening.
-Claude's generated settings allow the sixteen declared read tools without a prompt, while every write tool remains permission-gated.
+Claude's generated settings allow every declared read tool without a prompt, while every write tool remains permission-gated.
+A session spawned before a read tool is added does not carry it in its allowlist, so a newly added read tool reaches only sessions spawned afterwards.
 Tool annotations declare the same read/write split.
 Successful MCP calls record content-free per-tool call, serialized-response-byte, and truncation counters in background diagnostics.
 `notify` only stages a queue message with a visible sender/message/correlation envelope and `request_spawn` only creates an inert Fleet Queue approval row.
 The four cross-session memory reads are deterministic queries over Tier 0 facts, git-provenance edges, the experience corpus, and the scan timeline; each is per-Project opt-in through the enablement DAG and returns `unsupported` (503) when the substrate is absent or `disabled` (409) when no Project in scope opted its automation in, never a fake empty.
+The Phase 7.11 `scan_timeline` and `scan_search` reads expose the scan timeline to agents.
+`scan_timeline` is session-scoped and gates on the **target session's** Project opting into `scan_reads`; `scan_search` gates on `semantic_history_search`, the opt-in that already gates the identical query on the human surface.
+`detail:"digest"` is the bounded `catch_me_up` rollup, `detail:"records"` is the compact projection paged newest-first and cursored by an exclusive `since_t1`, and `detail:"full"` expands at most five explicitly named record ids.
+The projection omits `evidence_refs`, `tier0_fact_ids`, `prompt_hash`, `prompt_version` and `observer_model` and collapses `target` to a count plus a few paths, while keeping `repaired_fields`, `messages_seen` and `window_truncated`, which are what let a reader calibrate a label; a record that withheld `approach_status` omits the key rather than rendering `unknown`.
+Every result carries the enablement/liveness block (`scanning`, `last_scan_at`, `skip_reason`, `run_decided`), so a budget-stopped scanner is never readable as a quiet session, and an ended session is readable rather than refused.
+Neither `POST .../scan-timeline/scan` nor the backfill route is reachable through MCP: a read costs nothing, a scan spends the human's gated budget.
 The Phase 7.10 `doc_debt` read follows the same gate: it returns `{doc, changed_files}` pairs re-derived from each doc's "Key files" section over the Project's recently changed files, gated on the `doc_debt` detector's automation, and names the same blind spot the surface has — a source file no doc lists produces no debt, so empty is not proof the docs are current.
 `interrupt` and `end_session` act on a running agent only under a per-Project grant (`off`/`draft`/`granted`, default `draft`); a `draft` grant writes an inert `control_request` a human decides in Fleet Queue, and `interrupt` is refused unless delivery-readiness is `safe`.
 The full contract is `features/mux-mcp.md`.
@@ -1775,9 +1805,15 @@ retryability, token and cost usage, latency, and response content type and lengt
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
 row has `rule_id`, `calls`, `tokens`, `cost_usd`, the same three figures scoped to today, the
 requested models, and `last_at`. The daemon labels each row with `label`, `detail`, `kind`
-(`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because four
+(`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because several
 features bill the observer budget without being automation rules and a raw `rule_id` names
-neither them nor the setting that governs them. The rows are grouped from
+neither them nor the setting that governs them.
+`enabled` is read from the governing switch in every case - the live engine for a rule, the
+named `Config` flag for a feature - because the column's whole job is to separate a live bill
+from spent history.
+`kind: retired` is the fallback for an id nothing on the page can turn off, so a *live* spender
+missing from `FEATURE_SPENDERS` is reported as the opposite of what it is; the guard against
+that is `tests/test_spend_label_matrix.py` rather than review. The rows are grouped from
 `automation_budget_ledger` — the same table `spend_today` sums — so they reconcile with it
 exactly, including the rows a call that failed after the provider billed for its input writes.
 

@@ -955,8 +955,33 @@ class AutomationStore:
         session_id: str | None = None,
         agent_run_id: str | None = None,
         project_id: str | None = None,
+        since_t1: float | None = None,
+        until_t1: float | None = None,
+        triggers: Sequence[str] | None = None,
+        exclude_triggers: Sequence[str] | None = None,
+        work_phase: str | None = None,
+        approach_status: str | None = None,
+        blocked_only: bool = False,
+        target_fragment: str | None = None,
+        newest_first: bool = False,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
+        """Scan records for one scope, filtered in SQL rather than after the read.
+
+        The semantic predicates read `record_json` through `json_extract`
+        deliberately: filtering a decoded page in Python would make `limit` mean
+        "rows scanned" rather than "rows returned", so a blocked-only page would
+        silently come back short of a full page and a caller could not tell that
+        from the end of the run.
+
+        `since_t1` is exclusive so it composes as a monitoring cursor: feeding
+        back the newest `t1` a caller has already seen returns strictly newer
+        records and never repeats the boundary one.
+
+        `newest_first` is what a bounded read wants and the default (oldest
+        first) is what the derivations in `scan_consumers` require, so the
+        default ordering is unchanged.
+        """
         sql = "SELECT * FROM scan_timeline_records WHERE 1=1"
         args: list[Any] = []
         for field, value in (
@@ -967,7 +992,41 @@ class AutomationStore:
             if value:
                 sql += f" AND {field}=?"
                 args.append(value)
-        sql += " ORDER BY t0 ASC,created_at ASC LIMIT ?"
+        if since_t1 is not None:
+            sql += " AND t1>?"
+            args.append(float(since_t1))
+        if until_t1 is not None:
+            sql += " AND t1<=?"
+            args.append(float(until_t1))
+        if triggers:
+            wanted = sorted({str(item) for item in triggers})
+            sql += f" AND trigger IN ({','.join('?' for _ in wanted)})"
+            args.extend(wanted)
+        if exclude_triggers:
+            unwanted = sorted({str(item) for item in exclude_triggers})
+            sql += f" AND trigger NOT IN ({','.join('?' for _ in unwanted)})"
+            args.extend(unwanted)
+        if work_phase:
+            sql += " AND json_extract(record_json,'$.work_phase')=?"
+            args.append(str(work_phase))
+        if approach_status:
+            sql += " AND json_extract(record_json,'$.approach_status')=?"
+            args.append(str(approach_status))
+        if blocked_only:
+            # `none` is the schema's "not blocked"; NULL is a record that predates
+            # the field or had it withheld. Neither is a live blocker.
+            sql += (
+                " AND COALESCE(json_extract(record_json,'$.blocked_on'),'none')"
+                " NOT IN ('','none')"
+            )
+        if target_fragment:
+            # `target` is a JSON array, so the substring test runs against its
+            # serialized form. A path fragment cannot collide with the array
+            # punctuation, which is the only other thing in that text.
+            sql += " AND lower(COALESCE(json_extract(record_json,'$.target'),'')) LIKE ?"
+            args.append(f"%{str(target_fragment).casefold()}%")
+        order = "DESC" if newest_first else "ASC"
+        sql += f" ORDER BY t0 {order},created_at {order} LIMIT ?"
         args.append(max(1, min(limit, 2000)))
 
         def op() -> list[dict[str, Any]]:
