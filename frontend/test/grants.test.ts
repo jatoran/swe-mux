@@ -21,14 +21,23 @@ const grantsModule = daemon('grants.py')
 const registry = daemon('automation_registry.py')
 const ids = Object.keys(GRANTS) as GrantId[]
 
-/** The daemon's allowlist, read out of its source so the two ends cannot drift. */
+/**
+ * The daemon's allowlist, read out of its source so the two ends cannot drift.
+ *
+ * Anchored on the assignment rather than on the bare name: the module docstring names
+ * both constants several lines above where they are defined, so splitting on the name
+ * alone parsed prose and matched nothing. The size assertions below are what caught it,
+ * and are the reason they are there.
+ */
 function daemonInstallKeys(): string[] {
-  const block = grantsModule.split('GRANTABLE_INSTALL_KEYS')[1].split(')')[0]
+  const block = grantsModule.split('GRANTABLE_INSTALL_KEYS: frozenset[str] = frozenset(')[1]
+    .split(')')[0]
   return [...block.matchAll(/"([a-z_]+)"/g)].map(match => match[1])
 }
 
 function daemonProjectValues(): Map<string, string[]> {
-  const block = grantsModule.split('GRANTABLE_PROJECT_VALUES: Mapping')[1].split('\n}')[0]
+  const block = grantsModule.split('GRANTABLE_PROJECT_VALUES: Mapping[str, tuple[Any, ...]] = {')[1]
+    .split('\n}')[0]
   const rows = new Map<string, string[]>()
   for (const line of block.split('\n')) {
     const match = /"([a-z_]+)":\s*\(([^)]*)\)/.exec(line)

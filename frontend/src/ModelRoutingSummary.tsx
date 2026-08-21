@@ -8,7 +8,9 @@
  * the control that owns it.
  */
 import type { ModelOption } from './modelFilter'
-import { MODEL_ROUTES, resolveRoute, type ModelRoutingConfig } from './modelRouting'
+import {
+  MODEL_ROUTES, resolveRoute, type ModelRoutingConfig, type ProviderOverride,
+} from './modelRouting'
 import { modelMetaLabel } from './modelPricing'
 import type { SettingsTab } from './settingsTabs'
 
@@ -16,14 +18,21 @@ type Props = {
   draft: ModelRoutingConfig
   /** The cached OpenRouter catalog, for the price beside each resolved model. */
   catalog: ModelOption[]
+  /**
+   * Set while a custom endpoint is selected, in which case every row resolves to that
+   * endpoint's single model. Passed in rather than derived here so this component keeps
+   * knowing nothing about providers: the rule lives in `modelRouting.ts`, and this
+   * renders whatever it resolved.
+   */
+  override?: ProviderOverride
   onOpen: (tab: SettingsTab, setting: string) => void
 }
 
-export function ModelRoutingSummary({ draft, catalog, onOpen }: Props) {
+export function ModelRoutingSummary({ draft, catalog, override = null, onOpen }: Props) {
   const byId = new Map(catalog.map(model => [model.id, model]))
   return <ul class="model-routing">
     {MODEL_ROUTES.map(route => {
-      const { model, inherited } = resolveRoute(route, draft)
+      const { model, inherited } = resolveRoute(route, draft, override)
       const entry = model ? byId.get(model) : undefined
       const price = entry ? modelMetaLabel(entry) : null
       const target = route.target
@@ -38,7 +47,7 @@ export function ModelRoutingSummary({ draft, catalog, onOpen }: Props) {
             // that", and it is also the value the linked control holds.
             ? <code title={model}>{model}</code>
             : <em>{route.kind === 'pinned' ? 'not set — this feature cannot run' : 'not set'}</em>}
-          {inherited && <span class="model-routing-inherited">inherited</span>}
+          {inherited && <span class="model-routing-inherited">{override ? 'endpoint' : 'inherited'}</span>}
           {price && <span class="model-routing-price">{price}</span>}
         </div>
         {route.note && <small>{route.note}</small>}

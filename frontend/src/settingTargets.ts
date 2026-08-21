@@ -86,6 +86,14 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Alerts', setting: 'alerts_enabled',
     label: 'Alerts for this device', where: 'Settings → Alerts',
   },
+  // Which endpoint every model-backed feature calls. A *value* rather than a switch -
+  // choosing a provider and typing a URL, a key, and a model id is not something a gate
+  // can honestly offer in one press - so it stays a link, and the surfaces held back by
+  // an unverified endpoint route here rather than pretending to grant it.
+  'accounts.llmProvider': {
+    surface: 'settings', section: 'Accounts', setting: 'llm_provider',
+    label: 'Model provider', where: 'Settings → Accounts',
+  },
   // The global automation switches live in Settings with every other install-wide
   // switch; the Automation dashboard reads their state and links here.
   'automation.engine': {

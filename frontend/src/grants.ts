@@ -24,13 +24,16 @@
  *    closure it drags in, and whether it can cost money - all on the button, not after.
  */
 
-import { api } from './api'
-import { SETTING_TARGETS, type SettingTargetId } from './settingTargets'
+// Explicit extensions: `test/all.ts` runs under node's type stripping, which does not
+// resolve an extensionless relative TypeScript specifier, and this module is reached
+// from `test/grants.test.ts`.
+import { api } from './api.ts'
+import { SETTING_TARGETS, type SettingTargetId } from './settingTargets.ts'
 import {
   fetchProjectAutomations,
   forgetProjectAutomations,
   type ProjectAutomationState,
-} from './projectAutomations'
+} from './projectAutomations.ts'
 
 export type GrantScope = 'install' | 'project' | 'device'
 

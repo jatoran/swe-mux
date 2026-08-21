@@ -77,6 +77,9 @@ Everything here is that pattern generalised.
   Projects editor's chip and by every gate that offers the same switch.
   It is asked of the whole closure: `catch_me_up` is free and cannot be switched on without
   `scan_timeline`, which is not.
+- **So does `needs_llm`**, on the same terms and for the same reason: one fact, one source,
+  asked of the closure. It is a separate field because a model on the operator's own machine
+  is a dependency with no bill (`automation-enablement.md`).
 - **One request, whatever the mix of scopes.** `POST /api/grants` applies the Project write
   and the install write together. Sequencing them from the browser would mean two revisions,
   two failure modes, and a half-granted state whenever the second lost.
@@ -141,6 +144,8 @@ only route to the owning overlay.
 | Read-aloud chip | `tts_enabled` | install | link (a pane-bar chip, not a gate) |
 | Talk toggle | `stt_enabled` | install | link |
 | Claude width notice | `claude_max_columns` | install | link (a value, not a switch) |
+| Projects registry (model-backed row, provider unproven) | `llm_provider` | install | link (a value, not a switch) |
+| Any gate over a `needs_llm` switch | `llm_provider` | install | link, disclosed beside `spends` |
 
 ## First use
 
@@ -169,6 +174,14 @@ Two things address that without weakening the rule:
   approval chip states the restriction and grants only the install switch.
 - **Values rather than switches.** A gate can honestly offer "turn this on"; it cannot offer
   "pick a number". Budgets, model ids, and width caps stay links.
+- **The model provider.** Choosing OpenRouter or a custom endpoint, typing a base URL, a key,
+  and a model id, and then verifying it is a configuration pass, not one press - so a gate
+  over a model-backed switch *discloses* the unproven provider beside `spends` and links to
+  Settings → Accounts. Granting the automation anyway is correct: the opt-in is a real
+  permission and withholding it would mean the operator has to grant twice. What a gate must
+  not do is report success and leave a switch that reads on and does nothing, which is why
+  `GrantPlan.needs_llm` travels with `spends` and `POST /api/grants` returns the readiness
+  verdict alongside what it applied.
 - **Change map `unsupported` / `no_project`.** Neither is a switch: one needs a daemon build
   carrying the code graph, the other needs the session's directory registered as a Project.
 - **Harness "launch clean" (`harness_instrument_enabled`).** A clean-launched session has no

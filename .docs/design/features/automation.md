@@ -40,7 +40,53 @@ and the declared minimum observation capability.
 
 ## OpenRouter and economics
 
-- Only `https://openrouter.ai/api/v1` is accepted; redirects and caller URLs are impossible.
+- The origin is **install configuration, never a caller parameter**. It was a module constant
+  until Phase 15's bring-your-own endpoint; the substitution that replaced it is `LlmEndpoint`
+  (`llm_endpoint.py`), resolved from `Config`, and no method on `OpenRouterClient` accepts a URL.
+  Redirects are still refused. An agent, an MCP tool, or an HTTP body cannot reach a destination
+  the operator did not type into Settings, which is the property the constant was protecting and
+  the reason agent-chosen network destinations stay on the decision-gated list.
+- Two endpoints exist. `openrouter` is the default and is unchanged for anyone who never opens
+  the provider screen. `custom` is any OpenAI-compatible `/chat/completions` - llama.cpp, Ollama,
+  vLLM, LM Studio with one shape - described by `{base_url, api_key, model}` (`ui.md` for the
+  surface). The endpoint is re-resolved per request rather than fixed at daemon start, so a
+  corrected base URL takes effect on the next call, which is the verify press itself.
+- Three things are deliberately **not** inferred for a custom endpoint, because each would be a
+  silent wrong answer rather than a loud failure:
+  - **Cost.** `usage.cost` absent means unknown, never zero, and `/generation` is not asked at
+    all - it is an OpenRouter accounting API, not part of the OpenAI-compatible surface.
+  - **Routing.** `provider: {require_parameters, allow_fallbacks}` is OpenRouter's vocabulary for
+    choosing between hosts of one model. A single-origin server has no hosts to choose between
+    and never made that promise, so the block is omitted.
+  - **Caching.** This is the one that would fail invisibly. `needs_explicit_cache_control` reads
+    an OpenRouter routing prefix, and its safe direction - "anything unrecognised caches
+    implicitly" - stops being safe when the prefix is a local filename, or when a proxy
+    legitimately serves a model called `anthropic/claude-sonnet-4.5`. A custom endpoint's policy
+    is `unknown`: no breakpoint is sent, and no implicit hit is assumed either, so a zero in the
+    ledger reads as unmeasured rather than as a caching regression somebody should investigate.
+- A custom endpoint serves **one** model, and every model setting in the app names an OpenRouter
+  id it has never heard of, so the client redirects all of them to `custom_llm_model` at the seam.
+  That is what lets the assistant, the scan timeline, and the titler work against a local model
+  without any of them learning about providers; Settings → Accounts says so above the index rather
+  than letting it list ids nothing will request.
+- A custom endpoint with no key sends no `Authorization` header at all: llama.cpp and Ollama serve
+  unauthenticated, and demanding a placeholder would make the commonest local setup fail with a
+  message about a credential the server does not want. OpenRouter still refuses without one.
+- **Verification** proves an endpoint with one tiny plain completion and records it durably
+  (`llm_provider_verification`, keyed by provider). The stored fingerprint is a digest of the
+  whole triple - base URL, model, key - so editing any part of the endpoint un-verifies it *by
+  construction* rather than by every write path remembering to, including an edit made by hand
+  in `config.toml` while the daemon was down. Nothing key-shaped is recoverable from the digest.
+  A record that no longer matches is kept and reported as `stale`, because "you changed it" and
+  "you never did it" need different next steps. A failed verification records nothing and does
+  not disprove a previous success: an endpoint that worked yesterday and is unreachable this
+  minute has not been disproven, and deleting the record would turn a network blip into a
+  Project-wide switch-off.
+  OpenRouter requires no separate verification - storing its key already tests it against an
+  origin swe-mux ships, so configuring it *is* verifying it, and demanding a second act would
+  switch off every existing install's model-backed automations on upgrade.
+- What an unverified provider gates, and how it is stated rather than failing downstream:
+  `automation-enablement.md`.
 - Requests are non-streaming, strict JSON-schema, parameter-required, bounded, timed out,
   cancellable, retried for transient transport failures, and locally validated.
 - Routing may fall back between providers for the exact requested model when the provider
@@ -50,7 +96,8 @@ and the declared minimum observation capability.
 - Cheap and standard model controls are searchable comboboxes whose result popovers have a
   bounded scroll height on desktop and mobile.
 - Windows persistent keys use current-user DPAPI in `automation.secrets.json`;
-  `OPENROUTER_API_KEY` is the headless override. The key is never returned.
+  `OPENROUTER_API_KEY` is the headless override, and `SWE_MUX_CUSTOM_LLM_API_KEY` is the same
+  override for a custom endpoint. Neither key is ever returned.
 - The Automation dashboard exposes rules/shadow state, firings, traces, action/call results,
   annotations, provenance, cost, queue/degradation state, inbox, and no-side-effect dry-run.
 

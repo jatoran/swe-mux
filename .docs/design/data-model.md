@@ -198,6 +198,19 @@
   cache, a subset of `input_tokens` and never added to it, backfilled to 0 on an existing
   database because every pre-migration row was billed by a request that carried no cache
   breakpoint.
+- `llm_provider_verification` (schema 10): one row per configured model provider, holding the
+  completion that proved it — `fingerprint`, `base_url`, `model`, `resolved_model`, a bounded
+  `sample` of the reply, `latency_ms`, and `verified_at`.
+  `fingerprint` is a digest of the whole endpoint triple (base URL, model, key) and is never
+  compared as a string by a caller: readers recompute the live fingerprint and compare, which is
+  what makes editing the endpoint un-verify it *by construction* rather than by every write path
+  remembering to — including an edit made by hand in `config.toml` while the daemon was down.
+  Nothing key-shaped is recoverable from it, and this table holds no other copy of the secret.
+  `sample` is kept because the point of verifying is that a person reads what came back: an
+  endpoint answering with an empty string or a chat template's own scaffolding is reachable and
+  unusable at once.
+  One row per provider rather than a history — the question is whether the endpoint *as it
+  stands* is proven, and a log of superseded fingerprints would only make that harder to read.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
   (re-copying promotes rather than duplicates), character/line counts, provenance
   (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here

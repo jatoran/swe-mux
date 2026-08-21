@@ -4,6 +4,7 @@ import { ProjectContextEditor } from './ProjectContextEditor'
 import { revealSetting } from './settingReveal'
 import { SettingLink } from './SettingLink'
 import { automationSetting } from './settingTargets'
+import type { LlmReadiness } from './llmProvider'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
 import { allBackendNames, harnessDisplayName } from './harnessRegistry'
@@ -50,12 +51,18 @@ type AutomationEntry = {
   /** Whether switching it on can cost money. Straight from the registry, so the editor
    *  and every gate that offers the same switch say the same thing about it. */
   spends: boolean
+  /** Whether it is inert without a proven model provider. Separate from `spends`,
+   *  because a model on the operator's own machine is a dependency with no bill. */
+  needs_llm?: boolean
 }
 type AutomationState = {
   revision: string
   requested: Record<string, boolean>
   enabled: string[]
   blocked: Record<string, string[]>
+  /** Opted in, dependencies met, and held back by an unproven model provider. */
+  unverified?: string[]
+  llm?: LlmReadiness | null
   automations: AutomationEntry[]
   scan_timeline_auto_enable: boolean
 }
@@ -121,6 +128,7 @@ function AutomationOptIns({ project, busy, onError }: {
     }
     void write(next)
   }
+  const unverified = new Set(state.unverified || [])
   const row = (item: AutomationEntry) => {
     const on = state.requested[item.id] === true
     const missing = state.blocked[item.id] || []
@@ -141,6 +149,16 @@ function AutomationOptIns({ project, busy, onError }: {
       {item.requires.length > 0 && <p class="project-automation-deps">
         needs {item.requires.map(id => byId.get(id)?.label || id).join(' · ')}
         {missing.length > 0 && <strong> — {missing.length} still off</strong>}
+      </p>}
+      {/* The checkbox stays on and the automation does not run. Saying so here is the
+          whole point: the permission is real and the thing it permits has no model to
+          call, and a row that showed only a tick would be the silent downstream failure
+          this gate exists to replace. The provider is a value rather than a switch, so
+          this links rather than granting - see `settingTargets.ts`. */}
+      {unverified.has(item.id) && <p class="project-automation-deps">
+        <strong>On, and waiting on a model provider.</strong>{' '}
+        {state.llm?.reason}{' '}
+        <SettingLink target="accounts.llmProvider" variant="link">Choose or verify one</SettingLink>
       </p>}
     </li>
   }
@@ -168,6 +186,14 @@ function AutomationOptIns({ project, busy, onError }: {
         </label>
         {scanBlocked.length > 0 && <p class="project-automation-deps">
           needs {scanBlocked.join(' · ')} — enabled with it
+        </p>}
+        {/* Scan timeline has its own block above the consumer list, so it never passes
+            through `row()` and would otherwise be the one model-backed switch that could
+            sit on and inert with nothing said. */}
+        {unverified.has('scan_timeline') && <p class="project-automation-deps">
+          <strong>Permitted, and waiting on a model provider.</strong>{' '}
+          {state.llm?.reason}{' '}
+          <SettingLink target="accounts.llmProvider" variant="link">Choose or verify one</SettingLink>
         </p>}
       </li>
       <li class={scanOn ? '' : 'unavailable'} data-setting="scan_timeline_auto_enable">

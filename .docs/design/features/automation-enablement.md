@@ -18,6 +18,13 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   pressing it. Asked of the whole closure, never of the named id alone: `catch_me_up` costs
   nothing and cannot be enabled without `scan_timeline`, which does (`enabling_closure`,
   `spends_money`).
+- **`needs_llm`**: whether the automation cannot do its job without a language-model
+  provider. Kept apart from `spends` even though the two coincide exactly today, because
+  they answer different questions and a bring-your-own endpoint is precisely where they
+  come apart: a model running on the operator's own machine is a dependency with no bill.
+  `spends` is a *disclosure*; this is a *predicate*, and it is what `resolve` consults to
+  decide a switch is inert. Import-time validation holds `spends` ⊆ `needs_llm`, since
+  every way of spending money here is a model call.
 - **`implemented`**: false while an id is reserved with no code behind it. The toggle
   surface renders dependencies straight from this registry, so a placeholder edge presented
   as a complete dependency set would let a user switch on something that then does nothing.
@@ -69,7 +76,8 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   clone that inherits this opt-in has none of them, and the install-wide switch and
   concurrency ceiling still bound what does fire (`scheduled-runs.md`).
 - **Consumer that spends**: `model_narration` and `continuous_title` are the consumers that cost
-  model calls. `model_narration` depends on `attention_ranking`, so with ranking off there is
+  model calls. Both, and the `scan_timeline` substrate under them, are also the whole of
+  `needs_llm`, so they are exactly what an unverified provider holds back. `model_narration` depends on `attention_ranking`, so with ranking off there is
   nothing to narrate and no path to a call (`attention-ranking.md`). `continuous_title` (Phase 7.7
   adaptive titling) depends on `scan_timeline` and fires one cheap-model synthesis only on a genuine
   scope pivot, off by default (`automation.md`, `scan-timeline.md`).
@@ -82,8 +90,25 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 - **Enablement DAG**: `requires` edges. Import-time validation rejects cycles, dangling
   deps, and substrate depending on a consumer.
 - **Resolution**: a requested opt-in set → `enabled` (deps satisfied) + `blocked`
-  (id → missing transitive deps, for UI prompting). Disabling a substrate node cascades
+  (id → missing transitive deps, for UI prompting) + `unverified` (deps satisfied, held
+  back by something outside the DAG). Disabling a substrate node cascades
   its dependents to blocked (effectively off).
+- **Verified-provider gate (Phase 15)**: `resolve(requested, llm_ready=...)` subtracts the
+  `needs_llm` automations from `enabled` into `unverified` when the install has no proven
+  model provider. Three things about that shape are deliberate:
+  - It subtracts from `enabled`, never from `requested`. The free consumers layered over
+    the timeline read records that already exist, so `catch_me_up` and `live_blockers` keep
+    running when a key is rotated; failing the whole subtree would be a second outage
+    caused by the first.
+  - `unverified` is its own field rather than a `blocked` entry. `blocked` values are
+    automation ids a grant can switch on, and no automation's enabling fixes an unverified
+    endpoint - merging the two would render a gate offering to turn on nothing.
+  - An automation already `blocked` by a missing dependency is not *also* reported
+    unverified. It has one actionable answer, and offering two different fixes for one
+    switch is how a toggle surface stops being read.
+  The install-wide answer is `llm_endpoint.readiness()`; the daemon resolves it once per
+  five seconds beside the per-Project gate cache and drops both whenever the endpoint is
+  edited, a key is written, or a verification lands (`automation.md`).
 
 ## Operations
 
@@ -170,8 +195,10 @@ GET  /api/grants
 POST /api/grants   {install?, project_id?, automations?, values?, revision?}
 ```
 
-`GET` returns the registry (id, kind, label, `requires`, `implemented`), the project's
-`requested` table, and the resolution (`enabled`, `blocked` → missing dependencies). `PUT`
+`GET` returns the registry (id, kind, label, `requires`, `implemented`, `spends`,
+`needs_llm`), the project's `requested` table, and the resolution (`enabled`, `blocked` →
+missing dependencies, `unverified` → held back by the provider, plus the `llm` verdict and
+its reason so the surface states it rather than paraphrasing). `PUT`
 replaces the opt-in table through the ordinary project-config write: `409 revision_conflict`
 on a stale revision, `409 automation_not_implemented` for a reserved id. The typed project
 config endpoints (`GET|PUT /api/project/config`) still carry the same table.

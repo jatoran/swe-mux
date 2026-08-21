@@ -3917,14 +3917,56 @@ ask.
 STT (faster-whisper) and TTS (Kokoro) are already local, so the remaining gap is the language
 model.
 
-- [ ] A custom OpenAI-compatible endpoint - `{base_url, api_key, model}` - at the
+- [x] A custom OpenAI-compatible endpoint - `{base_url, api_key, model}` - at the
   `OpenRouterClient` seam, which covers llama.cpp, Ollama, vLLM, and LM Studio with one shape;
   OpenRouter stays the default and other users' routing is untouched.
-- [ ] A verify action per configured provider: one tiny completion, output shown to the user,
+  `llm_endpoint.py` is the substitution for the origin constant: one `LlmEndpoint` says where a
+  completion goes *and* what that destination may be assumed to support, so the three things a
+  custom endpoint does not have are absent rather than wrong - no OpenRouter `provider` routing
+  block, no `/generation` cost lookup (absent cost is unknown, never zero), and no catalog
+  filter that would report a loaded model as no models at all.
+  The endpoint is re-resolved per request, so a corrected base URL takes effect on the very next
+  call, which is the verify press itself.
+  A custom endpoint serves one model and every model setting in the app names an OpenRouter id it
+  has never heard of, so the client redirects all of them at the seam and Accounts says so above
+  the routing index rather than letting it list ids nothing will request.
+  The origin remains **install configuration and never a caller parameter**, which is the property
+  the old constant was protecting and the reason agent-chosen destinations stay decision-gated.
+- [x] A verify action per configured provider: one tiny completion, output shown to the user,
   verified status recorded durably; an edit to the endpoint un-verifies it.
-- [ ] LLM-dependent automations gate on a verified provider through the existing enablement
+  Per *configured* provider rather than the active one, because an operator proving a local
+  endpoint wants to prove it before switching the install onto it.
+  The record's fingerprint covers the whole triple, so the un-verify is a property of the data
+  rather than a rule every write path has to remember - it holds for an edit made by hand while
+  the daemon was down, and `tests/test_custom_llm_endpoint.py` asserts it per field, since a
+  fingerprint over two of the three would pass a single-case test.
+  A failed verification records nothing and does not disprove a previous success: an endpoint
+  unreachable this minute has not been disproven, and deleting the record would turn a network
+  blip into a Project-wide switch-off.
+  OpenRouter needs no separate act - storing its key already tests it against an origin swe-mux
+  ships - so no existing install loses its automations on upgrade.
+- [x] LLM-dependent automations gate on a verified provider through the existing enablement
   dependency graph, and an unverified provider reads as the reason the switch is inert rather
   than as a silent failure downstream.
+  `Automation.needs_llm` is kept apart from `spends` because a model on the operator's own
+  machine is a dependency with no bill, and `resolve(..., llm_ready=False)` subtracts those from
+  `enabled` into `Resolution.unverified` - not from `requested`, so `catch_me_up` and
+  `live_blockers`, which call nothing, keep reading records that already exist when somebody
+  rotates a key.
+  `unverified` is its own field rather than a `blocked` entry because `blocked` values are ids a
+  grant can switch on, and no automation's enabling fixes an unproven endpoint.
+  The provider is a *value* rather than a switch, so the surfaces held back by it link to
+  Settings → Accounts instead of duplicating the grant system: a `GrantGate` over a `needs_llm`
+  switch discloses it beside `spends` and still applies the grant, since the opt-in is a real
+  permission and withholding it would mean granting twice.
+  **Not covered, deliberately:** the install-wide model-backed *features* that are not registry
+  automations - the assistant, read-aloud summaries, the Project context card - still fail at
+  their own call rather than at a gate. They have no enablement DAG to gate through, which is
+  what this item scoped itself to; `provider.llm` is on the status payload for whoever closes
+  that separately.
+  Caching gets the same treatment for the same reason: `cache_policy` is `unknown` for a custom
+  endpoint, so no breakpoint is sent *and* no implicit hit is assumed, and a zero in the ledger
+  reads as unmeasured rather than as a regression.
 
 ### Assistant reach: project actions
 
@@ -3971,6 +4013,10 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
   speaking over the focused one.
 - [ ] A local OpenAI-compatible endpoint passes verification and unlocks LLM-gated automations;
   removing or editing it re-locks them with a stated reason.
+  Built and tested end to end, including the re-lock through the real HTTP path
+  (`tests/test_llm_provider_api.py`). The criterion stays open until an operator points it at a
+  real llama.cpp or Ollama and reads the reply off the Verify button, which no test can stand in
+  for - a fake session proves the request shape and not that a local server accepts it.
 - [ ] The assistant lists actions, runs an approved one behind a card, refuses an unapproved one
   by naming the file, and reports success or an issue flag with no output read-back.
 - [ ] "Open an opus session in X" spawns with that model, and a bad model name fails at the card.

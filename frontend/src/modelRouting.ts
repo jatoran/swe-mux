@@ -106,6 +106,26 @@ export const MODEL_ROUTES: readonly ModelRoute[] = [
   },
 ]
 
+/**
+ * How a custom endpoint changes every row above.
+ *
+ * A local server serves one model, and every id in the table names an OpenRouter route
+ * that server has never heard of, so the client redirects all of them to
+ * `custom_llm_model`. The table is kept rather than emptied - these settings still hold
+ * their values and apply again the moment the provider is switched back - but a summary
+ * that went on listing seven distinct model ids while one model answered all of them
+ * would be the most misleading thing on the screen, which is exactly the failure the
+ * index exists to prevent.
+ */
+export type ProviderOverride = { provider: string; model: string } | null
+
+export function customProviderOverride(
+  config: { llm_provider?: string; custom_llm_model?: string },
+): ProviderOverride {
+  if (config.llm_provider !== 'custom') return null
+  return { provider: 'custom', model: (config.custom_llm_model || '').trim() }
+}
+
 /** What a route resolves to, and whether that value is its own or inherited. */
 export type ResolvedRoute = {
   route: ModelRoute
@@ -114,12 +134,22 @@ export type ResolvedRoute = {
   inherited: boolean
 }
 
-export function resolveRoute(route: ModelRoute, config: ModelRoutingConfig): ResolvedRoute {
+export function resolveRoute(
+  route: ModelRoute,
+  config: ModelRoutingConfig,
+  override: ProviderOverride = null,
+): ResolvedRoute {
+  // The override wins over both the pin and the fallback, because it is what the client
+  // will actually send. `inherited` is true for every row under it: none of these routes
+  // chose this model, they all fell through to the endpoint's single one.
+  if (override) return { route, model: override.model, inherited: true }
   const configured = (config[route.key] || '').trim()
   if (configured) return { route, model: configured, inherited: false }
   const inherited = route.fallback ? (config[route.fallback] || '').trim() : ''
   return { route, model: inherited, inherited: Boolean(inherited) }
 }
 
-export const resolveRoutes = (config: ModelRoutingConfig): ResolvedRoute[] =>
-  MODEL_ROUTES.map(route => resolveRoute(route, config))
+export const resolveRoutes = (
+  config: ModelRoutingConfig,
+  override: ProviderOverride = null,
+): ResolvedRoute[] => MODEL_ROUTES.map(route => resolveRoute(route, config, override))

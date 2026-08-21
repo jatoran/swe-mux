@@ -349,6 +349,19 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .model-routing-inherited,.model-routing-price{color:var(--muted);font-size:8px}
 .model-routing li small{color:var(--muted)}
 .model-routing-where button{padding:2px 6px;font-size:9px}
+/* Model provider (Settings → Accounts). One row per configured endpoint, shaped like
+   the Project automation rows so a verified/unverified chip reads the same wherever it
+   appears. The reply is a blockquote rather than a code block: it is prose the operator
+   is being asked to judge, not a value to copy. */
+.provider-readiness{display:flex;align-items:baseline;gap:6px;margin:0;color:var(--muted)}
+.provider-readiness.blocked{color:var(--warn,var(--text))}
+.provider-verification-list{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.provider-verification-list li{display:grid;gap:4px;justify-items:start;padding:7px 8px;border:1px solid var(--line);background:var(--panel2)}
+.provider-verification-head{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.provider-verify-result{padding:7px 8px;border:1px solid var(--line);background:var(--panel2)}
+.provider-verify-result.failed{border-color:var(--warn,var(--line))}
+.provider-verify-result p{margin:0 0 4px}
+.provider-verify-result blockquote{margin:0;padding:0 0 0 8px;border-left:2px solid var(--line);color:var(--text);overflow-wrap:anywhere}
 /* Shaped like every other setting rather than like a banner: label column, control
    column, same gap and padding as `.settings-content label`. Stacked full-width it was
    the only control in the panel spanning the label column too, which read as a section

@@ -1,0 +1,308 @@
+"""The provider status and verify endpoints, and what a Project's payload says.
+
+The unit tests in `test_custom_llm_endpoint.py` hold the rules. These hold the
+wire: that verifying writes a durable record and reports the endpoint's own words,
+that a failure records nothing, that editing the endpoint afterwards un-verifies
+it through the real HTTP path, and that a held-back automation arrives at the
+browser carrying a reason rather than merely missing from `enabled`.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+from swe_mux.automation_store import AutomationStore
+from swe_mux.config import Config
+from swe_mux.event_bus import EventBus
+from swe_mux.openrouter import OpenRouterError, OpenRouterVerification
+from swe_mux.project_files import read_project_config, write_project_config
+from swe_mux.server import (
+    automation_provider_key,
+    automation_provider_status,
+    error_middleware,
+    get_project_automations,
+    verify_automation_provider,
+)
+
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+class ProjectStub:
+    def __init__(self, root: Path) -> None:
+        self.id = "proj-1"
+        self.name = "repo"
+        self.root = str(root)
+
+
+class ProjectsStub:
+    def __init__(self, project: ProjectStub) -> None:
+        self.projects = {project.id: project}
+
+    def ordered_projects(self) -> list[ProjectStub]:
+        return list(self.projects.values())
+
+
+class SecretsStub:
+    def __init__(self, values: dict[str, str] | None = None) -> None:
+        self.values = dict(values or {})
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name) or None
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
+
+    def clear(self, name: str) -> None:
+        self.values.pop(name, None)
+
+    def status(self, name: str) -> dict[str, Any]:
+        return {"configured": bool(self.values.get(name)), "source": "stub"}
+
+
+class ProviderStub:
+    """Scripted `verify`/`test_key`, recording the endpoint each was handed."""
+
+    def __init__(self, *, output: str = "swe-mux endpoint check ok.",
+                 error: str = "") -> None:
+        self.output = output
+        self.error = error
+        self.verified: list[str] = []
+
+    async def verify(self, *, endpoint: Any = None, model: str = "",
+                     max_tokens: int = 32) -> OpenRouterVerification:
+        self.verified.append(endpoint.provider)
+        if self.error:
+            raise OpenRouterError(self.error)
+        return OpenRouterVerification(
+            provider=endpoint.provider,
+            origin=endpoint.origin,
+            requested_model=endpoint.resolve_model(model) or "qwen2.5-coder:7b",
+            resolved_model="qwen2.5-coder:7b",
+            output=self.output,
+            latency_ms=91,
+            input_tokens=11,
+            output_tokens=7,
+            cost_usd=None,
+        )
+
+    async def test_key(self, candidate: str | None = None, *, endpoint: Any = None
+                       ) -> dict[str, Any]:
+        return {"ok": True, "models": 1}
+
+
+def build(tmp_path: Path, config: Config) -> tuple[web.Application, AutomationStore]:
+    root = tmp_path / "repo"
+    root.mkdir(exist_ok=True)
+    store = AutomationStore(tmp_path / "automation.db")
+    app = web.Application(middlewares=[error_middleware])
+    app["config"] = config
+    app["projects"] = ProjectsStub(ProjectStub(root))
+    app["events"] = EventBus()
+    app["secret_store"] = SecretsStub()
+    app["automation_store"] = store
+    app["openrouter"] = ProviderStub()
+    app.router.add_get("/api/automation/provider", automation_provider_status)
+    app.router.add_post("/api/automation/provider/key", automation_provider_key)
+    app.router.add_post("/api/automation/provider/verify", verify_automation_provider)
+    app.router.add_get("/api/projects/{project_id}/automations", get_project_automations)
+    return app, store
+
+
+def custom_config(tmp_path: Path, *, model: str = "qwen2.5-coder:7b",
+                  base_url: str = "http://127.0.0.1:11434/v1") -> Config:
+    return Config(
+        data_dir=tmp_path / "data",
+        llm_provider="custom",
+        custom_llm_base_url=base_url,
+        custom_llm_model=model,
+    )
+
+
+async def client_for(app: web.Application) -> TestClient:
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    return client
+
+
+async def test_a_custom_endpoint_is_unverified_until_it_is_proven(tmp_path: Path) -> None:
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    client = await client_for(app)
+    try:
+        payload = await (await client.get("/api/automation/provider")).json()
+        assert payload["provider"] == "custom"
+        assert payload["llm"]["ready"] is False
+        assert payload["llm"]["code"] == "unverified"
+        # The sentence a surface renders verbatim, so it has to be one.
+        assert "verify" in payload["llm"]["reason"].casefold()
+        custom = next(item for item in payload["providers"] if item["id"] == "custom")
+        assert custom["requires_verification"] is True
+        assert custom["cache_policy"] == "unknown"
+        # OpenRouter is listed too, so the panel can offer to prove either one before
+        # switching the whole install onto it.
+        assert {item["id"] for item in payload["providers"]} == {"openrouter", "custom"}
+
+        result = await (await client.post("/api/automation/provider/verify", json={})).json()
+        assert result["ok"] is True
+        assert result["output"] == "swe-mux endpoint check ok."
+        assert result["llm"]["ready"] is True
+        assert result["verification"]["verified"] is True
+
+        after = await (await client.get("/api/automation/provider")).json()
+        assert after["llm"]["ready"] is True
+        proven = next(item for item in after["providers"] if item["id"] == "custom")
+        assert proven["verification"]["sample"] == "swe-mux endpoint check ok."
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_editing_the_endpoint_re_locks_it_with_a_stated_reason(tmp_path: Path) -> None:
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    client = await client_for(app)
+    try:
+        await client.post("/api/automation/provider/verify", json={})
+        assert (await (await client.get("/api/automation/provider")).json())["llm"]["ready"]
+
+        # The edit an operator actually makes: a different model on the same server.
+        # Nothing clears the record; the fingerprint simply stops matching.
+        config.custom_llm_model = "llama3.1:8b"
+        payload = await (await client.get("/api/automation/provider")).json()
+        assert payload["llm"]["ready"] is False
+        assert payload["llm"]["code"] == "endpoint_changed"
+        stale = next(item for item in payload["providers"] if item["id"] == "custom")
+        # The record is kept and reported as stale: "you changed it" and "you never did
+        # it" are different problems with different next steps.
+        assert stale["verification"]["stale"] is True
+        assert stale["verification"]["model"] == "qwen2.5-coder:7b"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_failed_verification_does_not_disprove_the_last_good_one(
+    tmp_path: Path,
+) -> None:
+    # An endpoint that worked yesterday and is unreachable this minute has not been
+    # disproven. Deleting the record here would turn a network blip into a Project-wide
+    # switch-off, which is the loud failure this feature exists to avoid causing.
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    client = await client_for(app)
+    try:
+        await client.post("/api/automation/provider/verify", json={})
+        app["openrouter"] = ProviderStub(error="connection refused")
+        response = await client.post("/api/automation/provider/verify", json={})
+        assert response.status == 422
+        body = await response.json()
+        assert body["ok"] is False
+        assert "connection refused" in body["error"]
+        assert (await (await client.get("/api/automation/provider")).json())["llm"]["ready"]
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_replacing_the_key_drops_the_record_rather_than_leaving_a_stale_sample(
+    tmp_path: Path,
+) -> None:
+    # The fingerprint covers the key, so a replacement un-verifies on its own. Dropping
+    # the row as well keeps the surface from showing a reply a different credential
+    # produced, which reads as reassurance for a state nobody proved.
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    client = await client_for(app)
+    try:
+        await client.post("/api/automation/provider/verify", json={})
+        assert await store.provider_verification("custom") is not None
+        await client.post(
+            "/api/automation/provider/key",
+            json={"operation": "set", "provider": "custom", "key": "rotated", "test": False},
+        )
+        assert await store.provider_verification("custom") is None
+        payload = await (await client.get("/api/automation/provider")).json()
+        assert payload["llm"]["code"] == "unverified"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_an_unknown_provider_name_is_refused(tmp_path: Path) -> None:
+    app, store = build(tmp_path, custom_config(tmp_path))
+    client = await client_for(app)
+    try:
+        response = await client.post(
+            "/api/automation/provider/verify", json={"provider": "anthropic-direct"}
+        )
+        assert response.status == 400
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_openrouter_is_ready_on_a_key_alone_so_no_install_regresses(
+    tmp_path: Path,
+) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    app, store = build(tmp_path, config)
+    app["secret_store"] = SecretsStub({"openrouter_api_key": "sk-or-v1-x"})
+    client = await client_for(app)
+    try:
+        payload = await (await client.get("/api/automation/provider")).json()
+        assert payload["provider"] == "openrouter"
+        assert payload["llm"]["ready"] is True
+        # Nothing was ever verified, and nothing needs to be: storing the key tested it.
+        assert await store.provider_verification("openrouter") is None
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_held_back_automation_arrives_with_its_reason(tmp_path: Path) -> None:
+    # The whole point of the section: an unverified provider must read as the stated
+    # reason a switch is inert, never as a switch that is quietly missing from `enabled`.
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    root = Path(app["projects"].projects["proj-1"].root)
+    current = await read_project_config(root)
+    await write_project_config(
+        root,
+        {"automations": {"raw_store": True, "tier0": True, "scan_timeline": True,
+                         "catch_me_up": True, "loop_detection": True}},
+        current["revision"],
+    )
+    client = await client_for(app)
+    try:
+        payload = await (await client.get("/api/projects/proj-1/automations")).json()
+        assert payload["requested"]["scan_timeline"] is True
+        assert "scan_timeline" not in payload["enabled"]
+        assert payload["unverified"] == ["scan_timeline"]
+        assert payload["llm"]["ready"] is False
+        assert payload["llm"]["reason"]
+        # And the free consumers above it keep running on records that already exist.
+        assert "catch_me_up" in payload["enabled"]
+        assert "loop_detection" in payload["enabled"]
+        # `needs_llm` travels on the registry so the browser reads one fact from one
+        # source rather than keeping its own list of which automations call a model.
+        registry = {item["id"]: item for item in payload["automations"]}
+        assert registry["scan_timeline"]["needs_llm"] is True
+        assert registry["loop_detection"]["needs_llm"] is False
+
+        await client.post("/api/automation/provider/verify", json={})
+        unlocked = await (await client.get("/api/projects/proj-1/automations")).json()
+        assert "scan_timeline" in unlocked["enabled"]
+        assert unlocked["unverified"] == []
+    finally:
+        await client.close()
+        store.close()

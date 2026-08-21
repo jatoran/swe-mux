@@ -13,6 +13,7 @@ import {
   type GrantId,
 } from './grants'
 import { fetchProjectAutomations, type ProjectAutomationState } from './projectAutomations'
+import { fetchLlmProvider, type LlmReadiness } from './llmProvider'
 
 /**
  * The one shape a surface takes when it cannot work until something is switched on.
@@ -64,6 +65,7 @@ export function GrantGate({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [registry, setRegistry] = useState<ProjectAutomationState['automations'] | null>(null)
+  const [llm, setLlm] = useState<LlmReadiness | null>(null)
 
   const automationIds = ids
     .filter(id => {
@@ -91,6 +93,21 @@ export function GrantGate({
   const spends = closure.some(id => byId.get(id)?.spends === true)
     || ids.some(id => GRANTS[id].scope === 'install'
       && ['automation_enabled', 'scan_timeline_enabled'].includes(grantKey(id)))
+  const wantsModel = closure.some(id => byId.get(id)?.needs_llm === true)
+    || ids.some(id => GRANTS[id].scope === 'install'
+      && ['automation_enabled', 'scan_timeline_enabled'].includes(grantKey(id)))
+
+  // Only asked when the answer would change what this gate says. A gate over free,
+  // model-free switches makes no request at all, exactly as it makes none for the
+  // registry when it has no closure to name.
+  useEffect(() => {
+    if (!wantsModel) { setLlm(null); return }
+    let stale = false
+    fetchLlmProvider()
+      .then(status => { if (!stale) setLlm(status.llm) })
+      .catch(() => { if (!stale) setLlm(null) })
+    return () => { stale = true }
+  }, [wantsModel])
 
   const primary = ids[0]
   const label = confirmLabel
@@ -135,6 +152,17 @@ export function GrantGate({
         ? 'This one calls a model, so it can spend against your automation budget.'
         : 'Free to run — it reads what swe-mux already has and never calls a model.'}
     </p>
+    {/* The grant would land and the switch would still be inert, so this is disclosed
+        before the press rather than discovered as an automation that never fires. The
+        provider is a value rather than a switch - choosing one and typing a URL, key,
+        and model is not something a button can honestly offer - so it links out to its
+        owner instead of being granted here. */}
+    {llm && !llm.ready && <p class="grant-gate-cost spends">
+      {llm.reason}{' '}
+      <SettingLink variant="link" target="accounts.llmProvider">
+        Choose or verify a model provider
+      </SettingLink>
+    </p>}
     {extra}
     {error && <p class="grant-gate-error" role="alert">{error}</p>}
     <div class="grant-gate-actions">

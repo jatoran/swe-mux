@@ -1885,11 +1885,40 @@ that is `tests/test_spend_label_matrix.py` rather than review. The rows are grou
 `automation_budget_ledger` — the same table `spend_today` sums — so they reconcile with it
 exactly, including the rows a call that failed after the provider billed for its input writes.
 
+`GET /api/automation/provider` describes the model provider: `provider` (the active id),
+`providers[]` (one per configured endpoint — `id`, `label`, `active`, `origin`, `model`,
+`requires_verification`, `cache_policy`, its own `secret` status, its `verification`, and its
+`readiness`), `llm` (the resolved verdict for the active endpoint: `ready`, `provider`, `code`,
+`reason`), plus the pre-existing `secret`, `models`, `origin`, `cheap_model`, and
+`standard_model`. `verification.verified` is never read off the stored row: it is recomputed by
+comparing the stored fingerprint with the live one, which is what makes editing the endpoint
+un-verify it even when the edit arrived by hand in `config.toml`. `verification.stale` marks a
+record that exists and no longer matches, because "you changed it" and "you never did it" are
+different problems.
+
+`POST /api/automation/provider/verify {provider?}` proves one endpoint with a single plain
+completion and records it durably, defaulting to the active one. `200` carries `output` (the
+model's own reply — the point of verifying is that a person reads it), `requested_model`,
+`resolved_model`, `latency_ms`, token counts, `cost_usd` (null where the endpoint does not
+report one, which is unknown and not zero), the refreshed `verification`, and `llm`. `422`
+carries the endpoint's own `error` and records **nothing**, leaving any previous verification
+exactly as it was.
+
+`POST /api/automation/provider/key` takes an optional `provider` alongside `operation` and
+`key`, so a custom endpoint's credential is written through the same route. Storing or clearing
+a key drops that provider's verification record: the key is part of the fingerprint, so a
+replacement un-verifies the endpoint regardless, and keeping the row would show a sample reply
+that a different credential produced.
+
 `GET /api/automation/projects` is the read-only fleet aggregation of per-Project automation
-enablement: the registry (id, kind, label, `requires`, `implemented`) once, plus one row per
-registered Project in sidebar order — `project_id`, `project_name`, config `status`, the
-`requested` table, the resolved `enabled` list, `blocked` (id → missing dependencies), and
-`scan_timeline_auto_enable`. Projects that opted into nothing are listed rather than omitted.
+enablement: the registry (id, kind, label, `requires`, `implemented`, `spends`, `needs_llm`)
+once, plus one row per registered Project in sidebar order — `project_id`, `project_name`,
+config `status`, the `requested` table, the resolved `enabled` list, `blocked`
+(id → missing dependencies), `unverified` (opted in, dependencies met, held back by an unproven
+model provider), the `llm` verdict the row was resolved under, and
+`scan_timeline_auto_enable`. `GET /api/projects/{project_id}/automations` carries the same
+fields for one Project. `unverified` is separate from `blocked` because `blocked` values are
+ids a grant can switch on and no automation's enabling fixes an unproven endpoint. Projects that opted into nothing are listed rather than omitted.
 Drawn by the Automation dashboard's `projects` view; it has no write half — the
 revision-checked `PUT /api/projects/{project_id}/automations` stays the only editor.
 
@@ -1904,9 +1933,13 @@ outside `GRANTABLE_INSTALL_KEYS` / `GRANTABLE_PROJECT_VALUES` are refused with `
 both sets are validated against `Config` and `PROJECT_CONFIG_FIELDS` at import. The whole
 request is validated before the first write and a refusal writes nothing; the Project write
 goes first because it is the one that can fail. Success returns `applied` (per scope),
-`spends`, the public config, and the Project's resolved automation state, and emits one
-`grant_applied` audit event listing every scope-qualified key. `GET /api/grants` returns the
-same allowlists plus the registry and `recommended_project_automations`, and is the contract
+`spends`, `needs_llm`, the current `llm` verdict, the public config, and the Project's resolved
+automation state, and emits one `grant_applied` audit event listing every scope-qualified key.
+`needs_llm` and `llm` travel together because a grant over a model-backed switch still lands
+with an unproven provider — the opt-in is a real permission and withholding it would mean
+granting twice — and reporting only success would hand back exactly the enabled-and-does-nothing
+state the enablement design exists to prevent. `GET /api/grants` returns the same allowlists
+plus the registry, `recommended_project_automations`, and `llm`, and is the contract
 `frontend/test/grants.test.ts` holds the browser's catalogue against.
 
 `GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).

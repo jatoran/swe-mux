@@ -609,12 +609,15 @@ Its rules, and what each one is defending:
   Widening past the breakpoint turns it back into the docked column and closes the level, so a
   column that is permanently on screen never leaves a dismiss target standing.
 - Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
-  - The **OpenRouter key and the two routed model defaults it unlocks** are on Accounts, with the
-    other provider credentials. Everything model-backed depends on that one key, so filing it
-    inside Automation made it unfindable from Voice, the scan timeline, or attention narration.
+  - The **model provider, the OpenRouter key, and the two routed model defaults it unlocks** are
+    on Accounts, with the other provider credentials. Everything model-backed depends on that one
+    key, so filing it inside Automation made it unfindable from Voice, the scan timeline, or
+    attention narration.
     A model belonging to *one* feature is not a routed default and does not go here: it lives with
     that feature, because a feature is configured in one pass and a shared model form would split
     every one of those passes across two tabs. Accounts indexes them all instead.
+    The provider choice is one level above all of that - it decides which endpoint the whole index
+    is requested from - so it is the first block on the tab.
   - **Auto-delivery and agent messaging** are the Prompt queue tab. They bound how a queued
     message reaches an agent whichever harness it runs, so they are delivery policy rather than
     harness configuration.
@@ -756,6 +759,31 @@ Its rules, and what each one is defending:
   a control that opens the setting deciding it.
   It is an index, not a second editor - two controls writing one config key is how a panel starts
   disagreeing with itself.
+- Settings → Accounts → **Model provider** chooses *which endpoint* every one of those models is
+  requested from: OpenRouter's hosted catalog, or one OpenAI-compatible `/chat/completions` the
+  operator runs (llama.cpp, Ollama, vLLM, LM Studio).
+  It sits above the OpenRouter key rather than below it, because it decides whether that key is
+  the credential in play at all, and a reader who chose a custom endpoint should not scroll past a
+  key section that no longer applies to find out why.
+  A custom endpoint is three fields - base URL, an optional key, and one model - and its model is
+  a **pin**: blank is a validation error, because there is no routed default a local server could
+  inherit.
+  While it is selected, the index above says so and every row resolves to that one model, since a
+  table still listing seven OpenRouter ids while one local model answers all of them would be the
+  most misleading surface in the panel.
+  The OpenRouter section stays, with a note that its key is stored and unused.
+- **Verification** is per configured provider, not per active one: an operator proving a local
+  endpoint wants to prove it *before* switching the install onto it, and a verify that only worked
+  on the live provider would force exactly the risky ordering.
+  It sends one tiny completion and prints the reply, because reachable and usable are different
+  findings and only the words separate them - an endpoint answering with an empty string or a chat
+  template's own scaffolding passes every check a tick could make.
+  Each row shows one of three states, never two: verified (with the reply and when), *endpoint
+  changed* (a record exists and no longer matches), or not verified.
+  OpenRouter shows "no verification needed": storing its key already tests it against an origin
+  swe-mux ships, so configuring it is verifying it.
+  A failed verification changes nothing, including a previous success - an endpoint that worked
+  yesterday and is unreachable this minute has not been disproven.
 - The footer carries only draft state: status, Cancel, Save. Whole-config actions — reveal the
   config directory, export a sanitized copy, restore defaults — live in a General-tab block,
   because a footer repeats under every tab and so implied a per-tab scope none of them have

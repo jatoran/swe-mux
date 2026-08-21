@@ -41,6 +41,10 @@ import {
   sameRailSections, SECTION_RAIL_MIN, settingsTabGroups, settingsTabs, tabForSection,
   type SettingsRailSection, type SettingsTab,
 } from './settingsTabs'
+import {
+  forgetLlmProvider, verifyLlmProvider,
+  type LlmProviderEntry, type LlmReadiness, type VerifyResult,
+} from './llmProvider'
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './promptTemplates'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
@@ -48,6 +52,7 @@ import { formatCommandLine, launchPreview, parseCommandLine } from './commandLin
 import { ModelPicker } from './ModelPicker'
 import { includeSelectedModel, type ModelOption } from './modelFilter'
 import { ModelRoutingSummary } from './ModelRoutingSummary'
+import { customProviderOverride } from './modelRouting'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
@@ -107,6 +112,7 @@ type Config = {
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
+  llm_provider:string;custom_llm_base_url:string;custom_llm_model:string
   // Config-file only. The Project context card has no Settings control of its own,
   // so this is read to report the model it resolves to, never written here.
   project_card_model:string
@@ -156,7 +162,11 @@ type AutomationStatus={enabled:boolean;diagnostic?:string;rules:Array<{id:string
 // `models.models` is the cached OpenRouter catalog verbatim, so it already carries
 // per-token pricing and the context window alongside the id and name. Typing it as
 // `ModelOption` is what lets the pickers show a model's cost without a second request.
-type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean};models:{models:ModelOption[];fetched_at?:number;error?:string;stale:boolean};origin:string;cheap_model:string;standard_model:string}
+type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean};models:{models:ModelOption[];fetched_at?:number;error?:string;stale:boolean};origin:string;cheap_model:string;standard_model:string
+  // Phase 15 bring-your-own endpoint. `provider` is the active id; `providers` is the
+  // per-endpoint view, each with its own key status and verification; `llm` is the
+  // resolved verdict every gate in the app renders.
+  provider:string;providers:LlmProviderEntry[];llm:LlmReadiness}
 
 type UsageStatus = {
   enabled:boolean; refreshing:boolean; package:string; install_command:string
@@ -222,6 +232,29 @@ type HistoryScanJob = {
 const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordState =>
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
+/**
+ * The one sentence saying whether model-backed features can run, and why not.
+ *
+ * The daemon's own `reason` is rendered verbatim rather than paraphrased per surface:
+ * "no key", "no endpoint", "never verified", and "verified then edited" need four
+ * different next actions, and a surface that flattened them into "not configured" would
+ * be sending the reader to the wrong control three times out of four.
+ */
+function ProviderReadiness({readiness}:{readiness?:LlmReadiness|null}){
+  if(!readiness) return null
+  return <p class={readiness.ready?'provider-readiness ready':'provider-readiness blocked'}>
+    <span class={`state-dot ${readiness.ready?'idle':'running'}`}/> {readiness.reason}
+  </p>
+}
+
+/** Verified, edited-since, or never proven — as three distinct words, never two. */
+function VerificationBadge({entry}:{entry:LlmProviderEntry}){
+  if(entry.verification.verified) return <em class="project-setting-chip">verified</em>
+  if(entry.verification.stale) return <em class="project-setting-chip spends">endpoint changed</em>
+  if(!entry.requires_verification) return <em class="project-setting-chip">no verification needed</em>
+  return <em class="project-setting-chip spends">not verified</em>
+}
+
 
 export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;
   /** `data-setting` id of one control to scroll to and flash on arrival (`settingTargets.ts`). */
@@ -240,6 +273,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [automation,setAutomation]=useState<AutomationStatus|null>(null)
   const [provider,setProvider]=useState<ProviderStatus|null>(null)
   const [openRouterKey,setOpenRouterKey]=useState('')
+  const [customKey,setCustomKey]=useState('')
+  const [verifying,setVerifying]=useState('')
+  const [verifyResult,setVerifyResult]=useState<VerifyResult|null>(null)
+  const customProvider=provider?.providers?.find(entry=>entry.id==='custom')
   const [providerMessage,setProviderMessage]=useState('')
   const [bindings, setBindings] = useState<Record<string,string>>({})
   const [bindingDefaults, setBindingDefaults] = useState<Record<string,string>>({})
@@ -1012,13 +1049,40 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
   }
   const clearUsage = async () => setUsage(await api<UsageStatus>('DELETE','/api/usage/cache'))
-  const providerKeyAction=async(operation:'test'|'set'|'clear')=>{
+  const providerKeyAction=async(operation:'test'|'set'|'clear',target:'openrouter'|'custom'='openrouter')=>{
+    const key=target==='custom'?customKey:openRouterKey
+    const label=target==='custom'?'Endpoint':'OpenRouter'
     setProviderMessage(operation==='clear'?'Clearing key…':operation==='set'?'Testing and storing key…':'Testing key…')
     try{
-      const result=await api<{ok?:boolean;status:ProviderStatus['secret']}>('POST','/api/automation/provider/key',{operation,key:openRouterKey||undefined,test:true})
-      setProvider(current=>current?{...current,secret:result.status}:current);if(operation==='set'||operation==='clear')setOpenRouterKey('')
-      setProviderMessage(operation==='clear'?'Stored key cleared.':operation==='set'?'Key tested and stored with Windows DPAPI.':'OpenRouter connection succeeded.')
-    }catch(error){setProviderMessage(`OpenRouter error · ${(error as Error).message}`)}
+      const result=await api<{ok?:boolean;status:ProviderStatus['secret']}>('POST','/api/automation/provider/key',{operation,provider:target,key:key||undefined,test:true})
+      // The whole payload is refetched rather than patched in: storing or clearing a key
+      // drops the endpoint's verification (the key is part of its fingerprint), so the
+      // verified badge and the readiness sentence both change with the key status and
+      // patching only `secret` would leave a stale "verified" beside a new credential.
+      forgetLlmProvider()
+      await reloadProviderStatus()
+      if(target==='custom')setCustomKey('');else if(operation==='set'||operation==='clear')setOpenRouterKey('')
+      setProviderMessage(operation==='clear'?`${label} key cleared.`:operation==='set'?`${label} key tested and stored in the platform credential store.`:`${label} connection succeeded.`)
+      void result
+    }catch(error){setProviderMessage(`${label} error · ${(error as Error).message}`)}
+  }
+  const reloadProviderStatus=async()=>{
+    try{setProvider(await api<ProviderStatus>('GET','/api/automation/provider'))}catch{/* the banner already reports it */}
+  }
+  const verifyProvider=async(target:string)=>{
+    setVerifying(target);setVerifyResult(null)
+    try{
+      const result=await verifyLlmProvider(target)
+      setVerifyResult(result)
+      await reloadProviderStatus()
+    }catch(error){
+      // A refusal comes back as a resolved 422 carrying the endpoint's own words; only a
+      // transport failure lands here, and it has no endpoint text to show.
+      setVerifyResult({ok:false,provider:target,error:(error as Error).message,
+        verification:{provider:target,verified:false,stale:false,verified_at:null,base_url:'',
+          model:'',resolved_model:'',sample:'',latency_ms:0},
+        llm:{ready:false,provider:target,code:'unverified',reason:(error as Error).message}})
+    }finally{setVerifying('')}
   }
   const refreshModels=async()=>{
     setProviderMessage('Refreshing OpenRouter model catalog…')
@@ -1409,9 +1473,57 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             defaults it unlocks are chosen here for the same reason. */}
         {activeTab==='accounts'&&<Fragment>
           <AccountSettings/>
+          {/* Which endpoint every model-backed feature calls. It sits above the OpenRouter
+              key because it decides whether that key is the credential in play at all, and
+              a reader who set it to "custom" should not have to scroll past a key section
+              that no longer applies to find out why. */}
+          <section><h3>Model provider</h3>
+            <p>Speech recognition and speech synthesis already run on this machine. This is where the language model is chosen: OpenRouter's hosted catalog, or any OpenAI-compatible <code>/chat/completions</code> endpoint you run yourself, which covers llama.cpp, Ollama, vLLM, and LM Studio.</p>
+            <label for="llm-provider-select" data-setting="llm_provider">Provider<select id="llm-provider-select" value={draft.llm_provider} onChange={event=>change('llm_provider',event.currentTarget.value)}>
+              <option value="openrouter">OpenRouter (hosted)</option>
+              <option value="custom">Custom OpenAI-compatible endpoint</option>
+            </select><small>Everything model-backed follows this: automation observers, the scan timeline, spoken summaries, attention narration, the titler, the Project context card, and the Mux assistant.</small></label>
+            <ProviderReadiness readiness={provider?.llm}/>
+            {draft.llm_provider==='custom'&&<Fragment>
+              <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code>. Ollama serves <code>http://127.0.0.1:11434/v1</code>, llama.cpp and LM Studio <code>http://127.0.0.1:8080/v1</code> and <code>:1234/v1</code>, vLLM whatever host you started it on.</small></label>
+              <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>The one model this endpoint serves. Every feature's own model setting is an OpenRouter id your server has never heard of, so while a custom endpoint is selected they all resolve to this one — which is why it cannot be left blank.</small></label>
+              <label>API key<input type="password" autocomplete="off" value={customKey} placeholder={customProvider?.secret.configured?'write only · enter to replace':'often unnecessary for a local server'} onInput={event=>setCustomKey(event.currentTarget.value)} /><small>Optional. llama.cpp and Ollama accept requests with no credential; a hosted proxy usually does not. Stored in the platform credential store, never in config.</small></label>
+              <div class="theme-actions">
+                <button class="primary" disabled={!customKey} onClick={()=>void providerKeyAction('set','custom')}>Store key</button>
+                <button disabled={!customProvider?.secret.configured} onClick={()=>void providerKeyAction('clear','custom')}>Clear stored key</button>
+              </div>
+            </Fragment>}
+            {/* One button per configured provider rather than one for the active one: an
+                operator setting up a local endpoint wants to prove it before switching
+                everything over to it, and a verify that only worked on the live provider
+                would force exactly the risky ordering. */}
+            <h4>Verification</h4>
+            <p>Verifying sends one tiny completion and shows you what came back. Reachable and usable are different findings — an endpoint that answers with an empty string or a chat template's own scaffolding passes every check a yes/no could make — so the reply is printed rather than reduced to a tick.</p>
+            <ul class="provider-verification-list">
+              {(provider?.providers||[]).map(entry=><li key={entry.id}>
+                <div class="provider-verification-head">
+                  <span class="project-setting-name">{entry.label}{entry.active&&<em class="project-setting-chip">active</em>}</span>
+                  <VerificationBadge entry={entry}/>
+                </div>
+                <p class="project-automation-deps">{entry.origin||'no base URL yet'}{entry.model?` · ${entry.model}`:''}{entry.requires_verification?'':' · configuring the key verifies it'}</p>
+                {entry.verification.verified&&<p class="project-automation-deps">Replied “{entry.verification.sample||'(nothing)'}” in {entry.verification.latency_ms} ms{entry.verification.verified_at?`, ${new Date(entry.verification.verified_at*1000).toLocaleString()}`:''}.</p>}
+                {entry.verification.stale&&<p class="project-automation-deps"><strong>Edited since it was verified.</strong> The stored proof covers {entry.verification.base_url||'a different URL'}{entry.verification.model?` · ${entry.verification.model}`:''}, so it no longer applies.</p>}
+                <button disabled={verifying===entry.id} onClick={()=>void verifyProvider(entry.id)}>{verifying===entry.id?'Verifying…':`Verify ${entry.label}`}</button>
+              </li>)}
+            </ul>
+            {verifyResult&&<div class={verifyResult.ok?'provider-verify-result ok':'provider-verify-result failed'} role="status" aria-live="polite">
+              {verifyResult.ok
+                ? <Fragment>
+                    <p><strong>{verifyResult.provider} answered</strong> in {verifyResult.latency_ms} ms as <code>{verifyResult.resolved_model}</code>.</p>
+                    <blockquote>{verifyResult.output||'(the endpoint replied with no text)'}</blockquote>
+                  </Fragment>
+                : <p><strong>{verifyResult.provider} did not answer.</strong> {verifyResult.error}</p>}
+            </div>}
+          </section>
           <section><h3>OpenRouter</h3>
             <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
             <p class="profile-hint">One OpenRouter key unlocks every model-backed feature: automation observers, the scan timeline, spoken TTS summaries, attention narration, the conversation titler and summarizer, and the Project context card. Without it these features stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
+            {draft.llm_provider!=='openrouter'&&<p class="settings-warning">A custom endpoint is selected, so this key is stored but unused. Switch the provider above back to OpenRouter to route through it again.</p>}
             <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
             <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
             <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
@@ -1419,12 +1531,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section><h3>Models</h3>
             <p>The two routed models every model-backed feature draws from. A feature that only wants a cheaper or better model overrides one of these rather than replacing them; a feature whose model has to satisfy a capability the routed pair cannot guarantee pins its own instead. Either way the control lives with the feature, and every choice is listed here.</p>
+            {/* The index is only truthful while OpenRouter is doing the routing. A custom
+                endpoint serves one model, so every row below resolves to it, and a table
+                still listing seven distinct OpenRouter ids would be the most misleading
+                thing on the screen. */}
+            {draft.llm_provider==='custom'&&<p class="settings-warning">A custom endpoint is selected, so every row below resolves to <code>{draft.custom_llm_model||'(no model set)'}</code> instead of the id it names. These settings are kept, and apply again the moment the provider is switched back to OpenRouter.</p>}
             <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span>{!!provider?.models.fetched_at&&<span>prices as of {new Date(provider.models.fetched_at*1000).toLocaleDateString()}</span>}</div>
             <label for="cheap-model-picker" data-setting="openrouter_cheap_model">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/><small>High-volume, low-stakes work: observers, summaries, titles. Every override falls back to this one.</small></label>
             <label for="standard-model-picker" data-setting="openrouter_standard_model">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
             <h4>Where each model is used</h4>
             <p>Read-only. Each row resolves the model a feature will actually call with the edits currently in this form, and opens the control that decides it.</p>
-            <ModelRoutingSummary draft={draft} catalog={provider?.models.models||[]} onOpen={goToSetting}/>
+            <ModelRoutingSummary draft={draft} catalog={provider?.models.models||[]} override={customProviderOverride(draft)} onOpen={goToSetting}/>
           </section>
         </Fragment>}
 
