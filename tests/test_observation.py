@@ -29,6 +29,7 @@ from swe_mux.observation import (
 from swe_mux.scrollback import ScrollbackBuffer
 from swe_mux.session import Session
 from tests.support.detection_replay import ReplaySession
+from tests.support.settle import drained_until, until
 
 
 def screen(data: bytes) -> ScrollbackBuffer:
@@ -812,10 +813,9 @@ async def test_stable_approval_becomes_visible_once_after_the_window() -> None:
     assert session.record.state == "working"
     assert [item.type for item in drain(queue)] == ["approval_detected"]
 
-    await asyncio.sleep(0.03)
+    emitted = [item.type for item in await drained_until(queue, "approval_needed")]
 
     assert session.record.state == "awaiting"
-    emitted = [item.type for item in drain(queue)]
     assert emitted.count("state_changed") == 1
     assert emitted.count("approval_needed") == 1
 
@@ -836,10 +836,9 @@ async def test_pending_approval_restores_after_daemon_reload() -> None:
 
     assert await restore_pending_approval(session, events) is True
     assert [item.type for item in drain(queue)] == ["approval_detected"]
-    await asyncio.sleep(0.03)
+    emitted = [item.type for item in await drained_until(queue, "approval_needed")]
 
     assert session.record.state == "awaiting"
-    emitted = [item.type for item in drain(queue)]
     assert emitted.count("state_changed") == 1
     assert emitted.count("approval_needed") == 1
     assert session.approval_candidate is None
@@ -865,11 +864,11 @@ async def test_immediate_question_replaces_a_pending_approval_candidate() -> Non
         {"type": "event_msg", "payload": {"type": "request_user_input"}},
         events,
     )
-    await asyncio.sleep(0.07)
+    drained = await drained_until(queue, "approval_needed")
 
     assert session.record.state == "awaiting"
     assert session.record.awaiting_reason == "question"
-    emitted = [item for item in drain(queue) if item.type == "approval_needed"]
+    emitted = [item for item in drained if item.type == "approval_needed"]
     assert len(emitted) == 1
     assert emitted[0].payload["kind"] == "input"
 
@@ -933,11 +932,11 @@ async def test_auto_reviewed_approval_surfaces_once_the_dialog_is_on_screen() ->
 
     await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
     session.scrollback.data = b"> \nAllow Codex to run npm test?\n  Yes  No\n"
-    await asyncio.sleep(0.05)
+    emitted = [item.type for item in await drained_until(queue, "approval_needed")]
 
     assert session.record.state == "awaiting"
     assert session.record.awaiting_reason == "approval"
-    assert "approval_needed" in [item.type for item in drain(queue)]
+    assert "approval_needed" in emitted
     assert any(
         item.get("kind") == "approval_stabilization_committed" and item.get("gate") == "screen"
         for item in session.state_transitions
@@ -954,10 +953,12 @@ async def test_auto_reviewed_approval_surfaces_when_the_screen_never_speaks() ->
     drain(queue)
 
     await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
-    await asyncio.sleep(0.3)
+    # The escalation ceiling is a real wait, so this one is generous: what must not
+    # be fixed is the beat *after* it, which is what a loaded worker overshoots.
+    emitted = [item.type for item in await drained_until(queue, "approval_needed")]
 
     assert session.record.state == "awaiting"
-    assert "approval_needed" in [item.type for item in drain(queue)]
+    assert "approval_needed" in emitted
     assert any(
         item.get("kind") == "approval_stabilization_committed" and item.get("gate") == "ceiling"
         for item in session.state_transitions
@@ -973,9 +974,8 @@ async def test_a_user_reviewed_approval_keeps_the_plain_stabilization_window() -
     drain(queue)
 
     await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
-    await asyncio.sleep(0.05)
+    await until(lambda: session.record.state == "awaiting", what="the window committed")
 
-    assert session.record.state == "awaiting"
     assert any(
         item.get("kind") == "approval_stabilization_committed" and item.get("gate") == "stabilized"
         for item in session.state_transitions
@@ -1039,8 +1039,7 @@ async def test_parallel_tool_completion_cannot_cancel_another_approval_candidate
     )
 
     assert isinstance(session.observation_state.get("pending_approval"), dict)
-    await asyncio.sleep(0.07)
-    assert session.record.state == "awaiting"
+    await until(lambda: session.record.state == "awaiting", what="the Read approval committed")
     assert session.record.awaiting_reason == "approval"
 
 
@@ -1080,8 +1079,7 @@ async def test_parallel_tool_completion_cannot_clear_a_visible_approval_by_ident
         {"tool_name": "Read", "tool_use_id": "read-pending"},
         events,
     )
-    await asyncio.sleep(0.03)
-    assert session.record.state == "awaiting"
+    await until(lambda: session.record.state == "awaiting", what="the Read approval committed")
 
     # Exercise the identity guard independently of both dialog text and the
     # cli-state poll. The unrelated completion cannot retire this Read approval.
@@ -2387,8 +2385,9 @@ async def test_the_observer_stamps_growth_onto_the_session(tmp_path: Path) -> No
         assert session.transcript_growth_ts == 0.0
         with path.open("ab") as handle:
             handle.write(b'{"n":2}\n')
-        await asyncio.sleep(0.5)
-        assert session.transcript_growth_ts > 0.0
+        # The quiet window above is the claim; this half only has to happen, so it
+        # waits for the stamp rather than for another fixed half-second.
+        await until(lambda: session.transcript_growth_ts > 0.0, what="growth was stamped")
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=2)
