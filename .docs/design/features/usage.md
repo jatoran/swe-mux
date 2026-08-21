@@ -19,6 +19,7 @@
   It sits beside Processes, Network, and Storage because all four answer one question - what is this consuming - even though only this one is metered in money rather than bytes (`ui.md`).
   Its domains are historical cost + tokens, quota + resets, automation spend, runs + workload, tools + skills, and context + compaction.
   `automation spend` is the Automation dashboard's spend view drawn from the same component rather than a second copy of it, so the two surfaces can never disagree (`automation.md`).
+  A dollar total there is prefixed as a floor whenever its window contains calls the provider never priced, and names how many - a bring-your-own endpoint reports no cost at all, and a total presented as complete would understate the bill by an unknown amount (`budgets.md`).
 
 ## Operations and invariants
 

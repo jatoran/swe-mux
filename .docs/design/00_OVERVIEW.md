@@ -63,6 +63,7 @@
 - Launch profiles: `features/launch-profiles.md`
 - Provider accounts: `features/provider-accounts.md`
 - Usage analytics: `features/usage.md`
+- Spending budgets (the one cap shape, its enforcement, and unmeasurable cost): `features/budgets.md`
 - Read aloud and hands-free conversation: `features/voice.md`
 
 ### Technical

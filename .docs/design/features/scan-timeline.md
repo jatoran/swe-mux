@@ -152,20 +152,20 @@ Reads cost nothing; a scan spends the human's gated budget against caps set in S
 ## Budgets and visibility
 
 **Scan timeline is a continuous sampler, and it is budgeted as one.**
-It is deliberately exempt from `automation_rule_daily_token_budget`, `automation_rule_daily_budget_usd`, and `automation_rule_hourly_call_cap`.
+It is deliberately exempt from `automation_rule_daily_budget` and `automation_rule_hourly_call_cap`, on both axes.
 Those bound an observer that fires once per session, such as the session titler.
 Sharing that envelope with an event-triggered, three-minute-heartbeat sampler capped the whole feature at roughly ten scans a day across the entire fleet, and it stopped at 0.2% of the dollar budget that was supposed to be the real ceiling.
 The token axis must never be the binding constraint while the dollar axis is untouched.
 
 The caps that do apply are:
 
-- `scan_timeline_daily_budget_usd` ($5.00), the feature's dollar ceiling;
-- `scan_timeline_daily_token_budget` (3,000,000), its own daily token budget;
+- `scan_timeline_daily_budget` (3,000,000 tokens or $5.00, mode `either`), the feature's own daily ceiling;
+- `scan_timeline_run_budget` (500,000 tokens, mode `tokens`), one conversation's share;
 - `scan_timeline_hourly_call_cap` (600), its own burst limiter;
-- `scan_timeline_run_token_budget` (500,000), one conversation's share;
-- `automation_daily_token_budget` and `automation_daily_budget_usd`, the global emergency ceiling over every automation.
+- `automation_daily_budget`, the global emergency ceiling over every automation.
 
-All five are **global**, edited in Settings → Automation → Scan timeline, and apply to every Project.
+The three budgets carry the shared `{tokens?, usd?, mode}` shape and can each be denominated in tokens, dollars, or first-hit; `design/features/budgets.md` owns that contract and the migration that gave each of these the mode matching the unit it already enforced.
+All four caps are **global**, edited in Settings → Automation → Scan timeline, and apply to every Project.
 `scan_timeline_model` is edited in the same section, beside the caps it is priced against, so which model a given budget is being spent on is answerable without leaving the section.
 The OpenRouter key that unlocks it stays in Settings → Accounts, with the other provider credentials.
 The dollar ceiling used to be a per-Project field in the committed `.swe-mux/config.toml`.
@@ -174,7 +174,8 @@ It is one setting now; a `scan_timeline_daily_budget_usd` still present in a Pro
 The global ceiling must stay above the scan's own daily budget, or it silently becomes the new invisible binding cap.
 The dollar budget should stay above what the daily token budget can cost, so the tokens run out first.
 Successful calls, provider failures that report billable usage, and locally refused responses all enter the shared spend ledger with Project and run attribution.
-An unpriced billable call reserves the conservative preflight estimate so missing provider accounting cannot weaken a budget.
+A billable call whose completion reported no cost reserves the conservative preflight estimate, so missing provider accounting cannot weaken a budget - **but only when the endpoint is one that prices at all**.
+Against a bring-your-own endpoint the model is in no catalog and that estimate is a bare fallback constant, so the row is recorded as unpriced (`cost_known = 0`) instead, the drawer reads the dollar total as a floor, and the token axis is what bounds the feature.
 The ledger day is UTC.
 
 The Timeline surface is session-scoped, and everything Project-wide lives in the Project's settings instead: permission, the auto-arm flag, and the Project context Markdown.

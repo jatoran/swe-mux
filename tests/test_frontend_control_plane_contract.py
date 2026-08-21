@@ -63,5 +63,8 @@ def test_automation_settings_keep_key_write_only_and_show_privacy_boundary() -> 
     assert "Test + set/replace" in settings
     assert "Test entered key" in settings
     assert "Clear stored key" in settings
-    assert "Daily token budget" in settings
-    assert "Per-rule daily dollars" in settings
+    # Spending caps are edited through the shared `{tokens?, usd?, mode}` control rather
+    # than as separate token and dollar boxes, so the contract is the control being wired
+    # to each cap. `frontend/test/budgetControl.test.ts` owns the full inventory.
+    assert '<BudgetControl name="automation_daily_budget"' in settings
+    assert '<BudgetControl name="automation_rule_daily_budget"' in settings

@@ -48,9 +48,16 @@ pytestmark = pytest.mark.asyncio
 
 class LedgerStub:
     def __init__(
-        self, spent_usd: float = 0.0, titles: dict[str, str] | None = None
+        self,
+        spent_usd: float = 0.0,
+        titles: dict[str, str] | None = None,
+        *,
+        spent_tokens: int = 0,
+        unpriced_calls: int = 0,
     ) -> None:
         self.spent_usd = spent_usd
+        self.spent_tokens = spent_tokens
+        self.unpriced_calls = unpriced_calls
         self.titles = titles or {}
         self.started: list[dict[str, Any]] = []
         self.finished: list[dict[str, Any]] = []
@@ -58,7 +65,11 @@ class LedgerStub:
 
     async def spend(self, *, rule_id: str | None = None) -> dict[str, float | int]:
         assert rule_id == ASSISTANT_RULE_ID
-        return {"tokens": 0, "cost_usd": self.spent_usd}
+        return {
+            "tokens": self.spent_tokens,
+            "cost_usd": self.spent_usd,
+            "unpriced_calls": self.unpriced_calls,
+        }
 
     async def annotations(
         self,
@@ -223,6 +234,7 @@ def make_service(
     ledger: LedgerStub | None = None,
     actions: ActionStub | None = None,
     model: str = "test/assistant-model",
+    daily_budget: dict[str, Any] | None = None,
 ) -> tuple[AssistantService, list[MuxEvent], QueueStub, dict[str, Any]]:
     config = load_config(tmp_path / "config.toml")
     update_config(
@@ -231,6 +243,7 @@ def make_service(
             "assistant_enabled": enabled,
             "assistant_model": model,
             "assistant_trust_reversible": trust,
+            **({"assistant_daily_budget": daily_budget} if daily_budget else {}),
         },
     )
     emitted: list[MuxEvent] = []
@@ -1305,6 +1318,52 @@ async def test_unresolved_target_answers_with_candidates_not_a_pending_card(
         assert len(tool_result["candidates"]) == 2
         assert queue.enqueued == []
         assert await service.store.actions(dialog_id) == []
+    finally:
+        service.store.close()
+
+
+async def test_the_assistant_budget_can_be_denominated_in_tokens(tmp_path: Path) -> None:
+    """The choice the section exists to give: this cap in the other unit.
+
+    It matters most on a bring-your-own endpoint, where the dollar axis is blind
+    and a token cap is the only thing that can stop a runaway dialog.
+    """
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("never reached")],
+        ledger=LedgerStub(spent_usd=0.0, spent_tokens=50_000, unpriced_calls=9),
+        daily_budget={"tokens": 10_000, "mode": "tokens"},
+    )
+    try:
+        await run_turn(service, "hello")
+        failed = [event for event in emitted if event.type == "assistant_turn_failed"]
+        assert failed and "token budget" in str(failed[0].payload["error"])
+        provider = cast(ToolProviderStub, service.provider)
+        assert provider.calls == []
+    finally:
+        service.store.close()
+
+
+async def test_a_dollar_only_assistant_budget_says_when_it_cannot_see_the_spend(
+    tmp_path: Path,
+) -> None:
+    """Unpriced calls do not stop the turn, and are not silent either.
+
+    The status payload carries the verdict so the surface can say the dollar
+    figure is a floor; refusing the turn instead would switch the assistant off
+    on every local-endpoint install for a bill that does not exist.
+    """
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("fine")],
+        ledger=LedgerStub(spent_usd=0.0, spent_tokens=50_000, unpriced_calls=9),
+    )
+    try:
+        status = await service.status()
+        assert status["daily_budget"] == {"tokens": None, "usd": 2.0, "mode": "usd"}
+        assert status["budget_status"]["exhausted"] is False
+        assert status["budget_status"]["cost_blind"] is True
+        assert status["budget_status"]["unpriced_calls"] == 9
     finally:
         service.store.close()
 

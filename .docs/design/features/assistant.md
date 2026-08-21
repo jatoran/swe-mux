@@ -280,7 +280,11 @@ only sometimes emits a well-formed call fails as a broken assistant rather than 
 one, so a blank value is a validation error rather than a fall-through to the routed cheap
 model — it is edited in Settings → Voice → Mux assistant, with the assistant's other knobs,
 and indexed from Settings → Accounts → Models),
-`assistant_daily_budget_usd`, `assistant_max_output_tokens`, `assistant_context_messages`,
+`assistant_daily_budget` (the shared `{tokens?, usd?, mode}` spending shape, defaulting to
+`$2.00` in `usd` mode - which is the unit it enforced before the shape existed; it takes a token
+limit or first-hit instead, and against a provider that reports no cost the token axis is the
+only one that can bind, per `design/features/budgets.md`),
+`assistant_max_output_tokens`, `assistant_context_messages`,
 `assistant_trust_reversible`, `assistant_stream_replies` (token streaming; off buffers the
 turn whole, which is the escape hatch if a model's provider streams tool calls badly —
 correctness does not depend on it either way, only time-to-first-word).

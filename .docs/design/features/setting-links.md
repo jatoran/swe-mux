@@ -145,7 +145,7 @@ only route to the owning overlay.
 | Scan timeline (either switch off) | `scan_timeline_enabled` + `scan_timeline` | install + Project | grant, both in one act |
 | Scan timeline (unarmed run) | `scan_timeline_auto_enable` | Project | grant (inline) |
 | Automation dashboard (global switches) | `automation_enabled`, `scan_timeline_enabled` | install | link (it owns no switch) |
-| Project settings (spending-limits prose) | `automation_daily_budget_usd` | install | link (a value, not a switch) |
+| Project settings (spending-limits prose) | `automation_daily_budget` | install | link (a value, not a switch) |
 | Change map | `code_graph` | Project | grant |
 | Findings pane (no detectors) | the four detectors | Project | grant, all four in one act |
 | Findings pane (no observer notes) | `automation_enabled` | install | grant (inline) |

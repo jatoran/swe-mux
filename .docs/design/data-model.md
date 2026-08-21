@@ -198,6 +198,17 @@
   cache, a subset of `input_tokens` and never added to it, backfilled to 0 on an existing
   database because every pre-migration row was billed by a request that carried no cache
   breakpoint.
+  And `cost_known` (schema 11): whether the provider reported what this call cost.
+  A bring-your-own OpenAI-compatible endpoint reports no `usage.cost`, and an absent cost is
+  unknown rather than zero — recorded as `$0.00` it would leave every dollar figure, and every
+  dollar *cap* reading the same rows, looking enforced while approaching nothing.
+  The stored `cost_usd` stays 0 for such a row so existing `SUM(cost_usd)` keeps meaning "the
+  cost we know about", and `spend()` / `spend_breakdown()` carry `unpriced_calls` so a total can
+  be read as the floor it is (`design/features/budgets.md`).
+  A cost that arrives late through `/generation` clears the flag as it fills the figure.
+  Existing rows backfill to `1`, the **opposite** direction to `cached_tokens` and for the same
+  reason — it is the true reading: every pre-migration row went to OpenRouter, which prices every
+  completion, so its zero means free.
 - `llm_provider_verification` (schema 10): one row per configured model provider, holding the
   completion that proved it — `fingerprint`, `base_url`, `model`, `resolved_model`, a bounded
   `sample` of the reply, `latency_ms`, and `verified_at`.

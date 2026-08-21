@@ -91,7 +91,7 @@ and the declared minimum observation capability.
   cancellable, retried for transient transport failures, and locally validated.
 - Routing may fall back between providers for the exact requested model when the provider
   supports the required schema parameters.
-- Settings owns every install-wide switch and bound: the `automation_enabled` master switch and the `scan_timeline_enabled` gate (Settings → Automation, beside the budgets they govern), global/per-rule token and dollar budgets, hourly caps, concurrency, input/output limits, and retention. The OpenRouter key controls, exact cheap/standard model IDs, and model refresh are on Accounts.
+- Settings owns every install-wide switch and bound: the `automation_enabled` master switch and the `scan_timeline_enabled` gate (Settings → Automation, beside the budgets they govern), the global, per-rule, scan-timeline, and Project-card spending budgets, hourly caps, concurrency, input/output limits, and retention. Each spending budget carries the shared `{tokens?, usd?, mode}` shape and is edited through one control; `design/features/budgets.md` owns that contract. The OpenRouter key controls, exact cheap/standard model IDs, and model refresh are on Accounts.
 - The Automation dashboard owns the rule corpus and the runtime: per-rule enable and shadow/live state for the built-in titler, the shared attention-observer group, and custom rules, plus the canonical `rules.toml` editor beside them. It shows the two global switches as read-only state with links into Settings, and never owns a second copy of a switch. The turn summarizer was retired in Phase 7.7; the scan timeline is the single behavioral-summary producer.
 - Cheap and standard model controls are searchable comboboxes whose result popovers have a
   bounded scroll height on desktop and mobile.
@@ -181,6 +181,15 @@ and the declared minimum observation capability.
   `cached_tokens` also reads as `0%`, because the ledger records what the usage payload said
   and nothing more (`assistant.md` for where the breakpoint that earns a nonzero rate is
   placed).
+- **A cost nobody reported is recorded as unmeasured, never as zero.** `cost_known` is the
+  column that says so, and `unpriced_calls` is what the spend rows carry beside the money. A
+  bring-your-own endpoint reports no `usage.cost` at all, so writing those calls in at `$0.00`
+  would leave every dollar figure on the page - and every dollar *cap* reading the same ledger -
+  looking correct while approaching nothing. Any total drawn from a window containing unpriced
+  calls is prefixed as a floor and names the count. Existing rows backfill to `cost_known = 1`,
+  the opposite direction to `cached_tokens`, and for the same reason: every one of them went to
+  OpenRouter, which prices every completion, so their zero means free rather than unknown.
+  `design/features/budgets.md` carries what a dollar cap does about it.
 - **A row's `enabled` is read from the switch that governs it, and a spender missing from the
   table is the dangerous case.** `enabled` is what separates a live bill from spent history, so
   a feature row asserting `True` regardless told the reader to go turn off something already

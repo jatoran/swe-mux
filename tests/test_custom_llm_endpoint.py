@@ -443,6 +443,23 @@ def test_turning_on_a_model_backed_install_switch_discloses_it_too() -> None:
 
 def test_the_verify_payload_shape_is_stable_enough_to_render() -> None:
     # The browser branches on `code` and renders `reason` verbatim, so both travel.
+    # `reports_cost` travels with them because it is a property of the endpoint that
+    # only the daemon knows, and the budget controls need it to say that a dollar cap
+    # cannot bind against a provider reporting no cost (`src/swe_mux/budget.py`).
     payload = readiness(_custom(), api_key=None, verified_fingerprint=None).as_dict()
-    assert set(payload) == {"ready", "provider", "code", "reason"}
+    assert set(payload) == {"ready", "provider", "code", "reason", "reports_cost"}
+    assert payload["reports_cost"] is False
     assert json.dumps(payload)
+
+
+def test_readiness_and_cost_reporting_are_independent_facts() -> None:
+    """An unproven endpoint may still be one that prices, and a ready one may not be.
+
+    Deriving the budget warning from `ready` would silence it on exactly the install
+    it exists for - a local endpoint the operator has just verified.
+    """
+    proven = readiness(
+        _custom(), api_key=None, verified_fingerprint=_custom().fingerprint(None)
+    )
+    assert proven.ready is True
+    assert proven.reports_cost is False

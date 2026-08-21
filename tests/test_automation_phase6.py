@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import budget
 from swe_mux.automation import (
     PROMPT_TITLE_RULE_ID,
     TITLE_RETRY_SWEEP_LIMIT,
@@ -2017,6 +2018,137 @@ async def test_the_ledger_records_cached_prompt_tokens_as_a_subset_of_the_input(
         assert row["today_cached_tokens"] == 2000
         assert breakdown["totals"]["cached_tokens"] == 2000
         assert breakdown["totals"]["today_cached_tokens"] == 2000
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_ledger_tells_an_unpriced_call_apart_from_a_free_one(
+    tmp_path: Path,
+) -> None:
+    """A provider that reports no cost must not be recorded as costing nothing.
+
+    This is the failure a dollar cap cannot survive quietly: write `$0.00` for
+    every call from a bring-your-own endpoint and the cap looks enforced while
+    its ledger never approaches the limit. `cost_known` is what makes the total
+    readable as a floor (`src/swe_mux/budget.py`).
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="builtin:assistant", model="local/llama", input_tokens=100,
+            output_tokens=10, cost_usd=None, call_id="call-1",
+        )
+        # A genuinely free call - reported, and reported as zero - is a different
+        # fact and must not be counted among the unpriced ones.
+        await store.add_spend(
+            rule_id="builtin:assistant", model="free/model", input_tokens=50,
+            output_tokens=5, cost_usd=0.0, call_id="call-2",
+        )
+        await store.add_spend(
+            rule_id="builtin:assistant", model="openai/gpt-5.6-terra", input_tokens=80,
+            output_tokens=8, cost_usd=0.25, call_id="call-3",
+        )
+
+        today = await store.spend(rule_id="builtin:assistant")
+        assert today["unpriced_calls"] == 1
+        assert today["cost_usd"] == pytest.approx(0.25), "only measured cost is summed"
+
+        breakdown = await store.spend_breakdown(days=7)
+        row = breakdown["rules"][0]
+        assert row["unpriced_calls"] == 1
+        assert row["today_unpriced_calls"] == 1
+        assert breakdown["totals"]["unpriced_calls"] == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_reconciled_cost_stops_being_unpriced(tmp_path: Path) -> None:
+    """OpenRouter can answer late, and the ledger has to accept the answer.
+
+    Without this an OpenRouter call whose completion omitted `usage.cost` would
+    stay flagged blind forever, and every dollar figure on the page would carry
+    a floor marker it had already earned its way out of.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="builtin:titler", model="cheap/model", input_tokens=100,
+            output_tokens=10, cost_usd=None, call_id="call-1",
+        )
+        assert (await store.spend(rule_id="builtin:titler"))["unpriced_calls"] == 1
+        await store.reconcile_spend("call-1", 0.004)
+        after = await store.spend(rule_id="builtin:titler")
+        assert after["unpriced_calls"] == 0
+        assert after["cost_usd"] == pytest.approx(0.004)
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unpriced_ledger_still_stops_a_token_cap(tmp_path: Path) -> None:
+    """The backstop, end to end: no cost reported, and the tokens still bind."""
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        for index in range(3):
+            await store.add_spend(
+                rule_id="builtin:assistant", model="local/llama", input_tokens=1000,
+                output_tokens=100, cost_usd=None, call_id=f"call-{index}",
+            )
+        spend = await store.spend(rule_id="builtin:assistant")
+        usd_only = budget.spent_out(Budget(usd=1.0, mode="usd"), spend, label="the daily")
+        assert usd_only.exhausted is False, "a dollar cap cannot see unpriced spend"
+        assert usd_only.cost_blind is True, "and has to say so"
+        either = budget.spent_out(
+            Budget(tokens=3000, usd=1.0, mode="either"), spend, label="the daily"
+        )
+        assert either.axis == "tokens"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_ledger_backfills_cost_known_to_measured(tmp_path: Path) -> None:
+    """The opposite backfill direction to `cached_tokens`, and deliberately so.
+
+    Every pre-migration row went to OpenRouter, which prices every completion, so
+    its zero means free rather than unmeasured. Backfilling 0 would declare the
+    whole historical ledger unpriced and light the floor marker on every install
+    that has never seen a custom endpoint.
+    """
+    path = tmp_path / "mux.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE automation_budget_ledger ("
+        "id TEXT PRIMARY KEY, day TEXT NOT NULL, rule_id TEXT NOT NULL,"
+        "project_id TEXT, agent_run_id TEXT,"
+        "requested_model TEXT, input_tokens INTEGER NOT NULL,"
+        "output_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL DEFAULT 0,"
+        "cost_usd REAL NOT NULL, observer_call_id TEXT, created_at REAL NOT NULL)"
+    )
+    legacy.execute(
+        "INSERT INTO automation_budget_ledger"
+        "(id,day,rule_id,requested_model,input_tokens,output_tokens,cost_usd,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (
+            "old-1",
+            time.strftime("%Y-%m-%d", time.gmtime()),
+            "builtin:assistant",
+            "openai/gpt-5.6-terra",
+            300,
+            20,
+            0.0,
+            time.time(),
+        ),
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = AutomationStore(path)
+    try:
+        assert (await store.spend(rule_id="builtin:assistant"))["unpriced_calls"] == 0
+        assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
     finally:
         store.close()
 

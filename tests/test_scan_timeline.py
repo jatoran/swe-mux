@@ -98,6 +98,23 @@ class FakeProvider:
         )
 
 
+class UnpricedProvider(FakeProvider):
+    """A completion that reports usage but no cost - a local endpoint's normal reply."""
+
+    async def complete_json(self, **kwargs: Any) -> OpenRouterResult:
+        result = await super().complete_json(**kwargs)
+        return OpenRouterResult(
+            generation_id=result.generation_id,
+            requested_model=result.requested_model,
+            resolved_model=result.resolved_model,
+            value=result.value,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=None,
+            latency_ms=result.latency_ms,
+        )
+
+
 class FailingProvider:
     async def complete_json(self, **kwargs: Any) -> OpenRouterResult:
         raise OpenRouterError(
@@ -605,6 +622,61 @@ async def test_scan_ignores_the_per_rule_caps_and_reports_the_binding_gate(
         assert gates["scan_daily_usd"]["limit"] == 5.0
         assert gates["scan_daily_usd"]["used"] > 0
         assert state["skip_reason"] is None
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_an_endpoint_that_reports_no_cost_records_unpriced_rather_than_an_estimate(
+    tmp_path: Path,
+) -> None:
+    """A scan has no cost-reconcile pass, so the catalog estimate stands in.
+
+    That is honest against OpenRouter, whose model is in the catalog and whose
+    prices bounded the preflight. It is fiction against a bring-your-own
+    endpoint: the model is in no catalog, so the "estimate" is the bare 0.01
+    fallback, about a server that may bill nothing. Recording it would invent
+    spend *and* hide that the dollar axis is blind - so the row is unpriced and
+    the token axis is what bounds the feature.
+    """
+    service, store, _provider, _sessions = await build_service(
+        tmp_path, provider=UnpricedProvider(), llm_provider="custom",
+        custom_llm_base_url="http://127.0.0.1:8080/v1", custom_llm_model="local/llama",
+    )
+    try:
+        await store.set_scan_run_enabled(
+            agent_run_id="run-1", session_id="session-1", project_id="project-1", enabled=True,
+        )
+        assert await service.scan_now("session-1", "test") is not None
+        spend = await store.spend(rule_id="builtin:scan-timeline")
+        assert spend["unpriced_calls"] == 1
+        assert spend["cost_usd"] == 0.0, "unmeasured, not estimated"
+        assert spend["tokens"] > 0, "the token axis still counted the call"
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_openrouter_still_falls_back_to_the_catalog_estimate(tmp_path: Path) -> None:
+    """The other half of the rule: a priced provider keeps its stand-in.
+
+    Dropping the estimate for OpenRouter would leave a scan whose completion
+    omitted `usage.cost` contributing nothing to a dollar cap that can and
+    should bound it.
+    """
+    service, store, _provider, _sessions = await build_service(
+        tmp_path, provider=UnpricedProvider(),
+    )
+    try:
+        await store.set_scan_run_enabled(
+            agent_run_id="run-1", session_id="session-1", project_id="project-1", enabled=True,
+        )
+        assert await service.scan_now("session-1", "test") is not None
+        spend = await store.spend(rule_id="builtin:scan-timeline")
+        assert spend["unpriced_calls"] == 0
+        assert spend["cost_usd"] > 0
     finally:
         await service.stop()
         store.close()

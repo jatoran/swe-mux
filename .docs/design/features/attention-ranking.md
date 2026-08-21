@@ -115,7 +115,7 @@ The one part of this feature that spends tokens, off by default (`attention_narr
 - Stateless and read-only: one call sees one normalized slice of one incident.
 - A slice never spans two agent runs. A "why" assembled across a `/clear` is a fabricated cause.
 - Every failure path records a typed status (`disabled`, `no_model`, `budget`, `failed`, `empty`) and keeps the deterministic summary. Failure never degrades to silence and never to a guess.
-- Metered on the shared ledger under `builtin:attention-narration` with its own daily dollar budget.
+- Metered on the shared ledger under `builtin:attention-narration` with its own daily budget (`attention_narration_daily_budget`), which takes tokens, dollars, or first-hit and defaults to the `usd` mode it enforced before the shared shape existed (`budgets.md`).
 
 ## Delivery boundary
 

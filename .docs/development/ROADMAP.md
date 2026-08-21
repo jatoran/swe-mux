@@ -2572,7 +2572,7 @@ A stronger observer model is therefore **not** in scope: the fields enforcement 
 
 ### Backend — no write surface
 
-- [x] Neither `POST /api/sessions/{sid}/scan-timeline/scan` nor the backfill endpoint is exposed through MCP. Reads cost nothing, but a scan spends the human's gated budget against caps set in Settings → Automation → Scan timeline, and an agent that can trigger scans can exhaust `scan_timeline_daily_budget_usd` for every Project on the host.
+- [x] Neither `POST /api/sessions/{sid}/scan-timeline/scan` nor the backfill endpoint is exposed through MCP. Reads cost nothing, but a scan spends the human's gated budget against caps set in Settings → Automation → Scan timeline, and an agent that can trigger scans can exhaust `scan_timeline_daily_budget` for every Project on the host.
 - [x] No generic record-dump tool. Every mux MCP tool stays a question, not a table (the Phase 7.10 rule).
 
 ### Backend — the run-level fields (`approach_status`, `dead_end`)
@@ -3327,7 +3327,7 @@ Day-one rules that make the adaptation clean: dual-form responses, confirmation 
 - [x] Tool bridge: daemon-side read tools over existing read models; `run_ui_command` proposals delivered to the turn's originating device over the event stream with bounded acknowledgement; deterministic name resolution with candidate lists.
 - [x] HTTP surface: create/continue/interrupt a dialog turn, events (sentence boundaries, tool status, typed action/confirmation state), confirm/cancel a pending action, dialog history read.
 - [x] Frontend: conversation view in the voice overlay (toggleable `talk`/`chat`, taller), streaming renderer, confirmation cards with the cancel-window countdown, UI-action executor over the command registry, tier-2 fuzzy matcher (`voiceFuzzy.ts`) in front of the assistant fallback, follow-up window, earcons, TTS attachment via the existing application-speech path.
-- [x] Config: `assistant_enabled`, `assistant_model`, `assistant_daily_budget_usd`, `assistant_max_output_tokens`, `assistant_context_messages`, `assistant_trust_reversible` (the consequential confirm floor is fixed).
+- [x] Config: `assistant_enabled`, `assistant_model`, `assistant_daily_budget`, `assistant_max_output_tokens`, `assistant_context_messages`, `assistant_trust_reversible` (the consequential confirm floor is fixed).
 - [x] Logging: turns, tool calls, resolutions, confirmations, and refusals logged with dialog and turn ids plus per-turn call/token/cost/elapsed totals.
 - [x] Tests: tool-bridge resolution and refusal paths, trust-policy classes, restart action expiry, budget refusal, UI dispatch acknowledgement, dual-form helpers, event reducer, fuzzy tier (`tests/test_assistant.py`, `frontend/test/assistantEvents.test.ts`, `frontend/test/voiceFuzzy.test.ts`).
 - [x] Docs: new `design/features/assistant.md`, routing-table entry, `design/features/voice.md` tier cross-reference, `design/interfaces.md` endpoints, backend and frontend `packages.md` entries.
@@ -3865,14 +3865,47 @@ by a hard 15 s hold ceiling.
 
 ### Token caps and cost caps everywhere
 
-- [ ] One budget shape for every cap: `{tokens?, usd?, mode: tokens | usd | either}`, where
+- [x] One budget shape for every cap: `{tokens?, usd?, mode: tokens | usd | either}`, where
   `either` trips on whichever is hit first.
-- [ ] One shared budget control renders it, and every budget setting - assistant daily, scan
+  `src/swe_mux/budget.py` owns the shape and both comparisons - `spent_out` inclusive, because
+  the money is already gone, and `would_exceed` strict, because a preflight estimate is a
+  conservative maximum and refusing a call that fits exactly would refuse calls that fit.
+  The mode's axes are *required*, so a cap can never claim to enforce a unit it has no figure
+  for; the other axis may still hold a value and is never consulted, which is what lets the
+  control keep a number the operator is only temporarily not enforcing.
+- [x] One shared budget control renders it, and every budget setting - assistant daily, scan
   budgets, automation bounds - gets the choice, including settings that today carry only one
   unit.
-- [ ] Enforcement reads the spend ledger, which already records both tokens and USD per call.
-- [ ] Migration maps each existing cap onto the mode matching its current unit, so no cap
+  Eight caps, inventoried once in `BUDGET_SPECS` and listed in `design/features/budgets.md`.
+  Two of them earned a Settings control they never had: the Project context card's budget was
+  config-file-only, and a cap with no control cannot be offered a choice at all.
+  Rate limits (`automation_hourly_call_cap`, `attention_daily_interrupt_budget`, the hourly
+  message and land budgets) are deliberately **excluded**: they count acts, never read the
+  ledger, and asking the operator to denominate them in tokens or dollars would be asking them
+  to price something that has no price. Per-call ceilings are excluded for the same reason.
+- [x] Enforcement reads the spend ledger, which already records both tokens and USD per call.
+  Every site now calls one of the two shared comparisons against `AutomationStore.spend()`, so
+  a refusal and the figure drawn beside it cannot disagree.
+  The ledger gained the fact it was missing: `cost_known` (schema 11) distinguishes *unmeasured*
+  from *free*, because a bring-your-own endpoint reports no `usage.cost` and recording those
+  calls at `$0.00` would leave a dollar cap looking enforced while approaching nothing.
+  What a dollar cap does about it is **stated**, not silent: it counts reported cost and nothing
+  else, never guesses, never refuses the call (a local model has no bill, and failing closed
+  would switch off every local-endpoint install), and says so in three places - the control
+  warns while the dollar axis is selected against a provider whose `reports_cost` is false, the
+  verdict carries `cost_blind`, and every total over a window with unpriced calls is drawn as a
+  floor with the count. `either` is the honest configuration there, and the token axis is the
+  backstop that binds.
+- [x] Migration maps each existing cap onto the mode matching its current unit, so no cap
   silently loosens.
+  The automation and scan-timeline daily ceilings checked both units, so they arrive as
+  `either`; the scan run cap as `tokens`; the four dollar caps as `usd`.
+  The case a naive migration loses is a config that set one half of a pair: the other half was
+  still enforced, at a dataclass default the file never mentioned, so each `BudgetSpec.default`
+  carries that figure and fills it. Schema 23's uplift still composes, because it is applied
+  while the pre-`Budget` scalars are still visible.
+  `tests/test_budget_shape.py` pins the mapping against a longhand table of what the old code
+  compared, rather than deriving its expectation from `BUDGET_SPECS`.
 
 ### Global TTS switch and focus-driven playback
 
@@ -4019,8 +4052,11 @@ assistant inherits that boundary wholesale and cannot run anything a person did 
 - [ ] "Mux, new conversation" clears context by voice and says so.
 - [ ] A deliberately trailed-off utterance is deferred exactly once and merges with its
   completion; the deferral appears in the log with its trigger.
-- [ ] Every budget setting offers tokens, USD, or first-hit, and pre-existing caps enforce
+- [x] Every budget setting offers tokens, USD, or first-hit, and pre-existing caps enforce
   exactly what they enforced before migration.
+  Eight caps behind one control and one enforcement path (`design/features/budgets.md`), with
+  the migration checked per cap against a longhand table of the old comparisons, including the
+  half-a-pair case where the unmentioned axis was being enforced at its default all along.
 - [x] Read aloud has one master switch; an unfocused session's reply holds its clip instead of
   speaking over the focused one.
 - [ ] A local OpenAI-compatible endpoint passes verification and unlocks LLM-gated automations;

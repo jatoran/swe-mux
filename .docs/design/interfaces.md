@@ -382,7 +382,8 @@ budget gate is closed.
 `POST .../backfill` starts an oldest-first background scan of uncovered messages in the current run and returns its initial state.
 `DELETE .../backfill` stops a running job; every record it already wrote stays readable.
 The ordinary timeline snapshot carries chunk progress and an honest `completed`, `completed_with_gaps`, `partial`, or `failed` result, and that result is stored rather than held in daemon memory, so it survives a restart.
-The snapshot also carries `gates`, every quantitative cap that can stop a scan with its current usage, and `skip_reason`, the scanner's own words for why it is currently producing nothing.
+The snapshot also carries `daily_budget` and `run_budget` in the shared `{tokens, usd, mode}` spending shape (`design/features/budgets.md`), `gates`, every *enforced* quantitative cap that can stop a scan with its current usage, and `skip_reason`, the scanner's own words for why it is currently producing nothing.
+A budget's unenforced axis is absent from `gates` on purpose: a limit that cannot stop anything must not be drawn beside the ones that can. A `usd` gate additionally carries `unpriced_calls`, the calls in its window whose provider reported no cost, because a dollar figure computed over those is a floor rather than a total.
 `skip_reason` is null while a run is merely idle; it names a cap or a closed gate only when scanning is actually stopped.
 The record route returns compressed metadata by default; `rehydrate=1` reparses the authoritative
 current or historical run transcript for the record's source interval and increments the measured
@@ -1903,12 +1904,16 @@ content: requested and resolved model, generation, provider, finish reason, HTTP
 retryability, token and cost usage, latency, and response content type and length.
 
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
-row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cost_usd`, the same five
-figures scoped to today, the requested models, and `last_at`.
+row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cost_usd`,
+`unpriced_calls`, the same six figures scoped to today, the requested models, and `last_at`.
 `cached_tokens` is the prompt-cache hit and is a *subset* of `input_tokens`, never added to it;
 `input_tokens` rides along because it is the only honest denominator for a hit rate, `tokens`
 being input plus output and output never cacheable.
-`GET /api/assistant` and every other reader of the ledger's `spend()` helper carry the same two
+`unpriced_calls` counts the calls whose provider reported no cost at all, which a bring-your-own
+endpoint always does; their contribution to `cost_usd` is zero because nobody measured it, so a
+nonzero count means the money beside it is a floor rather than a total, and every surface drawing
+that figure marks it as one (`design/features/budgets.md`).
+`GET /api/assistant` and every other reader of the ledger's `spend()` helper carry the same three
 figures beside `tokens` and `cost_usd`. The daemon labels each row with `label`, `detail`, `kind`
 (`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because several
 features bill the observer budget without being automation rules and a raw `rule_id` names
@@ -1926,7 +1931,7 @@ exactly, including the rows a call that failed after the provider billed for its
 `providers[]` (one per configured endpoint — `id`, `label`, `active`, `origin`, `model`,
 `requires_verification`, `cache_policy`, its own `secret` status, its `verification`, and its
 `readiness`), `llm` (the resolved verdict for the active endpoint: `ready`, `provider`, `code`,
-`reason`), plus the pre-existing `secret`, `models`, `origin`, `cheap_model`, and
+`reason`, `reports_cost`), plus the pre-existing `secret`, `models`, `origin`, `cheap_model`, and
 `standard_model`. `verification.verified` is never read off the stored row: it is recomputed by
 comparing the stored fingerprint with the live one, which is what makes editing the endpoint
 un-verify it even when the edit arrived by hand in `config.toml`. `verification.stale` marks a

@@ -80,7 +80,8 @@ say the same thing in one line each.
   `tts_verbatim_max_chars`). The global `tts_content` is the default; each session can
   override it volatilely (`voice_content` via `PATCH /sessions/{id}`, toggled from the player
   strip), and verbatim never touches an LLM. Summary calls check the daily budget
-  (`tts_daily_budget_usd`) before spending and need a model. `tts_summary_model` is an
+  (`tts_daily_budget`, the shared `{tokens?, usd?, mode}` spending shape from
+  `design/features/budgets.md`) before spending and need a model. `tts_summary_model` is an
   **override**, not a pin: blank means the routed cheap model, so it never has to be set.
   It is edited in Settings → Voice → Spoken summary and indexed from
   Settings → Accounts → Models.
@@ -792,7 +793,9 @@ and never touches the daemon or an LLM.
 `tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine` (`sapi`/`kokoro`),
 `tts_kokoro_voice`/`_speed`, `tts_lexicon` (user pronunciation respellings, merged over the
 built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`/`_rate`, `tts_summary_model`,
-`tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget_usd`, `tts_cache_mb`;
+`tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget` (tokens, dollars, or
+first-hit; `usd` by default, which is the unit it enforced before the shape existed),
+`tts_cache_mb`;
 `stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
 `stt_routing_model` (spoken commands; blank falls back to the dictation model);
 `voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases),

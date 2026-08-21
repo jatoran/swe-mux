@@ -288,6 +288,20 @@
   Its failure mode is silence by construction - a bridged agent that cannot reach the daemon
   runs perfectly and simply never reports - so any change must keep the reachability probe
   and the `reasons` it produces, and must never let "not checked" render as available.
+- Changing a spending cap, adding one, or changing what a cap is denominated in:
+  `design/features/budgets.md`, plus the owning feature's doc
+  (`design/features/automation.md`, `design/features/scan-timeline.md`,
+  `design/features/assistant.md`, `design/features/voice.md`,
+  `design/features/attention-ranking.md`, `design/features/project-card.md`),
+  `design/data-model.md`, `design/interfaces.md`, `design/features/setting-links.md`.
+  Two rules the split exists to enforce. Every cap is `{tokens?, usd?, mode}` edited through one
+  control, and migration maps a pre-existing cap onto the mode matching the unit it already
+  enforced - so a config written by the previous build enforces exactly what it enforced before,
+  and adding a cap without giving it the choice is the regression to watch for. And a dollar cap
+  cannot bind against a provider that reports no cost: absent cost is unknown, never zero, so the
+  ledger records it as unmeasured (`cost_known`), every total drawn over it reads as a floor, and
+  the token axis is the honest backstop. Rate limits and per-call ceilings are deliberately *not*
+  budgets: they count acts and bound one request, never a period's spend.
 - Changing usage analytics: `design/features/usage.md`
 - Changing read aloud or hands-free conversation: `design/features/voice.md`;
   completed voice-interaction phases and their decisions:
