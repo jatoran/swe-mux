@@ -1513,11 +1513,64 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "watch_session",
+        "description": (
+            "Be told when another session stops working, instead of polling for "
+            "it. Arms a one-shot watch and returns immediately, having delivered "
+            "nothing. Exactly one message then enters YOUR prompt queue, "
+            "whichever of these happens first: the session leaves working for a "
+            "settled state and holds it (idle or awaiting - the notice says "
+            "which, because 'awaiting' means blocked on a person and not "
+            "finished), the session ends, or your timeout elapses. The timeout "
+            "notice is not an error, it is the guarantee: a session that hangs "
+            "can never leave you waiting with no message at all. A settle is "
+            "measured as a working -> settled edge that holds, so a session that "
+            "is already idle when you ask will be answered by the timeout, and a "
+            "session idling with its own subagents still running is not counted "
+            "as settled. The notice arrives as a queue item under the ordinary "
+            "delivery contract, so it reaches you between turns rather than "
+            "mid-turn. Bounded: a few watches per session, one per target, and "
+            "they die with your session or a daemon restart. "
+            'Your own Project is the default; pass project:"fleet" or a Project '
+            "name to watch a session in another."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "Session id or exact name to watch; cannot be your own "
+                        "session"
+                    ),
+                },
+                "timeout_minutes": {
+                    "type": "integer",
+                    "description": (
+                        "How long to wait before the failsafe notice fires "
+                        "anyway (default 30). Set it to roughly how long you "
+                        "expect the work to take, not to the longest you could "
+                        "tolerate: an early timeout notice tells you the state, "
+                        "and you can watch again."
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 _DECLARED_TOOL_NAMES = {str(tool["name"]) for tool in TOOLS}
 assert _DECLARED_TOOL_NAMES == set(READ_TOOL_NAMES) | set(WRITE_TOOL_NAMES)
 for _tool in TOOLS:
+    # The read/write split is the single source for both the Claude permission
+    # allowlist and these annotations, so a tool cannot be auto-allowed while
+    # advertising itself as a write. `watch_session` is the one entry whose
+    # placement needed an argument rather than being obvious; it is recorded in
+    # `mcp_contract.py` beside the name.
     _read_only = str(_tool["name"]) in READ_TOOL_NAMES
     _tool["annotations"] = {
         "readOnlyHint": _read_only,
@@ -1582,6 +1635,7 @@ class McpService:
         code_graph: Any = None,
         land_queue: Any = None,
         scan_timeline_service: Any = None,
+        session_watch: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -1619,6 +1673,10 @@ class McpService:
         # answers, and says the liveness block is unavailable rather than
         # reporting a stopped scanner as a quiet one.
         self.scan_timeline_service = scan_timeline_service
+        # Session-settle watches. Absent it, `watch_session` answers unavailable
+        # rather than arming nothing and reporting success - a watch that was
+        # never armed is the exact silence the tool exists to remove.
+        self.session_watch = session_watch
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -4275,6 +4333,29 @@ class McpService:
         )
         return dict(result)
 
+    async def watch_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.watch_session`: arm a one-shot settle watch on another session.
+
+        A read that matures into one bounded message. The target is only read;
+        the notice is a fixed daemon template addressed to the caller's own
+        prompt queue. Every bound (install switch, scope, per-watcher ceiling,
+        timeout ceiling, the settle rule itself) lives in the daemon service,
+        and this is a caller (CP §7.1).
+        """
+        if self.session_watch is None:
+            raise QueueError(
+                "unavailable",
+                "session watches are not available on this daemon.",
+                status=503,
+            )
+        result = await self.session_watch.watch(
+            caller,
+            target=str(args.get("target") or ""),
+            timeout_minutes=args.get("timeout_minutes"),
+            project=str(args.get("project") or ""),
+        )
+        return dict(result)
+
     # ------------------------------------------------------------ protocol
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
@@ -4315,6 +4396,7 @@ class McpService:
             "find_references": self.find_references,
             "code_context": self.code_context,
             "test_gap": self.test_gap,
+            "watch_session": self.watch_session,
             "notify": self.notify,
             "request_spawn": self.request_spawn,
             "run_action": self.run_action,

@@ -19,12 +19,14 @@ Reads:
 - The four cross-session memory reads (`provenance`, `verified_status`, `prior_resolutions`, `dead_ends`), DAG-gated per `MEMORY_TOOL_AUTOMATION`, run-attributed, answering `unsupported`/`disabled` rather than a fake empty.
 - The scan-timeline reads: `scan_timeline`, session-scoped and gated on the *target* session's Project opting into `scan_reads`, serving digest, records, or full details over the `scan_consumers` projection with an exclusive `since_t1` cursor and the liveness block on every result; and `scan_search` over distilled records, gated on `semantic_history_search`.
   No scan or backfill trigger is reachable from MCP, because a read costs nothing while a scan spends the human's gated budget.
+- `watch_session`, the one read that matures into a message: it reads a sibling's state and stages a single deterministic notice into the *caller's own* queue when that sibling settles, ends, or the caller's timeout elapses.
+  Declared a read because it addresses nobody and actuates nothing; the bounds and the fire rules live in `session_watch.py`.
 
 Writes, all thin callers into services that hold the authority: `notify`, `request_spawn`, `run_action`, `interrupt`, `end_session`, and `request_land` - whose worktree is read from the caller's own live cwd rather than accepted as an argument.
 
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
 
-**Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), session-control authority and bounds (`session_control.py`), land authority and bounds (`land_queue.py`), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`server.py`).
+**Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), session-control authority and bounds (`session_control.py`), land authority and bounds (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`server.py`).
 
 ### `mcp_contract.py`
 
@@ -51,6 +53,20 @@ The `project` argument shared by the agent-facing read and write surfaces: own-P
 Every refusal is a typed `QueueError`.
 
 **Not:** the interrupt and graceful-end PTY operations themselves and the daemon-owner check (both in `server.py`), MCP transport (`mcp.py`), or observation storage (`project_files.py`).
+
+### `session_watch.py`
+
+`SessionWatchService`: one-shot settle watches, the read that matures into one bounded message.
+
+- Arming bounds: the install switch, Project scope through `project_scope.py`, agent-only target and watcher, no self-watch, one watch per target, the per-watcher ceiling, and the timeout ceiling (a `0` timeout is refused rather than defaulted).
+- The fire rules: `ended` unconditionally, `settled` only on an observed `working` -> `idle`/`awaiting` edge that holds `SETTLE_HOLD_SECONDS`, and the timeout checked last so a settle maturing on the same sweep reports the case that happened.
+- The two suppressions that keep "settled" honest: `starting` is not working, and an `idle` target holding `RUNNING_ACTIVITY_KINDS` or `idle_reason: waiting_on_background` has not finished.
+- Lifetime: in-memory, dropped when the watcher session ends or its conversation rolls over, and flushed as notices on `stop()` so a daemon restart is never a silent un-arming.
+- The fixed notice template, and the counters `GET /api/diagnostics/background` reports.
+
+Every refusal is a typed `WatchRefusal` (a `QueueError`).
+
+**Not:** delivery or arming of the notice (`prompt_queue.py` owns both, and a `rule` sender is never self-arming), status detection itself (`session.py` and `observation.py` own the state the watch reads), MCP transport (`mcp.py`), or any storage - a watch has no table on purpose (`design/data-model.md`).
 
 ## Prompt delivery
 

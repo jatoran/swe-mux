@@ -905,6 +905,22 @@ class Config:
     # Spawn's blast radius is a single injection into fan-out, so this is smaller
     # than the interrupt/end budget and is what bounds that fan-out.
     agent_spawn_hourly_budget: int = 10
+    # Session-settle watches (`mux.watch_session`). The install-wide switch is
+    # here for the same reason the others are: it is the emergency stop, and off
+    # means no watch is armed anywhere. A watch reads a state the caller can
+    # already read and produces one deterministic queue item addressed to the
+    # caller itself, so there is no per-Project opt-in and no grant - the bounds
+    # that matter are how many one session may hold and how long one may run.
+    session_watch_enabled: bool = True
+    # How many watches one session may hold open at once. Sized for an
+    # orchestrator fanning out to a handful of workers, not for a fleet-wide
+    # sweep: a session that wants to watch everything should be reading
+    # `list_sessions` instead, which costs one call rather than N notices.
+    session_watch_max_per_session: int = 8
+    # The ceiling on one watch's timeout. Watches live in daemon memory, so a
+    # window longer than a working session is a promise this service cannot keep
+    # across the restarts that routinely happen inside it.
+    session_watch_max_minutes: int = 240
     # Scheduled runs. The install-wide master switch is here rather than
     # per-Project because it is the emergency stop: off means no schedule fires
     # anywhere, whatever any Project opted into. The caps are global for the same
@@ -1487,6 +1503,10 @@ def _validate(config: Config) -> None:
         errors["session_control_graceful_timeout_s"] = "must be between 1 and 120 seconds"
     if not 0 <= config.agent_spawn_hourly_budget <= 1000:
         errors["agent_spawn_hourly_budget"] = "must be between 0 and 1000 spawns per hour"
+    if not 1 <= config.session_watch_max_per_session <= 100:
+        errors["session_watch_max_per_session"] = "must be between 1 and 100 watches"
+    if not 1 <= config.session_watch_max_minutes <= 24 * 60:
+        errors["session_watch_max_minutes"] = "must be between 1 minute and 24 hours"
     if not 0 <= config.scheduled_runs_max_concurrent <= 50:
         errors["scheduled_runs_max_concurrent"] = "must be between 0 and 50 sessions"
     if not 0 <= config.land_hourly_budget <= 1000:

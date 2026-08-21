@@ -28,7 +28,11 @@ from swe_mux.mcp import (
     McpService,
     session_summary,
 )
-from swe_mux.mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
+from swe_mux.mcp_contract import (
+    READ_TOOL_NAMES,
+    WRITE_TOOL_NAMES,
+    claude_read_permissions,
+)
 from swe_mux.project_files import create_note, write_note
 from swe_mux.prompt_queue import QueueError
 
@@ -1249,8 +1253,9 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
     # two bounded Phase 5 writes,
     # neither of which delivers or spawns anything by itself. Phase 7.5 adds four
     # cross-session memory reads, Phase 7.10 adds the doc_debt read, and Phase
-    # 7.11 adds the two scan-timeline reads. A new tool must be added here
-    # deliberately.
+    # 7.11 adds the two scan-timeline reads. `watch_session` is a read that
+    # matures into one self-addressed queue notice and addresses nobody else. A
+    # new tool must be added here deliberately.
     assert names == {
         "list_sessions",
         "get_session",
@@ -1282,6 +1287,7 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "interrupt",
         "end_session",
         "request_land",
+        "watch_session",
     }
     assert names == {tool["name"] for tool in TOOLS}
     by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}
@@ -1500,3 +1506,64 @@ async def test_request_land_from_an_unregistered_project_refuses() -> None:
         await _land_service(caller, land).dispatch_tool(caller, "request_land", {})
     assert caught.value.code == "no_project"
     assert land.calls == []
+
+
+# ------------------------------------------------------------ session watches
+
+
+class WatchStub:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def watch(self, caller: Any, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"caller": caller.record.id, **kwargs})
+        return {"status": "watching", "watch_id": "watch_1"}
+
+
+def _watch_service(session: Any, watch: Any = None) -> McpService:
+    return McpService(
+        manager_for(session),
+        HistoryStub(),
+        projects=SimpleNamespace(
+            projects={"p1": SimpleNamespace(id="p1", name="repo", root="D:/repo")}
+        ),
+        session_watch=watch,
+    )
+
+
+async def test_watch_session_is_a_thin_caller_over_the_daemon_service() -> None:
+    """MCP is transport: every bound lives in the service, not in the tool."""
+    watch = WatchStub()
+    caller = live_session("s1")
+    result = await _watch_service(caller, watch).dispatch_tool(
+        caller, "watch_session", {"target": "worker", "timeout_minutes": 45}
+    )
+    assert result["status"] == "watching"
+    assert watch.calls == [
+        {"caller": "s1", "target": "worker", "timeout_minutes": 45, "project": ""}
+    ]
+
+
+async def test_watch_session_without_the_service_is_unavailable_not_a_silent_no_op() -> None:
+    """A watch that was never armed is the exact silence the tool exists to remove."""
+    caller = live_session("s1")
+    with pytest.raises(QueueError) as caught:
+        await _watch_service(caller, None).dispatch_tool(
+            caller, "watch_session", {"target": "worker"}
+        )
+    assert caught.value.code == "unavailable"
+
+
+def test_watch_session_is_declared_a_read_and_annotated_as_one() -> None:
+    """It reads a target and writes only into the caller's own queue.
+
+    Permission-gating it would put an approval prompt in front of the monitoring
+    call an orchestrator makes most often, and buy nothing: it addresses nobody,
+    actuates nothing, and re-arming returns the watch that already exists.
+    """
+    assert "watch_session" in READ_TOOL_NAMES
+    assert "watch_session" not in WRITE_TOOL_NAMES
+    tool = next(item for item in TOOLS if item["name"] == "watch_session")
+    assert tool["annotations"]["readOnlyHint"] is True
+    assert tool["annotations"]["idempotentHint"] is True
+    assert "mcp__mux__watch_session" in claude_read_permissions()

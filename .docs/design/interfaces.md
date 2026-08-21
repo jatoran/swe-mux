@@ -1815,7 +1815,7 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
+The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `watch_session`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
 The write tools are `notify`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
 Each takes a `project` argument selecting the scope it answers within: omitted (or `self`) is the caller's own Project, `fleet` is every Project, and a Project name or id is that one.
 `request_spawn` accepts a name but refuses `fleet`, because one request starts one session in one Project.
@@ -1848,6 +1848,13 @@ The projection omits `evidence_refs`, `tier0_fact_ids`, `prompt_hash`, `prompt_v
 Every result carries the enablement/liveness block (`scanning`, `last_scan_at`, `skip_reason`, `run_decided`), so a budget-stopped scanner is never readable as a quiet session, and an ended session is readable rather than refused.
 Neither `POST .../scan-timeline/scan` nor the backfill route is reachable through MCP: a read costs nothing, a scan spends the human's gated budget.
 The Phase 7.10 `doc_debt` read follows the same gate: it returns `{doc, changed_files}` pairs re-derived from each doc's "Key files" section over the Project's recently changed files, gated on the `doc_debt` detector's automation, and names the same blind spot the surface has — a source file no doc lists produces no debt, so empty is not proof the docs are current.
+`watch_session(target, timeout_minutes?, project?)` arms a one-shot settle watch and delivers nothing itself.
+Exactly one deterministic `rule`-sender notice then enters the **caller's own** prompt queue: when the target leaves `working` for a settled state (`idle` or `awaiting`) and holds it for 120 seconds, when the target ends, or when the caller's timeout elapses - whichever is first, and the notice names which case fired plus the target's state, its `awaiting`/`idle` sub-reason, and any background work still running.
+`starting` does not count as working and an `idle` target holding running background work is not settled, so a session that never leaves working - or was already settled when the watch was armed - is answered by the timeout rather than by silence.
+An already-ended target is refused at arming with its final state; a shell is refused as target and as watcher; a session cannot watch itself.
+Bounds are install-wide (`session_watch_enabled`), per watcher (`session_watch_max_per_session`, default 8, and one watch per target - re-arming returns the existing watch), and per watch (`session_watch_max_minutes`, default 240; a `0` timeout is refused rather than defaulted).
+Watches are held in daemon memory only: they die with the watcher session, are dropped when its conversation rolls over, and are flushed as notices when the daemon stops.
+Counters and the open-watch count appear under `session_watch` in `GET /api/diagnostics/background`.
 `interrupt` and `end_session` act on a running agent only under a per-Project grant (`off`/`draft`/`granted`, default `draft`); a `draft` grant writes an inert `control_request` a human decides in Fleet Queue, and `interrupt` is refused unless delivery-readiness is `safe`.
 The full contract is `features/mux-mcp.md`.
 An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.
