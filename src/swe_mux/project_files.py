@@ -1941,3 +1941,46 @@ async def delete_note(
         "bytes": int(current.get("bytes") or 0),
         "revision": expected_revision,
     }
+
+
+def note_save_loop_sample(raw: Any) -> dict[str, Any]:
+    """Validate and durably log one browser report of a note writing itself.
+
+    The failure this exists for (2026-08-19 → 2026-08-21): one note held open in two live
+    views wrote itself about once a second for minutes at a time - 648 writes in a single
+    access log, 1904 across the daemon logs - with the stored revision alternating between
+    two values. Every write was individually legitimate (each side rebased onto the revision
+    it had just been handed), so nothing here could tell the episode from fast typing, and the
+    only evidence it had happened was an access log read days later.
+
+    The browser can tell them apart, because it alone knows whether a human touched the note.
+    When its guards end an episode (`noteEditGuard.ts`) they report it here, so the next one is
+    in `daemon.log` at the moment it happens, against a resource and a revision.
+
+    Bounded and shape-checked like every other client-authored diagnostic: this is evidence
+    submitted by a page, so nothing in it is trusted beyond its type.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("save loop diagnostic must be an object")
+    kind = str(raw.get("kind") or "")
+    if kind not in {"paused", "echo"}:
+        raise ValueError("save loop kind must be paused or echo")
+
+    def bounded_int(value: Any, ceiling: int) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(number, ceiling))
+
+    sample: dict[str, Any] = {
+        "kind": kind,
+        # The save-queue key: a Project or global scope and the resource inside it. Truncated
+        # rather than parsed - it is evidence, not a lookup.
+        "resource": str(raw.get("resource") or "")[:256],
+        "revision": str(raw.get("revision") or "")[:64],
+        "commits": bounded_int(raw.get("commits"), 100_000),
+        "window_ms": bounded_int(raw.get("window_ms"), 86_400_000),
+    }
+    log.warning("note save loop %s", json.dumps(sample, sort_keys=True))
+    return sample

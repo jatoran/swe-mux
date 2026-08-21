@@ -284,10 +284,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       if(autosaved){
         // The queue owns the daemon storage revision; the editor starts fresh at 0. Remounting
         // it on a fresh load shows the new text while ordinary edits keep cursor/undo history.
-        noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
+        noteSaveQueue.reset(noteKey,saveTarget(),payload.revision,stored)
         // `reset` clears the queue deliberately (it is the "this is now the truth" signal), so
-        // carried-over work has to be re-armed after it or it would never commit.
-        if(unsaved!==null)noteSaveQueue.submit(noteKey,unsaved)
+        // carried-over work has to be re-armed after it or it would never commit. It is the
+        // user's own unsaved typing, so it is announced as local input: the load latch that
+        // suppresses an engine's post-reload echo would otherwise swallow it too.
+        if(unsaved!==null){noteSaveQueue.markLocalInput(noteKey);noteSaveQueue.submit(noteKey,unsaved)}
         setLoadGeneration(generation=>generation+1)
       }
       loadedOnce.current=true
@@ -313,7 +315,11 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       if(!noteSaveQueue.canFollowRemote(noteKey,payload.revision))return true
       setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown);setNoteTitle(payload.title)
       setStatus(payload.status);setSaveState('idle');setError('')
-      noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
+      // Adopting a remote version is never local work: the queue is told what the document now
+      // is, and the commit this remount's fresh engine emits from it is an echo rather than an
+      // edit until the user types again. Two views of one note wrote each other about once a
+      // second for minutes before that distinction existed (`noteEditGuard.ts`).
+      noteSaveQueue.reset(noteKey,saveTarget(),payload.revision,payload.markdown)
       setLoadGeneration(generation=>generation+1)
       loadedOnce.current=true
       return true
@@ -535,7 +541,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       if(detail.revision==='missing'&&noteSaveQueue.canFollowRemote(noteKey,detail.revision)){
         noteLoadGeneration.current++
         setRevision('missing');setText('');setBaseline('');setStatus('deleted');setSaveState('idle');setError('')
-        noteSaveQueue.reset(noteKey,saveTarget(),'missing')
+        noteSaveQueue.reset(noteKey,saveTarget(),'missing','')
         setLoadGeneration(generation=>generation+1)
         loadedOnce.current=true
         return
@@ -602,7 +608,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       try{
         scratch=new Editor(snapshot.text)
         scratch.setSelections(snapshot.selections)
-        if(scratch.insertText(''))noteSaveQueue.submit(noteKey,scratch.snapshot().text)
+        if(scratch.insertText('')){
+          // The user asked for this edit, so it is local input even though no editor is mounted
+          // to have produced a keystroke for it.
+          noteSaveQueue.markLocalInput(noteKey)
+          noteSaveQueue.submit(noteKey,scratch.snapshot().text)
+        }
       }catch{
         // The handoff is already accepted. Preserve the note if the captured engine state
         // cannot be replayed instead of risking a broader text edit.
@@ -1432,7 +1443,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       role="navigation" aria-label="Pinned note headings">
       {outline.map((heading,index)=>outlineRow(heading,index,false))}
     </div>}
-    {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
+    {autosaved&&noteSave.banner&&<p class={`resource-error note-conflict${noteSave.status==='paused'?' note-paused':''}`}><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}{noteSave.status==='paused'&&<span class="note-conflict-actions"><button onClick={()=>noteSaveQueue.resume(noteKey)}>Resume autosave</button><button onClick={()=>void loadText()}>Reload from disk</button></span>}</p>}
     {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>
       :isDelimitedFile&&readableFile&&fileViewMode==='preview'?<DelimitedTextViewer text={text} delimiter={presentation.delimiter}/>
       :editable?(autosaved?<ProjectNoteEditor

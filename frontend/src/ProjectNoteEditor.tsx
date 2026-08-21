@@ -11,7 +11,7 @@ import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { whenLayoutBox } from './layoutBox'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 import { claimEditorInsertTarget, forgetEditorFocus, noteEditorFocus } from './insertTarget'
-import type { TextSurfaceIdentity } from './insertTarget'
+import type { EditorHandle, TextSurfaceIdentity } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { hasSelection, selectionText } from './noteSelection'
 import { createNoteRailIcon } from './noteRailIcons'
@@ -81,6 +81,65 @@ function restoreHistory(key: string, element: ContinuityEditorElement): void {
  * something to report.
  */
 const abandonedEditors = new WeakSet<ContinuityEditorElement>()
+
+/**
+ * The events that prove a human is editing *this* note, as opposed to the engine re-emitting
+ * what it was handed. `isTrusted` is the whole point: a browser sets it only for events it
+ * generated from real input, so nothing this app (or the editor) dispatches can forge one.
+ *
+ * Pointer contact counts. It is not a text change, but it cannot be produced by a save loop
+ * either, and Continuity's own command rail edits through taps that emit no key event - a
+ * bullet toggled right after a reload would otherwise be mistaken for an echo and dropped.
+ *
+ * All composed events, so they cross the editor's shadow boundary to the host element, and all
+ * captured, so a handler inside the editor cannot stop this from seeing them.
+ */
+const LOCAL_INPUT_EVENTS = [
+  'pointerdown',
+  'keydown',
+  'beforeinput',
+  'paste',
+  'cut',
+  'drop',
+  'compositionstart',
+] as const
+
+function watchLocalInput(element: ContinuityEditorElement, report: () => void): void {
+  const onInput = (event: Event) => {
+    if (event.isTrusted) report()
+  }
+  for (const name of LOCAL_INPUT_EVENTS) {
+    element.addEventListener(name, onInput, { capture: true })
+  }
+}
+
+/**
+ * The editor as an insert target, wrapped so that text arriving from elsewhere in the app -
+ * the clipboard-history picker, a terminal selection, voice Append - is announced as local
+ * input before it lands.
+ *
+ * Those inserts are the user's doing, but the event that proves it happened on some other
+ * element, so nothing on this editor would report them. Without the wrapper a paste that
+ * followed a reload would be judged an echo and silently dropped.
+ *
+ * Memoized per element because insert-target identity is compared, not structurally matched
+ * (`insertTarget.ts`), and `isConnected` is a getter so a detached editor still refuses.
+ */
+const insertHandles = new WeakMap<ContinuityEditorElement, EditorHandle>()
+
+function insertHandle(element: ContinuityEditorElement, report: () => void): EditorHandle {
+  const existing = insertHandles.get(element)
+  if (existing) return existing
+  const handle: EditorHandle = {
+    insertText: text => {
+      report()
+      element.insertText(text)
+    },
+    get isConnected() { return element.isConnected },
+  }
+  insertHandles.set(element, handle)
+  return handle
+}
 
 /**
  * Observe the engine's start so a failure to start is reported as itself.
@@ -240,6 +299,7 @@ export function ContinuityMarkdownEditor({
   claimInsertTargetToken,
   onInsertTargetClaimed,
   onCommit,
+  onLocalInput,
 }: {
   initialText: string
   label: string
@@ -256,6 +316,8 @@ export function ContinuityMarkdownEditor({
   claimInsertTargetToken?: number
   onInsertTargetClaimed?: (token: number) => void
   onCommit: (text: string) => void
+  /** Called for every trusted user input on this editor; see `watchLocalInput` above. */
+  onLocalInput?: () => void
 }) {
   ensureNoteRailArrangement()
   const elementRef = useRef<ContinuityEditorElement | null>(null)
@@ -266,6 +328,8 @@ export function ContinuityMarkdownEditor({
   scrollKeyRef.current = scrollKey
   const textSurfaceRef = useRef(textSurface)
   textSurfaceRef.current = textSurface
+  const localInputRef = useRef(onLocalInput)
+  localInputRef.current = onLocalInput
   const settings = useNoteEditorSettings()
   const resolvedRailActions = useMemo<readonly RailAction[]>(
     () => [...NOTE_CLIPBOARD_RAIL_ACTIONS, ...(railActions || [])],
@@ -284,24 +348,26 @@ export function ContinuityMarkdownEditor({
         stashHistory(scrollKeyRef.current, elementRef.current)
       }
       // Detached editors must not keep winning the insert routing.
-      forgetEditorFocus(elementRef.current)
+      forgetEditorFocus(insertHandles.get(elementRef.current) ?? elementRef.current)
     }
     elementRef.current = element
     if (hostRefTarget.current) hostRefTarget.current.current = element
     // Focus inside the editor makes it the target for inserted text (clipboard
     // history, terminal selections) even after an overlay takes DOM focus.
     if (element) {
-      element.addEventListener('focusin', () => noteEditorFocus(element, textSurfaceRef.current))
+      const report = () => localInputRef.current?.()
+      element.addEventListener('focusin', () => noteEditorFocus(insertHandle(element, report), textSurfaceRef.current))
+      watchLocalInput(element, report)
       watchEditorStart(element)
     }
   }, [])
   useEffect(() => {
     const element = elementRef.current
-    if (element?.matches(':focus-within')) noteEditorFocus(element, textSurface)
+    if (element?.matches(':focus-within')) noteEditorFocus(insertHandle(element, () => localInputRef.current?.()), textSurface)
   }, [textSurface?.id, textSurface?.kind, textSurface?.label])
   useEffect(() => {
     const element = elementRef.current
-    claimEditorInsertTarget(element,textSurface,claimInsertTargetToken,onInsertTargetClaimed)
+    claimEditorInsertTarget(element&&insertHandle(element,()=>localInputRef.current?.()),textSurface,claimInsertTargetToken,onInsertTargetClaimed)
   },[claimInsertTargetToken,textSurface?.id,textSurface?.kind,textSurface?.label,onInsertTargetClaimed])
   /**
    * The engine is not created while its slot has no layout box.
@@ -436,6 +502,7 @@ export function ProjectNoteEditor({
       claimInsertTargetToken={claimInsertTargetToken}
       onInsertTargetClaimed={onInsertTargetClaimed}
       onCommit={text => noteSaveQueue.submit(key, text)}
+      onLocalInput={() => noteSaveQueue.markLocalInput(key)}
     />
   )
 }

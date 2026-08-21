@@ -256,6 +256,7 @@ emptied and the split above it.
 
 ```text
 GET     /notes[?project_id=]
+POST    /notes/save-loop-diagnostic   {kind: paused|echo, resource, revision, commits, window_ms}
 POST    /projects/{project_id}/notes                      {title}
 GET     /projects/{project_id}/notes/{note_id}
 PUT     /projects/{project_id}/notes/{note_id}            {markdown, revision}
@@ -412,6 +413,12 @@ A stale revision is `409 revision_conflict`, as with a write.
 A Project's last note is refused with `409 note_protected` and is not moved; a Project always
 keeps at least one note, which is a rule about the collection and not about the seeded
 `project.md`.
+
+`POST /notes/save-loop-diagnostic` records one browser-reported note save loop and answers with
+the bounded sample it logged at WARNING; an unknown `kind` is `400`.
+It writes nothing but the log, because the daemon cannot detect the episode itself: every write
+in it is individually legitimate, and only the browser knows whether a human touched the note
+(`project-resources.md`).
 
 `GET /global-notes/scratchpad` returns the fixed global Scratchpad.
 Before the first save it returns an editable `missing` payload with empty Markdown and revision `missing` without creating a file.

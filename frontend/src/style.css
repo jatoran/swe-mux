@@ -3028,7 +3028,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    target whose visible stem and knob are ::before/::after fills of --continuity-accent:
    giving the part itself a background paints a solid block over the whole hit area instead
    of the handle graphic. */
-.note-conflict{position:absolute;left:0;right:0;top:calc(42px*var(--ui-scale));z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
+.note-conflict{position:absolute;left:0;right:0;top:calc(42px*var(--ui-scale));z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-paused{color:var(--amber)}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
 /* Notes tab: a persistent per-Project tab rail with a searchable management browser. */
 .notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px);gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
 .notes-filters>*{min-width:0}

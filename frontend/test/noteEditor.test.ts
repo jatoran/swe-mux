@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { insertEditorTab } from '../src/editorText.ts'
+import { LOOP_SAVE_LIMIT, LOOP_WINDOW_MS } from '../src/noteEditGuard.ts'
 import { createNoteRailIcon, type NoteRailIcon } from '../src/noteRailIcons.ts'
 import {
   NoteSaveQueue,
@@ -28,6 +29,25 @@ function makeTransport() {
 }
 
 const noteTarget = noteSaveTarget('p1', 'note-a')
+
+/**
+ * A note loaded and then touched by a person: the starting state every save test assumes.
+ *
+ * `reset` takes the loaded document because that is the baseline the save guards judge against,
+ * and it deliberately leaves the entry unable to save until a local input arrives - a reload
+ * must never dirty a note by itself (`noteEditGuard.ts`). Tests about the *queue* say "a user
+ * is editing this" once, here, rather than restating it in every case.
+ */
+function loaded(
+  queue: NoteSaveQueue,
+  key: string,
+  revision = 'rev0',
+  target: ResourceSaveTarget = noteTarget,
+  text = '',
+): void {
+  queue.reset(key, target, revision, text)
+  queue.markLocalInput(key)
+}
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -89,7 +109,7 @@ test('save queue commits text with the storage revision and advances it on ack',
   const key = noteQueueKey('p1', 'r1')
   const states: NoteSaveState[] = []
   queue.subscribe(key, state => states.push(state))
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'hello')
   queue.flush(key)
   assert.deepEqual(calls, [{ url: '/api/projects/p1/notes/note-a', text: 'hello', revision: 'rev0' }])
@@ -103,7 +123,7 @@ test('only the newest pending snapshot is sent while one save is in flight', asy
   const { transport, calls, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'A')
   queue.flush(key) // A now in flight against rev0
   queue.submit(key, 'B') // queued behind the in-flight save
@@ -119,7 +139,7 @@ test('a storage conflict keeps local text, blocks auto-save, and overwrite re-co
   const { transport, calls, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'mine')
   queue.flush(key)
   deferreds[0].reject(Object.assign(new Error('note changed externally'), { status: 409 }))
@@ -142,9 +162,9 @@ test('reset adopts a fresh revision and clears conflict/pending state', () => {
   const { transport } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'x')
-  queue.reset(key, noteTarget, 'rev9')
+  queue.reset(key, noteTarget, 'rev9', 'reloaded from disk')
   const state = queue.getState(key)
   assert.equal(state.storageRevision, 'rev9')
   assert.equal(state.status, 'idle')
@@ -155,7 +175,7 @@ test('live follow is allowed only for a different remote revision while locally 
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   assert.equal(queue.canFollowRemote(key, 'rev1'), true)
   assert.equal(queue.canFollowRemote(key, 'rev0'), false)
 
@@ -173,7 +193,7 @@ test('a revision this browser replaced is recognisable as a stale read afterward
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'hello world')
   queue.flush(key)
   assert.equal(queue.hasSuperseded(key, 'rev0'), false) // not yet: the write has not landed
@@ -191,7 +211,7 @@ test('a save that restores earlier content makes that revision current again', a
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'edited')
   queue.flush(key)
   deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
@@ -210,8 +230,9 @@ test('superseded revisions stay bounded across a long editing session', async ()
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   for (let step = 0; step < 20; step++) {
+    queue.markLocalInput(key)
     queue.submit(key, `text ${step}`)
     queue.flush(key)
     deferreds[step].resolve({ revision: `rev${step + 1}`, status: 'ready' })
@@ -225,7 +246,7 @@ test('project notes retain their storage identity through queued saves', () => {
   const { transport, calls } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('project', 'note:release-plan')
-  queue.reset(key, noteSaveTarget('project', 'release-plan'), 'rev0')
+  loaded(queue, key, 'rev0', noteSaveTarget('project', 'release-plan'))
   queue.submit(key, 'release context')
   queue.flush(key)
   assert.deepEqual(calls, [{ url: '/api/projects/project/notes/release-plan', text: 'release context', revision: 'rev0' }])
@@ -235,7 +256,7 @@ test('markdown files queue-save to the project file endpoint with their path', (
   const { transport, calls } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('project', 'file:docs/readme.md')
-  queue.reset(key, fileSaveTarget('project', 'docs/readme.md'), 'rev0')
+  loaded(queue, key, 'rev0', fileSaveTarget('project', 'docs/readme.md'))
   queue.submit(key, '# hi')
   queue.flush(key)
   assert.deepEqual(calls, [{ url: '/api/projects/project/file', text: '# hi', revision: 'rev0' }])
@@ -250,7 +271,7 @@ test('the unload beacon sends the newest snapshot even while a save is in flight
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p1', 'r1')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'saved so far')
   queue.flush(key) // in flight
   queue.submit(key, 'typed while saving')
@@ -284,8 +305,8 @@ test('the unload beacon skips entries with nothing pending and blocked entries',
   const queue = new NoteSaveQueue(transport)
   const clean = noteQueueKey('p1', 'clean')
   const blocked = noteQueueKey('p1', 'blocked')
-  queue.reset(clean, noteTarget, 'rev0')
-  queue.reset(blocked, noteTarget, 'rev0')
+  loaded(queue, clean)
+  loaded(queue, blocked)
   queue.submit(blocked, 'conflicted')
   queue.flush(blocked)
   deferreds[0].resolve({ revision: 'rev9', status: 'conflict' })
@@ -314,7 +335,7 @@ test('pendingText is null for an unknown note and for a settled one', () => {
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p1', 'r1')
   assert.equal(queue.pendingText(noteQueueKey('p1', 'never-touched')), null)
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   assert.equal(queue.pendingText(key), null)
 })
 
@@ -322,7 +343,7 @@ test('pendingText reports typing that has not committed yet', () => {
   const { transport } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p1', 'r1')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'half a sentence')
   assert.equal(queue.pendingText(key), 'half a sentence')
 })
@@ -331,7 +352,7 @@ test('pendingText still reports a snapshot a running save is carrying', async ()
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p1', 'r1')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'in flight')
   queue.flush(key)
   // `start` moves the text out of `pending` for the duration of the request. Without the
@@ -347,7 +368,7 @@ test('pendingText prefers newer typing over the snapshot in flight', async () =>
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p1', 'r1')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'first')
   queue.flush(key)
   queue.submit(key, 'second')
@@ -361,12 +382,131 @@ test('a failed save leaves its text recoverable through pendingText', async () =
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p1', 'r1')
-  queue.reset(key, noteTarget, 'rev0')
+  loaded(queue, key)
   queue.submit(key, 'offline edit')
   queue.flush(key)
   deferreds[0].reject(new Error('the daemon did not respond in time.'))
   await tick()
   assert.equal(queue.pendingText(key), 'offline edit')
+})
+
+// The save loop (2026-08-19 → 2026-08-21): one note in two live views, each following the
+// other's `note_changed`, re-seeding its engine, and sending that engine's commit straight back
+// out. 1904 saves across the daemon logs, none of them typed. The queue is where the three
+// guards meet a real entry; `noteEditGuard.test.ts` covers the policy itself.
+
+test('a reload followed by the engine re-emitting it saves nothing', () => {
+  const { transport, calls } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p1', 'r1')
+  queue.reset(key, noteTarget, 'rev0', '# Note\n\nbody\n')
+  // Continuity commits what it was just handed, in its own serialization.
+  queue.submit(key, '# Note\r\n\r\nbody\r\n\r\n')
+  queue.flush(key)
+  assert.equal(calls.length, 0)
+  assert.equal(queue.getState(key).status, 'idle')
+  // Even a commit that differs in content is the engine's, not the user's, until they type.
+  queue.submit(key, '# Note\n\nbody rewritten by nobody\n')
+  queue.flush(key)
+  assert.equal(calls.length, 0)
+  // And the first real keystroke after the reload still saves.
+  queue.markLocalInput(key)
+  queue.submit(key, '# Note\n\nbody typed\n')
+  queue.flush(key)
+  assert.deepEqual(calls.map(call => call.text), ['# Note\n\nbody typed\n'])
+})
+
+test('a commit that only re-serializes the stored document is not a save', () => {
+  const { transport, calls } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p1', 'r1')
+  loaded(queue, key, 'rev0', noteTarget, 'body  \nmore\n')
+  queue.submit(key, '﻿body   \r\nmore\r\n\r\n')
+  queue.flush(key)
+  assert.equal(calls.length, 0)
+  assert.equal(queue.pendingText(key), null)
+  assert.equal(queue.getState(key).status, 'idle')
+})
+
+test('a re-serialized commit never withdraws typing that is still owed to the daemon', () => {
+  const { transport, calls } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p1', 'r1')
+  loaded(queue, key, 'rev0', noteTarget, 'body')
+  queue.submit(key, 'body edited')
+  // The engine re-emits the same document a beat later. Refusing that commit must not take
+  // the queued edit with it.
+  queue.submit(key, 'body edited\n\n')
+  assert.equal(queue.pendingText(key), 'body edited')
+  queue.flush(key)
+  assert.deepEqual(calls.map(call => call.text), ['body edited'])
+})
+
+test('a note saving with no local input pauses, says so, and reports the episode', async () => {
+  const { transport, calls, deferreds } = makeTransport()
+  const reports: unknown[] = []
+  const queue = new NoteSaveQueue(transport, report => reports.push(report))
+  const key = noteQueueKey('p1', 'r1')
+  loaded(queue, key)
+  for (let step = 0; step < LOOP_SAVE_LIMIT; step++) {
+    queue.submit(key, `body ${step}`)
+    queue.flush(key)
+    deferreds[step].resolve({ revision: `rev${step + 1}`, status: 'ready' })
+    await tick()
+  }
+  assert.equal(calls.length, LOOP_SAVE_LIMIT)
+  queue.submit(key, 'body again')
+  queue.flush(key)
+  assert.equal(calls.length, LOOP_SAVE_LIMIT, 'the loop stops writing')
+  const paused = queue.getState(key)
+  assert.equal(paused.status, 'paused')
+  assert.match(String(paused.banner), /changing elsewhere/)
+  assert.deepEqual(reports, [{
+    kind: 'paused',
+    commits: LOOP_SAVE_LIMIT,
+    windowMs: LOOP_WINDOW_MS,
+    resource: key,
+    revision: `rev${LOOP_SAVE_LIMIT}`,
+  }])
+  // A paused note still follows what the note now says elsewhere.
+  assert.equal(queue.canFollowRemote(key, 'rev99'), true)
+  // And typing is never blocked: it releases the pause and saves.
+  queue.markLocalInput(key)
+  assert.equal(queue.getState(key).status, 'saved')
+  queue.submit(key, 'typed over the loop')
+  queue.flush(key)
+  assert.equal(calls.length, LOOP_SAVE_LIMIT + 1)
+})
+
+test('resume lifts a pause by hand and commits what was held', async () => {
+  const { transport, calls, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport, () => {})
+  const key = noteQueueKey('p1', 'r1')
+  loaded(queue, key)
+  for (let step = 0; step < LOOP_SAVE_LIMIT; step++) {
+    queue.submit(key, `body ${step}`)
+    queue.flush(key)
+    deferreds[step].resolve({ revision: `rev${step + 1}`, status: 'ready' })
+    await tick()
+  }
+  queue.submit(key, 'refused')
+  assert.equal(queue.getState(key).status, 'paused')
+  queue.resume(key)
+  assert.equal(queue.getState(key).status, 'saved')
+  assert.equal(queue.getState(key).banner, null)
+  queue.submit(key, 'after resume')
+  queue.flush(key)
+  assert.equal(calls[calls.length - 1].text, 'after resume')
+})
+
+test('a save-loop report is a POST the daemon can log, and never throws at the editor', () => {
+  const { transport } = makeTransport()
+  const queue = new NoteSaveQueue(transport, () => { throw new Error('reporter exploded') })
+  const key = noteQueueKey('p1', 'r1')
+  loaded(queue, key)
+  for (let step = 0; step < LOOP_SAVE_LIMIT; step++) queue.submit(key, `body ${step}`)
+  assert.doesNotThrow(() => queue.submit(key, 'body again'))
+  assert.equal(queue.getState(key).status, 'paused')
 })
 
 // Continuity's first render measures inline-code affordances against `offsetParent`, which is
