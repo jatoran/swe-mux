@@ -109,9 +109,10 @@ import { ConversationSurface, ConversationToggle, useConversation, type VoicePan
 import { AssistantPanel } from './AssistantPanel'
 import {
   ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
-  latestOpenAction, noteAssistantActionEvent, reportUiResult,
+  latestOpenAction, NEW_CONVERSATION_PHRASES, NEW_CONVERSATION_REPLY,
+  noteAssistantActionEvent, reportUiResult,
   sendTurn as sendAssistantTurnApi,
-  spokenConfirmation, type AssistantClientContext, type AssistantStatus,
+  spokenConfirmation, startNewDialog, type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
@@ -5049,6 +5050,23 @@ export function App() {
         return next
       })
     },voice:{phrases:['assistant','open assistant','open the assistant','chat','close assistant','close the assistant']}},
+    // Clearing context is the one assistant act that runs on the word with no
+    // confirmation card, because nothing is destroyed: the prior dialog is
+    // unremembered, not deleted, and the panel keeps it readable. The spoken
+    // reply therefore has to carry both halves - "context cleared" on its own
+    // describes the same act as a deletion the operator cannot see.
+    { id:'assistant.newConversation',label:'Start a new assistant conversation',category:'voice',
+      available:!!assistantInfo?.enabled,disabledReason:'Enable the assistant in Settings → Assistant first',
+      run:()=>{setAssistantOpen(true);setVoicePanelMode('chat');void startNewDialog().catch(()=>{})},voice:{
+      phrases:NEW_CONVERSATION_PHRASES,
+      execute:async()=>{
+        await startNewDialog()
+        // Show what was just done. The reply claims the old conversation is
+        // still in the panel, so the panel is what the operator must land on.
+        setAssistantOpen(true);setVoicePanelMode('chat')
+        return{detail:NEW_CONVERSATION_REPLY,speech:NEW_CONVERSATION_REPLY}
+      },
+    }},
     { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
       phrases:['approve','review approval','confirm tool use'],
       execute:async()=>{

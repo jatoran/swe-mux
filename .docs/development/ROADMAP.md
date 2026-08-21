@@ -3808,11 +3808,17 @@ model is hitting.
 
 ### "New conversation" by voice
 
-- [ ] Deterministic command-registry aliases ("mux, new conversation" / "clear context") that call
+- [x] Deterministic command-registry aliases ("mux, new conversation" / "clear context") that call
   the existing new-dialog path (`AssistantPanel` already has the button; voice has no route to
   it).
-- [ ] No confirmation: the act is reversible, because the old dialog stays readable in the panel,
+  Shipped as `assistant.newConversation`; both surfaces now route through one `startNewDialog`,
+  which announces `mux:assistant-dialog-reset` rather than letting the panel clear itself.
+- [x] No confirmation: the act is reversible, because the old dialog stays readable in the panel,
   and the spoken reply says both things - context cleared, old conversation still there.
+  "Stays readable" was a claim the panel did not yet honour - it cleared its view outright - so
+  the cleared conversation is now kept in a collapsed `previous conversation` disclosure.
+  Without that the reply would have been describing a reversibility the operator had no way to
+  reach, which is the one thing that would have made the absent confirmation unsafe.
 
 ### Unfinished-utterance deferral
 

@@ -153,6 +153,14 @@ The assistant is text-first and voice-attached, not voice-only:
   Everything one turn says shares one stream, including any card it opens, so nothing a turn says can cut off something else the same turn said: starting a second stream hard-stops the first, which is what used to truncate the card's line mid-word and follow it with several seconds of silence while the next clip synthesized.
   And the appends are serialized, because segment order on the daemon is the order its `speak` calls arrive.
 - A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant in dictation mode too — one addressee removes the ambiguity the wake word exists to resolve.
+- **Starting a fresh conversation is a deterministic registry alias, not a model turn.**
+  `assistant.newConversation` puts "new conversation", "clear context", and their variants (`NEW_CONVERSATION_PHRASES` in `assistant.ts`) on the ordinary command registry, so clearing context costs no model call and cannot be paraphrased into something adjacent.
+  Nothing collides: the spawn aliases are `new <harness>`, never `new conversation`.
+  It is the one assistant act that runs on the word with **no confirmation card**, and that is only safe because nothing is destroyed.
+  `startNewDialog` merely *unremembers* the device's dialog id, so the daemon keeps the prior dialog in `GET /api/assistant/dialogs` and the panel keeps it readable under a collapsed `previous conversation` disclosure.
+  The spoken reply therefore has to carry both halves, context cleared and previous conversation still there: "context cleared" on its own describes the same act as a deletion the operator can neither see nor undo, which is what would make the missing confirmation unsafe rather than merely absent.
+  Both surfaces go through `startNewDialog`, which announces `mux:assistant-dialog-reset`, and the panel never clears itself directly - so a conversation started by voice and one started by the `new` button leave the panel in exactly the same state.
+  The alias is unavailable while the assistant is off, and says so in the voice catalog rather than disappearing from it.
 - **Spoken confirmation is deterministic.**
   A pending or scheduled card is spoken with the daemon-built `announcement`, which omits the text preview the visible card keeps; a bare `confirm`/`cancel` (a closed word set, `spokenConfirmation` in `assistant.ts`) resolves the newest open card directly against the confirm/cancel endpoints — the model is never in that loop, so it cannot "confirm" by talking about it.
   Anything conversational ("yes but change the wording") falls through to the model as an ordinary turn.

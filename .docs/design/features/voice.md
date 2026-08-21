@@ -448,6 +448,9 @@ executed action — so that number is measured rather than estimated.
   Session launch accepts the Project name, the stable visible `Project N` address, or no Project qualifier for the selected Project, and the ordinary spawn path focuses the optimistic new tab immediately.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
+- **Clearing the assistant's context is one of those registry aliases.**
+  `assistant.newConversation` ("Mux, new conversation", "Mux, clear context") calls the same new-dialog path the panel's `new` button uses, deterministically and with no model call.
+  Alone among assistant acts it carries no confirmation, because the prior dialog is unremembered rather than deleted and stays readable in the panel; the spoken reply says both halves, which is what makes the missing confirmation honest (`assistant.md`).
 - **Safe Action rail items join that same registry only while a session is focused.**
   `railVoice.ts` resolves the focused Project's Action configuration for the current device and backend, deduplicates entries placed on the Rail or Drawer layout, and adapts only an explicit safe subset to registry commands.
   The shipped subset is terminal copy/paste plus non-destructive terminal keys: Escape, Enter, Tab, Ctrl+C, arrows, cursor navigation, restore input, newline, and the Markdown insertion helpers.
