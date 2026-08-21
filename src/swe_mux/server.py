@@ -38,7 +38,15 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
-from . import agent_environment, budget, git_init, git_review, mcp_tools, session_titles
+from . import (
+    agent_environment,
+    budget,
+    git_init,
+    git_review,
+    mcp_tools,
+    session_titles,
+    worktree_graveyard,
+)
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -2378,6 +2386,17 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     )
     process_restore_task.add_done_callback(_log_task_failure)
     deferred_tasks.append(process_restore_task)
+    # Deferred for the same reason: a removal whose purge was cancelled by the last
+    # shutdown left a buried checkout on disk, and nobody would ever notice it. Two
+    # stats per Project, then whatever deletion the leftovers need.
+    graveyard_sweep = asyncio.create_task(
+        asyncio.to_thread(
+            _sweep_graveyards, [project.root for project in projects.projects.values()]
+        ),
+        name="worktree-graveyard-sweep",
+    )
+    graveyard_sweep.add_done_callback(_log_task_failure)
+    deferred_tasks.append(graveyard_sweep)
     ghost_windows.start()
     fleet.start()
     voice.start()
@@ -2549,6 +2568,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         # Kept beside the automation set and cancelled the same way, so a daemon
         # shutdown does not leave a timer holding a reference to a dead session.
         action_timeout_tasks=set(),
+        # One entry per worktree-removal purge in flight. Cancelled at shutdown like
+        # the rest: the graveyard is durable, so a cancelled purge costs disk until
+        # the next removal or the sweep at the next daemon start.
+        graveyard_tasks=set(),
         # Cancelled in teardown alongside every other one-shot task; published
         # rather than kept as a local because teardown no longer shares this
         # function's scope.
@@ -2606,7 +2629,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
             task.cancel()
     if one_shot_tasks:
         await asyncio.gather(*one_shot_tasks, return_exceptions=True)
-    for holder in ("automation_tasks", "action_timeout_tasks"):
+    for holder in ("automation_tasks", "action_timeout_tasks", "graveyard_tasks"):
         pending = tuple(app.get(holder) or ())
         for task in pending:
             task.cancel()
@@ -14199,6 +14222,152 @@ def _quarantine_orphaned_worktree(path: str, operation_id: str) -> str:
     return str(target)
 
 
+#: How long the fast path waits for `git status` to say whether a checkout is clean.
+WORKTREE_STATUS_TIMEOUT_SECONDS = 20.0
+
+
+async def _worktree_common_dir(worktree_root: str) -> Path | None:
+    """The object store this checkout belongs to, asked of the checkout itself.
+
+    Asked *of the worktree* rather than of the Project root on purpose: the answer
+    has to be the store that owns this exact tree, and a directory whose `.git` link
+    is broken must produce no answer at all rather than the enclosing repository's.
+    `--git-common-dir` still replies relatively whenever it can, and relative to
+    Git's own working directory - so it is resolved against the worktree, never
+    against the daemon's process directory.
+    """
+    code, reported = await _git(worktree_root, "rev-parse", "--git-common-dir")
+    if code or not reported.strip():
+        return None
+    try:
+        return Path(worktree_root).joinpath(reported.strip()).resolve()
+    except OSError:
+        return None
+
+
+async def _worktree_is_removable_in_place(worktree_root: str) -> bool:
+    """Whether Git would delete this tree without `--force`.
+
+    The question the fast path has to answer before renaming anything: Git refuses
+    to remove a worktree containing modified or untracked files, and the rename
+    would step around that refusal. Asking `status` is the same question Git asks
+    itself, and an unreadable answer counts as "no" - the ordinary in-place removal
+    then re-asks it and states Git's own refusal, which is the message worth
+    showing.
+    """
+    # Not the four-second observation deadline: this runs inside a mutation route, and a
+    # cold `status` over a checkout carrying a dependency tree is exactly the case the
+    # fast path exists for. A timeout here is answered as "no", which costs the rename
+    # rather than correctness.
+    code, output = await _git(
+        worktree_root,
+        "status",
+        "--porcelain",
+        "--ignore-submodules=none",
+        timeout_seconds=WORKTREE_STATUS_TIMEOUT_SECONDS,
+    )
+    return code == 0 and not output.strip()
+
+
+async def _bury_worktree(
+    registered: str,
+    entry: Mapping[str, Any],
+    *,
+    is_main: bool,
+    force: bool,
+    operation_id: str,
+) -> Path | None:
+    """Rename a checkout out of the way so its removal can feel instant.
+
+    Returns the buried path, or ``None`` when the fast path does not apply - in
+    which case the caller removes the tree in place exactly as before. Every
+    ``None`` is a case where the rename would either be refused or would change
+    what the removal means:
+
+      * **the main tree** - Git refuses to remove it at all, so renaming it first
+        would move the user's primary checkout out of the way for a removal that
+        was never going to happen. Git lists the main working tree first, which is
+        what `is_main` is read from; nothing here may infer it from the shape of
+        `.git` instead, because a main tree with a `.git` *file* is legal
+        (`git init --separate-git-dir`) and the obvious probe would say the opposite.
+      * **locked** - measured: Git refuses to remove a locked worktree even once
+        its directory is gone, so renaming first would leave a renamed tree and a
+        live registration. Git's own refusal is the right answer and needs the tree
+        where it is.
+      * **submodules** - Git refuses to remove a worktree with populated
+        submodules, and burying it would step around a rule this code does not
+        reimplement.
+      * **not clean, without force** - Git refuses in about fifty milliseconds, so
+        the in-place path costs nothing and says why.
+      * **no resolvable common directory, or a rename the filesystem refused** -
+        a cross-volume graveyard, or the known Windows class where an open handle
+        inside the tree defeats the move (`WinError 5`/`32`). The source is
+        untouched in both.
+    """
+    if is_main or "locked" in entry:
+        return None
+    tree = Path(registered)
+    if (tree / ".gitmodules").exists():
+        return None
+    if not force and not await _worktree_is_removable_in_place(registered):
+        return None
+    common_dir = await _worktree_common_dir(registered)
+    if common_dir is None:
+        return None
+    try:
+        return await asyncio.to_thread(
+            worktree_graveyard.bury,
+            registered,
+            worktree_graveyard.graveyard_root(common_dir),
+            operation_id,
+        )
+    except OSError as exc:
+        log.info(
+            "worktree_remove_fast_path_defeated operation_id=%s path=%s error_type=%s error=%s",
+            operation_id,
+            registered,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+def _schedule_graveyard_purge(app: web.Application, root: Path, operation_id: str) -> None:
+    """Delete what the graveyard holds, off the request's clock.
+
+    Everything under the root is purged rather than only what this removal buried:
+    a purge interrupted by a daemon shutdown leaves bytes behind, and the next
+    removal is the cheapest moment to notice. A cancelled purge is not an error -
+    the graveyard is durable and the sweep at daemon start tries again.
+    """
+    task = asyncio.create_task(
+        asyncio.to_thread(worktree_graveyard.purge, root),
+        name=f"worktree-graveyard-purge-{operation_id}",
+    )
+    task.add_done_callback(_log_task_failure)
+    tasks = app.get("graveyard_tasks")
+    if isinstance(tasks, set):
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+
+def _sweep_graveyards(roots: Sequence[str]) -> None:
+    """Purge leftovers from removals a previous daemon did not finish.
+
+    Filesystem only, no Git: for each Project root whose `.git` is a directory,
+    that directory is the common one and its graveyard is purged. A Project root
+    that is itself a linked worktree carries a `.git` *file* and is skipped - its
+    common directory belongs to a repository that is either registered here in its
+    own right or will be swept by the next removal, and resolving it would mean
+    running Git for every Project on the startup path.
+    """
+    for root in roots:
+        common = Path(root) / ".git"
+        if not common.is_dir():
+            continue
+        worktree_graveyard.purge(worktree_graveyard.graveyard_root(common))
+
+
 async def _spawn_into_worktree(
     app: web.Application,
     spawn_body: Any,
@@ -14880,6 +15049,21 @@ async def remove_worktree(request: web.Request) -> web.Response:
             registered,
             repair.code,
         )
+    # The fast path, when it applies: the directory is renamed into the repository's
+    # graveyard with one call, and what Git removes afterwards is a registration whose
+    # tree is already gone - measured to succeed and to drop only this entry, where
+    # `git worktree prune` is global and would take unrelated broken checkouts with it.
+    # `_bury_worktree` answers `None` for every case where this would change what the
+    # removal means, and the code below is then exactly what it always was.
+    buried = await _bury_worktree(
+        registered,
+        entry,
+        # Git lists the main working tree first, and the pre-repair listing is where
+        # that is read from because the main tree is not the thing a repair moves.
+        is_main=next(iter(listed), None) == requested.casefold(),
+        force=force,
+        operation_id=operation_id,
+    )
     args = ["worktree", "remove"]
     if force:
         args.append("--force")
@@ -14887,6 +15071,25 @@ async def remove_worktree(request: web.Request) -> web.Response:
     mutation = await run_git_mutation(
         cwd, *args, operation="worktree_remove", operation_id=operation_id
     )
+    if mutation.code and buried is not None:
+        # Git kept the registration after the tree was renamed away, which is a state
+        # nothing here knows how to reason about. Put the tree back exactly where it
+        # was and let the ordinary in-place removal produce Git's own answer.
+        restored = await asyncio.to_thread(worktree_graveyard.exhume, buried, registered)
+        log.warning(
+            "worktree_remove_fast_path_reverted operation_id=%s cwd=%s path=%s "
+            "git_code=%s restored=%s",
+            operation_id,
+            cwd,
+            registered,
+            mutation.code,
+            restored,
+        )
+        buried = None
+        if restored:
+            mutation = await run_git_mutation(
+                cwd, *args, operation="worktree_remove", operation_id=operation_id
+            )
     if mutation.code:
         try:
             post_remove_entries = await _listed_worktree_entries(cwd)
@@ -14969,18 +15172,31 @@ async def remove_worktree(request: web.Request) -> web.Response:
             },
             504 if mutation.timed_out else 400,
         )
+    cleanup: dict[str, Any] = {"status": "removed", "path": None}
+    if buried is not None:
+        _schedule_graveyard_purge(request.app, buried.parent, operation_id)
+        cleanup = {"status": "purging", "path": str(buried)}
     await request.app["events"].emit("worktree_removed", source="user", cwd=cwd, path=registered)
     log.info(
         "worktree_remove_completed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
-        "duration_ms=%.1f",
+        "cleanup_status=%s buried_path=%s duration_ms=%.1f",
         operation_id,
         cwd,
         registered,
         force,
         repaired,
+        cleanup["status"],
+        cleanup["path"] or "",
         (time.perf_counter() - started_at) * 1000,
     )
-    return json_response({"ok": True, "operation_id": operation_id, "repaired": repaired})
+    return json_response(
+        {
+            "ok": True,
+            "operation_id": operation_id,
+            "repaired": repaired,
+            "cleanup": cleanup,
+        }
+    )
 
 
 async def reveal_path(request: web.Request) -> web.Response:

@@ -79,6 +79,14 @@ A throw in the observer would abandon a half-read pipe and block the process it 
 
 **Not:** authority of any kind - bootstrap has none to check and verification's lives in `worktree_verify.py` - or interpreting what the observed bytes mean (`verify_progress.py`).
 
+### `worktree_graveyard.py`
+
+Where a removed checkout goes so the deletion does not have to happen in front of anyone: the graveyard's location under the repository's common Git directory, the single atomic rename that buries a tree, the restore that undoes it, and the idempotent purge.
+
+The purge clears the read-only bit before retrying a file (Git writes loose objects read-only, and Windows cannot unlink one at all), counts what it could not delete rather than raising, and never removes the graveyard root - a purge racing a burial must not delete the directory another removal is renaming into.
+
+**Not:** deciding *whether* a worktree may be buried, which is Git's set of refusals and lives with the removal route in `server.py`; running Git; or scheduling the purge.
+
 ### `worktree_verify.py`
 
 The land gate's authority: `[worktree].verify_command` and `.worktree-verify` resolution, the machine-local exact-content approval store (a digest over source-kind plus bytes, with a retained snapshot for the diff, un-approved by any edit), and the typed run result whose exit code is never re-derived and which also carries the steps the run announced and its line count.

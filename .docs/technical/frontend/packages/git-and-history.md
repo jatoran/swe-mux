@@ -5,8 +5,8 @@ Design: `../../../design/features/git.md`, `../../../design/features/land-queue.
 
 ## Git tab
 
-`GitTab.tsx`, `gitWorktrees.ts`, `gitReview.ts`, `GitFileRow.tsx`, `GitReviewModal.tsx`,
-`GitSessionLinks.tsx`, `LazyGitDiff.tsx`, `GitDiffView.tsx`
+`GitTab.tsx`, `gitWorktrees.ts`, `worktreeRemoval.ts`, `gitReview.ts`, `GitFileRow.tsx`,
+`GitReviewModal.tsx`, `GitSessionLinks.tsx`, `LazyGitDiff.tsx`, `GitDiffView.tsx`
 
 Map, Log, and durable session-provenance orchestration.
 Mutations are limited to API-wrapped worktree add and remove, land *requests*, the one-key `[worktree] verify_command` write, and the gate approval.
@@ -37,6 +37,17 @@ Parsing stays faithful to the payload; ordering is a presentation decision on to
 
 Violet emphasis marks nonzero comparison-ahead counts.
 Log draws TUI graph context, colored Git-authored lanes and nodes, semantic ref ordering, and exact commit-OID worktree-tip markers, without hiding any refs.
+
+### Pending removals and bulk select
+
+`worktreeRemoval.ts` is the pure half: the pending-removal set, the per-checkout removal assessment (its blocks, its warnings, whether Git will need force), and the two bulk plans.
+
+The pending set belongs to the **list**, not to a row.
+`settleRemovals` drops an entry only when the refreshed inventory stops listing it, which is why a removal's own response never ends the indication - the daemon answers a renamed removal before Git has deleted a byte, and a fallback removal while Git still is.
+`forgetRemoval` is the one early exit and it is only reachable from a refusal.
+
+`planBulkRemoval` separates what will run, what is refused and why, and what carries uncommitted or unlanded work; `planBulkLand` takes every named branch in map order and names the main tree and a detached HEAD as unable to land.
+Neither invents a permission the row does not have, and an unmeasured checkout takes the side of needing force rather than being called clean.
 
 Explicit unavailable and prunable presentation never converts null measurements to clean.
 Also: read-specific timeout guidance, failed-removal refresh with the mutation error retained, review locators, ephemeral annotation anchors, stale-session reduction, bounded review-packet generation, shared file rows, neutral comparison labels, and the adaptive review modal.
