@@ -25,13 +25,47 @@ const KEYBINDINGS = {
   rejected: {},
 }
 
+/**
+ * A cached OpenRouter catalog, shaped exactly as `OpenRouterClient.models()` emits it.
+ *
+ * Every awkward row the real catalog contains is represented, because the picker's
+ * layout is only interesting where the data is: a sub-cent price beside a
+ * double-digit one (the columns have to line up), a free model, an entry whose
+ * pricing OpenRouter did not report (which must not read as free), an auto-router
+ * whose price is negative, and an id long enough to need the ellipsis.
+ */
+const MODEL_CATALOG = [
+  { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek: DeepSeek V4 Flash', context_length: 1_000_000, prompt_price: 0.00000008, completion_price: 0.0000003 },
+  { id: 'openai/gpt-5.6-luna', name: 'OpenAI: GPT-5.6 Luna', context_length: 400_000, prompt_price: 0.00000005, completion_price: 0.0000004 },
+  { id: 'openai/gpt-5.6-terra', name: 'OpenAI: GPT-5.6 Terra', context_length: 400_000, prompt_price: 0.00000125, completion_price: 0.00001 },
+  { id: 'anthropic/claude-sonnet-5', name: 'Anthropic: Claude Sonnet 5', context_length: 200_000, prompt_price: 0.000003, completion_price: 0.000015 },
+  { id: 'meta-llama/llama-4-scout:free', name: 'Meta: Llama 4 Scout (free)', context_length: 128_000, prompt_price: 0, completion_price: 0 },
+  { id: 'openrouter/auto', name: 'OpenRouter: Auto Router', context_length: 2_000_000, prompt_price: -1, completion_price: -1 },
+  { id: 'somevendor/model-without-published-pricing', name: 'SomeVendor: Model Without Published Pricing', context_length: 0, prompt_price: null, completion_price: null },
+  { id: 'averylongvendorname/an-extremely-long-model-identifier-preview-2026-08-01', name: 'AVeryLongVendorName: An Extremely Long Model Identifier Preview', context_length: 32_768, prompt_price: 0.000000015, completion_price: 0.00000009 },
+]
+
+const PROVIDER = {
+  secret: { configured: true, source: 'stored', persistent: true },
+  models: { models: MODEL_CATALOG, fetched_at: 1_770_000_000, stale: false },
+  origin: 'https://openrouter.ai/api/v1',
+  cheap_model: 'deepseek/deepseek-v4-flash',
+  standard_model: 'anthropic/claude-sonnet-5',
+}
+
 const BUNDLE = {
-  config: SETTINGS_CONFIG_FIXTURE,
+  // The routed pair is set and the two overrides are not, so the routing summary has
+  // both a configured row and an inherited one to distinguish.
+  config: {
+    ...SETTINGS_CONFIG_FIXTURE,
+    openrouter_cheap_model: 'deepseek/deepseek-v4-flash',
+    openrouter_standard_model: 'anthropic/claude-sonnet-5',
+  },
   keybindings: KEYBINDINGS,
   profiles: { profiles: [], detected: [] },
   projects: [],
   automation: null,
-  provider: null,
+  provider: PROVIDER,
   usage: null,
   errors: {},
 }

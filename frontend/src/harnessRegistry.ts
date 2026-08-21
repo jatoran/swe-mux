@@ -100,6 +100,10 @@ export interface HarnessDescriptor {
   reserved_launch_args?: string[]
   /** What a user types to invoke an authored skill (`/`, `$`, `/skill:`). */
   skill_invocation_prefix?: string
+  /** The key sequence that discards this CLI's whole composer. Absent from older
+   *  daemon payloads; a missing value defaults to Ctrl+U, which is what mux sent
+   *  before the field existed. */
+  composer_clear_keys?: string
   capabilities: HarnessCapabilities
 }
 
@@ -274,6 +278,18 @@ export const resolvesTranscriptByCwd = (name: string | undefined): boolean =>
  */
 export const skillInvocationPrefix = (name: string | undefined): string =>
   harnessDescriptor(name)?.skill_invocation_prefix ?? '/'
+
+/**
+ * The key sequence that clears this CLI's whole composer.
+ *
+ * Declared for the same reason the skill prefix is: it is a per-CLI fact, and the
+ * browser's own guess at it was wrong. Ctrl+U is a *line* kill in Claude Code, so
+ * a rail button sending it cleared one line of a multi-line draft and reported a
+ * clear. An unknown harness falls back to Ctrl+U, which is right for the shells
+ * mux drives and for every other harness measured so far.
+ */
+export const composerClearKeys = (name: string | undefined): string =>
+  harnessDescriptor(name)?.composer_clear_keys || ''
 export const harnessDisplayName = (name: string): string => harnessDescriptor(name)?.display_name || name
 // Every registered harness, ignoring enablement. Kept for the display/history
 // surfaces and for `allHarnessesIncludingDisabled`; the launcher accessors below

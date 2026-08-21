@@ -1,10 +1,18 @@
 // The daemon's own default public config, dumped from `Config(data_dir=...).public_dict()`
 // so the Settings harness renders against the real field set rather than a hand-kept
 // subset that quietly goes stale. Regenerate by dumping `public_dict()` again if a field
-// is added; nothing here is asserted on, it only has to be complete enough that every
-// tab renders.
+// is added. It had gone stale exactly that way: every `assistant_*` field was missing and
+// four removed `tts_edge_*` fields were still here, so the assistant tab rendered against
+// values the daemon has not served for months.
+//
+// Most of it only has to be complete enough that every tab renders. The exception is the
+// model ids, which `model-picker.spec.ts` resolves against a stubbed catalog, so a default
+// that moves in `config.py` surfaces there as a failed assertion rather than as drift.
 export const SETTINGS_CONFIG_FIXTURE = {
   "access_mode": "local+tailnet",
+  "agent_interject_enabled": true,
+  "agent_interject_hourly_budget": 10,
+  "agent_interject_min_interval_seconds": 60.0,
   "agent_message_hourly_budget": 20,
   "agent_message_max_chain_depth": 6,
   "agent_message_max_chars": 4000,
@@ -19,6 +27,13 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "approval_keystroke_delivery": true,
   "approval_keystroke_window_seconds": 30.0,
   "approval_max_auto_per_grant": 200,
+  "assistant_context_messages": 30,
+  "assistant_daily_budget_usd": 2.0,
+  "assistant_enabled": false,
+  "assistant_max_output_tokens": 700,
+  "assistant_model": "openai/gpt-5.6-terra",
+  "assistant_stream_replies": true,
+  "assistant_trust_reversible": "cancel_window",
   "attach_replay_bytes": 524288,
   "attention_breakpoint_markers": true,
   "attention_daily_interrupt_budget": 4,
@@ -95,6 +110,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "host": "127.0.0.1",
   "log_level": "INFO",
   "middle_click_paste": true,
+  "mobile_back_view_history": true,
   "mobile_gesture_overlay_back": true,
   "mobile_gesture_swipe_away_close": true,
   "mobile_gestures": {
@@ -110,6 +126,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "mobile_scroll_direction": "natural",
   "mobile_scroll_sensitivity": 1.0,
   "mobile_vertical_drag": "smart",
+  "new_project_parent": "",
   "note_command_rail": "auto",
   "note_font_family": "",
   "note_font_size_px": 0,
@@ -217,14 +234,13 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "tts_content": "summary",
   "tts_daily_budget_usd": 1.0,
   "tts_default_mode": "off",
-  "tts_edge_pitch": "+0Hz",
-  "tts_edge_rate": "+10%",
-  "tts_edge_voice": "en-US-JennyNeural",
   "tts_enabled": false,
   "tts_engine": "edge",
+  "tts_kokoro_speed": 1.0,
+  "tts_kokoro_voice": "af_heart",
+  "tts_lexicon": {},
   "tts_sapi_rate": 0,
   "tts_sapi_voice": "",
-  "tts_soften_stops": true,
   "tts_summary_max_tokens": 500,
   "tts_summary_model": "",
   "tts_verbatim_max_chars": 6000,
@@ -238,6 +254,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   ],
   "usage_commands": {},
   "utility_rail_display": "icon",
+  "voice_chat_patience_ms": 1200,
   "voice_commands": [
     {
       "action": "send",

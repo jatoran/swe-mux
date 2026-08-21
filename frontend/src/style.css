@@ -326,7 +326,29 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .projects-manager .model-picker-options strong{display:flex;align-items:center;gap:6px}
 .model-picker-options strong,.model-picker-options span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .model-picker-options span{color:var(--muted);font-size:8px}
+/* The id/price row. Its own class rather than a restyled `span`, because
+   ProjectPicker borrows this whole block for a list that has no second cell. The
+   id takes the slack and ellipsizes; price keeps its natural width so figures
+   align down the list, and is undimmed because it, not the id, is what the row
+   is being read for. */
+.model-picker-options .model-picker-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;white-space:normal}
+.model-picker-options .model-picker-price{color:var(--text);opacity:.75;text-align:right}
 .model-picker-empty{padding:10px;color:var(--muted)}
+/* Where each model is used: a read-only inventory, so it is a list of stated facts
+   rather than a form. Rows are cards instead of table rows because the "where" cell
+   is a control and the note wraps to several lines, neither of which survives a
+   column layout on a phone. */
+.model-routing{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.model-routing li{display:grid;gap:3px;padding:7px 8px;border:1px solid var(--line);background:var(--panel2)}
+.model-routing-head{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.model-routing-kind{padding:0 4px;border:1px solid var(--line);color:var(--muted);font-size:8px;text-transform:uppercase}
+.model-routing-pinned{border-color:var(--green);color:var(--green)}
+.model-routing-model{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.model-routing-model code{min-width:0;overflow-wrap:anywhere}
+.model-routing-model em{color:var(--muted)}
+.model-routing-inherited,.model-routing-price{color:var(--muted);font-size:8px}
+.model-routing li small{color:var(--muted)}
+.model-routing-where button{padding:2px 6px;font-size:9px}
 /* Shaped like every other setting rather than like a banner: label column, control
    column, same gap and padding as `.settings-content label`. Stacked full-width it was
    the only control in the panel spanning the label column too, which read as a section
@@ -349,7 +371,14 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .settings-panel .file-input { display:none }.theme-actions { display:flex;gap:6px }.theme-tokens { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px }.settings-errors { grid-column:1/-1 }.settings-errors p { color:var(--red) }
 .quick-launcher select { width:100%;height:calc(31px*var(--ui-scale));border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--bg);color:var(--text);font:inherit }.path-entry { display:grid;grid-template-columns:minmax(0,1fr) auto auto }.path-entry input { min-width:0 }.path-entry button,.directory-browser button { border:1px solid var(--line);border-radius:0;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer }.directory-browser { max-height:180px;overflow:auto;display:grid;padding:5px;border-top:1px solid var(--line) }.directory-browser>span { padding:5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis }.directory-browser button { min-height:27px;text-align:left;padding:0 7px;border-width:0 0 1px }
 .profile-settings { grid-column:1/-1 }.profile-list { display:grid;gap:7px }.profile-list article,.project-default { padding:9px;border:1px solid var(--line);background:var(--bg) }.profile-row { display:grid;grid-template-columns:minmax(90px,.7fr) minmax(130px,1fr) repeat(5,auto);gap:4px;align-items:end }.profile-row label { margin:0 }.profile-row button { min-width:29px;padding:0 5px }.profile-list textarea { min-height:55px }.profile-list small { display:block;color:var(--muted);margin-top:5px }.project-default { margin-bottom:7px }.project-default>strong { display:block;margin-bottom:8px;color:var(--green) }
-@media(max-width:760px) { .settings-layer { padding:0 }.settings-panel { width:100%;height:100%;border:0;box-shadow:none }.settings-panel>main { grid-template-columns:1fr }.settings-panel>footer { overflow-x:auto;justify-content:flex-start }.settings-panel>footer>span { display:none }.model-picker-options{max-height:min(240px,34dvh)}.theme-picker-options{max-height:min(315px,44dvh)} }
+@media(max-width:760px) { .settings-layer { padding:0 }.settings-panel { width:100%;height:100%;border:0;box-shadow:none }.settings-panel>main { grid-template-columns:1fr }.settings-panel>footer { overflow-x:auto;justify-content:flex-start }.settings-panel>footer>span { display:none }.model-picker-options{max-height:min(240px,34dvh)}.theme-picker-options{max-height:min(315px,44dvh)}
+/* Stacked, not side by side. A setting's control column is about 216px on a phone,
+   and the price cell wants 155-192px of it — side by side that leaves the id 0-37px,
+   which erases the exact identifier the row is partly there to show. There is no
+   hover to recover it from the title on a touch device, so the price takes a line of
+   its own instead. The list scrolls inside a bounded height either way. */
+.model-picker-options .model-picker-meta{grid-template-columns:minmax(0,1fr)}
+.model-picker-options .model-picker-price{text-align:left} }
 
 /* Sidebar is a TUI tree, not a stack of cards. */
 .project-tree { padding:4px 0 }
@@ -1962,6 +1991,32 @@ body {
 .mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 .mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
+/* A rail picker's drop-up. Positioned by `anchoredPopoverStyle` (the same math the
+   account and resource popovers use), which sets left/bottom/width and a max-height
+   against the space above the trigger.
+
+   The row cap is the point: five rows of list, then scroll. `--rail-dropup-rows` and
+   `--rail-dropup-row` are the whole contract, so the height can be tuned without
+   touching either drop-up's markup, and rows are a fixed height so the cap actually
+   means five of them rather than "five short ones or two long ones". */
+.rail-dropup{--rail-dropup-rows:5;--rail-dropup-row:36px;position:fixed;z-index:96;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #0009;color:var(--text)}
+.rail-dropup-open{position:sticky;top:0;z-index:1;width:100%;min-height:28px;padding:0 8px;border:0;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;text-align:left;letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
+.rail-dropup-open:hover,.rail-dropup-open:focus-visible{background:color-mix(in srgb,var(--green) 12%,var(--panel2))}
+.rail-dropup-list{max-height:calc(var(--rail-dropup-rows) * var(--rail-dropup-row));overflow-y:auto;overscroll-behavior:contain}
+.rail-dropup-row{box-sizing:border-box;width:100%;height:var(--rail-dropup-row);display:grid;align-content:center;gap:1px;padding:0 8px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);background:transparent;color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
+.rail-dropup-row:hover,.rail-dropup-row:focus-visible{background:var(--panel2)}
+.rail-dropup-row:disabled{opacity:.45;cursor:not-allowed}
+.rail-dropup-row.shadowed{opacity:.6}
+/* Both lines are single-line and ellipsized: a drop-up row that wrapped would break
+   the fixed height the five-row cap is measured in. */
+.rail-dropup-row>span,.rail-dropup-row>small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-dropup-row>span{display:flex;align-items:center;gap:5px}
+.rail-dropup-row>small{color:var(--muted);font-size:8px}
+.rail-dropup-row code{color:var(--green);font:inherit}
+.rail-dropup-row em{color:var(--muted);font-style:normal}
+.rail-dropup-empty,.rail-dropup-note{margin:0;padding:9px 8px;color:var(--muted);font:9px/1.5 'Cascadia Mono',Consolas,monospace}
+.rail-dropup-note{border-top:1px solid var(--line)}
+.terminal-action-rail .rail-dropup-open-trigger{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green)}
 /* Dismissible first-open orientation. Persistent copy lives in tooltips and the
    scope note instead of a standing paragraph. */
 .commandrail-settings .rail-intro-callout{margin:0 0 10px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--blue) 45%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}
@@ -3952,6 +4007,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-provenance article{display:grid;gap:4px;padding:8px 10px;border-bottom:1px solid var(--line)}
 .git-provenance article>div{display:flex;gap:8px;min-width:0}.git-provenance article>div strong{color:var(--accent)}.git-provenance article>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .git-provenance article code{color:var(--muted);font-size:8px}.git-provenance article small{overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}.git-provenance article em{color:var(--amber);font-size:8px;font-style:normal}
+/* Checkout facts, visually separated from session claims: a reference movement
+   names no session, and rendering it in the same card shape is what made a
+   landing read as an accusation against whoever had the directory open. */
+.git-provenance-occupancy{opacity:.75}
+.git-ref-moves{display:grid;border-top:1px solid var(--line)}
+.git-ref-moves h4{margin:0;padding:8px 10px 4px;color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.git-ref-move-kind{color:var(--muted);font-size:8px}
+.git-ref-move-kind.merged,.git-ref-move-kind.created{color:var(--accent)}
+.git-ref-move-kind.rebased,.git-ref-move-kind.reset,.git-ref-move-kind.unknown{color:var(--amber)}
 .git-review-backdrop{position:fixed;inset:0;z-index:120;display:grid;place-items:center;background:#050608c7;backdrop-filter:blur(5px)}
 .git-review-modal{width:min(1500px,calc(100vw - 32px));height:min(940px,calc(100vh - 32px));display:flex;flex-direction:column;border:1px solid #3a424c;border-radius:10px;background:var(--bg);box-shadow:0 30px 100px #000;overflow:hidden}
 .git-review-header{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}

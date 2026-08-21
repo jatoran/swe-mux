@@ -25,8 +25,13 @@ test('scan timeline shows every cap and names whichever one is closest to bindin
   assert.ok(timeline.includes('state.skip_reason'))
   assert.ok(timeline.includes('Not scanning:'))
   assert.ok(timeline.includes('?rehydrate=1'))
-  // The scan-timeline model is a changeable default, not a fixed one.
-  assert.ok(settings.includes('Changeable default'))
+  // The scan-timeline model is a changeable default, not a fixed one - and its
+  // control sits with the caps it is priced against rather than a tab away, so
+  // "which model is this budget being spent on" is answerable without navigating.
+  assert.ok(settings.includes('data-setting="scan_timeline_model"'))
+  assert.ok(settings.includes('id="scan-timeline-model-picker"'))
+  assert.ok(settings.indexOf('data-setting="scan_timeline_model"')
+    > settings.indexOf("activeTab==='automation'"))
   assert.ok(!app.includes('ScanSpendStatus'))
 })
 

@@ -38,10 +38,34 @@ def test_a_frame_carrying_text_and_a_return_is_a_submit() -> None:
 
 
 def test_discard_keys_clear_it() -> None:
-    for key in ("\x03", "\x1b", "\x15"):
+    # Ctrl+C is universal; Ctrl+U is the default a harness gets when it declares
+    # nothing, and is what the shells mux drives implement.
+    for key in ("\x03", "\x15"):
         state = ComposerState()
         note_composer_write(state, "half a thought", NOW)
         assert note_composer_write(state, key, NOW + 1) == "cleared", key
+
+
+def test_the_harness_declares_what_else_clears_its_composer() -> None:
+    # The measured Claude case, which the old fixed key set got wrong in both
+    # directions: its clear is a double Esc, and Ctrl+U there kills only a line.
+    state = ComposerState()
+    note_composer_write(state, "half a thought", NOW, "\x1b\x1b")
+    assert note_composer_write(state, "\x1b\x1b", NOW + 1, "\x1b\x1b") == "cleared"
+
+    standing = ComposerState()
+    note_composer_write(standing, "half a thought", NOW, "\x1b\x1b")
+    # Ctrl+U is not this harness's clear, so it must not zero the estimate. A
+    # false "empty" is what lets a gate that reads this let something through.
+    assert note_composer_write(standing, "\x15", NOW + 1, "\x1b\x1b") is None
+    assert standing.pending
+
+    # A bare Esc is not a clear anywhere: it is also the first byte of every
+    # cursor key, and it did nothing to a real Claude draft.
+    bare = ComposerState()
+    note_composer_write(bare, "half a thought", NOW, "\x1b\x1b")
+    assert note_composer_write(bare, "\x1b", NOW + 1, "\x1b\x1b") is None
+    assert bare.pending
 
 
 def test_erasing_everything_typed_clears_it() -> None:

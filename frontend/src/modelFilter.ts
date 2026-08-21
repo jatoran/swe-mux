@@ -1,4 +1,16 @@
-export type ModelOption = {id:string;name:string}
+import type { ModelPricingFacts } from './modelPricing.ts'
+
+/**
+ * One entry of the cached OpenRouter catalog, as the daemon serves it.
+ *
+ * The price and capacity fields are optional because two other kinds of entry
+ * travel through the same list without them: the placeholder
+ * `includeSelectedModel` synthesises for a configured id the catalog no longer
+ * knows, and any catalog entry whose pricing OpenRouter did not report. Filtering
+ * and ranking read only `id` and `name`, so a priceless entry stays fully
+ * searchable and selectable.
+ */
+export type ModelOption = ModelPricingFacts & {id:string;name:string}
 
 export function includeSelectedModel(models:ModelOption[],selected:string):ModelOption[]{
   const items=[...models]

@@ -35,6 +35,16 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Adding or moving an OpenRouter model setting, or changing how one is chosen or priced:
+  `design/features/ui.md`, `technical/frontend/packages.md`, plus the owning feature's doc
+  (`design/features/scan-timeline.md`, `design/features/voice.md`,
+  `design/features/assistant.md`, `design/features/automation.md`).
+  The rule the split exists to enforce: only the two *routed* defaults (`openrouter_cheap_model`,
+  `openrouter_standard_model`) live in Settings -> Accounts. A model belonging to one feature is
+  edited with that feature, because a feature is configured in one pass; Accounts carries a
+  read-only index of them all instead of a second set of controls, and `modelRouting.ts` is that
+  index. Whether a blank value is legal is the whole distinction: an **override** falls through to
+  the cheap model, a **pin** is a validation error, and the two must never render the same.
 - Adding a surface that goes inert behind a switch, or changing how one reaches that switch
   (the deep link, the scroll-and-flash arrival, the `data-setting` marks):
   `design/features/setting-links.md`, `design/features/ui.md`,

@@ -147,6 +147,9 @@ export const BUILTIN_RAIL: RailItem[] = [
   // Clipboard history picker. Paired with Paste because it is the paste path on
   // touch, where reading the system clipboard is unreliable or refused outright.
   { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', label: 'Clip' },
+  // The session's own skills, as a drop-up. Next to Clip because they are the same
+  // gesture — a short list of the recent/relevant, with a link to the full section.
+  { id: 'skills', type: 'action', action: 'skills', label: 'Skills', agentOnly: true, title: 'Insert one of this session’s skills' },
   { id: 'actionsDrawer', type: 'action', action: 'openActions', label: 'Actions', title: 'Open Actions temporarily' },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
@@ -161,7 +164,20 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
   { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it', voicePhrases: ['insert markdown divider'] },
   { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines', voicePhrases: ['insert code fence', 'start code fence'] },
-  { id: 'clearInput', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Clear the current input (Ctrl+U)' },
+  // Copy / Clear the composer. Both read the draft off the terminal grid, because
+  // no harness publishes its composer and the daemon's write log deliberately
+  // keeps only a count (`composerText.ts`, `composer_input.py`).
+  //
+  // Neither carries a voice phrase, and adding one would be dead config: the voice
+  // adapter passes `action` items through only for Paste (`railVoice.ts`). Copy
+  // would also be a poor spoken command — its whole result is on a clipboard the
+  // speaker cannot see.
+  { id: 'copyInput', type: 'action', action: 'copyInput', label: 'Copy input', agentOnly: true, title: 'Copy the text sitting unsent in this composer' },
+  // Was a raw Ctrl+U, which is only a whole-composer clear on single-line drafts:
+  // measured against Claude Code v2.1.238, Ctrl+U kills one line of a four-line
+  // draft. The sequence is per-harness now, and the discarded text is captured to
+  // clipboard history first so the button is recoverable rather than destructive.
+  { id: 'clearInput', type: 'action', action: 'clearInput', label: 'Clear', title: 'Clear the composer, keeping its text in clipboard history' },
   { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)', voicePhrases: ['restore input', 'yank input'] },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left', voicePhrases: ['left arrow', 'press left'] },
   { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right', voicePhrases: ['right arrow', 'press right'] },
