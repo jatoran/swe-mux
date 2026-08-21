@@ -5,7 +5,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .harness import Backend, harness_for_command, is_agent_harness, is_backend
+from .harness import (
+    Backend,
+    harness_for_command,
+    is_agent_harness,
+    is_backend,
+    model_launch_args,
+    model_refusal,
+    resolve_launch_model,
+    strip_model_args,
+)
 
 # A spawn may direct a session at a subdirectory of its project (a task that runs
 # in ./frontend), never outside it, and may carry a bounded environment.
@@ -255,6 +264,51 @@ def parse_spawn_env(value: Any) -> dict[str, str]:
     return result
 
 
+# A model name is a short token beside a flag, not a body of text. The ceiling is
+# generous enough for a dated snapshot with a context suffix and small enough that
+# nothing can smuggle a command line through it.
+MAX_SPAWN_MODEL_CHARS = 100
+
+
+def resolve_spawn_model(backend: str, model: str) -> str:
+    """The value `backend`'s CLI is given for `model`, or raise.
+
+    The single place both entry points ask the question, so the assistant's card
+    and the spawn handler cannot disagree about whether a model is usable. Raising
+    the contract's field-keyed `ValueError` keeps the refusal shaped like every
+    other one here: the HTTP layer renders it as a 400 and the assistant lifts the
+    sentence out for the operator.
+    """
+    text = str(model or "").strip()
+    if not text:
+        raise ValueError({"model": "must be a non-empty string"})
+    if not is_agent_harness(backend):
+        raise ValueError({"model": "a model can only be chosen for an agent session"})
+    refusal = model_refusal(backend, text)
+    if refusal is not None:
+        raise ValueError({"model": refusal})
+    resolved = resolve_launch_model(backend, text)
+    # Unreachable while `model_refusal` and `resolve_launch_model` read the same
+    # declaration, and asserted rather than assumed because the alternative is
+    # spawning with a bare flag and no value.
+    if not resolved:
+        raise ValueError({"model": f"could not resolve the model {text!r}"})
+    return resolved
+
+
+def apply_spawn_model(backend: str, args: Sequence[str], resolved_model: str) -> list[str]:
+    """`args` with the request's model in place of any the earlier slots set.
+
+    Replacement rather than concatenation: a launch profile setting `--model` is a
+    supported and documented thing to do, so a request naming its own model has to
+    win outright instead of leaving the CLI to pick between two flags.
+    """
+    return [
+        *strip_model_args(backend, args),
+        *model_launch_args(backend, resolved_model),
+    ]
+
+
 @dataclass(frozen=True, slots=True)
 class SpawnRequest:
     project_id: str
@@ -280,6 +334,11 @@ class SpawnRequest:
     # no carriage return, so the operator reviews and presses Enter themselves.
     # Mutually exclusive with ``seed_text``. Agent backends only.
     stage_text: str | None = None
+    # The model this session's CLI should run, as the operator named it. The spawn
+    # handler maps it to the harness's own argv (`resolve_spawn_model`) once the
+    # backend is resolved, because whether a model can be chosen at all - and which
+    # names are accepted - is a per-harness declaration. Agent backends only.
+    model: str | None = None
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SpawnRequest:
@@ -298,6 +357,7 @@ class SpawnRequest:
             "env",
             "seed_text",
             "stage_text",
+            "model",
         }
         unknown = set(body) - known
         if unknown:
@@ -339,6 +399,19 @@ class SpawnRequest:
                 raise ValueError({"stage_text": "must be a non-empty string"})
             if len(raw_stage) > 500_000:
                 raise ValueError({"stage_text": "must contain at most 500000 characters"})
+        raw_model = body.get("model")
+        if raw_model is not None:
+            if not isinstance(raw_model, str) or not raw_model.strip():
+                raise ValueError({"model": "must be a non-empty string"})
+            if len(raw_model) > MAX_SPAWN_MODEL_CHARS:
+                raise ValueError(
+                    {"model": f"must contain at most {MAX_SPAWN_MODEL_CHARS} characters"}
+                )
+            # Only an explicit `shell` is refused here. Every other case needs the
+            # resolved backend, which lives one layer up with the Project defaults,
+            # and refusing on a guess would be worse than refusing late.
+            if backend == "shell":
+                raise ValueError({"model": "a model can only be chosen for an agent session"})
         if raw_seed is not None and raw_stage is not None:
             # One submits, the other deliberately does not; carrying both would
             # make the session run one prompt with another parked on top of it.
@@ -357,4 +430,5 @@ class SpawnRequest:
             env=environment,
             seed_text=raw_seed,
             stage_text=raw_stage,
+            model=raw_model.strip() if isinstance(raw_model, str) else None,
         )

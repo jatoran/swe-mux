@@ -67,6 +67,21 @@ Least specific first:
 
 Every adapter already concatenated `default_args` before `opts.args`, so the profile prepends into the second slot and no adapter changed.
 
+### A requested model replaces the slots, it does not join them
+
+`POST /api/sessions {model}` names the model the new session's CLI should run, in that CLI's own spelling.
+It is deliberately **not** a fourth argument slot: `_spawn_from_body` strips whatever model the earlier slots set and appends its own (`strip_model_args`, `apply_spawn_model` in `spawn_contract.py`).
+
+Concatenating would leave two `--model` flags on one command line, and which one a CLI honours is a per-CLI coin toss, so "the request wins" would be a hope rather than a fact.
+Both spellings a profile could have used are removed: the flag-with-value pair, and Codex's `-c model=…` config override, whose introducing `-c` is dropped with it so nothing is left dangling.
+
+`--model` is **not** reserved argv, and must not become reserved.
+A profile pinning a model is the documented way to keep a `Claude (opus)` entry in the Run menu, and reserving the flag would refuse exactly that profile.
+Replacement is what makes the two coexist.
+
+Which names are accepted is `HarnessDescriptor.model_selection` (`backends.md`), so the refusal happens before anything spawns.
+The model is composed in after the profile slots and before a seed prompt, because it is a flag and the seed prompt is the positional that must stay last.
+
 ### Reserved argv
 
 `HarnessDescriptor.reserved_launch_args` declares the argv an adapter builds for itself.
@@ -141,7 +156,7 @@ An agent profile named there would make every plain `New terminal` unspawnable.
 ## API and CLI
 
 - `GET /api/profiles` - every configured and detected profile; each carries `backend`.
-- `POST /api/sessions {project_id, backend, profile_id, argv, ...}` - `profile_id` is accepted for any backend.
+- `POST /api/sessions {project_id, backend, profile_id, argv, model, ...}` - `profile_id` is accepted for any backend; `model` only for an agent one, and only for a harness declaring `model_selection`.
 - `PATCH /api/projects/{id} {default_profile_id, default_agent_profiles}`
 - `mux profiles`
 - `mux spawn --project ID [--backend NAME] [--profile ID] [--arg VALUE]`
@@ -151,7 +166,7 @@ An agent profile named there would make every plain `New terminal` unspawnable.
 - `src/swe_mux/config.py` - `LaunchProfile`, validation, the reserved-argument check at save time.
 - `src/swe_mux/profiles.py` - `find_profile`, `resolve_profile` (shell), `resolve_agent_profile`, `derive_capabilities`, `profile_payload`.
 - `frontend/src/commandLine.ts` - the Windows-rules tokenizer and the launch preview.
-- `src/swe_mux/harness.py` - `reserved_launch_args`, `reserved_launch_arg_conflict`.
+- `src/swe_mux/harness.py` - `reserved_launch_args`, `reserved_launch_arg_conflict`, `ModelSelection`, `strip_model_args`, `model_launch_args`, `model_refusal`.
 - `src/swe_mux/server.py` - `_spawn_from_body`, `_project_agent_profile`.
 - `src/swe_mux/spawn_contract.py`
 - `frontend/src/Settings.tsx` - the profile editor.

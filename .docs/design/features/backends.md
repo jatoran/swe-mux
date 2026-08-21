@@ -93,6 +93,8 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | Which argv carries a conversation id? | `conversation_id_argv(name)`, `native_id_from_args(name, args)` | Recovering a pane's conversation from its recorded command line |
 | What resumes this conversation elsewhere? | `resume_command(name, id)`; published `cli_name` + `resume_argv` | The Copy-resume affordance |
 | How is a conversation forked? | `branch_strategy(name)` | Branch dispatch and its refusal; the browser's branch gate reads the published `branch` capability |
+| Can a launch choose the model, and which names? | `model_selection(name)`, `resolve_launch_model(name, model)`, `model_refusal(name, model)` | The spawn contract's model field, the assistant's `spawn_session` card refusal |
+| What argv sets the model, and what did an earlier slot set? | `model_launch_args(name, model)`, `strip_model_args(name, args)` | `_spawn_from_body` composing a request-level model over the profile's (`launch-profiles.md`) |
 | Can a branch be cut at a chosen message? | `branches_from_message(name)` (frontend `branchesFromMessage(name)`, published `branch_from_message`) | Whether the rail's Branch opens a point picker or forks on the click |
 | What does a user type to invoke a skill? | published `skill_invocation_prefix` | Skill inventories and the command rail's injected payload |
 | What key discards its whole composer? | published `composer_clear_keys` (frontend `composerClearKeys(name)`) | Whether the daemon's unsent-input estimate treats a write as a clear. No rail button sends it any more (`features/ui.md`): on Claude the sequence is a double Esc, which interrupts a running turn |
@@ -154,6 +156,13 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares `reserved_launch_args`: the argv its adapter builds for itself, which a user-authored launch profile may not set.
   Declared rather than inferred because the consequence of missing one is silent and total: a profile passing its own `--settings` replaces the file holding a pane's hook identity, so the CLI runs, the pane looks healthy, and the session is never observed again.
   An entry ending in `=` or `.` matches by prefix, which names a value-carrying config override without reserving the flag that introduces it.
+- Every harness declares `model_selection`: how a launch tells its CLI which model to run, or `None`.
+  `None` is a permitted answer and is what makes "this harness cannot be launched on a model" a sentence the operator hears before anything spawns; what is not permitted is leaving it unanswered, because the resulting guess is handed to a CLI that exits during startup and the operator gets a pane that appears and dies.
+  Only `claude` and `codex` declare one today; `omp`, `pi`, and `opencode` declare `None` as unmeasured, and their refusal names a launch profile as the way to set a model anyway.
+  A declaration carries the argv introducing the value (canonical first, every spelling recognized), the short aliases the CLI accepts *as* a model, the namespaces a full model id belongs to, and any generic-config value prefix (`codex -c model=…`).
+  Recognition is by **namespace plus alias, never an enumerated catalogue of released models**: a catalogue lags every vendor release and would refuse a model that works, which is the failure `claude_models.py` had to grow a family fallback to escape.
+  A namespace check still catches what matters here - a name meant for another harness, or for none, reaching a CLI that will die on it - which is why Codex declares no aliases: it genuinely has none, so `codex --model opus` is recognizable as wrong.
+  The declared flag must **not** also be reserved argv, and `test_a_model_flag_is_not_reserved_argv` holds the two apart: a profile pinning `--model` is supported, and a request-level model replaces it instead (`launch-profiles.md`).
 - Every harness declares `transcript_dialect`: the reader that parses its records, or `None` when it writes none.
   Reuse an existing dialect whenever the records are the same shape; a new dialect obliges a new reader branch and a sample record in the registry test.
 - An npm-distributed harness needs no launch special-casing on Windows: `resolve_npm_shim_pty_command` reads the `.cmd` shim and resolves it to the package's own executable or to Node plus its entrypoint, because ConPTY cannot execute a batch shim.
