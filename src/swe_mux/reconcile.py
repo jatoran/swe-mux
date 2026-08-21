@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -282,7 +283,12 @@ def scan_external_transcripts(
     are simply not indexed this run, and enabling it later indexes them on the next
     scan.
 
-    ``should_cancel`` is polled per file so a long scan aborts promptly, and
+    ``should_cancel`` is polled per file in *both* halves of the scan - the
+    discovery walk and the indexing pass - so a long scan aborts promptly. That
+    matters more than it looks: the walk runs in a worker thread that no caller
+    can interrupt, and an abandoned one is joined at the very end of the loop's
+    shutdown, so a walk that ignores the token turns every daemon (and every
+    in-process test daemon) shutdown into a wait for a full transcript-tree walk.
     ``on_progress`` receives the running count of files examined.
     """
     selected = set(backends) if backends is not None else None
@@ -292,6 +298,8 @@ def scan_external_transcripts(
     found: list[ExternalTranscript] = []
     scanned = 0
     for name, harness in HARNESSES.items():
+        if should_cancel is not None and should_cancel():
+            return found
         if selected is not None and name not in selected:
             continue
         discovery = harness.conversation_discovery
@@ -320,6 +328,11 @@ def scan_external_transcripts(
         discovered: list[tuple[float, Path]] = []
         for directory in search_dirs:
             for path in directory.glob(f"**/{pattern}"):
+                # Polled here and not only in the indexing pass below. A real
+                # `~/.claude/projects` is tens of thousands of files, and this
+                # walk is the half that a shutdown actually lands in.
+                if should_cancel is not None and should_cancel():
+                    return found
                 # Provider transcript cleanup (and antivirus) removes and locks
                 # files in these very directories while the scan walks them. One
                 # raced file used to abort the whole reconcile with no log, so
@@ -343,6 +356,54 @@ def scan_external_transcripts(
             if on_progress is not None:
                 on_progress(scanned)
     return found
+
+
+async def scan_external_transcripts_async(
+    home: Path | None = None,
+    *,
+    limit: int | None = 2000,
+    roots: Iterable[str | Path] | None = None,
+    backends: Iterable[str] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_progress: Callable[[int], None] | None = None,
+) -> list[ExternalTranscript]:
+    """Run the discovery walk off the loop, and stop it when the caller is cancelled.
+
+    `asyncio.to_thread` cannot interrupt its worker. Cancelling the awaiting task
+    only abandons the thread, which keeps walking - and because that thread belongs
+    to the event loop's default executor, the abandoned walk is joined by
+    `loop.shutdown_default_executor()` at the very end of shutdown, after every log
+    handler has already reported a clean stop. A daemon whose startup reconcile was
+    still walking therefore waited out an entire scan of the user's transcript tree
+    with nothing saying why: measured at 4.5-13.5s per in-process app teardown
+    against a real `~/.claude/projects`, and unbounded as that tree grows.
+
+    So cancellation is made cooperative at this seam rather than at each call site:
+    every caller that cancels the coroutine - `HistoryScanManager.stop`,
+    `HistoryBackfillManager.stop`, the startup reconcile's teardown - releases the
+    worker within one polled file, which is the contract `scan_external_transcripts`
+    already documents for ``should_cancel``.
+    """
+    abandoned = threading.Event()
+
+    def cancelled() -> bool:
+        return abandoned.is_set() or (should_cancel is not None and should_cancel())
+
+    try:
+        return await asyncio.to_thread(
+            scan_external_transcripts,
+            home,
+            limit=limit,
+            roots=roots,
+            backends=backends,
+            should_cancel=cancelled,
+            on_progress=on_progress,
+        )
+    except asyncio.CancelledError:
+        # Set on the way out so the worker sees it on its next poll. The partial
+        # result it eventually returns is discarded with the abandoned future.
+        abandoned.set()
+        raise
 
 
 def summarize_transcript(
@@ -522,10 +583,8 @@ async def reconcile_external_history(
         progress.scanned = count
         report()
 
-    transcripts = await asyncio.to_thread(
-        lambda: scan_external_transcripts(
-            home, backends=backends, should_cancel=should_cancel, on_progress=scan_progress
-        )
+    transcripts = await scan_external_transcripts_async(
+        home, backends=backends, should_cancel=should_cancel, on_progress=scan_progress
     )
     if should_cancel is not None and should_cancel():
         return 0

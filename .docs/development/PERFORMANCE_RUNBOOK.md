@@ -350,3 +350,12 @@ with the longest history of subtle identity bugs in this repository.
   the walk already read.
 - **An unchanged arbitration is silence.** Several subsystems broadcast only on change, so
   "nothing was reported" is not evidence that nothing is wrong.
+- **`asyncio.to_thread` cannot be cancelled, and the loop joins what you abandon.** Cancelling
+  the awaiting task only drops the future; the worker keeps running, and because it belongs to
+  the loop's default executor it is joined by `shutdown_default_executor` at the very end of
+  shutdown - after every log handler has already reported a clean stop. A long worker that
+  ignores a cancellation token therefore reads as an unexplained multi-second hang *after* the
+  daemon says it stopped. Measured: the startup native-history reconcile's tree walk cost
+  4.5-13.5s per in-process app teardown in the test suite, and scales with the user's transcript
+  tree. Any `to_thread` call that can outlive its awaiter needs a token the worker polls
+  (`reconcile.scan_external_transcripts_async` is the pattern).
