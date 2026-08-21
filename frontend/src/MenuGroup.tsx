@@ -51,9 +51,13 @@ type Props = {
    *  count they carried, so a group holding something that wants attention has to say
    *  so on its own header or the signal is simply gone until the group is opened. */
   badge?: ComponentChildren
+  /** A mark drawn where the theme would otherwise put its `> ` prefix. Supplying one opts
+   *  the header into the icon layout, and suppresses that prefix, so a group inside a menu
+   *  whose rows carry icons lines up with them instead of sitting one marker out. */
+  icon?: ComponentChildren
 }
 
-export function MenuGroup({ id, label, openId, onOpenChange, children, disabled, hint, badge }: Props) {
+export function MenuGroup({ id, label, openId, onOpenChange, children, disabled, hint, badge, icon }: Props) {
   const flyout = useFlyoutCapable()
   const open = openId === id && !disabled
   const header = useRef<HTMLButtonElement>(null)
@@ -95,7 +99,7 @@ export function MenuGroup({ id, label, openId, onOpenChange, children, disabled,
   return <Fragment>
     <button
       ref={header}
-      class={`menu-group-header ${open ? 'open' : ''}`}
+      class={`menu-group-header ${icon ? 'menu-row' : ''} ${open ? 'open' : ''}`}
       role="menuitem"
       disabled={disabled}
       title={hint}
@@ -104,7 +108,7 @@ export function MenuGroup({ id, label, openId, onOpenChange, children, disabled,
       onPointerEnter={event => { if (event.pointerType !== 'touch') scheduleOpen() }}
       onPointerLeave={event => { if (event.pointerType !== 'touch') scheduleClose() }}
       onClick={() => { clear(); onOpenChange(open ? null : id) }}
-    >{label}{badge}<span class="menu-group-caret" aria-hidden="true">{flyout ? '›' : open ? '▾' : '▸'}</span></button>
+    >{icon ? <span class="menu-row-icon" aria-hidden="true">{icon}</span> : null}{icon ? <span class="menu-row-label">{label}</span> : label}{badge}<span class="menu-group-caret" aria-hidden="true">{flyout ? '›' : open ? '▾' : '▸'}</span></button>
     {open && (flyout
       ? <div
           ref={panel}

@@ -307,6 +307,7 @@ const SOURCE_LABELS: Record<string, string> = {
   terminal: 'terminal',
   reply: 'agent reply',
   resume: 'resume cmd',
+  composer: 'composer',
   note: 'note',
   history: 'history',
 }

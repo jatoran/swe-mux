@@ -39,7 +39,7 @@ import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type Ra
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { activatePromptRailItem } from './promptRail'
-import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
+import { AttachIcon, BranchIcon, CopyIcon, CopyInputIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { RailInlineEditor } from './RailInlineEditor'
 import { MOBILE_QUERY, currentProfile, loadRailConfig } from './deviceSettings'
@@ -122,8 +122,14 @@ import {
   type TerminalCaretPosition,
   type TerminalCaretSnapshot,
 } from './terminalCaretPlacement'
+import { composerClearSequence, composerIsReadable, readComposerText } from './composerText'
+import { ClipboardDropup } from './ClipboardDropup'
+import { SkillsDropup } from './SkillsDropup'
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
+
+/** Which rail drop-up is open, and the button it hangs from. */
+type RailDropupState = { kind: 'clipboard' | 'skills'; anchor: HTMLElement }
 
 /**
  * The pane's normal font size at 100% chrome scale. A letterboxed pane renders below
@@ -349,6 +355,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [dropup, setDropup] = useState<RailDropupState | null>(null)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findCase, setFindCase] = useState(false)
@@ -768,6 +775,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   useEffect(() => () => {
     if(clipboardStatusTimerRef.current!==null)window.clearTimeout(clipboardStatusTimerRef.current)
   }, [])
+
+  // A drop-up holds a direct reference to the rail button it hangs from, so
+  // anything that unmounts that button has to take it down: switching the pane to
+  // another session, and opening the in-place rail editor, which replaces the
+  // whole rail. Left alone it would float over the new content, anchored to a node
+  // that is no longer in the document.
+  useEffect(() => { setDropup(null) }, [session.id, railEditOpen])
 
   useEffect(() => {
     const openFind = (event: Event) => {
@@ -3129,6 +3143,39 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       setPreparedClipboard('');setManualClipboard(false)
     }else prepareClipboardFallback(text)
   }
+
+  // ---- the unsent draft ----------------------------------------------------
+  //
+  // Read off the cell grid, because nothing else can answer it: no harness
+  // publishes its composer, and the daemon's write log deliberately keeps a count
+  // rather than text (`composerText.ts` says why at length). Three outcomes, and
+  // they must not be collapsed into two — `null` is "this screen is not showing a
+  // readable draft", which is a different thing from an empty one.
+  const readComposer = ():string|null => {
+    const term=termRef.current
+    if(!term||!composerIsReadable(session.backend))return null
+    return readComposerText(session.backend,terminalCaretSnapshot(term))
+  }
+  const composerUnreadable = 'The composer could not be read from this screen. It may be showing a dialog, a picker, or output rather than a draft.'
+  const copyComposerInput = async () => {
+    const text=readComposer()
+    if(text===null){reportError(composerIsReadable(session.backend)?composerUnreadable:`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions.`);return}
+    if(!text){showClipboardStatus('The composer is empty');return}
+    captureCopy(text,'composer')
+    if(await copyPreparedText(text)){
+      setPreparedClipboard('');setManualClipboard(false)
+      showClipboardStatus(`Copied ${text.length.toLocaleString()} chars`)
+    }else prepareClipboardFallback(text)
+  }
+  // Clear never depends on the read succeeding. The keys go to the CLI either
+  // way, so a screen this cannot scrape still clears; only the clipboard-history
+  // safety net is lost, and the status line says which of the two happened.
+  const clearComposerInput = () => {
+    const text=readComposer()
+    if(text)captureCopy(text,'composer')
+    sendKey(composerClearSequence(session.backend))
+    showClipboardStatus(text?`Cleared · ${text.length.toLocaleString()} chars kept in clipboard history`:'Cleared')
+  }
   /** Answer the approval this pane is showing, once.
    *
    *  Routed through the daemon rather than by writing Enter here, because the
@@ -3198,6 +3245,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         sendKey(detail.text!)
       })
       else if (detail.action === 'copyReply') void copyLastReply()
+      else if (detail.action === 'copyInput') void copyComposerInput()
+      else if (detail.action === 'clearInput') clearComposerInput()
       else if (detail.action === 'copyResume') void copyResumeCommand()
       else if (detail.action === 'branch') onBranch?.()
       else if (detail.action === 'approveOnce') void approveOnce()
@@ -3397,6 +3446,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const scrollingRailRows=mobilePinnedSend
     ?railRows.map(row=>({...row,entries:row.entries.filter(entry=>entry.item.id!=='enter')})).filter(row=>row.entries.length)
     :railRows
+  // One drop-up at a time, and a second tap on its own trigger closes it — the
+  // trigger is the affordance, so it has to be able to undo itself.
+  const toggleDropup=(kind:RailDropupState['kind'],anchor:HTMLElement)=>
+    setDropup(current=>current?.kind===kind?null:{kind,anchor})
   const renderRailItem=({item,key}:RailEntry)=>{
     switch(item.id){
       case 'attach':return acceptsTerminalAttachments(session)?<button key={key} class="rail-icon" disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
@@ -3426,7 +3479,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return <button key={key} class="rail-approve" disabled={!showing||approveBusy} aria-label="Approve the pending request" title={showing?'Approve the request this session is showing':'Available while this session is waiting for an approval'} onClick={()=>void approveOnce()}>{approveBusy?'…':'Approve'}</button>
       }
       case 'paste':return <button key={key} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
-      case 'clipboardHistory':return <button key={key} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>
+      // The two pickers open a drop-up of the most recent/relevant few rather than
+      // the drawer section outright. The section is still one tap away, from the
+      // sticky row inside the drop-up, so nothing became less reachable.
+      case 'clipboardHistory':return <button key={key} class={dropup?.kind==='clipboard'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='clipboard'} title="Recent clipboard — tap an entry to insert it here" onClick={event=>toggleDropup('clipboard',event.currentTarget as HTMLElement)}>Clip</button>
+      // `agentOnly` already keeps this off shells, where the endpoint 409s.
+      case 'skills':return <button key={key} class={dropup?.kind==='skills'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='skills'} title={item.title||'Insert one of this session’s skills'} onClick={event=>toggleDropup('skills',event.currentTarget as HTMLElement)}>Skills</button>
+      case 'copyInput':{
+        // Disabled rather than absent on an unmeasured harness: a button that is
+        // simply missing reads as "not built", while one that says why reads as
+        // "not here yet", which is the true answer.
+        const readable=composerIsReadable(session.backend)
+        return <button key={key} class="rail-icon" disabled={!readable} aria-label="Copy composer text" title={readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>void copyComposerInput()}><CopyInputIcon/></button>
+      }
+      case 'clearInput':return <button key={key} title={item.title||'Clear the composer'} onClick={clearComposerInput}>{item.label}</button>
       case 'actionsDrawer':return <button key={key} title={item.title} onClick={()=>runCommand('drawer.peekActions')}>Actions</button>
       case 'endSession':{
         // Ended sessions keep the button: the same command removes their row from the
@@ -3515,7 +3581,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
     if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,session,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>

@@ -1,11 +1,17 @@
-// Makes the platform's own back gesture close one overlay level.
+// Makes the platform's own back gesture mean one step back inside the app.
+//
+// What a step *is* belongs to the target, not here: on its own the dismiss stack closes
+// one overlay level, and `composeBackTarget` (`viewHistory.ts`) puts the recent-views
+// ring underneath it so back keeps working once nothing is layered. This module only
+// owns the browser half - one sentinel history entry, maintained against the target's
+// depth - and is deliberately blind to which rung answered.
 //
 // swe-mux installs as a `display: standalone` PWA, where Android's back gesture is the
 // primary navigation control. With no history entry to pop it backgrounds the app, so a
 // phone user with a modal open lost the whole view instead of stepping back. The app
 // keeps no route history of its own (`App` only ever `replaceState`s the URL to track
 // the focused session), so the fix is a single sentinel entry that exists exactly while
-// something is dismissable.
+// the target has somewhere to go back to.
 //
 // One sentinel, never one per level: per-level entries desynchronize the first time a
 // level closes by button instead of by back, and nothing can resynchronize them.
@@ -13,7 +19,7 @@
 // The coordinator is separated from the DOM so the four transitions that break real
 // implementations — open, close by button, close by back, nested back — are testable.
 
-import { dismissStack, type DismissStack } from './dismissStack.ts'
+import { dismissStack, type BackTarget } from './dismissStack.ts'
 
 export type BackHost = {
   /** Push a history entry marked as ours, at the current URL. */
@@ -26,7 +32,7 @@ export type BackHost = {
 
 export type BackCoordinator = ReturnType<typeof createBackCoordinator>
 
-export function createBackCoordinator(stack: Pick<DismissStack, 'depth' | 'pop'>, host: BackHost) {
+export function createBackCoordinator(stack: Pick<BackTarget, 'depth' | 'pop'>, host: BackHost) {
   let armed = false
   // Counts popstates we caused ourselves. A counter rather than a flag because two
   // close-by-button transitions can leave two `back()` calls in flight.
@@ -87,14 +93,14 @@ function browserHost(): BackHost {
 }
 
 /**
- * Wire the live dismiss stack to the browser's history. Returns a teardown.
+ * Wire a live back target to the browser's history. Returns a teardown.
  *
  * Note the one gesture this deliberately does not see: when the Android soft keyboard
  * is up, back closes the keyboard and the page is never told, so the overlay behind it
  * survives the first press. That matches the platform everywhere else and is why the
  * keyboard case is not special-cased here (`ui.md` § focus and responsive behavior).
  */
-export function installSystemBack(stack: DismissStack = dismissStack, host: BackHost = browserHost()): () => void {
+export function installSystemBack(stack: BackTarget = dismissStack, host: BackHost = browserHost()): () => void {
   const coordinator = createBackCoordinator(stack, host)
   const onPopstate = () => coordinator.handlePopstate()
   window.addEventListener('popstate', onPopstate)

@@ -104,6 +104,29 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .menu-group-badge { margin-left:7px;padding:0 5px;border-radius:8px;background:color-mix(in srgb,var(--green) 20%,transparent);color:var(--green);font:600 8px 'JetBrains Mono';font-style:normal;letter-spacing:0 }
 .menu-group-items { padding-left:10px }
 .menu-flyout { z-index:36 }
+/* An icon-bearing menu row. Opt-in per row rather than applied to every `.context-menu
+   button`, because most context menus in the app are a handful of verbs about one object
+   ("Rename", "Close", "Duplicate") where a mark per verb is noise; the app menu and its
+   sidebar twin are the two that list a dozen unrelated destinations, which is the case a
+   mark actually shortens.
+
+   The row is flex, so the label has to be its own element: a bare text child sits in an
+   anonymous flex item, and any sibling text — the ` [3 pending]` counts, the toggled
+   broadcast wording — would become a second item with the full `gap` stranded between the
+   two halves of one sentence. `.menu-hint` keeps its `margin-left:auto` and so still parks
+   at the right edge. */
+.context-menu button.menu-row { display:flex;align-items:center;gap:8px }
+/* The terminal skin prefixes every menu row with `content:'> '`. A row that draws its own
+   mark has said the same thing better, and keeping both would indent the label past every
+   sibling. Two classes beat the skin's one, so this needs no `!important`. */
+.context-menu button.menu-row:before,.menu-group-header.menu-row:before { content:none }
+.menu-row-icon { flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;opacity:.78 }
+.menu-row-icon svg { width:100%;height:100%;display:block }
+.context-menu button.menu-row:hover:not(:disabled) .menu-row-icon { opacity:1 }
+.context-menu button.menu-row:disabled .menu-row-icon { opacity:.4 }
+/* Long destinations ("Rebuild + redeploy app (keep sessions)") must ellipsise rather than
+   push the row wider than the menu. */
+.menu-row-label { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .terminal-menu { position:fixed;z-index:40;width:calc(145px*var(--ui-scale));padding:5px;border:1px solid #3b434d;border-radius:7px;background:#15191e;box-shadow:0 15px 50px #000 }.terminal-menu button { width:100%;height:calc(28px*var(--ui-scale));border:0;border-radius:4px;background:transparent;color:#bac2cc;text-align:left;padding:0 8px;font-size:10px;cursor:pointer }.terminal-menu button:hover:not(:disabled) { background:#252c25;color:#e6ece2 }.terminal-menu button:disabled { color:#4f5863 }
 .mobile-paste { display:none }
 .history-workspace { container-type:inline-size;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;background:#070a08 }.history-body { height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(260px,38%) minmax(0,1fr);grid-template-rows:minmax(0,1fr) }.history-body>aside { min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;border-right:1px solid var(--line);padding:7px;background:#0e1115 }.history-search { padding:2px 2px 8px }.history-search>* { min-width:0;max-width:100% }.history-search input { width:100%;height:calc(34px*var(--ui-scale));border:1px solid #303741;border-radius:6px;background:#090c0f;color:var(--text);padding:0 9px;font-size:10px }.history-query-row { display:grid;grid-template-columns:minmax(0,1fr) 105px;gap:4px;grid-column:1/-1 }.history-search label { display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:5px;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-transform:uppercase }.history-backfill-control { grid-column:1/-1;display:grid;gap:4px;padding-top:3px }.history-backfill-control button,.history-backfill-status button { min-height:30px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);cursor:pointer }.history-backfill-control small,.history-backfill-status small { white-space:normal!important;line-height:1.4 }.history-backfill-status { grid-column:1/-1;display:grid;gap:5px;padding:7px;border:1px solid var(--line);background:#080d09 }.history-backfill-status>div { display:flex;justify-content:space-between;text-transform:uppercase }.history-backfill-status progress { width:100%;accent-color:var(--green) }.history-backfill-status.completed { border-color:#36563c }.history-backfill-status.failed,.history-backfill-status .error { color:var(--red) }.history-body>aside>button { width:100%;height:calc(63px*var(--ui-scale));display:flex;flex-direction:column;justify-content:center;gap:3px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:left;padding:0 9px;cursor:pointer }.history-body>aside>button:hover { background:#171c22 }.history-body>aside>button.active { background:#192019;border-color:#35452f }.history-body>aside strong { font-size:11px }.history-body>aside span { color:#7d8793;font-size:9px }.history-body>aside small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#5e6874;font:8px 'JetBrains Mono' }.history-body>main { min-width:0;min-height:0;display:flex;flex-direction:column;background:#0b0e11 }.history-match { width:100%;display:block!important;padding:4px 6px;border-left:2px solid #4d6352;background:#0b110d;white-space:normal!important;line-height:1.35 }.history-match b { margin-right:6px;color:#789681;text-transform:uppercase;font-size:7px }.history-match.assistant { border-left-color:#59647a }.transcript-heading { min-height:58px;height:auto;flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 16px;border-bottom:1px solid var(--line) }.transcript-heading h3 { margin:0 0 4px;font-size:13px }.transcript-heading span { color:#68727e;font:8px 'JetBrains Mono' }.transcript-heading button { height:calc(31px*var(--ui-scale));border-radius:6px }.transcript-match-nav { display:flex;align-items:center;gap:4px;margin-left:auto }.transcript-match-nav button { min-width:30px }.messages { flex:1;overflow:auto;padding:22px max(22px,calc((100% - 800px)/2)) }.messages article { margin-bottom:17px;padding:12px 14px;border:1px solid #242b33;border-radius:8px;background:#11151a }.messages article.user { border-color:#34442d;background:#121912 }.messages article.search-match-message { border-left-color:#6b926f }.messages article.active-search-match { outline:2px solid #769d75;outline-offset:2px }.messages article header { margin-bottom:8px;color:#76816f;font:600 8px 'JetBrains Mono';letter-spacing:.1em;text-transform:uppercase }.messages article p { white-space:pre-wrap;margin:0;color:#cbd1d9;font-size:12px;line-height:1.55 }.messages article pre { white-space:pre-wrap;color:#9da8b5;font:9px/1.5 'JetBrains Mono' }.history-placeholder,.no-transcript { height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#68737f;text-align:center }.history-placeholder>span { font-size:27px;color:#50604a }.history-placeholder strong { margin-top:9px;color:#aab2bc;font-size:12px }.history-placeholder p { font-size:10px }.no-transcript { min-height:260px;font-size:11px }
@@ -303,7 +326,29 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .projects-manager .model-picker-options strong{display:flex;align-items:center;gap:6px}
 .model-picker-options strong,.model-picker-options span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .model-picker-options span{color:var(--muted);font-size:8px}
+/* The id/price row. Its own class rather than a restyled `span`, because
+   ProjectPicker borrows this whole block for a list that has no second cell. The
+   id takes the slack and ellipsizes; price keeps its natural width so figures
+   align down the list, and is undimmed because it, not the id, is what the row
+   is being read for. */
+.model-picker-options .model-picker-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;white-space:normal}
+.model-picker-options .model-picker-price{color:var(--text);opacity:.75;text-align:right}
 .model-picker-empty{padding:10px;color:var(--muted)}
+/* Where each model is used: a read-only inventory, so it is a list of stated facts
+   rather than a form. Rows are cards instead of table rows because the "where" cell
+   is a control and the note wraps to several lines, neither of which survives a
+   column layout on a phone. */
+.model-routing{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.model-routing li{display:grid;gap:3px;padding:7px 8px;border:1px solid var(--line);background:var(--panel2)}
+.model-routing-head{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.model-routing-kind{padding:0 4px;border:1px solid var(--line);color:var(--muted);font-size:8px;text-transform:uppercase}
+.model-routing-pinned{border-color:var(--green);color:var(--green)}
+.model-routing-model{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.model-routing-model code{min-width:0;overflow-wrap:anywhere}
+.model-routing-model em{color:var(--muted)}
+.model-routing-inherited,.model-routing-price{color:var(--muted);font-size:8px}
+.model-routing li small{color:var(--muted)}
+.model-routing-where button{padding:2px 6px;font-size:9px}
 /* Shaped like every other setting rather than like a banner: label column, control
    column, same gap and padding as `.settings-content label`. Stacked full-width it was
    the only control in the panel spanning the label column too, which read as a section
@@ -326,7 +371,14 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .settings-panel .file-input { display:none }.theme-actions { display:flex;gap:6px }.theme-tokens { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px }.settings-errors { grid-column:1/-1 }.settings-errors p { color:var(--red) }
 .quick-launcher select { width:100%;height:calc(31px*var(--ui-scale));border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--bg);color:var(--text);font:inherit }.path-entry { display:grid;grid-template-columns:minmax(0,1fr) auto auto }.path-entry input { min-width:0 }.path-entry button,.directory-browser button { border:1px solid var(--line);border-radius:0;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer }.directory-browser { max-height:180px;overflow:auto;display:grid;padding:5px;border-top:1px solid var(--line) }.directory-browser>span { padding:5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis }.directory-browser button { min-height:27px;text-align:left;padding:0 7px;border-width:0 0 1px }
 .profile-settings { grid-column:1/-1 }.profile-list { display:grid;gap:7px }.profile-list article,.project-default { padding:9px;border:1px solid var(--line);background:var(--bg) }.profile-row { display:grid;grid-template-columns:minmax(90px,.7fr) minmax(130px,1fr) repeat(5,auto);gap:4px;align-items:end }.profile-row label { margin:0 }.profile-row button { min-width:29px;padding:0 5px }.profile-list textarea { min-height:55px }.profile-list small { display:block;color:var(--muted);margin-top:5px }.project-default { margin-bottom:7px }.project-default>strong { display:block;margin-bottom:8px;color:var(--green) }
-@media(max-width:760px) { .settings-layer { padding:0 }.settings-panel { width:100%;height:100%;border:0;box-shadow:none }.settings-panel>main { grid-template-columns:1fr }.settings-panel>footer { overflow-x:auto;justify-content:flex-start }.settings-panel>footer>span { display:none }.model-picker-options{max-height:min(240px,34dvh)}.theme-picker-options{max-height:min(315px,44dvh)} }
+@media(max-width:760px) { .settings-layer { padding:0 }.settings-panel { width:100%;height:100%;border:0;box-shadow:none }.settings-panel>main { grid-template-columns:1fr }.settings-panel>footer { overflow-x:auto;justify-content:flex-start }.settings-panel>footer>span { display:none }.model-picker-options{max-height:min(240px,34dvh)}.theme-picker-options{max-height:min(315px,44dvh)}
+/* Stacked, not side by side. A setting's control column is about 216px on a phone,
+   and the price cell wants 155-192px of it — side by side that leaves the id 0-37px,
+   which erases the exact identifier the row is partly there to show. There is no
+   hover to recover it from the title on a touch device, so the price takes a line of
+   its own instead. The list scrolls inside a bounded height either way. */
+.model-picker-options .model-picker-meta{grid-template-columns:minmax(0,1fr)}
+.model-picker-options .model-picker-price{text-align:left} }
 
 /* Sidebar is a TUI tree, not a stack of cards. */
 .project-tree { padding:4px 0 }
@@ -391,10 +443,24 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .terminal-draft-indicator{display:inline-block;flex:0 0 auto;width:6px;height:6px;margin:0 3px;border-radius:50%;background:var(--green);box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 28%,transparent)}
 /* The provider mark on a session tab, beside the state dot. Sized against the tab's own 9px
    text rather than the sidebar's 12px, and the strip's 7px flex gap is pulled back in so the
-   dot, the mark, and the title read as one group instead of three evenly spaced things. */
-.tab-session-glyph { display:inline-flex;align-items:center;flex:none;margin:0 -3px 0 -2px;font-size:11px;line-height:1 }
+   dot, the mark, and the title read as one group instead of three evenly spaced things.
+   The left pull-in is the larger of the two: the state dot and the harness mark are one
+   compound "what and how is it" prefix, so they sit tight against each other, and the gap
+   that survives is the one before the title. Every pixel taken out of this prefix is a pixel
+   of session name that fits before the 220px (160px on a phone) tab cap truncates it, which
+   is the whole reason the numbers are as tight as they are. */
+.tab-session-glyph { display:inline-flex;align-items:center;flex:none;margin:0 -3px 0 -4px;font-size:11px;line-height:1 }
 .tab-session-glyph .provider-mark { width:10px;height:10px;display:block }
 .tab-session-glyph.shell { color:#6d7783;font-size:9px }
+/* The state dot rides high in the tab rather than centred on the title. Two reasons, and the
+   second is the load-bearing one: a strip is scanned by state before it is read by name, and
+   a corner mark is found faster than one inline in a row of same-height glyphs; and with the
+   dot and the harness mark now 3px apart, two centred discs of similar size read as one
+   two-part object. Offsetting one of them keeps them legible as two facts at the distance the
+   tightened spacing was bought for. `position` rather than `align-self`, so the shift is a
+   fixed optical nudge and does not have to be recomputed against `--ui-scale`, the tab
+   height, or a user-configured `--session-dot`. */
+.stack-tabs .tab-main > .state-dot { position:relative;top:-2px }
 /* A preview tab/row is a server its session spawned: same shape, distinct accent. */
 .stack-tabs .preview-tab { color:var(--blue) }
 .stack-tabs .preview-tab-glyph { margin-right:5px }
@@ -1268,6 +1334,14 @@ body {
 .sidebar-rail .rail-run:disabled{opacity:.4;cursor:not-allowed}.project-row{grid-template-columns:16px minmax(0,1fr) 25px!important}.project-row-menu{display:none!important}.project-row-run{display:grid!important;place-items:center;font-size:8px}
 @media(min-width:761px) and (hover:hover){.project-row-run{opacity:0;visibility:hidden;pointer-events:none;transition:opacity .1s ease}.project-group:hover>.project-row .project-row-run,.project-group:focus-within>.project-row .project-row-run{opacity:1;visibility:visible;pointer-events:auto}}
 .run-menu-scrim{position:fixed;inset:0;z-index:76;background:transparent}.project-run-menu{position:fixed;z-index:77;width:calc(300px*var(--ui-scale));max-height:min(560px,calc(100dvh - 12px));overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:7px 9px #0009}.project-run-menu>header{position:sticky;top:0;z-index:1;min-height:42px;display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:var(--panel)}.project-run-menu>header>div{min-width:0;flex:1;display:grid;gap:2px}.project-run-menu>header span,.run-menu-section>small{color:var(--accent);font-size:8px;text-transform:uppercase}.project-run-menu>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-run-menu>header>button{width:29px;height:calc(29px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.run-menu-section{display:grid;padding:5px;border-bottom:1px solid var(--line)}.run-menu-section>small{padding:4px 5px}.run-menu-section>button{min-height:34px;display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:5px;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer}.run-menu-section>button:hover:not(:disabled){background:var(--panel2)}.run-menu-section>button:disabled{opacity:.5;cursor:not-allowed}.run-menu-section>button>span{color:var(--accent);text-align:center}.run-menu-section>button>div{min-width:0;display:flex;align-items:baseline;justify-content:space-between;gap:8px}.run-menu-section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.run-menu-section>button em{flex:none;color:var(--muted);font-size:8px;font-style:normal}.project-run-menu>p,.project-run-menu details{margin:0;padding:9px;color:var(--muted);font-size:8px}.project-run-menu summary{cursor:pointer}.project-run-menu details p{margin:6px 0 0;line-height:1.4}.project-action-trust-layer{z-index:90}.project-action-trust{width:min(620px,calc(100vw - 24px))}.project-action-trust-body{padding:16px 20px;color:var(--muted);line-height:1.5}.project-action-trust-body strong{color:var(--text)}.project-action-trust-body ul{padding-left:20px}.project-action-trust-body pre{max-height:180px;overflow:auto;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre-wrap}.project-action-trust-body details{margin-top:10px}.project-action-trust-body summary{cursor:pointer;color:var(--accent)}.project-action-diff{max-height:220px;font-size:9px;line-height:1.45}.project-action-source-layer{z-index:90}.project-action-source{width:min(760px,calc(100vw - 24px));display:flex;flex-direction:column;max-height:calc(100dvh - 48px)}.project-action-source-body{flex:1;overflow:auto;display:grid;gap:8px;padding:14px 18px;color:var(--muted);line-height:1.5}.project-action-source-body>p{margin:0}.project-action-source-body button.link{justify-self:start;padding:0;border:0;background:transparent;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit}.project-action-source-text{min-height:320px;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre;font:12px 'Cascadia Mono',Consolas,monospace;tab-size:2}.project-action-source-body pre.error{margin:0;padding:10px;overflow:auto;max-height:150px;border:1px solid var(--danger,#c33);background:var(--bg);color:var(--danger,#f66);white-space:pre-wrap;font-size:10px}.project-action-help{padding:10px;border:1px solid var(--line);background:var(--bg);font-size:10px;line-height:1.6}.project-action-help p{margin:0 0 6px}.project-action-help ul{margin:0;padding-left:18px}.project-action-help li{margin-bottom:3px}.project-action-help code{padding:0 3px;border:1px solid var(--line);color:var(--text)}.project-action-inputs-layer{z-index:90}.project-action-inputs{width:min(520px,calc(100vw - 24px))}.project-action-inputs form{display:grid;gap:10px;padding:16px 20px}.project-action-inputs label{display:grid;gap:4px;color:var(--muted)}.project-action-inputs input,.project-action-inputs select{min-height:32px;padding:0 8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}.project-action-inputs pre{max-height:140px;overflow:auto;margin:0;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre-wrap}.project-action-inputs p{margin:0;color:var(--muted);line-height:1.5}.mobile-run-trigger{display:none}
+/* The launch rows' harness marks. They sit in the same 24px gutter the section's text glyphs
+   (`>_`, `⋯`, `⑂`, and the Project-task trust triangles) use, drawn at 15px so a stroke mark
+   reads at the weight those glyphs do — an `em`-sized SVG in a 10px menu is a smudge. Colour
+   is inherited from `.run-menu-section>button>span`, so a mark tracks the accent exactly like
+   the glyph it replaced. A harness with no drawing falls back to its initial and needs no
+   sizing at all. */
+.run-menu-mark{display:inline-flex;align-items:center;justify-content:center}
+.run-menu-mark .provider-mark{width:15px;height:15px;display:block}
 .run-worktree-form{display:grid;gap:8px;padding:10px}.run-worktree-form>small{color:var(--accent);font-size:8px}.run-worktree-form label{display:grid;gap:3px;color:var(--muted);font-size:8px}.run-worktree-form label em{font-style:normal;color:var(--muted)}.run-worktree-form input,.run-worktree-form select{width:100%;min-width:0;min-height:31px;padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}.run-worktree-form input:disabled,.run-worktree-form select:disabled{opacity:.6}.run-worktree-form>p{margin:0;color:var(--red);font-size:8px;line-height:1.4;overflow-wrap:anywhere}.run-worktree-form>div{display:grid;grid-template-columns:1fr 1fr;gap:7px}.run-worktree-form button{min-height:31px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}.run-worktree-form button.primary{border-color:var(--accent);color:var(--accent)}.run-worktree-form button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:calc(36px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{height:calc(44px*var(--ui-scale));grid-template-columns:18px minmax(0,1fr) 40px 40px!important;padding-right:4px}.project-row .project-row-menu,.project-row-run{display:grid!important;place-items:center;width:100%;min-width:40px;height:100%;min-height:44px;font-size:15px}.project-row-run{font-size:10px}.project-run-menu{width:min(calc(300px*var(--ui-scale)),calc(100vw - 28px));max-height:min(58dvh,calc(100dvh - 12px))}.run-menu-section>button{min-height:44px}.run-worktree-form input,.run-worktree-form select{min-height:42px;font-size:16px}.run-worktree-form button{min-height:42px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}.project-action-source-layer{padding:0}.project-action-source{width:100vw;height:100dvh;max-height:none;border:0}.project-action-source-text{min-height:220px;font-size:12px}.project-action-inputs-layer{padding:0}.project-action-inputs{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-inputs form{flex:1;overflow:auto;align-content:start}.project-action-inputs input,.project-action-inputs select{min-height:42px;font-size:16px}}
 
@@ -1333,7 +1407,7 @@ body {
 .layout-cluster.stack>.layout-branch:after{top:calc(var(--session-row-inset-y) + max(var(--session-dot),var(--session-line-box)));bottom:0}
 .layout-cluster.stack>.layout-branch.first:before,.layout-cluster.stack>.layout-branch.last:after{content:none}
 .layout-cluster .session-row{position:relative;z-index:2}.layout-resource-row{height:calc(40px*var(--ui-scale));display:flex;align-items:center;gap:8px;color:var(--muted)}.layout-loose{margin-top:4px;padding-top:3px}.layout-loose-divider{height:10px;display:grid;grid-template-columns:13px 1fr;align-items:center;color:var(--muted);font-size:8px}.layout-loose-divider i{display:block;border-top:1px dotted var(--line)}.foreign-scope{margin-left:6px;color:var(--amber)}.anchor-badge{color:var(--green);margin-left:auto}.project-row .anchor-badge+small{margin-left:0}
-.pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:calc(31px*var(--ui-scale)) minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs-rail{--overflow-rail-bg:var(--panel);--overflow-rail-accent:var(--green)}.stack-tabs{width:100%;height:100%;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:none}.stack-tabs::-webkit-scrollbar{display:none}.stack-tabs button{flex:0 0 auto;max-width:220px;height:calc(31px*var(--ui-scale));border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}/* The active tab was distinguished only by swapping --panel for --bg, a difference of a few
+.pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:calc(31px*var(--ui-scale)) minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs-rail{--overflow-rail-bg:var(--panel);--overflow-rail-accent:var(--green)}.stack-tabs{width:100%;height:100%;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:none}.stack-tabs::-webkit-scrollbar{display:none}.stack-tabs button{flex:0 0 auto;max-width:220px;height:calc(31px*var(--ui-scale));border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px 0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}/* The active tab was distinguished only by swapping --panel for --bg, a difference of a few
    RGB points that is invisible on a phone screen in daylight and easy to miss on desktop. It
    now carries a real outline plus a thick underline in the app accent, and a tinted fill.
    `--tab-active-bg` exists so the close button's fade overlay tracks the same colour instead
@@ -1917,6 +1991,32 @@ body {
 .mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 .mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
+/* A rail picker's drop-up. Positioned by `anchoredPopoverStyle` (the same math the
+   account and resource popovers use), which sets left/bottom/width and a max-height
+   against the space above the trigger.
+
+   The row cap is the point: five rows of list, then scroll. `--rail-dropup-rows` and
+   `--rail-dropup-row` are the whole contract, so the height can be tuned without
+   touching either drop-up's markup, and rows are a fixed height so the cap actually
+   means five of them rather than "five short ones or two long ones". */
+.rail-dropup{--rail-dropup-rows:5;--rail-dropup-row:36px;position:fixed;z-index:96;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #0009;color:var(--text)}
+.rail-dropup-open{position:sticky;top:0;z-index:1;width:100%;min-height:28px;padding:0 8px;border:0;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;text-align:left;letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
+.rail-dropup-open:hover,.rail-dropup-open:focus-visible{background:color-mix(in srgb,var(--green) 12%,var(--panel2))}
+.rail-dropup-list{max-height:calc(var(--rail-dropup-rows) * var(--rail-dropup-row));overflow-y:auto;overscroll-behavior:contain}
+.rail-dropup-row{box-sizing:border-box;width:100%;height:var(--rail-dropup-row);display:grid;align-content:center;gap:1px;padding:0 8px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);background:transparent;color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
+.rail-dropup-row:hover,.rail-dropup-row:focus-visible{background:var(--panel2)}
+.rail-dropup-row:disabled{opacity:.45;cursor:not-allowed}
+.rail-dropup-row.shadowed{opacity:.6}
+/* Both lines are single-line and ellipsized: a drop-up row that wrapped would break
+   the fixed height the five-row cap is measured in. */
+.rail-dropup-row>span,.rail-dropup-row>small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-dropup-row>span{display:flex;align-items:center;gap:5px}
+.rail-dropup-row>small{color:var(--muted);font-size:8px}
+.rail-dropup-row code{color:var(--green);font:inherit}
+.rail-dropup-row em{color:var(--muted);font-style:normal}
+.rail-dropup-empty,.rail-dropup-note{margin:0;padding:9px 8px;color:var(--muted);font:9px/1.5 'Cascadia Mono',Consolas,monospace}
+.rail-dropup-note{border-top:1px solid var(--line)}
+.terminal-action-rail .rail-dropup-open-trigger{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green)}
 /* Dismissible first-open orientation. Persistent copy lives in tooltips and the
    scope note instead of a standing paragraph. */
 .commandrail-settings .rail-intro-callout{margin:0 0 10px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--blue) 45%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}

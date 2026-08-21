@@ -291,10 +291,52 @@ half-typed in it, from any device (`features/ui.md`).
 - **Bracketed paste is content, not a submit**, and its open/closed state is carried between
   writes: a paste large enough to matter is the one most likely to arrive split, and a
   continuation frame carries no opening marker of its own.
+- **What discards a composer is a harness fact, not a constant.**
+  Ctrl+C is universal. Everything else arrives from `HarnessDescriptor.composer_clear_keys`,
+  because the constant this module used to carry was wrong on the harness most people run:
+  measured 2026-08-20 against Claude Code v2.1.238 on a four-line draft, `Ctrl+U` killed one
+  line and left the other three, and a bare `Esc` did nothing to the draft at all - only a
+  double `Esc` cleared it.
+  Counting either as a clear reported an empty composer over a standing draft, which is the
+  false *safe* named above, in the one estimate a gate can act on.
+  The declared sequence is matched against the raw frame rather than the escape-stripped
+  remainder, since Claude's is itself an escape sequence.
 - **Known imprecision, in the safe direction.**
-  Keystrokes a slash menu consumed can leave the mark standing until the next submit or `Esc`;
+  Keystrokes a slash menu consumed can leave the mark standing until the next submit;
   history recall (`↑`) puts text in the composer that this cannot see and is deliberately not
   counted, because inventing a count for bytes nobody sent is worse than missing one.
+
+## Reading the composer back
+
+The count above is all the daemon can offer, so the Action rail's **Copy input** and **Clear
+input** read the draft off the client's own cell grid instead (`frontend/src/composerText.ts`).
+Reconstructing text from the write log was the alternative and is rejected: it would have to
+emulate a line editor, and would still be wrong the moment `↑` puts characters in the composer
+that mux never sent. The screen is the truth.
+
+- **One measurement per harness.** `terminalCaretPlacement.ts` already measures each composer
+  for caret steering; `ComposerRegion` re-expresses that same measurement as a readable
+  rectangle, and the readers for Codex, OMP and pi are their existing caret resolvers - which is
+  also what refuses a dialog, a picker, or ordinary output sitting under the cursor.
+- **Claude appears there and only there.** It negotiates mouse tracking, so it positions its own
+  caret and needs no caret resolver, but its draft is still on screen. Measured against
+  v2.1.238 at 100x30: two full-width `─` rules bracket the draft, the first visible row carries
+  `❯` plus U+00A0, continuation rows leave those two columns blank, text runs from column 2, and
+  the editor wraps at `cols-2`. Its `/` completion list renders above the top rule, outside the
+  composer entirely, so unlike pi there is no picker to refuse.
+- **Dim cells are dropped**, which removes a placeholder hint without matching its wording -
+  every harness paints the hint with SGR 2 (verified in Claude's own output bytes), and nothing
+  an operator types arrives dim. It also removes the ghost completion painted after the caret.
+- **Soft wraps are inferred.** A row whose content reaches the wrap column is joined to the
+  next; anything shorter ends a line. A hard newline landing exactly on the wrap column is read
+  as a wrap, which costs one newline rather than any characters, and is the only ambiguity a
+  cell grid cannot resolve.
+- **Only what is drawn.** A draft taller than its box scrolls inside it and no harness marks
+  that on screen - Claude's first visible row still carries `❯`. What comes back may be the tail.
+  This is why Clear does not depend on the read: the clear keys go to the CLI either way, and the
+  scrape is a best-effort clipboard-history record whose character count is shown to the operator.
+- **Three outcomes, never two.** `null` means "this screen is not showing a readable draft";
+  an empty string means "read it, and it is empty". Callers must not collapse them.
 
 ## API surface
 
@@ -336,6 +378,8 @@ None user-facing.
 
 - Rules (pure): `src/swe_mux/terminal_arbitration.py`
 - Unsent-composer estimate (pure): `src/swe_mux/composer_input.py`
+- Composer text assembly from the cell grid (pure): `frontend/src/composerText.ts`;
+  the per-harness rectangles it reads: `frontend/src/terminalCaretPlacement.ts`
 - Ownership/viewport state, geometry fanout: `src/swe_mux/session.py`
 - Frame handling, claim decisions, decision log: `src/swe_mux/server.py` (`pty_ws`,
   `_claim_terminal_input`, `_handle_terminal_input`, `_apply_client_viewport`)

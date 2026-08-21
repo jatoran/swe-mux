@@ -94,7 +94,10 @@ test('Codex targets resolve within the live composer and clamp after line text',
     current:{column:7,row:4},
     target:{column:5,row:3},
     promptRow:3,
+    firstRow:3,
+    lastRow:4,
     textStart:2,
+    textEnd:20,
   })
   assert.deepEqual(
     resolveCodexCaretTarget(snapshot(),{column:18,row:4})?.target,
@@ -106,7 +109,7 @@ test('Codex target can move after the current row when visible draft text contin
   const state=snapshot(4,3)
   assert.deepEqual(
     resolveCodexCaretTarget(state,{column:4,row:4}),
-    {current:{column:4,row:3},target:{column:4,row:4},promptRow:3,textStart:2},
+    {current:{column:4,row:3},target:{column:4,row:4},promptRow:3,firstRow:3,lastRow:4,textStart:2,textEnd:20},
   )
 })
 
@@ -143,7 +146,7 @@ test('Codex target resolves when palette detection leaves the composer unstyled'
   }
   assert.deepEqual(
     resolveCodexCaretTarget(state,{column:3,row:3}),
-    {current:{column:7,row:4},target:{column:3,row:3},promptRow:3,textStart:2},
+    {current:{column:7,row:4},target:{column:3,row:3},promptRow:3,firstRow:3,lastRow:4,textStart:2,textEnd:20},
   )
 })
 
@@ -222,7 +225,7 @@ test('OMP targets resolve on the fused bottom row and clamp after the draft',()=
   const state=ompSnapshot()
   assert.deepEqual(
     resolveOmpCaretTarget(state,{column:5,row:7}),
-    {current:{column:10,row:7},target:{column:5,row:7},promptRow:6,textStart:3},
+    {current:{column:10,row:7},target:{column:5,row:7},promptRow:6,firstRow:7,lastRow:7,textStart:3,textEnd:37},
   )
   assert.deepEqual(resolveOmpCaretTarget(state,{column:30,row:7})?.target,{column:10,row:7})
 })
@@ -231,7 +234,7 @@ test('OMP targets reach interior draft rows of a wrapped draft',()=>{
   const state=ompSnapshot({interior:'alpha bravo'})
   assert.deepEqual(
     resolveOmpCaretTarget(state,{column:6,row:6}),
-    {current:{column:10,row:7},target:{column:6,row:6},promptRow:5,textStart:3},
+    {current:{column:10,row:7},target:{column:6,row:6},promptRow:5,firstRow:6,lastRow:7,textStart:3,textEnd:37},
   )
 })
 
@@ -305,7 +308,7 @@ test('pi targets resolve inside the rules and clamp after the draft text',()=>{
   const state=piSnapshot({draft:['alpha bravo']})
   assert.deepEqual(
     resolvePiCaretTarget(state,{column:4,row:5}),
-    {current:{column:11,row:5},target:{column:4,row:5},promptRow:4,textStart:0},
+    {current:{column:11,row:5},target:{column:4,row:5},promptRow:4,firstRow:5,lastRow:5,textStart:0,textEnd:40},
   )
   // The caret's own written blank must not read as content past the line end.
   assert.deepEqual(resolvePiCaretTarget(state,{column:30,row:5})?.target,{column:11,row:5})
@@ -315,7 +318,7 @@ test('pi targets reach every row of a wrapped draft and its leading column',()=>
   const state=piSnapshot({draft:['alpha bravo charlie delta echo foxtrot','golf hotel']})
   assert.deepEqual(
     resolvePiCaretTarget(state,{column:9,row:5}),
-    {current:{column:10,row:6},target:{column:9,row:5},promptRow:4,textStart:0},
+    {current:{column:10,row:6},target:{column:9,row:5},promptRow:4,firstRow:5,lastRow:6,textStart:0,textEnd:40},
   )
   assert.deepEqual(resolvePiCaretTarget(state,{column:0,row:6})?.target,{column:0,row:6})
 })
@@ -324,7 +327,7 @@ test('an empty pi composer resolves to its single blank row',()=>{
   const state=piSnapshot()
   assert.deepEqual(
     resolvePiCaretTarget(state,{column:20,row:5}),
-    {current:{column:0,row:5},target:{column:0,row:5},promptRow:4,textStart:0},
+    {current:{column:0,row:5},target:{column:0,row:5},promptRow:4,firstRow:5,lastRow:5,textStart:0,textEnd:40},
   )
 })
 

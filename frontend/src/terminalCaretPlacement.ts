@@ -56,7 +56,7 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value))
 }
 
-function cellAt(snapshot: TerminalCaretSnapshot, row: number, column: number): TerminalCaretCell | undefined {
+export function cellAt(snapshot: TerminalCaretSnapshot, row: number, column: number): TerminalCaretCell | undefined {
   const indexed=snapshot.lines[row-snapshot.viewportY]
   const line=indexed?.row===row?indexed:snapshot.lines.find(candidate=>candidate.row===row)
   return line?.cells[column]
@@ -66,11 +66,11 @@ function sameBackground(a: TerminalCaretCell | undefined, b: TerminalCaretCell |
   return !!a && !!b && a.bgMode === b.bgMode && a.bg === b.bg
 }
 
-function cellHasVisibleText(cell: TerminalCaretCell | undefined): boolean {
+export function cellHasVisibleText(cell: TerminalCaretCell | undefined): boolean {
   return !!cell && cell.code !== 0 && cell.chars.trim().length > 0
 }
 
-function rowIsBlank(snapshot: TerminalCaretSnapshot, row: number): boolean {
+export function rowIsBlank(snapshot: TerminalCaretSnapshot, row: number): boolean {
   for (let column = 0; column < snapshot.cols; column += 1) {
     if (cellHasVisibleText(cellAt(snapshot, row, column))) return false
   }
@@ -126,7 +126,7 @@ function unstyledComposerLastRow(
   return null
 }
 
-function contentBoundary(
+export function contentBoundary(
   snapshot: TerminalCaretSnapshot,
   row: number,
   startColumn: number,
@@ -156,12 +156,7 @@ function contentBoundary(
 export function resolveCodexCaretTarget(
   snapshot: TerminalCaretSnapshot,
   requested: TerminalCaretPosition,
-): {
-  current: TerminalCaretPosition
-  target: TerminalCaretPosition
-  promptRow: number
-  textStart: number
-} | null {
+): ResolvedCaretTarget | null {
   if (snapshot.cols < 4 || snapshot.rows < 1 || snapshot.viewportY !== snapshot.baseY) return null
   const cursorRow = snapshot.baseY + snapshot.cursorY
   if (cursorRow < snapshot.viewportY || cursorRow >= snapshot.viewportY + snapshot.rows) return null
@@ -211,15 +206,29 @@ export function resolveCodexCaretTarget(
     current,
     target: { column: targetColumn, row: targetRow },
     promptRow: prompt.row,
+    firstRow: prompt.row,
+    lastRow: lastDraftRow,
     textStart,
+    textEnd: snapshot.cols,
   }
 }
 
 export type ResolvedCaretTarget = {
   current: TerminalCaretPosition
   target: TerminalCaretPosition
+  /** The row a caret request is offset from: the live-prefix row on Codex, the
+   *  top border or rule on the harnesses that draw one. */
   promptRow: number
+  /** First row of the draft's own text region. Equal to `promptRow` only where the
+   *  prompt shares its row with the first line of text. */
+  firstRow: number
+  /** Last row of the draft's text region, inclusive. */
+  lastRow: number
+  /** First column text occupies, on every row of the region. */
   textStart: number
+  /** One past the last column the editor will write text into. A row whose content
+   *  reaches this column wrapped; it did not end. */
+  textEnd: number
 }
 export type CaretTargetResolver = (
   snapshot: TerminalCaretSnapshot,
@@ -297,7 +306,10 @@ export function resolveOmpCaretTarget(
     current,
     target: { column: targetColumn, row: targetRow },
     promptRow: topRow,
+    firstRow: topRow + 1,
+    lastRow: bottomRow,
     textStart: OMP_TEXT_START,
+    textEnd: snapshot.cols - 3,
   }
 }
 
@@ -313,11 +325,23 @@ const PI_RULE = '─'
 const PI_LIST_MARKER = '→'
 const PI_TEXT_START = 0
 
-function rowIsPiRule(snapshot: TerminalCaretSnapshot, row: number): boolean {
+/**
+ * A row that is nothing but `glyph`, edge to edge.
+ *
+ * Shared because two harnesses bracket their composer with exactly this — pi and
+ * Claude both draw a full-width `─` above and below the draft — and a composer
+ * reader has to find the same rules the caret resolver does. One definition is
+ * what stops the two from disagreeing about where a composer begins.
+ */
+export function rowIsFullWidthRule(snapshot: TerminalCaretSnapshot, row: number, glyph: string): boolean {
   for (let column = 0; column < snapshot.cols; column += 1) {
-    if (cellAt(snapshot, row, column)?.chars !== PI_RULE) return false
+    if (cellAt(snapshot, row, column)?.chars !== glyph) return false
   }
   return true
+}
+
+function rowIsPiRule(snapshot: TerminalCaretSnapshot, row: number): boolean {
+  return rowIsFullWidthRule(snapshot, row, PI_RULE)
 }
 
 /**
@@ -403,7 +427,10 @@ export function resolvePiCaretTarget(
     current,
     target: { column: targetColumn, row: targetRow },
     promptRow: topRule,
+    firstRow: firstDraftRow,
+    lastRow: bottomRule - 1,
     textStart: PI_TEXT_START,
+    textEnd: snapshot.cols,
   }
 }
 
@@ -424,6 +451,131 @@ const CARET_RESOLVERS = new Map<string, CaretTargetResolver>([
 /** The caret resolver a backend steers with, or null when taps must not send keys. */
 export function caretResolverForBackend(backend: string): CaretTargetResolver | null {
   return CARET_RESOLVERS.get(backend) ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Composer regions
+// ---------------------------------------------------------------------------
+//
+// Where a harness's draft *is*, as a rectangle of cells. Reading the draft back
+// out is a different question from steering a caret into it, and the two must not
+// be allowed to answer it differently — so both are measured here, against the
+// same per-harness constants, rather than in whichever module happened to need
+// one. The readers below reuse the caret resolvers wherever a resolver already
+// proves the surface really is a composer, and add only the extent a resolver has
+// no reason to compute.
+//
+// The membership is deliberately wider than `CARET_RESOLVERS`. A harness that
+// negotiates mouse tracking needs no caret resolver, because it positions its own
+// caret from the tap — but its draft is still on the screen and still readable.
+// Claude is exactly that case and appears here only.
+
+export interface ComposerRegion {
+  /** First row of the draft's text region. */
+  firstRow: number
+  /** Last row of the draft's text region, inclusive. */
+  lastRow: number
+  /** First column text occupies, on every row of the region. */
+  textStart: number
+  /** One past the last column the editor will write text into. A row whose
+   *  content reaches this column wrapped; it did not end. */
+  textEnd: number
+}
+
+export type ComposerRegionReader = (snapshot: TerminalCaretSnapshot) => ComposerRegion | null
+
+/** The cursor, in the shape the caret resolvers take a request in. */
+function cursorPosition(snapshot: TerminalCaretSnapshot): TerminalCaretPosition {
+  return { column: snapshot.cursorX, row: snapshot.baseY + snapshot.cursorY }
+}
+
+// Measured against installed Claude Code v2.1.238 (2026-08-20, a live pane at
+// 100x30): the composer is bracketed by two full-width `─` rules, the first
+// *visible* draft row carries `❯` at column 0 followed by U+00A0, continuation
+// rows leave those two columns blank, text starts at column 2 on every row, and
+// the editor wraps at column cols-2 — the last two columns are never written.
+// An empty composer holds one row whose hint is painted with SGR 2, which is
+// what `contentBoundary`'s dim handling already knows how to discard.
+//
+// Two behaviours a reader cannot see, both measured in the same session:
+//   * a draft taller than the box scrolls *inside* it, and the top row of the
+//     visible remainder still carries `❯`. There is no on-screen difference
+//     between a whole draft and the tail of a scrolled one.
+//   * a `/` completion list renders above the top rule, outside the composer's
+//     rules entirely, so unlike pi there is no picker to refuse here.
+const CLAUDE_RULE = '─'
+const CLAUDE_PROMPT = '❯'
+const CLAUDE_TEXT_START = 2
+const CLAUDE_RIGHT_INSET = 2
+
+/** True for the two gutter columns Claude leaves blank on a continuation row. */
+function claudeGutterIsClear(snapshot: TerminalCaretSnapshot, row: number): boolean {
+  for (let column = 0; column < CLAUDE_TEXT_START; column += 1) {
+    if (cellHasVisibleText(cellAt(snapshot, row, column))) return false
+  }
+  return true
+}
+
+export function readClaudeComposerRegion(snapshot: TerminalCaretSnapshot): ComposerRegion | null {
+  if (snapshot.cols < CLAUDE_TEXT_START + CLAUDE_RIGHT_INSET + 1 || snapshot.rows < 3) return null
+  // Off-tail is refused, exactly as the caret resolvers refuse it. A reader parked in
+  // scrollback is looking at an old frame, and an old frame can hold rules and a
+  // prompt glyph that would pass every check below while being nobody's live draft.
+  if (snapshot.viewportY !== snapshot.baseY) return null
+  const viewportEnd = snapshot.viewportY + snapshot.rows
+  const cursorRow = snapshot.baseY + snapshot.cursorY
+  if (cursorRow < snapshot.viewportY || cursorRow >= viewportEnd) return null
+
+  let topRule = -1
+  for (let row = cursorRow - 1; row >= snapshot.viewportY; row -= 1) {
+    if (rowIsFullWidthRule(snapshot, row, CLAUDE_RULE)) { topRule = row; break }
+  }
+  if (topRule < 0) return null
+  let bottomRule = -1
+  for (let row = cursorRow + 1; row < viewportEnd; row += 1) {
+    if (rowIsFullWidthRule(snapshot, row, CLAUDE_RULE)) { bottomRule = row; break }
+  }
+  if (bottomRule < 0 || bottomRule - topRule < 2) return null
+
+  // The prompt glyph is the positive detection. Refusing without it matters
+  // because Claude brackets other things in rules too, and reading one of those
+  // back as "your draft" is worse than reading nothing.
+  const firstRow = topRule + 1
+  if (cellAt(snapshot, firstRow, 0)?.chars !== CLAUDE_PROMPT) return null
+  for (let row = firstRow + 1; row < bottomRule; row += 1) {
+    if (!claudeGutterIsClear(snapshot, row)) return null
+  }
+  return {
+    firstRow,
+    lastRow: bottomRule - 1,
+    textStart: CLAUDE_TEXT_START,
+    textEnd: snapshot.cols - CLAUDE_RIGHT_INSET,
+  }
+}
+
+/** A resolver's own composer measurement, re-expressed as a readable rectangle. */
+function regionFromResolver(resolve: CaretTargetResolver): ComposerRegionReader {
+  return snapshot => {
+    // Asking at the cursor is what makes this a *validation* rather than a guess:
+    // the resolver is the code that refuses a dialog, a picker, a transcript, or
+    // ordinary output that happens to sit under the cursor.
+    const composer = resolve(snapshot, cursorPosition(snapshot))
+    if (!composer) return null
+    const { firstRow, lastRow, textStart, textEnd } = composer
+    return lastRow < firstRow ? null : { firstRow, lastRow, textStart, textEnd }
+  }
+}
+
+const COMPOSER_REGIONS = new Map<string, ComposerRegionReader>([
+  ['claude', readClaudeComposerRegion],
+  ['codex', regionFromResolver(resolveCodexCaretTarget)],
+  ['omp', regionFromResolver(resolveOmpCaretTarget)],
+  ['pi', regionFromResolver(resolvePiCaretTarget)],
+])
+
+/** Whether this backend's draft can be read off the screen at all. */
+export function composerRegionForBackend(backend: string): ComposerRegionReader | null {
+  return COMPOSER_REGIONS.get(backend) ?? null
 }
 
 /** Resolve a target that stays attached to the composer when popup height moves it. */

@@ -6,6 +6,7 @@ import {
   railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
   type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem,
 } from '../src/commandRail.ts'
+import { composerClearSequence } from '../src/composerText.ts'
 import { AGENT_NEWLINE } from '../src/terminalKeys.ts'
 
 const CLAUDE: RailContext = { device: 'desktop', backend: 'claude' }
@@ -27,9 +28,9 @@ test('the default layout seeds one row per surface, identical on both devices', 
 
 test('default rail groups editing helpers after Down and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
-    'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'actionsDrawer', 'kbdToggle',
+    'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'skills', 'actionsDrawer', 'kbdToggle',
     'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down',
-    'markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput',
+    'markdownDivider', 'markdownCodeFence', 'copyInput', 'clearInput', 'restoreInput',
     'left', 'right', 'attach',
   ])
 })
@@ -49,7 +50,7 @@ test('desktop and mobile layouts are edited independently', () => {
   config.layouts.mobile.strip[0].items = ['esc', 'enter']
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
-  assert.equal(ids(config, 'strip').length, 23)
+  assert.equal(ids(config, 'strip').length, 25)
 })
 
 test('an item placed in no row is simply absent from that device', () => {
@@ -115,8 +116,17 @@ test('the drawer newline and editing helpers use non-submitting agent keys', () 
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'newline')?.bytes, AGENT_NEWLINE)
   assert.equal(divider?.bytes, `${AGENT_NEWLINE}${AGENT_NEWLINE}---${AGENT_NEWLINE}${AGENT_NEWLINE}`)
   assert.equal(codeFence?.bytes, `${AGENT_NEWLINE}${AGENT_NEWLINE}\`\`\`${AGENT_NEWLINE}`)
-  assert.equal(BUILTIN_RAIL.find(item => item.id === 'clearInput')?.bytes, '\x15')
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'restoreInput')?.bytes, '\x19')
+  // Clear is deliberately *not* a raw key any more. Ctrl+U is a whole-composer
+  // clear only on single-line drafts (measured: it kills one line of a four-line
+  // Claude draft), so the sequence is resolved per harness at click time by
+  // `composerClearSequence`, and this item carries no bytes of its own.
+  const clearInput = BUILTIN_RAIL.find(item => item.id === 'clearInput')
+  assert.equal(clearInput?.type, 'action')
+  assert.equal(clearInput?.bytes, undefined)
+  assert.equal(composerClearSequence('claude'), '\x1b\x1b')
+  assert.equal(composerClearSequence('codex'), '\x15')
+  assert.equal(composerClearSequence('shell'), '\x15')
 })
 
 test('a newly shipped built-in is placed, not merely catalogued', () => {

@@ -1785,9 +1785,15 @@ retryability, token and cost usage, latency, and response content type and lengt
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
 row has `rule_id`, `calls`, `tokens`, `cost_usd`, the same three figures scoped to today, the
 requested models, and `last_at`. The daemon labels each row with `label`, `detail`, `kind`
-(`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because four
+(`observer` | `custom` | `feature` | `retired`), `enabled`, and `setting_label`, because several
 features bill the observer budget without being automation rules and a raw `rule_id` names
-neither them nor the setting that governs them. The rows are grouped from
+neither them nor the setting that governs them.
+`enabled` is read from the governing switch in every case - the live engine for a rule, the
+named `Config` flag for a feature - because the column's whole job is to separate a live bill
+from spent history.
+`kind: retired` is the fallback for an id nothing on the page can turn off, so a *live* spender
+missing from `FEATURE_SPENDERS` is reported as the opposite of what it is; the guard against
+that is `tests/test_spend_label_matrix.py` rather than review. The rows are grouped from
 `automation_budget_ledger` — the same table `spend_today` sums — so they reconcile with it
 exactly, including the rows a call that failed after the provider billed for its input writes.
 

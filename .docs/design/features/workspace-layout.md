@@ -100,9 +100,21 @@ PaneLeaf = terminal | note | preview | history | queue
   `claude-77eaca`, `claude-34cebf` is unreadable while the sidebar beside it reads fine.
 - Every tab is prefixed by what it holds before which one it is, so a strip reads the way a
   sidebar row does. Resource tabs carry a kind glyph (preview, note, history, queue); a session
-  tab carries its state dot, then the provider mark the sidebar and the account switcher use
-  (`providerGlyph`), then any standing-activity badges, then the title. Shell sessions take a
-  prompt mark rather than nothing, so the mapping stays total.
+  tab carries its state dot, then the harness mark the sidebar and the account switcher use
+  (`harnessMark`, `harnessIcons.tsx`), then any standing-activity badges, then the title. Shell
+  sessions take a prompt mark rather than nothing, so the mapping stays total.
+- That prefix is budgeted, because every pixel it spends is a pixel of session name that the
+  220 px (160 px on a phone) tab cap truncates.
+  The state dot and the harness mark are one compound "what is this and how is it doing" unit
+  and sit 3 px apart; the strip's 7 px flex gap survives only before the title, and the tab's
+  leading padding is 6 px rather than the trailing 11 px.
+  The dot is offset 2 px above the title's centre line: a strip is scanned by state before it
+  is read by name, so the dot reads as a corner mark rather than as the first of a row of
+  same-height glyphs, and offsetting it keeps two similarly sized discs legible as two facts at
+  the tightened spacing.
+  The offset is a fixed optical nudge (`position:relative`), never a re-centring, so it does
+  not have to be recomputed against `--ui-scale`, the tab height, or a configured
+  `--session-dot`.
 - A tab strip that outgrows its pane scrolls sideways without exposing a scrollbar.
   A soft edge fade and chevron appear only on sides with hidden content, occupy no layout space, and click-scroll to the next useful tab boundary.
   Plain wheel input translates to horizontal movement because the strip only overflows on that axis.
