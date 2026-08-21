@@ -27,9 +27,14 @@ declare global {
 window.dropupPicks = []
 window.dropupSticky = 0
 
-// Enough keys either side of the trigger to make the strip overflow at any width
-// the spec sets, which is what gives the scroller something to pan.
-const PADDING = ['esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down', 'left']
+// Enough keys either side of the trigger to make the strip overflow at any width the spec
+// sets, which is what gives the scroller something to pan. That now includes widths *above*
+// the 760px device-class breakpoint, since the drop-up's placement rule differs either side
+// of it and the pan has to be exercised on the desktop side.
+const PADDING = [
+  'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down', 'left',
+  'right', 'home', 'end', 'ctrlHome', 'ctrlEnd', 'ctrlU', 'ctrlY', 'newline',
+]
 
 const ROWS = Array.from({ length: 12 }, (_, index) => ({
   id: `row-${index}`,

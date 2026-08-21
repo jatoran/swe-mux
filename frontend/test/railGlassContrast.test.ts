@@ -66,37 +66,55 @@ function themes(): { name: string; panel: Rgb; chip: Rgb; text: Rgb }[] {
   return found
 }
 
-/** The one opacity the panel and its chips are both mixed at. */
+/** The one opacity every rail overlay is mixed at. */
 function glassOpacity(): number {
-  const declared = /\.rail-overflow-popover\{--rail-glass:(\d+)%/.exec(CSS)
-  if (!declared) throw new Error('the overflow popover must declare --rail-glass')
+  const declared = /:root\{--rail-glass:(\d+)%\}/.exec(CSS)
+  if (!declared) throw new Error('--rail-glass must be declared once, at :root')
   return Number(declared[1]) / 100
 }
 
-/** A chip label's background: the chip over the panel over whatever the terminal is showing. */
-function chipBackground(theme: { panel: Rgb; chip: Rgb }, alpha: number, buffer: Rgb): Rgb {
-  return over(theme.chip, alpha, over(theme.panel, alpha, buffer))
+/**
+ * The two compositions a rail overlay's label can sit on, worst first.
+ *
+ * A drop-up row is transparent over its panel, so its label sits on ONE layer of glass. A
+ * popover chip has its own background, so a chip label sits on two and is materially safer.
+ * The single-layer case is what sets the number; testing only the two-layer one would have
+ * let the drop-ups ship at an opacity that fails.
+ */
+function labelBackgrounds(theme: { panel: Rgb; chip: Rgb }, alpha: number, buffer: Rgb): [string, Rgb][] {
+  const panel = over(theme.panel, alpha, buffer)
+  return [['drop-up row', panel], ['popover chip', over(theme.chip, alpha, panel)]]
 }
 
-test('the popover is glass rather than a panel with a blur declaration on it', () => {
+test('every rail overlay is glass rather than a panel with a blur declaration on it', () => {
   const alpha = glassOpacity()
-  assert.ok(alpha < 0.9, `--rail-glass is ${alpha}: at that opacity the panel is not translucent`)
-  assert.match(CSS, /\.rail-overflow-popover\{[^}]*backdrop-filter:blur\(/)
-  // Both the panel and the chips on it, or the chips are opaque plates on glass.
-  assert.match(CSS, /\.rail-overflow-popover\{[^}]*background:color-mix\(in srgb,var\(--panel\) var\(--rail-glass\),transparent\)/)
+  assert.ok(alpha < 0.95, `--rail-glass is ${alpha}: at that opacity nothing is translucent`)
+  for (const surface of [/\.rail-overflow-popover\{[^}]*/, /\.rail-dropup\{[^}]*/]) {
+    const rule = surface.exec(CSS)?.[0] ?? ''
+    assert.match(rule, /backdrop-filter:blur\(/)
+    assert.match(rule, /background:color-mix\(in srgb,var\(--panel\) var\(--rail-glass\),transparent\)/)
+  }
+  // The surfaces layered on those panels too, or they are opaque plates on glass.
   assert.match(CSS, /\.rail-overflow-grid>button\{background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)\}/)
+  assert.match(CSS, /\.rail-dropup-open\{[^}]*background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)/)
+  assert.match(CSS, /\.rail-dropup-row:hover,\.rail-dropup-row:focus-visible\{background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)\}/)
 })
 
-test('glass costs no theme its chip-label contrast, over a white or a black terminal', () => {
+test('glass costs no theme its label contrast, over a white or a black terminal', () => {
   const alpha = glassOpacity()
   const broken: string[] = []
   for (const theme of themes()) {
-    const opaque = contrast(theme.text, theme.chip)
-    if (opaque < 4.5) continue
     for (const buffer of [WHITE, BLACK]) {
-      const composited = contrast(theme.text, chipBackground(theme, alpha, buffer))
-      if (composited < 4.5) {
-        broken.push(`${theme.name} over ${buffer === WHITE ? 'white' : 'black'}: ${opaque.toFixed(2)} → ${composited.toFixed(2)}`)
+      for (const [surface, background] of labelBackgrounds(theme, alpha, buffer)) {
+        // Compared against what the same label reads at with no glass at all: three shipped
+        // themes are already under 4.5:1 opaque, and holding this panel to a bar the rail
+        // beneath it never met would fail for a reason that is not translucency.
+        const opaque = contrast(theme.text, surface === 'drop-up row' ? theme.panel : theme.chip)
+        if (opaque < 4.5) continue
+        const composited = contrast(theme.text, background)
+        if (composited < 4.5) {
+          broken.push(`${theme.name} ${surface} over ${buffer === WHITE ? 'white' : 'black'}: ${opaque.toFixed(2)} → ${composited.toFixed(2)}`)
+        }
       }
     }
   }
@@ -111,8 +129,10 @@ test('the shipped default themes clear 4.5:1 through the glass on both extremes'
   assert.ok(defaults.length >= 3, 'the default, dark, and light palettes must all be readable here')
   for (const theme of defaults) {
     for (const buffer of [WHITE, BLACK]) {
-      const composited = contrast(theme.text, chipBackground(theme, alpha, buffer))
-      assert.ok(composited >= 4.5, `${theme.name} over ${buffer === WHITE ? 'white' : 'black'} is ${composited.toFixed(2)}:1`)
+      for (const [surface, background] of labelBackgrounds(theme, alpha, buffer)) {
+        const composited = contrast(theme.text, background)
+        assert.ok(composited >= 4.5, `${theme.name} ${surface} over ${buffer === WHITE ? 'white' : 'black'} is ${composited.toFixed(2)}:1`)
+      }
     }
   }
 })

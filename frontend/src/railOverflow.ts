@@ -86,50 +86,101 @@ export function railFitCount({ widths, gap, available, overflowWidth }: RailFitM
   return count
 }
 
-/** Widest the overflow popover is allowed to grow, before the viewport clamp. */
+/** Widest the overflow popover's wrap grid may grow on a desktop, before the view clamp. */
 export const RAIL_POPOVER_MAX_WIDTH_PX = 520
-/** Most of the viewport height the popover may take, so it never blankets the composer. */
+/** Widest a drop-up's *list* may grow on a desktop. Narrower than the grid on purpose:
+ *  a list of one-line rows past this reads as a stretched menu rather than a picker. */
+export const RAIL_DROPUP_MAX_WIDTH_PX = 340
+/** Most of the visible height a rail overlay may take, so it never blankets the composer. */
 export const RAIL_POPOVER_MAX_HEIGHT_RATIO = 0.5
+/** Below this the layout is the phone's, and a rail overlay takes half the screen at most.
+ *  The same breakpoint the workspace projection and the device-class settings use. */
+export const RAIL_OVERLAY_MOBILE_MAX_PX = 760
+/** How much of a phone's screen a rail overlay may cover. Operator-chosen: the terminal it
+ *  is opened over has to stay readable beside it, which a near-full-width panel prevents. */
+export const RAIL_OVERLAY_MOBILE_WIDTH_RATIO = 0.5
 const RAIL_POPOVER_MARGIN_PX = 8
 const RAIL_POPOVER_MIN_HEIGHT_PX = 120
+const RAIL_OVERLAY_MIN_WIDTH_PX = 160
 
+/** The rail's trailing cluster: `right` is the edge to align to, `top` the edge to open from. */
 export interface RailPopoverRect { left: number; right: number; top: number }
 
 /**
- * Place the overflow popover above its `+N` chip, growing upward in rows.
+ * The part of the page the operator can actually see, in layout-viewport coordinates.
  *
- * Right-aligned to the chip rather than left-aligned to it, because the chip is at the row's
- * trailing end: aligning the panel's right edge with it puts the panel over the rail it came
- * from on a wide pane and flush to the rail's edge on a phone, which is the same rule in both
- * places rather than two.
- *
- * Not `anchoredPopoverStyle`: that one caps at 340px because it lays out a *list*, and a wrap
- * grid of rail chips at 340px is a column of one chip per row.
+ * This is `visualViewport`, not `window.innerWidth/innerHeight`, and the difference is the
+ * whole of the soft keyboard. The app declares `interactive-widget=resizes-visual`, so an
+ * open keyboard leaves the layout viewport at full height and shrinks only this one - which
+ * means every bound drawn against `innerHeight` describes a rectangle extending well behind
+ * the keyboard. `top`/`left` carry the visual viewport's offset for the case where the page
+ * is also scrolled within it.
  */
-export function railPopoverStyle(
+export interface RailOverlayView { left: number; top: number; width: number; height: number }
+
+/** Where a rail overlay goes, in layout-viewport coordinates, before any containing block
+ *  is taken into account (`railOverlayPlacement.ts` does that half). `bottom` is where the
+ *  panel's bottom *edge* sits, not a CSS inset - the two differ the moment a transformed
+ *  ancestor is in the way, and naming the edge is what makes that conversion checkable. */
+export interface RailOverlayBox { left: number; bottom: number; width: number; maxHeight: number }
+
+/**
+ * Place a command-rail overlay above its anchor, growing upward, inside what is visible.
+ *
+ * One function for the overflow popover and for every drop-up, because they are one control
+ * as far as placement goes: both hang off the rail at the bottom of a pane, both must open
+ * upward, both must stay right-aligned to the rail's trailing edge, and both were getting the
+ * soft keyboard wrong in the same way. Only the desktop width cap differs, because one lays
+ * out a wrap grid and the other a list.
+ *
+ * The anchor for the overflow popover is the rail's trailing *cluster* rather than the `+N`
+ * chip inside it: the panel's right edge then lands on the rail's trailing edge on every row,
+ * whatever that row is carrying. Aligning to the chip left the panel a gear-width short of
+ * the edge on the one row that carries a gear, which is two placements for one control.
+ *
+ * Not `anchoredPopoverStyle`: that one is the account/resource popovers' rule and knows
+ * nothing about the rail, the keyboard, or a phone's width budget.
+ */
+export function railOverlayBox(
   anchor: RailPopoverRect,
-  viewport: { width: number; height: number },
-): Record<string, string> {
-  const width = Math.min(RAIL_POPOVER_MAX_WIDTH_PX, Math.max(160, viewport.width - RAIL_POPOVER_MARGIN_PX * 2))
-  const left = clamp(anchor.right - width, RAIL_POPOVER_MARGIN_PX, Math.max(RAIL_POPOVER_MARGIN_PX, viewport.width - width - RAIL_POPOVER_MARGIN_PX))
-  const above = anchor.top - RAIL_POPOVER_MARGIN_PX - 4
+  view: RailOverlayView,
+  maxWidth: number,
+): RailOverlayBox {
+  const viewRight = view.left + view.width
+  const viewBottom = view.top + view.height
+  const room = view.width - RAIL_POPOVER_MARGIN_PX * 2
+  const cap = view.width <= RAIL_OVERLAY_MOBILE_MAX_PX
+    ? Math.floor(view.width * RAIL_OVERLAY_MOBILE_WIDTH_RATIO)
+    : maxWidth
+  const width = Math.max(Math.min(cap, room), Math.min(RAIL_OVERLAY_MIN_WIDTH_PX, room))
+  // A phone aligns every rail overlay to the screen's trailing edge rather than to its own
+  // trigger. On a wide pane, hanging off the trigger is the useful thing - it says which
+  // control opened this. On a phone at half width it only means a picker opened from a chip
+  // in the middle of the rail lands in the middle of the screen, so two overlays opened a
+  // second apart appear in two places. The desktop keeps the trigger; the phone gets one
+  // place, which is the same edge the rail's own trailing cluster sits on.
+  const trailing = viewRight - width - RAIL_POPOVER_MARGIN_PX
+  const left = view.width <= RAIL_OVERLAY_MOBILE_MAX_PX
+    ? Math.max(view.left + RAIL_POPOVER_MARGIN_PX, trailing)
+    : clamp(anchor.right - width, view.left + RAIL_POPOVER_MARGIN_PX, Math.max(view.left + RAIL_POPOVER_MARGIN_PX, trailing))
+  const above = anchor.top - (view.top + RAIL_POPOVER_MARGIN_PX) - 4
   const maxHeight = Math.max(
     RAIL_POPOVER_MIN_HEIGHT_PX,
-    Math.min(above, Math.round(viewport.height * RAIL_POPOVER_MAX_HEIGHT_RATIO)),
+    Math.min(above, Math.round(view.height * RAIL_POPOVER_MAX_HEIGHT_RATIO)),
   )
-  // Hugs the chip while there is room above it, and stops hugging rather than growing off
-  // the top of the screen: the minimum height is a floor, so a rail high in a short viewport
-  // would otherwise be handed a panel whose first row is above the window.
+  // Hugs the anchor while there is room above it, and stops hugging rather than growing off
+  // the top of what is visible: the minimum height is a floor, so a rail high in a short
+  // view would otherwise be handed a panel whose first row is off screen.
   const bottom = clamp(
-    viewport.height - anchor.top + 4,
-    RAIL_POPOVER_MARGIN_PX,
-    Math.max(RAIL_POPOVER_MARGIN_PX, viewport.height - maxHeight - RAIL_POPOVER_MARGIN_PX),
+    anchor.top - 4,
+    Math.min(viewBottom, view.top + maxHeight + RAIL_POPOVER_MARGIN_PX),
+    viewBottom - RAIL_POPOVER_MARGIN_PX,
   )
   return {
-    left: `${Math.round(left)}px`,
-    bottom: `${Math.round(bottom)}px`,
-    width: `${Math.round(width)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
+    left: Math.round(left),
+    bottom: Math.round(bottom),
+    width: Math.round(width),
+    maxHeight: Math.round(maxHeight),
   }
 }
 

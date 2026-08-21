@@ -105,38 +105,63 @@ test('Escape and a click outside both dismiss it', async ({ page }) => {
   expect(await page.evaluate(() => window.dropupPicks)).toEqual([])
 })
 
-test('panning the rail repositions the panel against the trigger it now sits at', async ({ page }) => {
-  await page.setViewportSize({ width: 480, height: 700 })
-  await open(page)
-  // The property is that the panel is placed from the trigger's *live* rectangle, not
-  // that it moves by the same delta: `anchoredPopoverStyle` also clamps to the viewport,
-  // and on a narrow pane that clamp is what is binding. Asserting the placement rule
-  // holds after the pan catches the failure that matters — a `scroll` listener without
-  // capture never hears a rail pan, and the panel is left placed against where the
-  // trigger used to be.
-  const placement = async () => page.evaluate(() => {
-    const panel = document.querySelector('.rail-dropup') as HTMLElement
-    const trigger = document.querySelector('[data-key="clip"]') as HTMLElement
-    const panelBox = panel.getBoundingClientRect()
-    const triggerBox = trigger.getBoundingClientRect()
-    return {
-      left: Math.round(panelBox.left),
-      expected: Math.round(Math.max(8, Math.min(triggerBox.left, window.innerWidth - panelBox.width - 8))),
-      triggerLeft: Math.round(triggerBox.left),
-    }
-  })
-  const before = await placement()
-  expect(before.left).toBe(before.expected)
-
-  const moved = await page.locator('.overflow-rail-strip').evaluate(el => {
+/** Pan the rail sideways; true when it actually moved. */
+async function panRail(page: Page): Promise<boolean> {
+  return page.locator('.overflow-rail-strip').evaluate(el => {
     const start = el.scrollLeft
     el.scrollLeft = start + 160
     el.dispatchEvent(new Event('scroll', { bubbles: false }))
     return el.scrollLeft !== start
   })
-  expect(moved).toBe(true)
+}
+
+const placement = async (page: Page) => page.evaluate(() => {
+  const panel = (document.querySelector('.rail-dropup') as HTMLElement).getBoundingClientRect()
+  const trigger = (document.querySelector('[data-key="clip"]') as HTMLElement).getBoundingClientRect()
+  // The desktop rule, restated: right edge on the trigger's, clamped into the viewport. The
+  // clamp is what binds when the trigger is nearer an edge than the panel is wide, so
+  // asserting the rule rather than raw equality is what keeps this about the *live* rect.
+  const left = Math.max(8, Math.min(trigger.right - panel.width, window.innerWidth - panel.width - 8))
+  return {
+    right: Math.round(panel.right),
+    left: Math.round(panel.left),
+    expectedRight: Math.round(left + panel.width),
+    triggerRight: Math.round(trigger.right),
+    triggerLeft: Math.round(trigger.left),
+    screenRight: Math.round(window.innerWidth),
+  }
+})
+
+test('panning the rail repositions the panel against the trigger it now sits at', async ({ page }) => {
+  // Wide enough for the desktop rule and narrow enough that the harness's rail still
+  // overflows, which is what gives the pan something to move.
+  await page.setViewportSize({ width: 900, height: 700 })
+  await open(page)
+  // On a pane with room, the panel hangs off its own trigger — which is how it says which
+  // control opened it. A `scroll` listener without capture never hears a rail pan, and the
+  // panel is left pointing at where the trigger used to be.
+  const before = await placement(page)
+  expect(before.right).toBe(before.expectedRight)
+
+  expect(await panRail(page)).toBe(true)
   await expect.poll(async () => {
-    const after = await placement()
-    return after.triggerLeft !== before.triggerLeft && after.left === after.expected
+    const after = await placement(page)
+    return after.triggerRight !== before.triggerRight && after.right === after.expectedRight
   }).toBe(true)
+})
+
+test('a phone pins the panel to the screen edge instead, so a pan does not move it', async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 700 })
+  await open(page)
+  // Half a phone's screen hanging off a trigger in the middle of the rail lands in the
+  // middle of the screen, and two pickers opened a second apart appear in two places. Below
+  // the device-class breakpoint every rail overlay goes to the same trailing edge instead.
+  const before = await placement(page)
+  expect(before.right).toBe(before.screenRight - 8)
+  expect(before.right - before.left).toBeLessThanOrEqual(480 / 2)
+
+  expect(await panRail(page)).toBe(true)
+  await expect.poll(async () => (await placement(page)).triggerLeft).not.toBe(before.triggerLeft)
+  const after = await placement(page)
+  expect(after.right).toBe(before.right)
 })

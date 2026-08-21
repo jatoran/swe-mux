@@ -2,14 +2,18 @@ import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { holdSoftKeyboard } from './mobileKeyboard'
-import { anchoredPopoverStyle } from './providerAccountDisplay'
+import { RAIL_DROPUP_MAX_WIDTH_PX } from './railOverflow'
+import { railOverlayStyle, watchRailOverlayPlacement } from './railOverlayPlacement'
 
 // A short list, opened upward from a button on the terminal's Action rail.
 //
-// The rail sits at the bottom of a pane, so anything it opens has to open *up* —
-// which is the same geometry the collapsed desktop rail's account switcher
-// already solved, so this reuses `anchoredPopoverStyle` rather than inventing a
-// second set of placement rules.
+// The rail sits at the bottom of a pane, so anything it opens has to open *up*.
+// That geometry is shared with the rail's overflow popover and lives in
+// `railOverlayPlacement.ts`; only the width cap differs, because this lays out a
+// list and that one a wrap grid. It used to borrow `anchoredPopoverStyle` from the
+// account switcher, which is the same *shape* and a different problem: that one
+// knows nothing about the soft keyboard resizing the visual viewport out from
+// under it, nor about a phone's width budget, and every rail overlay needs both.
 //
 // It exists because the rail's high-frequency pickers (clipboard history, the
 // session's skills) had exactly one route: open the utility drawer, find the
@@ -32,7 +36,8 @@ import { anchoredPopoverStyle } from './providerAccountDisplay'
 //     keyboard the operator is mid-sentence in.
 //   * repositioning on scroll *with capture*, because the rail itself is a
 //     horizontal scroller — a trigger that pans out from under a fixed popover
-//     leaves it pointing at nothing.
+//     leaves it pointing at nothing — and on `visualViewport` resize, which is
+//     the only event the keyboard's open and close fire.
 
 function sameStyle(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(b)
@@ -71,8 +76,7 @@ export function RailDropup({ label, anchor, onClose, sticky, children }: Props) 
   useEffect(() => {
     if (!anchor) return
     const position = () => {
-      const rect = anchor.getBoundingClientRect()
-      const next = anchoredPopoverStyle(rect, false, { width: window.innerWidth, height: window.innerHeight })
+      const next = railOverlayStyle(anchor.getBoundingClientRect(), root.current, RAIL_DROPUP_MAX_WIDTH_PX)
       // Only on a real change: a scroll listener that set fresh state on every event
       // would re-render the whole list for each frame of a rail pan.
       setStyle(current => sameStyle(current, next) ? current : next)
@@ -83,13 +87,11 @@ export function RailDropup({ label, anchor, onClose, sticky, children }: Props) 
       if (!root.current?.contains(target) && !anchor.contains(target)) close.current()
     }
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close.current() } }
-    window.addEventListener('resize', position)
-    window.addEventListener('scroll', position, true)
+    const unwatch = watchRailOverlayPlacement(position)
     window.addEventListener('pointerdown', dismiss)
     window.addEventListener('keydown', key)
     return () => {
-      window.removeEventListener('resize', position)
-      window.removeEventListener('scroll', position, true)
+      unwatch()
       window.removeEventListener('pointerdown', dismiss)
       window.removeEventListener('keydown', key)
     }

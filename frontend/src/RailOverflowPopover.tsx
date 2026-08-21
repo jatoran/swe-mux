@@ -2,7 +2,8 @@ import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { holdSoftKeyboard } from './mobileKeyboard'
-import { railPopoverStyle } from './railOverflow'
+import { RAIL_POPOVER_MAX_WIDTH_PX } from './railOverflow'
+import { railOverlayStyle, watchRailOverlayPlacement } from './railOverlayPlacement'
 
 // The rest of one rail row, as a wrap grid of the same real chips.
 //
@@ -26,10 +27,11 @@ import { railPopoverStyle } from './railOverflow'
 //     (`railPopoverClosingCommand`), because leaving it standing would cover the surface the
 //     tap just asked for. The caller owns that, since it owns the command bus.
 //
-// Placement and translucency both live outside this component: `railPopoverStyle` for the
-// geometry, `style.css` for the glass. The opacity there is not a taste value — see
-// `test/railGlassContrast.test.ts`, which composites it over a white and a black terminal
-// for every theme and holds label text at 4.5:1.
+// Placement and translucency both live outside this component: `railOverlayPlacement.ts` for
+// the geometry (shared with every drop-up, and the one place that knows what the soft
+// keyboard does to a fixed element's containing block), `style.css` for the glass. The
+// opacity there is not a taste value — see `test/railGlassContrast.test.ts`, which composites
+// it over a white and a black terminal for every theme and holds label text at 4.5:1.
 
 function sameStyle(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(b)
@@ -39,13 +41,19 @@ function sameStyle(a: Record<string, string>, b: Record<string, string>): boolea
 type Props = {
   /** Accessible name for the panel; one row's worth of overflow. */
   label: string
-  /** The `+N` chip this hangs from. */
+  /** The rail's trailing cluster, which the panel is placed against: its right edge is the
+   *  rail's trailing edge and its top is the `+N` chip's top. */
   anchor: HTMLElement | null
   onClose: () => void
+  /** Opens the in-place rail editor. Present here as well as on the row because a full
+   *  overflow is the surface that prompts the thought, and the row's own gear is a
+   *  different act from this panel's contents - it belongs in the chrome, beside the
+   *  close control, rather than as a chip among the ones you came here to press. */
+  onConfigure?: () => void
   children: ComponentChildren
 }
 
-export function RailOverflowPopover({ label, anchor, onClose, children }: Props) {
+export function RailOverflowPopover({ label, anchor, onClose, onConfigure, children }: Props) {
   const root = useRef<HTMLDivElement>(null)
   const [style, setStyle] = useState<Record<string, string>>({})
 
@@ -58,8 +66,7 @@ export function RailOverflowPopover({ label, anchor, onClose, children }: Props)
   useEffect(() => {
     if (!anchor) return
     const position = () => {
-      const rect = anchor.getBoundingClientRect()
-      const next = railPopoverStyle(rect, { width: window.innerWidth, height: window.innerHeight })
+      const next = railOverlayStyle(anchor.getBoundingClientRect(), root.current, RAIL_POPOVER_MAX_WIDTH_PX)
       setStyle(current => sameStyle(current, next) ? current : next)
     }
     position()
@@ -77,13 +84,11 @@ export function RailOverflowPopover({ label, anchor, onClose, children }: Props)
       event.stopPropagation()
       close.current()
     }
-    window.addEventListener('resize', position)
-    window.addEventListener('scroll', position, true)
+    const unwatch = watchRailOverlayPlacement(position)
     window.addEventListener('pointerdown', dismiss)
     window.addEventListener('keydown', key)
     return () => {
-      window.removeEventListener('resize', position)
-      window.removeEventListener('scroll', position, true)
+      unwatch()
       window.removeEventListener('pointerdown', dismiss)
       window.removeEventListener('keydown', key)
     }
@@ -107,6 +112,13 @@ export function RailOverflowPopover({ label, anchor, onClose, children }: Props)
           you use it. Said in words rather than implied, because every other popover on the
           rail behaves the opposite way. */}
       <span>stays open</span>
+      {onConfigure && <button
+        type="button"
+        class="rail-overflow-configure"
+        aria-label="Customize actions"
+        title="Customize this rail in place — drag, remove, add"
+        onClick={() => { onClose(); onConfigure() }}
+      >⚙</button>}
       <button type="button" class="rail-overflow-close" aria-label="Close more actions" title="Close" onClick={onClose}>×</button>
     </header>
     <div class="rail-overflow-grid">{children}</div>

@@ -27,6 +27,14 @@ declare global {
     setBuffer: (colour: string) => void
     /** Fire the command bus the way `TerminalPane.runCommand` does. */
     fireCommand: (command: string) => void
+    /** Stand a soft keyboard up exactly the way production does: the layout viewport keeps
+     *  its height, `--keyboard-inset` is published, and `.soft-keyboard-open` slides the
+     *  terminal surface up with a transform - which is what silently makes that surface the
+     *  containing block for every `position:fixed` overlay inside it. That half of the
+     *  keyboard bug is reproducible here; the visual-viewport half is pure arithmetic and is
+     *  covered in `test/railOverflow.test.ts`, since `visualViewport` cannot be resized from
+     *  script. */
+    openKeyboard: (inset: number) => void
   }
 }
 window.railOverflowFires = []
@@ -46,6 +54,11 @@ function Harness() {
   const clip = useRef<HTMLButtonElement>(null)
   window.setBuffer = setBufferColour
   window.fireCommand = command => window.dispatchEvent(new CustomEvent('mux:command', { detail: command }))
+  window.openKeyboard = inset => {
+    document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`)
+    document.documentElement.classList.toggle('soft-keyboard-open', inset > 0)
+    window.dispatchEvent(new Event('resize'))
+  }
 
   const fire = (id: string) => { window.railOverflowFires.push(id) }
 
@@ -88,10 +101,8 @@ function Harness() {
         <RailStrip
           chips={chips}
           label="More actions"
-          trailing={<>
-            <span aria-live="polite" />
-            <button class="rail-config" data-rail-fixed aria-label="Customize actions">⚙</button>
-          </>}
+          status=""
+          onConfigure={() => { window.railOverflowFires.push('configure') }}
         />
       </div>
     </div>

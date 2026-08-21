@@ -1545,12 +1545,32 @@ Its rules, and what each one is defending:
   Each row is split independently and gets its own popover, in row order, holding only that row's remainder.
   An empty remainder draws no `+N` chip at all, so a rail that fits looks exactly as it did before the split existed — including not reserving the chip's width "just in case".
   The `+N` chip is fixed-width by construction, because the one control that exists to absorb overflow must never be the thing that overflows, and the count follows the row's width live.
+- **The `+N` chip rides the row's trailing cluster, beside the gear**, rather than trailing the last pinned chip.
+  The split leaves up to a chip's width of slack, so following the chips put the control at a different offset on every rail and on every resize; the cluster takes that slack and pushes its contents right, which gives it one place on every row however that row is populated.
+  Its panel is placed against the *cluster* for the same reason: aligning to the chip alone left the panel a gear-width short of the rail's edge on the one row that carries a gear and flush on every other row, which is two placements for one control.
+  The status readout sits to the chip's left and is the only thing in the cluster that shrinks.
 - **The popover is the rest of the row, not a picker, so a selection does not close it.**
   It is a wrap grid of the same real chips with their real handlers, which is what makes the two-click End session confirm complete in place and a repeat-tap arrow key repeat where it is.
   Dismissal is always deliberate: an outside press, Escape, or the panel's own close control, and the header says `stays open` because every other popover on the rail behaves the opposite way.
   It is capped in width and in height (half the viewport), right-aligned to its chip, and grows upward — so on a phone it hugs the rail's edge and adds rows rather than blanketing the composer.
-  Panel and chips are translucent over a backdrop blur, with borders and text at full opacity.
-  That opacity is a measured value, not a taste one: it is the lowest that costs no theme its chip-label contrast when the terminal behind it is pure white or pure black, and it is held under 90% so a later "fix" cannot buy contrast by quietly going opaque (`test/railGlassContrast.test.ts`, and the real composited pixels in `test/renderer/rail-overflow.spec.ts`).
+  It also offers the in-place rail editor from its header, beside the close control: a full overflow is the surface that prompts "this rail needs configuring", and the gear behind the panel is a reach away.
+  It is chrome rather than a chip in the grid, where it would read as one more thing to press into the terminal, and it closes the panel as it hands over — the editor replaces the whole rail area, so a panel left standing would float over a surface that no longer exists.
+- **Every command-rail overlay is glass: the popover and each of the drop-ups.**
+  Panel, chips, and rows are translucent over a backdrop blur, with borders and text at full opacity.
+  One opacity for all of them, and a measured value rather than a taste one: the lowest at which the translucency costs no theme its label contrast when the terminal behind it is pure white or pure black, held under 95% so a later "fix" cannot buy contrast by quietly going opaque (`test/railGlassContrast.test.ts`, and the real composited pixels in `test/renderer/rail-overflow.spec.ts`).
+  The number is set by the **single-layer** case: a drop-up row is transparent over its panel, so its label sits on one layer of glass, where a popover chip has its own background and sits on two.
+  The binding surface owns the number and the other inherits it, rather than each carrying its own.
+  A browser without `backdrop-filter` falls back to near-solid, because unblurred glass is a flat wash of whatever pixel happens to be behind each letter — neither the look nor a contrast anyone can reason about.
+- **On a phone a rail overlay takes half the screen and goes to the screen's trailing edge**, whichever control opened it.
+  On a wide pane hanging off the trigger is useful — it says which control this belongs to — but at half a phone's width a picker opened from a chip in the middle of the rail lands in the middle of the screen, so two pickers opened a second apart appear in two places.
+  Below the device-class breakpoint they all go to one edge; above it they keep their trigger.
+  Half the screen is the point rather than a limit: the terminal the panel is opened over has to stay readable beside it.
+- **The soft keyboard is two separate corrections, and both live in `railOverlayPlacement.ts`.**
+  Bounds are drawn against the **visual** viewport, not `window.innerHeight`: the app declares `interactive-widget=resizes-visual` so an open keyboard leaves the layout viewport at full height (deliberately — sizing the shell from `visualViewport` shrank every terminal, and shrinking an alternate-screen PTY discards rows permanently), which means half of `innerHeight` is half of a rectangle running well behind the keyboard.
+  And the **containing block** is measured rather than assumed: `.terminal-surface` is translated up by the keyboard's inset so the rail stays visible, and a transformed ancestor is the containing block for its `position:fixed` descendants — which every rail overlay is — so the identical `bottom` means one place with the keyboard down and a place an inset higher with it up.
+  That is the "the panel is thrown up the screen when I start typing" report exactly.
+  Both are corrected rather than side-stepped by portalling the overlays to the body, which would take the rail's chip styling with them.
+  Placement re-runs on `visualViewport` resize and scroll as well as on window resize and capture-phase scroll, because the keyboard's open and close fire nothing else.
 - **The drop-up pickers work from inside the popover.**
   A Clip, Skills, Prompts, or Actions chip opened there renders its drop-up *over* the panel and leaves it standing, which needs two exemptions rather than one: the tap that opens a drop-up is an outside press for the panel, and Escape reaches both listeners on `window` where `stopPropagation` stops neither — so the panel stands aside for as long as a drop-up is open.
   The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
