@@ -149,6 +149,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # database, so a clone that inherits this opt-in has none of them
     # (`schedule_store.py`).
     Automation("scheduled_runs", CONSUMER, "Scheduled runs", ()),
+    # Phase 14: serialized branch landing. Like `session_control` and
+    # `scheduled_runs` it gates a *capability* rather than a read over another
+    # automation's output, so it depends on no substrate. Its own id rather than a
+    # second meaning for `session_control`: that one acts on a session, this one
+    # acts on a repository, and they deserve separate switches and separate
+    # budgets. Off by default, and permission alone lands nothing - the Project's
+    # `land_grant` stays at the inert `draft` until a human raises it.
+    Automation("land_queue", CONSUMER, "Land queue", ()),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}

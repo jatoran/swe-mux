@@ -795,6 +795,22 @@ class Config:
     # How long the run history behind each schedule is kept. Long enough that
     # "has this been failing all week" is answerable.
     scheduled_run_retention_days: int = 60
+    # Phase 14 land queue. The install-wide master switch is here for the same reason
+    # the scheduled-runs one is: it is the emergency stop, and off means no branch
+    # lands anywhere whatever any Project opted into.
+    land_queue_enabled: bool = True
+    # How many land requests one origin session may make per hour on the granted
+    # path. A land costs wall-clock rather than tokens, so this bounds a runaway
+    # request loop rather than spend.
+    land_hourly_budget: int = 12
+    # How long a request holds for a busy worktree before it gives up and hands back.
+    # Long enough that an ordinary agent turn finishes inside it, short enough that a
+    # request against an abandoned worktree does not sit in the queue forever.
+    land_hold_timeout_seconds: float = 30 * 60.0
+    # Whether a failed verification is retried once. Off by default and never silent:
+    # a flaky gate that loops is worse than one that stops, and a retry that fails
+    # differently from the first attempt stops rather than retrying again.
+    land_retry_verification: bool = False
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -1292,6 +1308,10 @@ def _validate(config: Config) -> None:
         errors["agent_spawn_hourly_budget"] = "must be between 0 and 1000 spawns per hour"
     if not 0 <= config.scheduled_runs_max_concurrent <= 50:
         errors["scheduled_runs_max_concurrent"] = "must be between 0 and 50 sessions"
+    if not 0 <= config.land_hourly_budget <= 1000:
+        errors["land_hourly_budget"] = "must be between 0 and 1000 land requests per hour"
+    if not 60 <= config.land_hold_timeout_seconds <= 24 * 3600:
+        errors["land_hold_timeout_seconds"] = "must be between 60 seconds and 24 hours"
     if not 1 <= config.scheduled_runs_poll_seconds <= 300:
         errors["scheduled_runs_poll_seconds"] = "must be between 1 and 300 seconds"
     if not 1 <= config.scheduled_run_retention_days <= 3650:

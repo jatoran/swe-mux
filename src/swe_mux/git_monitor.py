@@ -85,6 +85,12 @@ async def _git(
         return 1, ""
 
 
+#: The read-only runner under its public name, for callers outside this module that
+#: need one bounded Git query. Exported rather than reimplemented so no second caller
+#: can forget `--no-optional-locks` and start writing to the repository it is reading.
+read_git = _git
+
+
 @dataclass(slots=True, frozen=True)
 class GitEvidence:
     """Deterministic Tier 0 git facts for one repository root.
