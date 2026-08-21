@@ -101,7 +101,11 @@ SWAP_RETRY_SECONDS = 20.0
 # while that process is still alive converts a slow-but-valid deploy into an
 # outage, so give cold starts a realistic budget and fail early only when the
 # launched shell actually exits.
-APP_HEALTH_TIMEOUT_SECONDS = 300.0
+# 600 rather than 300: measured 2026-08-21, an already-scanned build took 225s
+# to "runtime ready" with 30 live sessions, so a fresh bundle paying its
+# first-launch scan on top of that legitimately exceeds 300s - the rollback
+# fired on a healthy-but-slow deploy. Overridable per run for slower fleets.
+APP_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MUX_REDEPLOY_HEALTH_TIMEOUT", "600"))
 # Outcomes recorded in `<data_dir>/redeploy-result.json`. The successor daemon
 # serves this so the reconnecting UI can say what actually happened: a rollback
 # used to be visible only as English in redeploy.log, which meant the app came
