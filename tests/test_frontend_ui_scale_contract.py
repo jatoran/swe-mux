@@ -83,7 +83,11 @@ INTENTIONAL_PINS = {
     (".terminal-menu", "width"): "mobile: width:min(300px,100dvw - 8px), viewport-bound",
     (".settings-panel", "height"): "height:min(760px,...) is a panel maximum, viewport-bound",
     (".mobile-nav-toggle", "height"): "44px touch target, already comfortable at any scale",
-    (".terminal-action-rail button", "height"): "44px touch target",
+    # The rail chip's height is no longer one of these. It reads `var(--rail-chip-h)` in
+    # a single rule, and the density variable group resolves that to
+    # `calc(27px*var(--ui-scale))` on the desktop and to the 44px touch target on the
+    # phone - so the mobile target is stated once where the desktop value is stated,
+    # rather than as a later override that has to be excused here.
     (".terminal-action-rail button", "min-width"): "96px touch target",
     (".sidebar-footer .notes-shelf-trigger", "height"): "44px touch target",
 }

@@ -125,7 +125,8 @@ Autofocus of the filter is gated on `hasSoftKeyboard()` **and on an `autoFocusTo
 - The sticky first row that leads to the full drawer section, or a bar of them side by side when a picker has two exits.
 The five-row cap is CSS (`--rail-dropup-rows` over a fixed `--rail-dropup-row`), so it is a height and never a slice - capping by count would make the sticky row the only route to a sixth entry, and it is also why a second exit shares the sticky bar rather than taking a list row.
 
-A drop-up trigger may itself be inside the rail's overflow popover (`RailStrip.tsx`, `layout-and-chrome.md`), which is why `RailDropup` sits one z-index above it and why the popover - not this component - carries the two exemptions that make the pairing work: the pointer that opens a drop-up is not an outside press for the panel behind it, and Escape belongs to the drop-up for as long as one is open.
+A drop-up trigger may itself be inside the rail's overflow popover (`RailStrip.tsx`, `layout-and-chrome.md`), which is why `RailDropup` sits one z-index above it.
+The two exemptions that make the pairing work belong to the popover rather than to this component: the pointer that opens a drop-up is not an outside press for the panel behind it, and Escape belongs to the drop-up for as long as one is open.
 Nothing here changes for that case, which is the point: the panel holds the same real chips the row does, so a picker opened from it is the same picker.
 
 The three content components hold no chrome and no geometry.
