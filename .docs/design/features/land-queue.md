@@ -162,6 +162,31 @@ The editor writes exactly one key, guarded by the Project config's own revision,
 An empty command **clears** the override and falls back to the `.worktree-verify` convention, which is a decision ("run the script in the tree") rather than a no-op.
 A read-only or malformed config is not offered as editable.
 
+### Setting one up in another repository
+
+A repository with no verification command gets nothing from the land queue: `verify` refuses rather than runs, and every land refuses with it.
+Writing that command in an unfamiliar repository is real work - which suite is the full one, what it must not collide with, what its exit code has to mean - and all of it is already stated in this document.
+So the strip's verification section carries a copyable prompt that hands an agent exactly that, rather than leaving each operator to reconstruct it from memory in a new repo.
+
+The prompt states four things and ends with a fifth:
+the pipeline the command sits in (reconcile, gate, fast-forward) and that its **exit code is the only verdict**;
+the contract it must satisfy (the worktree is its cwd, parallel-safe with no fixed port or shared temp or write outside the tree, bounded, and never laundered through a `tail`/`grep` pipeline that reports the wrong status);
+the two conventions and which is preferred for *authoring* - an executable `.worktree-verify` at the root, because it is committed and travels with every checkout, else `[worktree] verify_command`, with the config key stated as the **override that wins** when both exist rather than as a fallback;
+and how to prove it honest - two worktrees running it simultaneously, then a deliberately broken test that must exit nonzero.
+
+**The last paragraph is what keeps the button from being an authority leak, and it is not decoration.**
+A verification command is authority: it decides what reaches a trunk with no human present.
+Everything else in the prompt asks an agent to write that authority, so without a stated ending a copyable setup prompt reads as "an agent sets up its own gate" - the one thing the approval model exists to prevent.
+So the prompt ends by telling the receiving agent that it **cannot approve what it just wrote**, that approval is a separate human act against the exact bytes made in this very section, and that any edit un-approves it again by construction.
+
+This is deliberately a *statement* rather than a mechanism, because the mechanism already exists and is not weakened here.
+Nothing in the prompt can approve anything: approval is a digest over bytes, submitted through its own route, and an agent that wrote a script has moved the bytes rather than authorised them.
+What the ending prevents is a narrower and more ordinary failure - sending an agent off to do work whose final step it is not permitted to take, without saying so, and having it either stall or start looking for a way to finish the job.
+
+The prompt is **shown as well as copied**, in a collapsed disclosure beside the editor.
+It is an instruction being handed to an agent that will write somebody's gate, so a copy button whose payload nobody can read before pressing it is the wrong shape for it; and the copy itself is best-effort, because `navigator.clipboard` is absent in an insecure context and refusable everywhere, so a refusal says so and the text is already on screen to select by hand.
+It is a frontend template rather than a daemon read: every fact in it is a property of this design rather than of an install, and the one variable (the script convention's name) is already in the strip's own gate payload.
+
 ### What a running gate says about itself
 
 `verifying` alone said nothing about whether a four-minute gate was thirty seconds or three minutes in.
@@ -312,6 +337,20 @@ It is one summary line - the gate's standing, and what the queue is doing right 
 It **opens itself when landing is blocked**, which is exactly two states (the install stop is off, or the bytes a land would run are not approved) and in both the act that clears it is inside; a surface that cannot work must not render as merely quiet (`setting-links.md`).
 An explicit collapse wins after that and nothing re-opens under the reader, which stays honest because the summary line goes on stating the block while closed.
 
+**A bounced request stops speaking for the queue once its branch gets another answer.**
+The summary line picks the most interesting row, and a handed-back or refused request is terminal *and* unresolved, so it outranks a quiet queue.
+Nothing ever closed one: an agent's redo is a **new** request with a new id, so the bounced row sits in the history for good and the summary resurrects it forever.
+Observed 2026-08-21 - the collapsed strip read `worktree-watch-session-settle · returned to agent` for hours after that very branch's redo had landed, through several unrelated landings, which is the queue reporting a state it had already left.
+
+The supersession rule is therefore: a bounced request stops being the queue's headline the moment a **later** request for the same branch reaches a state that answered the branch (`landed`, `already_landed`, `refused`, or another `handed_back`).
+`cancelled` deliberately does not supersede, because withdrawing a re-request is not an answer about the branch and the earlier handback is still the standing fact about it.
+Ties do not supersede either: two rows created in the same second are not ordered by anything the reading can see, and the safe direction for a row whose whole job is asking for attention is to keep asking.
+
+It is **derived at the reading, not written back onto the row**, and that is the load-bearing half.
+The handback really did happen, and `land_events` and the history disclosure are an audit that must go on saying so - what was wrong was never the record, only which row spoke for the queue.
+A "closed" column would also be a second writer's opinion about a terminal row, in a store whose serialization is a property of its schema.
+With nothing left to report, the strip renders an idle summary carrying what recently landed (`nothing queued · 3 landed recently`) rather than the stalest historical row; the count is `landed` only, inside a 24-hour window, over the newest 100 rows `GET /api/land` returns, so it is a floor and is drawn only where the alternative is a bare "nothing queued".
+
 Queue order is oldest-first - the order the pipeline will actually reach them.
 The daemon lists newest-first because that is what a history read wants; read backwards, the request about to run sat at the bottom.
 Finished requests are folded into a history disclosure, newest first.
@@ -374,7 +413,8 @@ It has **no target argument**: the checkout comes from the caller's own live cwd
 - The act, on the Map row: `frontend/src/GitLandRow.tsx`
 - The strip at the head of the map (queue, verification command, agent authority): `frontend/src/GitLandBar.tsx`
 - The retired segment and its migration: `frontend/src/drawerSegments.ts`, `frontend/src/drawerLayout.ts`, `src/swe_mux/keybindings.py`
-- Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, and the strip's summary line: `frontend/src/gitLand.ts`
+- Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, supersession, and the strip's summary line: `frontend/src/gitLand.ts`
+- The copyable setup prompt for another repository: `frontend/src/landSetupPrompt.ts`
 - Tests: `tests/test_land_queue.py`, `tests/test_land_api.py`, `tests/test_verify_progress.py`,
   `tests/test_land_classify.py`,
   `frontend/test/gitLand.test.ts`, `frontend/test/renderer/git-land.spec.ts`

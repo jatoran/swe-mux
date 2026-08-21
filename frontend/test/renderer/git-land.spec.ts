@@ -121,6 +121,31 @@ test('the verification command shows what resolved, and edits without approving'
   await expect(page.locator('.git-landing-facts em')).toHaveText('verification not approved')
 })
 
+test('the setup prompt is offered beside the gate, and hands over no authority', async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 900 })
+  await page.goto('/git-land-harness.html')
+  await page.locator('.git-landing-summary').click()
+
+  // Collapsed by default: it answers a question about *another* repository, so it must
+  // not push this Project's own gate down the pane.
+  const setup = page.locator('.git-land-setup-prompt')
+  await expect(setup.locator('pre')).toBeHidden()
+  await setup.locator('summary').click()
+
+  // Shown as well as copyable. It is an instruction being handed to an agent that will
+  // write somebody's gate, so a payload nobody can read before pressing is the wrong shape.
+  await expect(setup.getByRole('button', { name: 'Copy setup prompt' })).toBeVisible()
+  const prompt = setup.locator('pre')
+  await expect(prompt).toContainText('exit code is the only verdict')
+  await expect(prompt).toContainText('parallel-safe')
+  await expect(prompt).toContainText('[worktree] verify_command')
+
+  // The whole reason this button is not an authority leak: the prompt ends by telling the
+  // agent it cannot approve what it wrote, and the approve control stays here.
+  await expect(prompt).toContainText('You cannot approve this')
+  await expect(prompt).toContainText('A human presses approve.')
+})
+
 test('a blocked gate opens the strip by itself, and a deliberate collapse still says so', async ({ page }) => {
   // A surface that cannot work must not render as merely quiet (`setting-links.md`), so
   // an unapproved gate opens the strip on arrival - the approval act is inside it.
