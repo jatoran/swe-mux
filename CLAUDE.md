@@ -133,7 +133,11 @@ tasks are short, prefer reusing a few long-lived worktrees over creating one per
 **The land queue automates exactly the sequence above** (`.docs/design/features/land-queue.md`):
 the Git drawer's Land segment, or `mux.request_land` from inside the worktree, enqueues a
 request and the daemon runs reconcile → `.worktree-verify` → fast-forward for one branch at a
-time. It never resolves a conflict and never runs a gate whose exact bytes a human has not
+time. It applies the docs-only half of the triage rule above by itself: after reconciling it
+classifies the incoming paths against a closed allowlist (`*.md` anywhere, plus documentation
+assets under `.docs/`/`docs/`) and skips the gate when every one of them matches, recording the
+class and its reason in the request's event trail and on the row. Anything else - a source file,
+a rename, a submodule, an unreadable diff - runs the full gate exactly as before. It never resolves a conflict and never runs a gate whose exact bytes a human has not
 approved; a conflict or a failed gate comes back to the requesting session as a queue message.
 It is off by default per Project, and the manual two commands remain the fallback and the
 thing to reach for when the queue is not enabled.

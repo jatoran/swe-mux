@@ -1609,6 +1609,16 @@ percentage in it by design: `step_index` counts the `=== name ===` markers the g
 rendered. The reading is in memory and dies with the process; a restart that returns a row to
 `queued` reports none rather than a stale snapshot. See `features/land-queue.md`.
 
+Every row carries `verify_gate`: `""` until the pipeline classified its change set, then `"full"`
+or `"docs_only"`. It answers **which gate that land ran**, decided from the incoming paths against
+a closed documentation allowlist, and it exists because a documentation-only land never enters
+`verifying` and would otherwise be indistinguishable from one that passed the full gate. `""` is
+not collapsed into `"full"` at either end, and a client reads any value it does not recognise as
+`""` rather than as a skip. `GET /land/{id}/events` carries the same decision as a `classify` step
+recorded on **both** outcomes, with the reason, the matched paths, and whatever disqualified them;
+on the fast path the `verify` step is still present, with outcome `skipped`. See
+`features/land-queue.md`.
+
 `GET /land/verify-command` reports the command a land would run, its digest, whether those exact
 bytes are approved, and both the approved and current text so the prompt can show a diff. It also
 carries the editable half (`config_command`, `config_revision`, `config_status`, `config_path`),

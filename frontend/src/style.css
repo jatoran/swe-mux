@@ -4251,6 +4251,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-state.busy{color:var(--fg)}
 .git-land-state.idle{color:var(--muted)}
 .git-land-origin,.git-land-oid{color:var(--muted);font-size:8px}
+/* A skipped gate. Amber rather than muted: it is the one thing about a finished land
+   that a reader must not scan past, since the row's states cannot show it. */
+.git-land-gate-note{color:var(--amber);font-size:8px;white-space:nowrap}
 .git-land-reason{margin:0;color:var(--muted);font-size:9px;overflow-wrap:anywhere}
 .git-land-paths{display:grid;gap:2px;margin:0;padding-left:14px;font-size:9px}
 .git-land-paths code{overflow-wrap:anywhere}

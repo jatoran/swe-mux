@@ -40,7 +40,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-LAND_SCHEMA_VERSION = 2
+LAND_SCHEMA_VERSION = 3
 
 #: States a request can occupy. `queued` is accepted-not-started; `waiting` is a
 #: precondition hold that a human can read; the three step states are in-flight; the
@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS land_requests(
   verified_oid TEXT NOT NULL DEFAULT '',
   verify_digest TEXT NOT NULL DEFAULT '',
   verify_attempts INTEGER NOT NULL DEFAULT 0,
+  -- Which gate this request ran: '' before it was classified, 'full' for the
+  -- repository's own verification command, 'docs_only' for the change set that was
+  -- entirely documentation and therefore skipped it. Persisted rather than left in the
+  -- event trail alone because a *skipped* gate must be visible wherever the row is
+  -- drawn: a land nobody verified that reads identically to one that passed is exactly
+  -- the silent cap this column exists to prevent.
+  verify_gate TEXT NOT NULL DEFAULT '',
   trunk_before TEXT NOT NULL DEFAULT '',
   landed_oid TEXT NOT NULL DEFAULT '',
   handback_message_id TEXT NOT NULL DEFAULT '',
@@ -183,6 +190,7 @@ def _row_to_request(row: sqlite3.Row) -> dict[str, Any]:
         "verified_oid": str(row["verified_oid"] or ""),
         "verify_digest": str(row["verify_digest"] or ""),
         "verify_attempts": int(row["verify_attempts"] or 0),
+        "verify_gate": str(row["verify_gate"] or ""),
         "trunk_before": str(row["trunk_before"] or ""),
         "landed_oid": str(row["landed_oid"] or ""),
         "handback_message_id": str(row["handback_message_id"] or ""),
@@ -227,8 +235,30 @@ class LandStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self._path, self._open)
             self._db.executescript(LAND_SCHEMA)
+            self._migrate()
             write_schema_version(self._db, "land_queue", LAND_SCHEMA_VERSION)
             self._db.commit()
+
+    def _columns(self, table: str) -> set[str]:
+        return {
+            str(row["name"]) for row in self._db.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+
+    def _migrate(self) -> None:
+        """Add columns a pre-existing database was created without.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so a
+        column added to the schema above reaches a fresh install and no other. Backfilled
+        to `''` - "this row was never classified" - rather than to `'full'`: every
+        pre-migration land did run the full gate, but that is a fact about history rather
+        than about the column, and a row that claims a classification nothing recorded is
+        the wrong direction for a field whose whole job is making a skip visible.
+        """
+        columns = self._columns("land_requests")
+        if columns and "verify_gate" not in columns:
+            self._db.execute(
+                "ALTER TABLE land_requests ADD COLUMN verify_gate TEXT NOT NULL DEFAULT ''"
+            )
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, check_same_thread=False)
@@ -414,6 +444,7 @@ class LandStore:
         reconciled_oid: str | None = None,
         verified_oid: str | None = None,
         verify_digest: str | None = None,
+        verify_gate: str | None = None,
         bump_verify_attempts: bool = False,
         trunk_before: str | None = None,
         landed_oid: str | None = None,
@@ -444,6 +475,7 @@ class LandStore:
                 ("reconciled_oid", reconciled_oid),
                 ("verified_oid", verified_oid),
                 ("verify_digest", verify_digest),
+                ("verify_gate", verify_gate),
                 ("trunk_before", trunk_before),
                 ("landed_oid", landed_oid),
                 ("handback_message_id", handback_message_id),
