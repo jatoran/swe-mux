@@ -3576,6 +3576,13 @@ class McpService:
         detail = str(args.get("detail") or "digest").strip() or "digest"
         if detail not in {"digest", "records", "full"}:
             raise ValueError("detail must be digest, records, or full")
+        # An out-of-range filter value must be refused, not answered with an
+        # empty page. The inputSchema declares these enums, but relying on the
+        # client to enforce them would make a typo indistinguishable from "no
+        # records are in that phase" - which is the same silent-empty failure
+        # the whole surface exists to avoid.
+        work_phase = self._enum_arg(args, "work_phase", WORK_PHASES)
+        approach_status = self._enum_arg(args, "approach_status", APPROACH_STATUS)
         service = self.scan_timeline_service
         liveness = (
             await service.liveness(session_id, agent_run_id=run_id)
@@ -3670,8 +3677,8 @@ class McpService:
             exclude_triggers=(
                 sorted(HEARTBEAT_TRIGGERS) if args.get("exclude_heartbeat") else None
             ),
-            work_phase=str(args.get("work_phase") or "") or None,
-            approach_status=str(args.get("approach_status") or "") or None,
+            work_phase=work_phase,
+            approach_status=approach_status,
             blocked_only=bool(args.get("blocked_only", False)),
             target_fragment=str(args.get("target") or "") or None,
             newest_first=newest_first,
@@ -3697,6 +3704,18 @@ class McpService:
             "scan_timeline", returned=len(records), suppressed=0
         )
         return result
+
+    @staticmethod
+    def _enum_arg(
+        args: dict[str, Any], name: str, allowed: frozenset[str]
+    ) -> str | None:
+        """One optional enum-valued filter, refused rather than silently empty."""
+        value = str(args.get(name) or "").strip()
+        if not value:
+            return None
+        if value not in allowed:
+            raise ValueError(f"{name} must be one of: {', '.join(sorted(allowed))}")
+        return value
 
     @staticmethod
     def _redact_projection(projected: dict[str, Any]) -> dict[str, Any]:

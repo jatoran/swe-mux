@@ -295,6 +295,38 @@ def test_digest_is_bounded_and_says_what_it_dropped() -> None:
     assert all(len(line) < 2000 for line in digest["progress"])
 
 
+@pytest.mark.parametrize("segments", [1, 5, 6, 7, 8, 9, 15, 40])
+def test_digest_never_drops_a_segment_it_does_not_count(segments: int) -> None:
+    # The regression the isolated-daemon run found: `items[len(items) - keep:]`
+    # slices a *negative* index whenever the list is shorter than the bound but
+    # longer than the shortfall, so six segments under a bound of eight came back
+    # as two - beside `phase_segments_omitted: 0`. Both the far-larger and
+    # far-smaller cases are correct by clamping, which is why a test at only
+    # those sizes passed. Every size in the middle is the actual contract.
+    records = [
+        {
+            "id": f"r{index}",
+            "t0": float(index),
+            "t1": float(index + 1),
+            "work_phase": "debug" if index % 2 else "implementation",
+            "summary": f"step {index}",
+            "claim": f"claim {index}",
+            "blocked_on": "none",
+        }
+        for index in range(segments)
+    ]
+    digest = catch_me_up(records, "run-2")
+    assert digest["phase_segments"] == segments
+    assert len(digest["progress"]) == min(segments, DIGEST_MAX_SEGMENTS)
+    # The counters are derived from what is actually carried, so they cannot
+    # disagree with it however the bounds are later changed.
+    assert digest["phase_segments_omitted"] == segments - len(digest["progress"])
+    assert digest["phases_omitted"] == segments - len(digest["phases"])
+    assert digest["claims_omitted"] == segments - len(digest["claims"])
+    # Whatever survived is the most recent end of the run.
+    assert f"step {segments - 1}" in digest["progress"][-1]
+
+
 def test_digest_keeps_the_whole_run_when_it_fits() -> None:
     records = [
         {"id": "r0", "t0": 0.0, "t1": 1.0, "work_phase": "test", "summary": "ran tests"}
@@ -500,6 +532,39 @@ async def test_records_page_is_bounded_and_cursors_forward(tmp_path: Any) -> Non
     )
     assert tail["records"] == []
     assert tail["page_is_full"] is False
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("work_phase", "vibes"),
+        ("approach_status", "nope"),
+        ("detail", "everything"),
+    ],
+)
+async def test_an_out_of_range_argument_is_refused_not_answered_empty(
+    tmp_path: Any, field: str, value: str
+) -> None:
+    # Found on the isolated daemon: a typo'd filter answered with an empty page,
+    # which reads exactly like "no records are in that phase". The inputSchema
+    # declares these enums, but a server that trusts the client to enforce them
+    # has the same silent-empty failure the rest of this surface refuses.
+    store = AutomationStore(tmp_path / "mux.db")
+    await seed(store, count=3)
+    caller = caller_session()
+    svc = service(caller, target_session(), store=store)
+    with pytest.raises(ValueError) as excinfo:
+        await svc.scan_timeline(
+            caller, {"session_id": "s2", "detail": "records", field: value}
+        )
+    assert field in str(excinfo.value)
+    # The valid form of the same filter still answers.
+    ok = await svc.scan_timeline(
+        caller, {"session_id": "s2", "detail": "records", "work_phase": "implementation"}
+    )
+    assert len(ok["records"]) == 3
     store.close()
 
 

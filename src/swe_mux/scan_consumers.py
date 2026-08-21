@@ -92,6 +92,21 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
 
 
+def _last(items: list[Any], keep: int) -> list[Any]:
+    """The most recent ``keep`` items, and all of them when there are fewer.
+
+    The obvious `items[len(items) - keep:]` is wrong exactly when the list is
+    shorter than the bound but longer than the shortfall: with six items and a
+    bound of eight it slices `[-2:]` and silently returns two. The bug is
+    invisible in tests that use a list far larger or far smaller than the bound,
+    and it makes the paired `*_omitted` counter lie, because that counter is
+    computed from the bound rather than from what was actually returned.
+    """
+    if keep <= 0:
+        return []
+    return items[max(0, len(items) - keep) :]
+
+
 def repaired_fields(repairs: Any) -> list[str]:
     """Which record fields a repair list touched, sorted and deduplicated.
 
@@ -236,7 +251,7 @@ def handoff_progress(
     """
     segments = phase_segments(records)
     if max_segments is not None and max_segments >= 0:
-        segments = segments[len(segments) - max_segments :] if max_segments else []
+        segments = _last(segments, max_segments)
     lines: list[str] = []
     for segment in segments:
         summaries = segment["summaries"][:max_summaries]
@@ -282,11 +297,8 @@ def catch_me_up(
     digest: dict[str, Any] = {
         "agent_run_id": agent_run_id,
         "record_count": len(records),
-        "phases": phases[len(phases) - max_phases :] if max_phases > 0 else [],
-        "claims": [
-            _clip(item, max_chars)
-            for item in (claims[len(claims) - max_claims :] if max_claims > 0 else [])
-        ],
+        "phases": _last(phases, max_phases),
+        "claims": [_clip(item, max_chars) for item in _last(claims, max_claims)],
         "current_blocker": blocker,
         "progress": handoff_progress(
             records,
@@ -295,12 +307,15 @@ def catch_me_up(
             max_chars=max_chars,
         ),
     }
-    omitted = {
-        "phase_segments": len(segments),
-        "phase_segments_omitted": max(0, len(segments) - max_segments),
-        "claims_omitted": max(0, len(claims) - max_claims),
-    }
-    digest.update(omitted)
+    # Counted from what the digest actually carries, never from the bound. A
+    # counter derived from the bound agrees with reality only while the slicing
+    # is correct, which is precisely when nobody needs it - the first version of
+    # this reported "0 omitted" beside a `progress` list that had silently lost
+    # four of six segments.
+    digest["phase_segments"] = len(segments)
+    digest["phase_segments_omitted"] = len(segments) - len(digest["progress"])
+    digest["phases_omitted"] = len(phases) - len(digest["phases"])
+    digest["claims_omitted"] = len(claims) - len(digest["claims"])
     return digest
 
 
