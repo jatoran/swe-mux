@@ -35,7 +35,8 @@ Two unfocused Projects holding copies of one file are not ambiguous, and are not
 The Actions drawer contains a Prompt templates section for browsing, inserting, and authoring templates beside Quick actions and Skills.
 Each row shows a bounded two-line excerpt of the body so templates remain distinguishable at a glance.
 The section is expanded by default, remembers its disclosure state on the device, and its Manage button opens the full responsive library.
-The command palette, main menu, session context menu, and that Manage button all open that same library.
+The command palette, main menu, and that Manage button all open that same library.
+The session context menu no longer does: it opened a whole surface of its own from a menu whose every other row acts on the session and closes, and the library is a palette command and a drawer tab away from wherever you already are (`ui.md`).
 A separate `prompts.new` command opens it on a blank template, scoped to the focused session's Project, and is what the rail's Prompts drop-up uses for its `+ New` exit; starting in create mode is a property of the *opening*, so an ordinary open afterwards still lands on the list.
 
 Templates are created and edited where they are used.

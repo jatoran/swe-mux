@@ -37,6 +37,25 @@ MeasurementSource = Literal["transcript", "database", "none"]
 # (opencode keeps its conversations as rows in `opencode.db`).
 TranscriptDialect = Literal["claude", "codex", "pi", "opencode"]
 ToolCatalogSource = Literal["documented_catalog", "runtime_dependent"]
+# How, if at all, this harness can be asked which tools its configured MCP servers
+# actually publish - the one question a passive configuration scan provably cannot
+# answer, because the answer exists only inside a running MCP client.
+#
+# `live_process`  the running session itself reports it to swe-mux (an injected
+#                 extension), so nothing is spawned and the reading is that
+#                 session's own.
+# `app_server`    a short-lived sidecar of the same CLI answers it over a control
+#                 protocol.
+# `client_dial`   the CLI offers no headless path at all, so the daemon dials the
+#                 configured server itself with an MCP client. Strictly weaker
+#                 evidence: it reaches neither account connectors nor plugin
+#                 gating, and its health is not the running CLI's.
+# `none`          nothing to ask. Reported as such rather than as an empty catalog,
+#                 which would read as "this server publishes no tools".
+#
+# Declared here rather than in `mcp_tools.py` so adding a harness is a decision
+# rather than a silent `none`. See `.docs/design/features/agent-environment.md`.
+McpToolSource = Literal["live_process", "app_server", "client_dial", "none"]
 Backend = Literal["shell", "claude", "codex", "omp", "pi", "opencode"]
 AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 # How a harness forks a conversation, for the harnesses that can.
@@ -477,6 +496,7 @@ class HarnessDescriptor:
 
     tool_catalog: ToolCatalog
     tool_catalog_source: ToolCatalogSource
+    mcp_tool_source: McpToolSource
     hook_events: tuple[str, ...]
 
     def __post_init__(self) -> None:
@@ -903,6 +923,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         normalized_events=_NORMALIZED_AGENT_EVENTS,
         tool_catalog=_CLAUDE_TOOLS,
         tool_catalog_source="documented_catalog",
+        # No headless path exists to a running TUI's own tool registry, so the
+        # daemon dials the configured server itself. Probe evidence only: it
+        # reaches neither account connectors nor plugin gating.
+        mcp_tool_source="client_dial",
         hook_events=_CLAUDE_HOOK_EVENTS,
     ),
     "codex": HarnessDescriptor(
@@ -1004,6 +1028,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         normalized_events=_NORMALIZED_AGENT_EVENTS,
         tool_catalog=_CODEX_TOOLS,
         tool_catalog_source="runtime_dependent",
+        # `app-server` answers `mcpServerStatus/list` with `toolsAndAuthOnly`,
+        # the only interface that reports `codex_apps` and account connectors.
+        mcp_tool_source="app_server",
         hook_events=_CODEX_HOOK_EVENTS,
     ),
     "omp": HarnessDescriptor(
@@ -1091,6 +1118,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         normalized_events=_NORMALIZED_AGENT_EVENTS,
         tool_catalog=_OMP_TOOLS,
         tool_catalog_source="documented_catalog",
+        # The extension mux already injects publishes the running process's own
+        # runtime tool inventory, so nothing has to be spawned to read it.
+        mcp_tool_source="live_process",
         hook_events=_OMP_HOOK_EVENTS,
     ),
     "pi": HarnessDescriptor(
@@ -1183,6 +1213,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         normalized_events=_PI_NORMALIZED_EVENTS,
         tool_catalog=_PI_TOOLS,
         tool_catalog_source="documented_catalog",
+        # No MCP client at all, so there is no inventory to ask for.
+        mcp_tool_source="none",
         hook_events=_PI_HOOK_EVENTS,
     ),
     "opencode": HarnessDescriptor(
@@ -1299,6 +1331,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         normalized_events=_NORMALIZED_AGENT_EVENTS,
         tool_catalog=_OPENCODE_TOOLS,
         tool_catalog_source="runtime_dependent",
+        # Its server surface reports connection status rather than a tool
+        # inventory; revisit if upstream adds one.
+        mcp_tool_source="none",
         hook_events=_OPENCODE_HOOK_EVENTS,
     ),
 }

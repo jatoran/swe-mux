@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
+import { hasSoftKeyboard } from './deviceSettings'
 import { GrantGate } from './GrantGate'
 import { SettingLink } from './SettingLink'
 import { StateIndicator } from './StateIndicator'
@@ -257,8 +258,16 @@ export function QueuePane({
   }, [sessionId])
 
   // A chip or command can open an already-selected Queue tab; the token still earns focus.
+  //
+  // Never on a device whose only keyboard is an on-screen one. There, focusing a field is
+  // not a convenience but a layout change: the keyboard rises over most of the drawer, so
+  // opening the Queue to *read* it — which is what the tab is opened for far more often
+  // than composing — arrives with the list already covered and a dismissal to perform.
+  // The desktop caret costs nothing and is kept. `hasSoftKeyboard` rather than the mobile
+  // breakpoint, deliberately: a narrowed desktop window has a real keyboard and a landscape
+  // tablet does not.
   useEffect(() => {
-    if (openRequestToken) composerRef.current?.focus()
+    if (openRequestToken && !hasSoftKeyboard()) composerRef.current?.focus()
   }, [openRequestToken])
 
   const messages = view?.messages ?? []
@@ -329,6 +338,42 @@ export function QueuePane({
     await moveQueueMessage(message.id, after)
   }
 
+  /** Delete, in exactly one implementation.
+   *
+   *  It is drawn twice — on the row itself and inside the overflow — because removing a
+   *  message someone changed their mind about is the one act a reader wanted often enough
+   *  to resent opening a menu for, while the overflow must keep it for the case where the
+   *  row is scrolled or the compact mark is ambiguous. Two copies of a *destructive*
+   *  control is exactly where behaviour drifts, so both call this: same arm-then-confirm
+   *  (one click marks, the second deletes), same `deleteConfirmId` — so confirming from
+   *  either place is the same armed state, not two — same busy guard, and the same absence
+   *  while a message is mid-delivery, which is the one state the daemon will not accept a
+   *  delete in. Only the resting label differs, because a full-width menu row has space
+   *  for a word and an inline row does not. */
+  const deleteButton = (message: QueueMessage, busy: boolean, compact: boolean) => {
+    if (message.state === 'delivering') return null
+    const armed = deleteConfirmId === message.id
+    return (
+      <button
+        type="button"
+        class={`danger${compact ? ' queue-item-delete' : ''}${armed ? ' confirming' : ''}`}
+        aria-label={armed ? 'Confirm deleting this message' : 'Delete this message'}
+        title={armed ? 'Click again to delete permanently' : 'Delete this message'}
+        disabled={busy}
+        onClick={() => {
+          if (!armed) {
+            setDeleteConfirmId(message.id)
+            return
+          }
+          setDeleteConfirmId('')
+          void run(message.id, () => deleteQueueMessage(message.id))
+        }}
+      >
+        {armed ? 'Delete permanently' : compact ? '×' : 'Delete'}
+      </button>
+    )
+  }
+
   /** The secondary acts, in a row that opens under the message rather than a floating
    *  menu: this column scrolls and can be as narrow as 300px, where a popover would need
    *  positioning, portalling, and an outside-click contract to do the same job.
@@ -392,23 +437,7 @@ export function QueuePane({
           </button>
         )}
         <button type="button" disabled={busy} onClick={() => copyBody(message)}>Copy</button>
-        {message.state !== 'delivering' && (
-          <button
-            type="button"
-            class={`danger${deleteConfirmId === message.id ? ' confirming' : ''}`}
-            disabled={busy}
-            onClick={() => {
-              if (deleteConfirmId !== message.id) {
-                setDeleteConfirmId(message.id)
-                return
-              }
-              setDeleteConfirmId('')
-              void run(message.id, () => deleteQueueMessage(message.id))
-            }}
-          >
-            {deleteConfirmId === message.id ? 'Delete permanently' : 'Delete'}
-          </button>
-        )}
+        {deleteButton(message, busy, false)}
       </div>
     )
   }
@@ -547,6 +576,9 @@ export function QueuePane({
             >
               ⋯
             </button>
+            {/* Last, and after the overflow rather than before it: a destructive control
+                does not sit where a distracted hand aims for the menu. */}
+            {deleteButton(message, busy, true)}
           </div>
         )}
         {!isEditing && menuId === message.id && overflow(message, busy)}

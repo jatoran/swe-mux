@@ -1568,7 +1568,11 @@ TOOLS: list[dict[str, Any]] = [
             "session idling with its own subagents still running is not counted "
             "as settled. The notice arrives as a queue item under the ordinary "
             "delivery contract, so it reaches you between turns rather than "
-            "mid-turn. Bounded: a few watches per session, one per target, and "
+            "mid-turn. It is the bounded answer to the watch you armed, so it is "
+            "staged armed rather than as an inert draft - but armed is not "
+            "delivered, and your own auto-delivery grant and the ordinary queue "
+            "gates still decide whether it reaches you without a person. "
+            "Bounded: a few watches per session, one per target, and "
             "they die with your session or a daemon restart. "
             'Your own Project is the default; pass project:"fleet" or a Project '
             "name to watch a session in another."
@@ -4396,9 +4400,10 @@ class McpService:
 
         A read that matures into one bounded message. The target is only read;
         the notice is a fixed daemon template addressed to the caller's own
-        prompt queue. Every bound (install switch, scope, per-watcher ceiling,
-        timeout ceiling, the settle rule itself) lives in the daemon service,
-        and this is a caller (CP §7.1).
+        prompt queue, staged armed because the watch is the consent for it
+        (`land-queue.md`, `agent-messaging.md`). Every bound (install switch,
+        scope, per-watcher ceiling, timeout ceiling, the settle rule, and the
+        arming rule) lives in the daemon service, and this is a caller (CP §7.1).
         """
         if self.session_watch is None:
             raise QueueError(

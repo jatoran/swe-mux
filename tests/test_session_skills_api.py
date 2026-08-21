@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -10,27 +11,42 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import mcp_tools
+from swe_mux.agent_environment import clear_cache as clear_environment_cache
 from swe_mux.agent_skills import clear_cache
 from swe_mux.models import SessionRecord
-from swe_mux.server import error_middleware, session_agent_environment, session_skills
+from swe_mux.server import (
+    error_middleware,
+    runtime_inventory_ingress,
+    session_agent_environment,
+    session_mcp_tools,
+    session_skills,
+)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_cache():
     clear_cache()
+    clear_environment_cache()
+    mcp_tools.clear_cache()
     yield
     clear_cache()
+    clear_environment_cache()
+    mcp_tools.clear_cache()
 
 
 class SessionStub:
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
         self.agent_promoted_at: float | None = None
+        self.hook_secret = "hook-secret"
 
 
 class ManagerStub:
     def __init__(self, session: SessionStub) -> None:
         self.session = session
+        self.ingress_url = "http://127.0.0.1:8765"
+        self.sessions = {session.record.id: session}
 
     def resolve(self, _sid: str) -> SessionStub:
         return self.session
@@ -53,8 +69,12 @@ def record(**overrides: Any) -> SessionRecord:
 def build(session_record: SessionRecord) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
     app["sessions"] = ManagerStub(SessionStub(session_record))
+    app["runtime_inventories"] = mcp_tools.LiveSnapshotStore()
+    app["mcp_tools_windows"] = {}
     app.router.add_get("/api/sessions/{sid}/skills", session_skills)
     app.router.add_get("/api/sessions/{sid}/agent-environment", session_agent_environment)
+    app.router.add_post("/api/sessions/{sid}/agent-environment/mcp-tools", session_mcp_tools)
+    app.router.add_post("/api/sessions/{sid}/runtime-inventory", runtime_inventory_ingress)
     return app
 
 
@@ -233,3 +253,161 @@ async def test_agent_environment_keeps_the_cli_generation_across_conversation_ro
 
     assert payload["runtime"]["loaded_at"] == 1_000.0
     assert payload["runtime"]["run_started_at"] == 2_000.0
+
+
+# ---------------------------------------------------------------------------
+# The explicit per-server tool fetch
+# ---------------------------------------------------------------------------
+
+
+def _codex_home_with_mcp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    (home / "config.toml").write_text(
+        "[mcp_servers.node_repl]\ncommand = \"node\"\nargs = [\"repl.js\"]\n",
+        encoding="utf-8",
+    )
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    return cwd
+
+
+async def test_opening_the_tab_never_fetches_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The passive invariant, asserted rather than trusted.
+
+    A regression here would not look like a bug: the drawer would simply be
+    slower and would start MCP servers for anyone who opened it.
+    """
+    cwd = _codex_home_with_mcp(tmp_path, monkeypatch)
+    app = build(record(cwd=str(cwd)))
+    async with TestClient(TestServer(app)) as client:
+        payload = await (await client.get("/api/sessions/sess-1/agent-environment")).json()
+    mcp = next(section for section in payload["sections"] if section["id"] == "mcp")
+    assert [item["name"] for item in mcp["items"]] == ["node_repl"]
+    assert mcp["completeness"] == "configured_only"
+    assert all("tools" not in item for item in mcp["items"])
+    assert "connection and tool health are not probed" in mcp["items"][0]["description"]
+
+
+async def test_fetching_tools_for_an_unknown_server_is_a_404(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cwd = _codex_home_with_mcp(tmp_path, monkeypatch)
+    app = build(record(cwd=str(cwd)))
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/sessions/sess-1/agent-environment/mcp-tools", json={"server": "nope"}
+        )
+        assert response.status == 404
+        blank = await client.post(
+            "/api/sessions/sess-1/agent-environment/mcp-tools", json={"server": "  "}
+        )
+        assert blank.status == 400
+
+
+async def test_a_shell_and_a_remote_boundary_are_refused_by_the_fetch_too(
+    tmp_path: Path,
+) -> None:
+    shell = build(record(backend="shell", cwd=str(tmp_path)))
+    async with TestClient(TestServer(shell)) as client:
+        response = await client.post(
+            "/api/sessions/sess-1/agent-environment/mcp-tools", json={"server": "x"}
+        )
+        assert response.status == 409
+
+    remote = build(
+        record(cwd=str(tmp_path), runtime_boundary="remote", remote_authority="example.test")
+    )
+    async with TestClient(TestServer(remote)) as client:
+        response = await client.post(
+            "/api/sessions/sess-1/agent-environment/mcp-tools", json={"server": "x"}
+        )
+        assert response.status == 409
+        assert (await response.json())["code"] == "agent_bridge_unavailable"
+
+
+async def test_a_passive_harness_answers_with_a_reason_rather_than_probing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "opencode-home"
+    home.mkdir()
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / "opencode.json").write_text(
+        json.dumps({"mcp": {"local": {"type": "local", "command": ["srv"]}}}), encoding="utf-8"
+    )
+    app = build(record(backend="opencode", cwd=str(cwd), exe="opencode"))
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/sessions/sess-1/agent-environment/mcp-tools", json={"server": "local"}
+        )
+        payload = await response.json()
+    assert response.status == 200
+    assert payload["evidence"] == "not_supported"
+    assert payload["status"] == "unsupported"
+    assert payload["diagnostic"]
+
+
+async def test_an_omp_session_serves_the_inventory_its_extension_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "omp-home"
+    home.mkdir()
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(home))
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"My-Server": {"command": "srv"}}}), encoding="utf-8"
+    )
+    app = build(record(backend="omp", cwd=str(cwd), exe="omp"))
+
+    async with TestClient(TestServer(app)) as client:
+        before = await (
+            await client.post(
+                "/api/sessions/sess-1/agent-environment/mcp-tools", json={"server": "My-Server"}
+            )
+        ).json()
+        response = await client.post(
+            "/api/sessions/sess-1/runtime-inventory",
+            headers={"X-Mux-Hook-Secret": "hook-secret"},
+            json={
+                "reason": "session_start",
+                "tools": [
+                    {"name": "mcp__my_server_do_thing", "description": "Does a thing"},
+                    {"name": "read", "description": "a built-in"},
+                ],
+            },
+        )
+        published_status, published = response.status, await response.json()
+        after = await (
+            await client.post(
+                "/api/sessions/sess-1/agent-environment/mcp-tools",
+                json={"server": "My-Server", "refresh": True},
+            )
+        ).json()
+
+    # Before the session reports anything, the honest answer is "not reported",
+    # which is not the same claim as "this server publishes no tools".
+    assert before["status"] == "unavailable"
+    assert published_status == 200
+    # Only the MCP-fronted tool is retained; `read` is a built-in the documented
+    # catalog already covers.
+    assert published["tools"] == 1
+    assert after["status"] == "ok"
+    assert after["evidence"] == "live_process"
+    assert [tool["name"] for tool in after["tools"]] == ["mcp__my_server_do_thing"]
+
+
+async def test_runtime_inventory_ingress_requires_the_session_secret(tmp_path: Path) -> None:
+    app = build(record(backend="omp", cwd=str(tmp_path), exe="omp"))
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/sessions/sess-1/runtime-inventory",
+            headers={"X-Mux-Hook-Secret": "wrong"},
+            json={"tools": []},
+        )
+        assert response.status == 403

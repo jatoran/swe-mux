@@ -28,6 +28,15 @@ hiddenimports = []
 # reference, and misaki ships its lexicon as package data. Missing any of the
 # three surfaces only in the frozen app ("Can't find model 'en_core_web_sm'"),
 # never in a source run.
+#
+# `mcp` is the official MCP client used by the Agent Environment tool-catalog
+# fetch to dial a Claude-configured server (`mcp_tools.claude_probe`). It is
+# imported lazily, inside the probe, so the daemon never pays for it at startup
+# and the drawer degrades to a typed diagnostic if it is missing - which is
+# exactly the shape PyInstaller's source graph is least likely to follow on its
+# own, and the transport modules it selects between are chosen at call time.
+# Collected explicitly so the frozen app can probe at all; without it the failure
+# appears only there, as "the MCP client is unavailable".
 for package in (
     "PIL",
     "pystray",
@@ -39,6 +48,7 @@ for package in (
     "spacy",
     "en_core_web_sm",
     "misaki",
+    "mcp",
 ):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas

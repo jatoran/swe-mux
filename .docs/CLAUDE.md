@@ -27,7 +27,19 @@
 - Changing the session Agent Environment inventory, safety boundaries, or drawer surface:
   `design/features/agent-environment.md`, `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`; runtime inventory research
-  and planned collection strategy: `development/AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md`
+  and planned collection strategy: `development/AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md`.
+  The rule the split exists to enforce: **opening the tab probes nothing**, and the one
+  control that does reach a server (per-server Fetch tools, `src/swe_mux/mcp_tools.py`) is
+  reached only by an explicit press. Everything it returns carries the evidence tier that
+  produced it and those tiers are never collapsed into "connected" - a `parallel_probe` is a
+  *separate* runtime with its own connection and authentication state, so its health is not
+  the health of the CLI in the terminal, and for Claude it is strictly weaker than that CLI's
+  own `/mcp` because dialling configuration reaches neither account connectors nor plugin
+  gating. Two consequences follow. An empty catalog must say which kind of empty it is
+  ("not probed", "not reported by this session", "connected and published nothing" are
+  different facts that render identically otherwise), and an HTTP server carrying credentials
+  is reported rather than dialled, because a probe would spend a credential the user handed to
+  their CLI and not to this drawer.
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
@@ -202,6 +214,15 @@
   its control. Retiring the Land segment did not delete its palette command, its voice
   phrases, a stored selection, or a keybinding - all four migrate onto Map and the rows
   stay forever (`drawerSegments.ts`, `drawerLayout.ts`, `keybindings.py`).
+  Two consequences of that strip being one line. The summary picks the most interesting
+  row, so a bounced request must stop speaking once a *later* request for its branch got
+  an answer - nothing closes the old row and the redo is a new id, so without the rule the
+  strip reports a branch as returned-to-agent forever; and it is derived at the reading
+  rather than written back, because the trail is an audit that must go on saying the
+  handback happened. And the verification section's copyable setup prompt for another
+  repository ends by telling the receiving agent it cannot approve what it wrote - the
+  daemon enforces that regardless, but a prompt that omitted it would send an agent to do
+  work whose last step it is not allowed to take, without saying so.
 - Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint
   detection, the absence digest, mined demotion rules, or model narration:
   `design/features/attention-ranking.md`, `design/features/deterministic-consumers.md`,

@@ -239,6 +239,16 @@
 - One unreadable transcript never aborts a scan. Provider transcript cleanup and antivirus
   operate in these very directories, so a file can vanish between glob and stat; per-file
   failures are skipped and counted, and the whole-scan task logs its own death.
+- A cancelled scan stops walking, and it stops within one file rather than at the end of the
+  tree.
+  `scan_external_transcripts` polls `should_cancel` in both halves - the discovery walk and the
+  indexing pass - and `scan_external_transcripts_async` is the only seam through which the walk
+  is put on a thread, because it is what turns a cancelled coroutine into something the worker
+  thread can see.
+  Cancelling a bare `asyncio.to_thread` abandons the worker rather than stopping it, and the
+  event loop joins every abandoned worker in `shutdown_default_executor` at the very end of
+  shutdown: a startup reconcile still walking made the daemon wait out a full scan of the user's
+  transcript tree after the last log line already claimed a clean stop.
 - EventBus persistence precedes fanout; reconnect catch-up uses monotonic sequence IDs.
 - Current context telemetry remains on live sessions and history. Explicit provider-native
   compaction records increment durable count/last-time/capability/confidence summaries;
