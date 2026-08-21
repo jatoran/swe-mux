@@ -49,6 +49,12 @@ MAX_PROVIDER_ERROR_CHARS = 400
 # put it there. Covers OpenRouter's own `sk-or-v1-…` and the generic `sk-…` an
 # upstream provider might quote back at us.
 SECRET_SHAPED = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE)
+# Routing prefixes whose providers cache a repeated prompt prefix only when the
+# request marks one. Everything absent from this set caches implicitly, so an
+# unknown provider is treated as "send the prompt as it is" rather than as
+# "send a marker it may reject" — the safe direction is a missed hit, never a
+# rejected request.
+EXPLICIT_CACHE_CONTROL_PROVIDERS = frozenset({"anthropic"})
 log = logging.getLogger(__name__)
 
 
@@ -108,6 +114,7 @@ class OpenRouterResult:
     finish_reason: str | None = None
     response_content_type: str | None = None
     response_content_length: int | None = None
+    cached_tokens: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -131,6 +138,10 @@ class OpenRouterToolTurn:
     cost_usd: float | None
     latency_ms: int
     provider_name: str | None = None
+    #: Prompt tokens the provider served from its cache, out of `input_tokens`.
+    #: Zero is ambiguous by construction - it means "no hit" and "this provider
+    #: does not report caching" alike - so it is recorded, never asserted from.
+    cached_tokens: int = 0
 
 
 class _StreamUnsupported(RuntimeError):
@@ -543,6 +554,7 @@ class OpenRouterClient:
             finish_reason=finish_reason,
             response_content_type=content_type,
             response_content_length=content_length,
+            cached_tokens=cached_prompt_tokens(usage),
         )
 
     async def complete_tools(
@@ -622,6 +634,7 @@ class OpenRouterClient:
             cost_usd=_number(usage.get("cost")),
             latency_ms=int((time.monotonic() - started) * 1000),
             provider_name=str(payload.get("provider")) if payload.get("provider") else None,
+            cached_tokens=cached_prompt_tokens(usage),
         )
 
     async def _stream_tool_completion(
@@ -948,3 +961,61 @@ def _number(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def cached_prompt_tokens(usage: Any) -> int:
+    """Prompt tokens the provider served from cache, from one usage payload.
+
+    OpenRouter normalises every provider onto the OpenAI shape
+    (`usage.prompt_tokens_details.cached_tokens`), and some upstreams also put a
+    bare `cached_tokens` at the top level. Both are read because a caller that
+    saw only one of them would report "no caching" for exactly the providers
+    that report it the other way, which is indistinguishable from a real miss.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and details.get("cached_tokens") is not None:
+        return max(0, _integer(details.get("cached_tokens")))
+    return max(0, _integer(usage.get("cached_tokens")))
+
+
+def needs_explicit_cache_control(model: str) -> bool:
+    """Whether this model's provider caches only where a breakpoint says to.
+
+    Anthropic-routed models cache nothing without an explicit `cache_control`
+    breakpoint in the request; OpenAI-family, DeepSeek, and the other implicit
+    cachers ignore the marker and cache a repeated prefix on their own. The
+    routing prefix of an OpenRouter model id is the whole question - a variant
+    suffix (`:beta`, `:floor`) rides on the same provider.
+    """
+    return str(model).split("/", 1)[0].strip().lower() in EXPLICIT_CACHE_CONTROL_PROVIDERS
+
+
+def cache_stable_message(message: dict[str, Any], *, model: str) -> dict[str, Any]:
+    """Mark one message as the end of the request's cache-stable prefix.
+
+    Returns the message unchanged for providers that cache implicitly, so the
+    marked prompt is only ever sent where it is understood. The breakpoint
+    covers everything *before* it too - for Anthropic that ordering is tools,
+    then system, then messages, so marking the primer caches the tool
+    definitions with it and no second breakpoint is needed for them.
+
+    Marking is deliberately the caller's choice rather than this module's: only
+    the caller knows which of its messages is stable across calls, and a
+    breakpoint placed above something that changes every round is a cache write
+    billed at a premium that is never read back.
+    """
+    if not needs_explicit_cache_control(model):
+        return message
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        parts: list[dict[str, Any]] = [{"type": "text", "text": content}]
+    elif isinstance(content, list) and content:
+        parts = [dict(part) for part in content if isinstance(part, dict)]
+        if len(parts) != len(content):
+            return message  # a shape this function did not build; leave it alone
+    else:
+        return message
+    parts[-1] = {**parts[-1], "cache_control": {"type": "ephemeral"}}
+    return {**message, "content": parts}

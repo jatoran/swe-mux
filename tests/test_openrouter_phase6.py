@@ -17,6 +17,9 @@ from swe_mux.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     _retry_after,
+    cache_stable_message,
+    cached_prompt_tokens,
+    needs_explicit_cache_control,
 )
 from swe_mux.secret_store import PlatformSecretStore
 from swe_mux.server import automation_provider_key
@@ -675,7 +678,7 @@ async def test_streamed_tool_calls_are_merged_by_index_not_appended() -> None:
                     {
                         "choices": [{"delta": {"tool_calls": [
                             {"index": 0, "id": "call-1", "type": "function",
-                             "function": {"name": "append_project_note", "arguments": ""}}
+                             "function": {"name": "write_project_note", "arguments": ""}}
                         ]}}]
                     },
                     {
@@ -699,7 +702,7 @@ async def test_streamed_tool_calls_are_merged_by_index_not_appended() -> None:
     assert len(turn.tool_calls) == 1
     call = turn.tool_calls[0]
     assert call["id"] == "call-1"
-    assert call["function"]["name"] == "append_project_note"
+    assert call["function"]["name"] == "write_project_note"
     assert json.loads(call["function"]["arguments"]) == {"project": "pixel lab"}
     assert turn.message["tool_calls"] == turn.tool_calls
 
@@ -797,3 +800,140 @@ async def test_an_unstreamed_completion_still_takes_the_buffered_path() -> None:
     assert turn.content == "Plain."
     assert session.requests[0][2]["json"]["stream"] is False
     assert "stream_options" not in session.requests[0][2]["json"]
+
+
+# --------------------------------------------------------------------------- #
+# Prompt caching (Phase 15)
+# --------------------------------------------------------------------------- #
+
+
+def test_anthropic_routing_is_the_only_family_that_needs_a_breakpoint() -> None:
+    # Anthropic caches nothing without an explicit marker; everything else caches
+    # a repeated prefix on its own and ignores one.
+    assert needs_explicit_cache_control("anthropic/claude-sonnet-4.5")
+    assert needs_explicit_cache_control("anthropic/claude-opus-4.1:beta")
+    assert not needs_explicit_cache_control("openai/gpt-5.6-terra")
+    assert not needs_explicit_cache_control("deepseek/deepseek-chat")
+    # An unknown routing prefix is left unmarked: a missed hit is recoverable,
+    # a rejected request is not.
+    assert not needs_explicit_cache_control("some-new-vendor/model")
+    assert not needs_explicit_cache_control("")
+
+
+def test_a_marked_message_becomes_one_text_part_carrying_the_breakpoint() -> None:
+    marked = cache_stable_message(
+        {"role": "system", "content": "primer"}, model="anthropic/claude-sonnet-4.5"
+    )
+    assert marked == {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "primer", "cache_control": {"type": "ephemeral"}}
+        ],
+    }
+
+
+def test_an_implicit_caching_model_gets_its_plain_string_back() -> None:
+    # The marked shape is only ever sent where it is understood, so a provider
+    # that caches implicitly keeps the request it has always received.
+    original = {"role": "system", "content": "primer"}
+    assert cache_stable_message(original, model="openai/gpt-5.6-terra") is original
+
+
+def test_marking_never_mutates_the_message_it_was_handed() -> None:
+    original = {"role": "system", "content": "primer"}
+    cache_stable_message(original, model="anthropic/claude-sonnet-4.5")
+    assert original == {"role": "system", "content": "primer"}
+
+
+def test_marking_an_already_parted_message_moves_the_breakpoint_to_the_end() -> None:
+    marked = cache_stable_message(
+        {"role": "system", "content": [{"type": "text", "text": "a"},
+                                       {"type": "text", "text": "b"}]},
+        model="anthropic/claude-sonnet-4.5",
+    )
+    parts = marked["content"]
+    assert "cache_control" not in parts[0]
+    assert parts[1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_a_message_with_no_markable_content_is_left_exactly_as_it_was() -> None:
+    for message in (
+        {"role": "system", "content": ""},
+        {"role": "system", "content": []},
+        {"role": "assistant", "tool_calls": []},
+    ):
+        assert cache_stable_message(message, model="anthropic/claude-sonnet-4.5") is message
+
+
+def test_cached_prompt_tokens_reads_either_shape_a_provider_reports() -> None:
+    assert cached_prompt_tokens({"prompt_tokens_details": {"cached_tokens": 1800}}) == 1800
+    assert cached_prompt_tokens({"cached_tokens": 900}) == 900
+    # The nested reading wins when both are present: it is the normalised one.
+    assert cached_prompt_tokens(
+        {"cached_tokens": 5, "prompt_tokens_details": {"cached_tokens": 1800}}
+    ) == 1800
+    # Absent, malformed, and negative all read as "no measured hit" rather than
+    # raising into a call that otherwise succeeded.
+    assert cached_prompt_tokens({"prompt_tokens": 400}) == 0
+    assert cached_prompt_tokens({"prompt_tokens_details": {"cached_tokens": "n/a"}}) == 0
+    assert cached_prompt_tokens({"cached_tokens": -3}) == 0
+    assert cached_prompt_tokens(None) == 0
+
+
+async def test_an_unstreamed_tool_turn_carries_its_cached_prompt_tokens() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "id": "gen-5",
+                    "model": "anthropic/claude-sonnet-4.5",
+                    "choices": [{"message": {"role": "assistant", "content": "Cached."}}],
+                    "usage": {
+                        "prompt_tokens": 2400,
+                        "completion_tokens": 12,
+                        "prompt_tokens_details": {"cached_tokens": 2000},
+                    },
+                },
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    turn = await client.complete_tools(
+        model="anthropic/claude-sonnet-4.5",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        max_tokens=256,
+    )
+    # A subset of the prompt tokens, never added to them.
+    assert turn.input_tokens == 2400
+    assert turn.cached_tokens == 2000
+
+
+async def test_a_streamed_tool_turn_carries_its_cached_prompt_tokens() -> None:
+    # Usage rides only the final chunk, so the cached figure is lost with it if
+    # the accumulator drops anything but the two headline counters.
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                sse(
+                    content_chunk("Cached."),
+                    {
+                        "id": "gen-6",
+                        "model": "anthropic/claude-sonnet-4.5",
+                        "choices": [{"delta": {}, "finish_reason": "stop"}],
+                        "usage": {
+                            "prompt_tokens": 2400,
+                            "completion_tokens": 12,
+                            "prompt_tokens_details": {"cached_tokens": 2000},
+                        },
+                    },
+                ),
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    deltas: list[str] = []
+    turn = await collect(client, deltas)
+    assert turn.cached_tokens == 2000

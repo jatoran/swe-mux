@@ -1132,6 +1132,14 @@ def set_approval_mode(
 # lands on one of these, so it must not be surfaced as "crashed".
 CLEAN_EXIT_CODES = frozenset({0, 130, 0xC000013A, -1073741510})
 
+# The `SessionState` members that mean the process is gone. An ended session is
+# retained in the live table (its scrollback and exit code are what a task result
+# is read from), so "is it still running" is this test rather than a lookup miss.
+# Defined beside the lifecycle it describes rather than in each consumer: the
+# names are not guessable from the outside ("ended" is not one of them), and a
+# consumer that guessed wrong reported a finished one-shot step as still running.
+TERMINAL_SESSION_STATES = frozenset({"exited", "crashed"})
+
 
 def terminal_exit_outcome(
     completion_mode: str, *, stopping: bool, exit_code: int | None, reason: str

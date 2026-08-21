@@ -114,15 +114,16 @@ import {
 import { AssistantPanel } from './AssistantPanel'
 import {
   ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
-  latestOpenAction, noteAssistantActionEvent, reportUiResult,
+  latestOpenAction, NEW_CONVERSATION_PHRASES, NEW_CONVERSATION_REPLY,
+  noteAssistantActionEvent, reportUiResult,
   sendTurn as sendAssistantTurnApi,
-  spokenConfirmation, type AssistantClientContext, type AssistantStatus,
+  spokenConfirmation, startNewDialog, type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, playAllHeldClips, playClip, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
@@ -130,6 +131,10 @@ import {
   KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
   nextActiveAfterKill, type KillTombstones,
 } from './sessionKills'
+import {
+  forgetJoinAttempts, joinSessions, joinableSessionIds, recordJoinFailure, unjoinedSessionIds,
+  type JoinAttempts,
+} from './sessionJoin'
 import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
@@ -1377,6 +1382,12 @@ export function App() {
   // Sessions this client has already taken off screen while their DELETE finishes.
   // See sessionKills.ts for why the fleet and layout reconcilers both have to honour it.
   const pendingKills=useRef<KillTombstones>({})
+  // Daemon-started sessions whose automatic join the server refused, so a Project that cannot
+  // take another leaf stops being asked (`sessionJoin.ts`).
+  const joinAttempts=useRef<JoinAttempts>({})
+  // The pane a joining session should prefer, kept fresh every render because `refresh` runs from
+  // intervals and sockets whose closures are older than the current focus.
+  const joinAnchor=useRef<{projectId:string;viewId:string|null}>({projectId:'',viewId:null})
   const spawning = useRef(false)
   const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
@@ -1409,6 +1420,7 @@ export function App() {
   const [focusHydrated,setFocusHydrated]=useState(false)
   sessionsRef.current=sessions
   projectsRef.current=projects
+  joinAnchor.current={projectId,viewId:focusedViewId||activeId}
   useEffect(()=>{
     const onProjectRecency=(event:Event)=>{
       const detail=(event as CustomEvent<ProjectRecencyEventDetail>).detail
@@ -1549,37 +1561,91 @@ export function App() {
       setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
       setProjectGroups(nextGroups)
       setRegistryLoaded(true)
-      setLayoutMap(current => {
-        const next = { ...current }
-        // Every session the daemon still holds keeps its leaf, ended ones
-        // included. A session that ends on its own used to keep its sidebar row
-        // and lose its tab in the same instant, so the pane showing what it
-        // printed was destroyed at exactly the moment somebody wanted to read
-        // it — and the pruned layout was written back, so it did not come back.
-        // A session leaves the layout when it leaves the fleet: killed, or
-        // dismissed. `sessionKills` already excludes in-flight kills from this
-        // set, which is what removes a closed tab immediately.
-        const live = new Set(visibleSessions.map(session => session.id))
-        const livePreviews = new Set(nextPreviews.items.map(item => item.id))
-        for (const project of nextProjects) {
-          // This GET may have been snapshotted before an in-flight layout PATCH
-          // committed. Overwriting optimistic state with it snaps a just-dropped
-          // tab back; the PATCH's own generation-guarded path reconciles instead.
-          if(layoutWriteChains.current[project.id]!==undefined)continue
-          // History graduated from a per-project pane tab to a global overlay;
-          // drop any persisted history leaf so old layouts don't dangle.
-          let base=parseLayout(project.layout)
-          for(const leaf of leaves(base,'history'))base=removeLeaf(base,'history',leaf.id)
-          next[project.id] = reconcilePreviews(reconcileTerminals(base, live), livePreviews)
-          for(const [pendingId,pending] of Object.entries(pendingSpawns.current)){
-            if(pending.projectId!==project.id||!pending.placement)continue
-            next[project.id]=placePendingTerminal(next[project.id],pending.resolvedId||pendingId,pending.placement,false)
-          }
+      // Every session the daemon still holds keeps its leaf, ended ones
+      // included. A session that ends on its own used to keep its sidebar row
+      // and lose its tab in the same instant, so the pane showing what it
+      // printed was destroyed at exactly the moment somebody wanted to read
+      // it — and the pruned layout was written back, so it did not come back.
+      // A session leaves the layout when it leaves the fleet: killed, or
+      // dismissed. `sessionKills` already excludes in-flight kills from this
+      // set, which is what removes a closed tab immediately.
+      const live = new Set(visibleSessions.map(session => session.id))
+      const livePreviews = new Set(nextPreviews.items.map(item => item.id))
+      joinAttempts.current = forgetJoinAttempts(joinAttempts.current, live)
+      // A session this device is mid-spawn on already owns an optimistic leaf under its
+      // pending id; joining it here as well would leave the layout holding it twice once
+      // `replaceTerminal` swaps the real id in.
+      const spawningHere = new Set(
+        Object.values(pendingSpawns.current).map(pending => pending.resolvedId).filter(Boolean) as string[],
+      )
+      // A launch still waiting on its POST is worse than that: the daemon has created the
+      // session and announced it, so this GET can carry a session that is *ours* under an id
+      // this client does not know yet, and there is no way to tell it from a daemon-started
+      // one. The whole join pass is therefore withheld from that Project until the launch
+      // resolves; the refresh after it joins whatever is still floating.
+      const launchingHere = new Set(
+        Object.values(pendingSpawns.current).filter(pending => !pending.resolvedId).map(pending => pending.projectId),
+      )
+      // Grouped once rather than per Project: this runs on every refresh, and the fleet and the
+      // Project list both grow.
+      const joinCandidates = new Map<string,string[]>()
+      for (const session of visibleSessions) {
+        if(isEndedSession(session)||session.pending||spawningHere.has(session.id))continue
+        if(launchingHere.has(session.project_id))continue
+        const forProject=joinCandidates.get(session.project_id)
+        if(forProject)forProject.push(session.id)
+        else joinCandidates.set(session.project_id,[session.id])
+      }
+      const nextLayouts: Record<string,PaneLayout> = {}
+      const joins: {projectId:string;layout:PaneLayout;ids:string[]}[] = []
+      for (const project of nextProjects) {
+        // This GET may have been snapshotted before an in-flight layout PATCH
+        // committed. Overwriting optimistic state with it snaps a just-dropped
+        // tab back; the PATCH's own generation-guarded path reconciles instead.
+        if(layoutWriteChains.current[project.id]!==undefined)continue
+        // History graduated from a per-project pane tab to a global overlay;
+        // drop any persisted history leaf so old layouts don't dangle.
+        let base=parseLayout(project.layout)
+        for(const leaf of leaves(base,'history'))base=removeLeaf(base,'history',leaf.id)
+        let reconciled = reconcilePreviews(reconcileTerminals(base, live), livePreviews)
+        for(const [pendingId,pending] of Object.entries(pendingSpawns.current)){
+          if(pending.projectId!==project.id||!pending.placement)continue
+          reconciled=placePendingTerminal(reconciled,pending.resolvedId||pendingId,pending.placement,false)
         }
+        // Sessions the daemon started on its own - an approved `request_spawn`, the
+        // assistant's daemon spawn path, a scheduled run - reach the fleet with no leaf,
+        // because only a device launch writes one. They used to float: a sidebar row
+        // attached to no pane group, joining the tabs only once the operator tapped it.
+        // They join here instead, off this same authoritative snapshot, so a client that
+        // was asleep while they spawned still finds them as tabs. Ended sessions are left
+        // alone: a pane is kept for a session that ended in one, never minted for one
+        // nobody ever opened, and adopting a long archive of them at boot would spend the
+        // layout's 64 leaves on sessions with nothing running. `sessionJoin.ts` owns the
+        // placement rule and the no-focus-stealing contract.
+        const candidates = joinableSessionIds(joinCandidates.get(project.id)||[], joinAttempts.current)
+        const joined = joinSessions(
+          reconciled,
+          candidates,
+          joinAnchor.current.projectId===project.id?joinAnchor.current.viewId:null,
+        )
+        if(joined!==reconciled)joins.push({projectId:project.id,layout:joined,ids:unjoinedSessionIds(reconciled,candidates)})
+        nextLayouts[project.id] = joined
+      }
+      setLayoutMap(current => {
+        const next = { ...current, ...nextLayouts }
         layoutValues.current=next
         return next
       })
       setError('')
+      // Persisted after the render that shows them, and quietly: a join nobody asked for must
+      // not report a conflict the operator did not cause. A second device joining the same
+      // session first simply wins - the loser's refresh finds the leaf already there and
+      // proposes nothing, so the two converge instead of fighting.
+      for(const join of joins){
+        void updateLayout(join.projectId,join.layout,{quiet:true}).then(persisted=>{
+          if(!persisted)joinAttempts.current=recordJoinFailure(joinAttempts.current,join.ids)
+        })
+      }
       } catch (cause) {
         // While the daemon is deliberately away, every request failing is the
         // expected state, not news. The reconnect that follows each dropped
@@ -2039,11 +2105,13 @@ export function App() {
               trigger: event.payload?.trigger,
               streamId: event.payload?.stream_id,
             } }))
-            // The pane's mode is re-checked here as well as on the daemon: a clip
-            // generated just before the user hit "off" would otherwise land and start
-            // speaking after the switch was thrown.
+            // The pane's participation is re-checked here as well as on the daemon: a
+            // clip generated just before the user hit "off" would otherwise land and
+            // start speaking after the switch was thrown. Whether it *plays* or is
+            // *held* is `enqueueAutoplay`'s call, so the device toggle and the focus
+            // rule stay in one place rather than being half-decided here.
             const autoAllowed = eventSession ? eventSession.voice_mode !== 'off' : true
-            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
+            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
             if(!isReplay&&event.type==='voice_clip_ready'&&event.payload?.trigger!=='auto'&&clipId&&event.payload?.stream_id){
               enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
             }
@@ -2263,6 +2331,11 @@ export function App() {
   useEffect(()=>{
     if(focusedAgentSession)noteTerminalFocus(focusedAgentSession.id)
   },[focusedAgentSession?.id])
+  // The one report that drives focus-driven playback. Read aloud plays the session
+  // being watched and holds the rest, so this has to be the same "focused agent"
+  // every other pane-scoped surface means — and `null` (a note, a shell, nothing)
+  // holds everything, which is why a held clip is surfaced rather than dropped.
+  useEffect(()=>{setPlaybackFocus(focusedAgentSession?.id||null)},[focusedAgentSession?.id])
   const liveVoiceSessionIds=useRef<Set<string>>(new Set())
   liveVoiceSessionIds.current=new Set(sessions.filter(session=>isAgent(session)&&!session.pending&&!isEndedSession(session)).map(session=>session.id))
   const liveVoiceSessionRuns=useRef<Map<string,string|null>>(new Map())
@@ -3804,7 +3877,11 @@ export function App() {
     else setConfirmKillId(session.id)
   }
 
-  const updateLayout = async (targetProject: string, layout: PaneLayout) => {
+  // `quiet` suppresses only the failure toast, never the reload behind it. It exists for writes
+  // the operator did not make - the automatic join in `refresh` - where a lost revision race is
+  // the mechanism working rather than news: the refresh that follows re-derives from whatever
+  // the winner persisted.
+  const updateLayout = async (targetProject: string, layout: PaneLayout, options?: {quiet?: boolean}) => {
     layoutValues.current[targetProject]=layout
     setLayoutMap(current => ({ ...current, [targetProject]: layout }))
     const generation=(layoutWriteGeneration.current[targetProject]||0)+1
@@ -3825,7 +3902,7 @@ export function App() {
       } catch (cause) {
         await refresh()
         const message = cause instanceof Error ? cause.message : String(cause)
-        setError(message.includes('stale layout revision') ? 'Layout changed in another client; reloaded the current layout.' : message)
+        if(!options?.quiet)setError(message.includes('stale layout revision') ? 'Layout changed in another client; reloaded the current layout.' : message)
         return false
       }
     })
@@ -5057,6 +5134,12 @@ export function App() {
     { id: 'voice.cycleMode', label: `Read aloud: cycle focused session mode${active && isAgent(active) ? ` (now ${voiceModeLabel(effectiveVoiceMode(active))})` : ''}`, category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) cycleVoiceMode(active); setContextMenu(null) } },
     { id: 'voice.speak', label: 'Read aloud: speak focused session’s last reply', category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) void speakLastReply(active); setContextMenu(null) } },
     { id: 'voice.autoplayDevice', label: `Read aloud: turn device autoplay ${autoplayEnabled() ? 'off' : 'on'}`, category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { setAutoplayEnabled(!autoplayEnabled()); setContextMenu(null) } },
+    // The keyboard route to held clips. The pane's own strip is the surface that
+    // *announces* a held clip, but a session whose pane is behind another tab has
+    // no visible strip, so the backlog needs one route that does not depend on the
+    // pane being drawn. Deliberately not labelled with a count: reading one would
+    // subscribe this component to every `timeupdate` the audio element fires.
+    { id: 'voice.playHeld', label: 'Read aloud: play clips held while you were elsewhere', category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { unlockPlayback(); playAllHeldClips(); setContextMenu(null) } },
     { id:'voice.fleetStatus',label:'Speak fleet status',category:'voice',available:true,run:()=>{},voice:{
       phrases:['fleet status','status report','what is running'],
       execute:text=>voiceQueryHandler.current(parseVoiceQuery(text||'fleet status')||{kind:'status',entity:'fleet',reference:'',scope:{kind:'all'}}),
@@ -5102,6 +5185,25 @@ export function App() {
     },voice:{phrases:['assistant','open assistant','open the assistant','chat','close assistant','close the assistant']}},
     { id:'voice.dockExpand',label:'Expand the voice panel',category:'voice',available:canExpandVoiceDock(voiceDock.state),disabledReason:'The voice panel is already at full size',run:()=>dispatchVoiceDock({kind:'expand'}),voice:{phrases:['expand the voice panel','expand voice panel','expand the panel']}},
     { id:'voice.dockCollapse',label:'Collapse the voice panel',category:'voice',available:canCollapseVoiceDock(voiceDock.state),disabledReason:'The voice panel is already in the top bar',run:()=>dispatchVoiceDock({kind:'collapse'}),voice:{phrases:['collapse the voice panel','collapse voice panel','collapse the panel']}},
+    // Clearing context is the one assistant act that runs on the word with no
+    // confirmation card, because nothing is destroyed: the prior dialog is
+    // unremembered, not deleted, and the panel keeps it readable. The spoken
+    // reply therefore has to carry both halves - "context cleared" on its own
+    // describes the same act as a deletion the operator cannot see.
+    // Opening the panel is the dock's floor event here: raise to full without
+    // ever collapsing, the dock-era spelling of the old setAssistantOpen(true).
+    { id:'assistant.newConversation',label:'Start a new assistant conversation',category:'voice',
+      available:!!assistantInfo?.enabled,disabledReason:'Enable the assistant in Settings → Assistant first',
+      run:()=>{setVoicePanelMode('chat');dispatchVoiceDock({kind:'floor',state:'full'});void startNewDialog().catch(()=>{})},voice:{
+      phrases:NEW_CONVERSATION_PHRASES,
+      execute:async()=>{
+        await startNewDialog()
+        // Show what was just done. The reply claims the old conversation is
+        // still in the panel, so the panel is what the operator must land on.
+        setVoicePanelMode('chat');dispatchVoiceDock({kind:'floor',state:'full'})
+        return{detail:NEW_CONVERSATION_REPLY,speech:NEW_CONVERSATION_REPLY}
+      },
+    }},
     { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
       phrases:['approve','review approval','confirm tool use'],
       execute:async()=>{
@@ -5959,7 +6061,7 @@ export function App() {
     // easy to lose off-screen. Grouped in the header they have a fixed home; the group is its
     // own scroller so a long chip set can never push the pane tools out of the bar.
     const paneVoice=agentVoice&&voiceStatus?<>
-      {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
+      {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: this session generates ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto · what is spoken here follows workspace focus and the device toggle`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {/* Read aloud is off (or unconfigured): the chip stays and becomes the way to fix
           that, landing on the switch rather than on the Voice tab. */}
       {!voiceAvailable&&<SettingLink target="voice.tts" class="voice-chip mobile-voice-action" title="Read aloud is disabled · open its switch">tts:setup</SettingLink>}

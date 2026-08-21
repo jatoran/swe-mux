@@ -259,6 +259,7 @@ A phase here may depend on one, but none of them is a phase.
 | `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
+| `USABILITY_AUDIT_2026-08-20.md` | audit report, findings open | The deliverable of Phase 15's "Global usability audit session". Twelve ranked first-use and overwhelm findings, each anchored to a file and line, split into quick polish and needs-design. Nothing in it is scheduled; a maintainer decides which findings earn work. |
 
 ## Phase 1 — Evidence replay and delivery readiness
 
@@ -3766,6 +3767,213 @@ exact-content approval model, and Tier 0 fact capture.
   budget accounting.
 - [x] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
   the prompt-queue and mux-mcp documents name the handback template and the request tool.
+
+## Phase 15 - Voice assistant follow-through: caching, patience, budgets, and reach
+
+The assistant now speaks sentence by sentence, announces a card exactly once, reports its round
+budget honestly, and can stage a prompt into a new session without sending it.
+This phase is the set of follow-on items the 2026-08-20 voice sessions surfaced, scoped with the
+operator on 2026-08-20.
+Each section is independent and separately landable.
+None introduces a new authority: every executing path already exists and keeps its trust
+boundary, which is what makes the whole phase safe to parallelize.
+
+### Decisions taken at scoping (2026-08-20)
+
+- **No multi-model tier inside the assistant.** The considered design - a cheap default model, an
+  escalate tool, per-model tool-catalog subsets, the assistant as its own orchestration harness -
+  is dropped rather than deferred.
+  The assistant keeps one configured model, and heavy work belongs in a real harness session the
+  assistant spawns, which is the primitive swe-mux already has.
+  Trimmed per-model tool catalogs are specifically rejected: a capability the model cannot see is
+  a capability it denies having, which is the exact `seed_text` invisibility failure just fixed.
+- **Phone-in-pocket TTS delivery stays out of scope.** Push notifications already carry "a reply
+  is ready"; background audio on a locked phone is its own project and not this one.
+- **No spoken read-back of action output.** A finished project action reports success or an issue
+  flag, never its output stream; readback was rejected as spam at scoping.
+
+### Prompt-cache accounting for assistant turns
+
+Today the assistant re-sends its primer plus the dialog window on every model call with no
+`cache_control` anywhere, so Anthropic-routed models get zero caching and nobody can see what any
+model is hitting.
+
+- [x] Mark the stable prefix (primer + tool definitions) with an explicit cache breakpoint when
+  the resolved model routes to a provider that requires one (Anthropic); implicit-caching
+  providers need no request change.
+  Shipped as `cache_stable_message` / `needs_explicit_cache_control` in `openrouter.py`, applied
+  to the primer only: the provider orders tool definitions ahead of the system prompt, so one
+  breakpoint covers both, and a second one over the per-round tail would be a cache write billed
+  at a premium and never read back.
+- [x] Keep the per-round budget line trailing, as it is today, so the prefix stays cache-stable
+  across the up-to-14 rounds of one turn; treat any future prompt change that inserts ahead of
+  the primer as a cache regression.
+  Both halves of that rule now have a test: the primer is asserted byte-identical across a
+  turn's rounds, and the budget line is asserted last.
+- [x] Record `cached_tokens` from the usage payload into the assistant spend ledger and surface
+  the hit rate beside spend, so caching is measured rather than assumed.
+  `automation_budget_ledger.cached_tokens` (schema 9, backfilled to 0), carried through `spend()`
+  and `spend_breakdown` with `input_tokens` as the honest denominator, and drawn as a `cached`
+  column plus a `prompt cache` tile in `AutomationSpendView` - the same component the Automation
+  dashboard and Resources → Tokens both draw.
+
+### "New conversation" by voice
+
+- [x] Deterministic command-registry aliases ("mux, new conversation" / "clear context") that call
+  the existing new-dialog path (`AssistantPanel` already has the button; voice has no route to
+  it).
+  Shipped as `assistant.newConversation`; both surfaces now route through one `startNewDialog`,
+  which announces `mux:assistant-dialog-reset` rather than letting the panel clear itself.
+- [x] No confirmation: the act is reversible, because the old dialog stays readable in the panel,
+  and the spoken reply says both things - context cleared, old conversation still there.
+  "Stays readable" was a claim the panel did not yet honour - it cleared its view outright - so
+  the cleared conversation is now kept in a collapsed `previous conversation` disclosure.
+  Without that the reply would have been describing a reversibility the operator had no way to
+  reach, which is the one thing that would have made the absent confirmation unsafe.
+
+### Unfinished-utterance deferral
+
+The defining voice-agent complaint: the operator rushes because a pause becomes a reply.
+The design is deterministic-first, because a model-arbitrated "are you done" loop is the
+round-trip spam the feature exists to avoid.
+
+- [x] A completeness heuristic runs before a chat turn is dispatched: an utterance ending
+  mid-clause (dangling conjunction, preposition, or article) earns one adaptive patience
+  extension instead of submitting.
+  At most one deferral per utterance, so unbounded round-trips are structurally impossible.
+- [x] Queue-merge stays the safety net for fragments that slip through: the second breath merges
+  into the pending turn, and barge-in already silences a reply to fragment one.
+- [x] The model is never instructed to return nothing - incomplete fragments are handled before
+  the model, not by it.
+- [x] The primer teaches the model to suggest hold/proceed once when the operator is clearly
+  thinking aloud, rather than emulating it.
+- [x] Every deferral is logged with the trigger token, so the heuristic's false-positive rate is
+  measurable before anyone tunes it.
+
+Shipped (`design/features/voice.md`, endpointing). `utteranceCompleteness.ts` is the pure rule
+set, `utteranceDeferral.ts`'s clock-injected `DeferralPen` owns the one-deferral-per-utterance
+decisions, and `ConversationControl.tsx` keeps the effects; the extension is the operator's own
+`voice_chat_patience_ms` (floored at 600 ms, capped at 5 s) rather than a second knob, and it
+also raises the gate's `endpointPatienceMs` while a fragment is held so the second breath is not
+itself chopped in half.
+Two structural guards keep false positives down without a parser - questions strand prepositions
+legitimately, and prepositions that double as verb particles need a five-word clause - and the
+resolution report (`POST /api/voice/deferral-diagnostic`) carries the trigger plus the outcome
+that judges it, since `merged` versus `submitted` IS the false-positive rate.
+The release timer re-arms while speech is still arriving or an utterance is mid-decode, bounded
+by a hard 15 s hold ceiling.
+
+### Token caps and cost caps everywhere
+
+- [ ] One budget shape for every cap: `{tokens?, usd?, mode: tokens | usd | either}`, where
+  `either` trips on whichever is hit first.
+- [ ] One shared budget control renders it, and every budget setting - assistant daily, scan
+  budgets, automation bounds - gets the choice, including settings that today carry only one
+  unit.
+- [ ] Enforcement reads the spend ledger, which already records both tokens and USD per call.
+- [ ] Migration maps each existing cap onto the mode matching its current unit, so no cap
+  silently loosens.
+
+### Global TTS switch and focus-driven playback
+
+Read aloud is currently three independent switches (per-session mode, device autoplay, tts chip)
+with no master, and the note behind this section is an overwhelm complaint as much as a feature
+ask.
+
+- [x] A global read-aloud master switch, shaped like the assistant's: off means no session
+  generates or plays. `tts_enabled` is that master and is now checked on manual `generate` as
+  well as on the automatic path and `speak`, so it governs every path rather than the ones that
+  happened to consult it.
+- [x] Per-session participation stays and narrows to "does this session generate" - some sessions
+  should never speak. An explicit human "speak this reply" is still honoured for an `off`
+  session: that is an instruction, not participation, and the shipped `tts_default_mode` is
+  `off`, so refusing there would have silenced the speak button install-wide.
+- [x] Playback policy becomes global and focus-driven: the focused session auto-plays, unfocused
+  sessions generate and hold their clips (already durable in `voice_clips`), and held clips
+  surface as ready-to-play rather than auto-playing over whatever the operator is doing.
+  A Voice Comms pin is the one override, because that mode is a conversation with an agent the
+  operator may not be looking at.
+- [x] The Settings surface presents the three layers as one legible policy: master, per-session
+  participation, this-device autoplay.
+
+### Global usability audit session
+
+- [x] Spawn a dedicated audit session - prompt staged for operator review, per `stage_text` -
+  charged with an app-wide first-use/overwhelm audit: every surface with complex functionality,
+  not voice alone, drawing on the continuity project's UI/UX-psychology documentation and its own
+  research, producing a written report with ranked recommendations.
+  This is a session to run, not code to write; it is in the phase so it is not lost.
+  Delivered 2026-08-20 as `USABILITY_AUDIT_2026-08-20.md`: twelve ranked findings, each anchored
+  to a file and line, split into quick polish and needs-design.
+  The report is the deliverable and nothing in it is scheduled here; acting on a finding is a
+  separate decision.
+  Two findings are deliberately handed to the in-flight gated-feature enablement work rather than
+  acted on (Run with no harness enabled, and the assistant's off-state naming a Settings tab that
+  does not exist), and the report asks only that the Voice-tab split be sequenced before the
+  global TTS master switch in this phase.
+
+### Bring-your-own LLM endpoint, and gating on a verified provider
+
+STT (faster-whisper) and TTS (Kokoro) are already local, so the remaining gap is the language
+model.
+
+- [ ] A custom OpenAI-compatible endpoint - `{base_url, api_key, model}` - at the
+  `OpenRouterClient` seam, which covers llama.cpp, Ollama, vLLM, and LM Studio with one shape;
+  OpenRouter stays the default and other users' routing is untouched.
+- [ ] A verify action per configured provider: one tiny completion, output shown to the user,
+  verified status recorded durably; an edit to the endpoint un-verifies it.
+- [ ] LLM-dependent automations gate on a verified provider through the existing enablement
+  dependency graph, and an unverified provider reads as the reason the switch is inert rather
+  than as a silent failure downstream.
+
+### Assistant reach: project actions
+
+The hard part is already built: `run_action` executes only human-approved exact bytes, so the
+assistant inherits that boundary wholesale and cannot run anything a person did not approve.
+
+- [x] A list tool over the Project's actions, showing each action's approval state.
+  `list_project_actions` reports approval **per action**, because trust is per source file and
+  one unapproved file leaves the rest runnable.
+- [x] A run tool for approved actions only, confirmation-carded per the existing trust policy;
+  an unapproved action names the file a human must review, exactly as the MCP surface does.
+  `run_project_action` classifies as *consequential* rather than reversible - a build or a
+  deploy is not undone by a tombstone, so it never runs under an `auto` trust setting - and the
+  refusal happens at preflight, so nothing pends that the executor would refuse. Resolution,
+  the trust check, and input validation are one shared implementation (`preview_action_run`).
+- [x] The outcome is a terse notification: success, or an issue flag when the exit code is
+  nonzero or the output tail looks unhealthy - never an automatic read-back of output.
+  A bounded watch over the step sessions reports one sentence through `assistant_notice` (the
+  one assistant event belonging to no turn, since the exit code arrives after the confirmation).
+  The unhealthy-tail markers are deliberately narrow: bare "error" and "failed" appear in
+  healthy builds, and a flag that fires on green runs is one the operator learns to ignore.
+
+### Assistant reach: spawn with a specified model
+
+- [ ] An optional `model` argument on `spawn_session`, mapped per harness by the adapter (claude
+  and codex take `--model`; a harness with no model flag refuses honestly at the card, before
+  anything spawns).
+- [ ] A request-level model overrides the launch profile's, and an unrecognized model name fails
+  at the card rather than as a dead session.
+
+### Phase 15 exit criteria
+
+- [ ] Anthropic-routed assistant turns show nonzero cached tokens in the spend view, and the hit
+  rate is visible beside spend.
+  The breakpoint, the ledger column, and the surface are built and tested; the criterion stays
+  open until an operator reads a nonzero rate off a real Anthropic-routed turn, which no test
+  can stand in for.
+- [ ] "Mux, new conversation" clears context by voice and says so.
+- [ ] A deliberately trailed-off utterance is deferred exactly once and merges with its
+  completion; the deferral appears in the log with its trigger.
+- [ ] Every budget setting offers tokens, USD, or first-hit, and pre-existing caps enforce
+  exactly what they enforced before migration.
+- [x] Read aloud has one master switch; an unfocused session's reply holds its clip instead of
+  speaking over the focused one.
+- [ ] A local OpenAI-compatible endpoint passes verification and unlocks LLM-gated automations;
+  removing or editing it re-locks them with a stated reason.
+- [ ] The assistant lists actions, runs an approved one behind a card, refuses an unapproved one
+  by naming the file, and reports success or an issue flag with no output read-back.
+- [ ] "Open an opus session in X" spawns with that model, and a bad model name fails at the card.
 
 ## Decision-gated capabilities
 

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
 import {
-  buildSpendRows, callHealth, exactMoney, formatCount, formatMoney, formatPercent,
-  type SpendBreakdown,
+  buildSpendRows, cacheHit, cacheHitDetail, callHealth, exactMoney, formatCount, formatMoney,
+  formatPercent, type SpendBreakdown,
 } from './automationCost'
 import { ModelName } from './ModelName'
 
@@ -60,6 +60,10 @@ export function AutomationSpendView() {
   const agentTokens = (telemetry?.provider_cost_dimensions || []).reduce((total, row) => total + (row.tokens || 0), 0)
   const calls = callHealth(data?.observer_calls)
   const costShareTotal = spendRows.reduce((total, row) => total + (row.cost_usd || 0), 0)
+  // Prompt caching, measured rather than assumed. A provider that needs an explicit
+  // breakpoint and never got one reads 0% here, which is the whole point of showing it.
+  const windowCache = cacheHit(spendTotals?.input_tokens, spendTotals?.cached_tokens)
+  const todayCache = cacheHit(spendTotals?.today_input_tokens, spendTotals?.today_cached_tokens)
 
   return <div class="automation-cost">
     {error && <div class="usage-error" role="alert">{error}</div>}
@@ -69,6 +73,10 @@ export function AutomationSpendView() {
         <div class="usage-summary cost-summary">
           <article><span>observers today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong><small>{formatCount(spendTotals?.today_calls||0)} calls · {formatCount(spendTotals?.today_tokens||0)} tokens</small></article>
           <article><span>observers · {spendDays}d</span><strong title={exactMoney(spendTotals?.cost_usd||0)}>{formatMoney(spendTotals?.cost_usd||0)}</strong><small>{formatCount(spendTotals?.calls||0)} calls · {formatCount(spendTotals?.tokens||0)} tokens</small></article>
+          {/* Beside the money, because the hit rate is only ever read as "is this spend
+              avoidable". Today first: a breakpoint that started working this morning is
+              invisible in a seven-day average. */}
+          <article><span>prompt cache</span><strong title={cacheHitDetail(todayCache)}>{todayCache?formatPercent(todayCache.rate):'—'}</strong><small title={cacheHitDetail(windowCache)}>{windowCache?`${formatPercent(windowCache.rate)} over ${spendDays}d · ${formatCount(windowCache.cached)} tokens cached`:'no billed prompt tokens yet'}</small></article>
           <article><span>call outcomes</span><strong>{formatCount(calls.total)}</strong><small class={calls.failed?'warn':''}>{formatCount(calls.failed)} failed or cancelled · {formatPercent(calls.failureRate)}</small></article>
           <article><span>agent models</span><strong title={exactMoney(agentSpend)}>{formatMoney(agentSpend)}</strong><small>estimated · {formatCount(agentTokens)} tokens</small></article>
         </div>
@@ -76,8 +84,8 @@ export function AutomationSpendView() {
           <h3>What automation is costing</h3>
           <p>Every billed observer call of the last {spendDays} days, grouped by what asked for it and ranked by the window rather than by today. Same ledger as the headline, so the rows add up to it exactly.</p>
           {spendRows.length?<div class="usage-table-scroll"><table class="data-table cost-table">
-            <thead><tr><th>automation</th><th>today</th><th>{spendDays} days</th><th>calls</th><th>tokens</th><th>model</th></tr></thead>
-            <tbody>{spendRows.map(row=><tr class={row.enabled?'':'disabled'} key={row.rule_id}>
+            <thead><tr><th>automation</th><th>today</th><th>{spendDays} days</th><th>calls</th><th>tokens</th><th>cached</th><th>model</th></tr></thead>
+            <tbody>{spendRows.map(row=>{const hit=cacheHit(row.input_tokens,row.cached_tokens); return <tr class={row.enabled?'':'disabled'} key={row.rule_id}>
               <td data-label="automation">
                 <div class="cost-name"><strong>{row.label}</strong><span class={`automation-pill ${row.kind}`}>{row.kind}</span>{row.enabled?null:<span class="automation-pill off">off</span>}</div>
                 <div class="cost-bar" style={`--share:${Math.max(0.015,costShareTotal>0?row.share:row.callShare)}`}/>
@@ -87,8 +95,9 @@ export function AutomationSpendView() {
               <td data-label={`${spendDays} days`} title={exactMoney(row.cost_usd)}><strong>{formatMoney(row.cost_usd)}</strong>{costShareTotal>0?<em>{formatPercent(row.share)}</em>:null}</td>
               <td data-label="calls" title={integer.format(row.calls)}>{formatCount(row.calls)}</td>
               <td data-label="tokens" title={integer.format(row.tokens)}>{formatCount(row.tokens)}</td>
+              <td data-label="cached" title={cacheHitDetail(hit)}>{hit?formatPercent(hit.rate):'—'}</td>
               <td data-label="model" class="cost-model">{row.models?.length?row.models.map(model=><ModelName model={model}/>):'—'}</td>
-            </tr>)}</tbody>
+            </tr>})}</tbody>
             <tfoot><tr><td data-label="automation">all automation</td><td data-label="today" title={exactMoney(spendTotals?.today_cost_usd||0)}>{formatMoney(spendTotals?.today_cost_usd||0)}</td><td data-label={`${spendDays} days`} title={exactMoney(spendTotals?.cost_usd||0)}>{formatMoney(spendTotals?.cost_usd||0)}</td><td data-label="calls">{formatCount(spendTotals?.calls||0)}</td><td data-label="tokens">{formatCount(spendTotals?.tokens||0)}</td><td/></tr></tfoot>
           </table></div>:<div class="automation-empty"><strong>No observer spend in the last {spendDays} days</strong><span>Enabled observers that never fired, and deterministic health checks, cost nothing and do not appear here.</span></div>}
         </section>
