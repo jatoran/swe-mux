@@ -80,12 +80,15 @@ The sidebar marks a quantity whose root carries more than one live session
 ### Session-to-commit provenance
 
 - `GitProvenanceService` consumes existing `tool_use`, `tool_result`, and `git_changed` events and never writes a hook, trailer, ref, note, or repository file.
-- A recognized successful `git commit` command snapshots the session, run, Project, checkout root, and starting HEAD at tool start, then reads the resulting HEAD after the paired tool result.
-- Command recognition is deliberately narrow.
-  It accepts explicit ordinary `git commit` and `git commit --amend` invocations from command tools and rejects repository-redirection flags such as `-C`, `--git-dir`, and `--work-tree` rather than interpreting shell quoting.
-- Two questions are recorded separately, because they have separate answers.
-  The **committer** is the one session whose process ran `git commit`; the **contributors** are the sessions whose file writes the commit contains.
-  Each row therefore carries a `role` of `committer`, `contributor`, or `observer` alongside the `relationship` the reference underwent, and one commit can hold several rows.
+- A recognized successful commit-creating command snapshots the session, run, Project, checkout root, and starting HEAD at tool start, then reads the resulting HEAD after the paired tool result.
+- Command recognition is narrow in *form* and complete in *subcommand*.
+  It accepts `commit`, `merge`, `cherry-pick`, `revert`, `rebase`, and `am` from command tools, rejects repository-redirection flags such as `-C`, `--git-dir`, and `--work-tree` rather than interpreting shell quoting, and rejects the forms that resolve or abandon an operation (`--abort`, `--quit`, `--skip`, `--no-commit`).
+  Matching the literal token `commit` alone meant the most common commit-creating command in a worktree workflow — `git merge`, which both reconciles and lands — produced no committer evidence at all, so the session that ran it was recorded exactly like the bystanders whose HEAD it dragged along.
+- Recognizing a command is not believing it made a commit.
+  Argv cannot tell a fast-forward from a merge, because a plain `git merge` fast-forwards whenever it can, so the *outcome* decides: a recognized command whose reference gained nothing it wrote records a movement and no committer row.
+- Three questions are recorded separately, because they have separate answers.
+  The **committer** is the one session whose process ran the command; the **contributors** are the sessions whose file writes the commit contains; the **reference movement** is what a *checkout* did and names no session at all.
+  Each session row carries a `role` of `committer`, `contributor`, or `observer` alongside the `relationship` the reference underwent, and one commit can hold several rows; movements live in their own checkout-keyed table.
 - The commit a command produced is isolated by object, not by reading `HEAD` back.
   The service lists `started_head..current_head` and selects within it: a single commit settles it, otherwise the command's own `-m` subject decides, then the command's time window.
   Reading `HEAD` after the command answers "what is on top now", which is a different question and names the wrong commit whenever a sibling session commits in between.
@@ -93,9 +96,33 @@ The sidebar marks a quantity whose root carries more than one live session
   Exact means swe-mux observed that commit appear across that session's successful commit-tool boundary; it is session provenance, not a cryptographic claim about the Git author identity.
 - A shared checkout is **not** ambiguity and never downgrades a committer.
   A shared `HEAD` is a fact about the starting point, not about the commit event, and the retired rule that treated it as ambiguity stamped nearly every commit in a multi-session checkout `ambiguous` even on the path that watched the exact session run the command.
-- `ambiguous` is reserved for two named cases: several commits in one command's range that neither subject nor time can tell apart, and a reference that moved many commits at once (a merge or a rebase).
-- A HEAD transition first found by the checkout monitor records `observed` with `correlated` confidence.
-  It proves that the session occupied that checkout when the transition was observed, not that the session ran the mutating command.
+- `ambiguous` is reserved for one named case: several commits one command authored that neither subject nor time can tell apart.
+  A reference moving many commits at once is **not** one of them.
+  That was a second retired rule of the same shape as the shared-checkout one: it described a merge and a rebase — two structurally distinguishable events — as a single undecidable one, on a code path that never asked git which had happened.
+  Measured against this repository's own ledger before the change, every move recorded as undecidable classifies, and not one of them was a rebase.
+
+#### Authorship versus arrival
+
+- Every reference move is classified rather than counted, from three facts and no guesses: whether the old position is still reachable from the new one, whether the new one is reachable from the old (a rewind), and what the reference's own **first-parent** line gained.
+- `--first-parent` is the whole discriminator and is not an optimization.
+  Full ancestry counts the side branch a merge absorbed, so `git merge master` creating exactly one commit and a two-commit fast-forward both report two, which is precisely the collision that stamped the session that ran the merge `ambiguous`.
+- A move that goes forward either **authored** the commits it gained or **received** them.
+  A commit counts as authored when its own timestamp falls in the command's window — or, for the monitor, within the widest gap in which a commit can first appear on a HEAD it was written on — *and* the ledger does not already hold it under another checkout that saw it earlier.
+- That last clause is the arrival oracle, and it costs no extra Git work: when a worktree branch lands, mux recorded those commits in the worktree minutes before the primary checkout ever saw them.
+- The oracle is deliberately one-directional in time.
+  "Recorded under another checkout" without an ordering is symmetric — after a landing *both* checkouts hold the commit — and a symmetric test retracts the one true answer along with the noise, reading the worktree that made a merge as a bystander to its own merge commit.
+- An observation's *time* survives the withdrawal of the claim built on it.
+  The oracle therefore reads when each checkout first held a commit from every row, retracted or not, while "who is already known to have made it" reads only standing rows.
+  Conflating the two made the repair pass forget its own inputs and restore exactly the rows it should have kept withdrawn.
+- A reference move is recorded once for the checkout it happened to, never once per attached session, and carries the classified kind, how many commits the first-parent line gained, and how many of those were authored.
+- A move that authored nothing writes no session row at all.
+  This is the single largest source of the ledger's retired noise: a landing fast-forward used to write one `ambiguous` row per session in the checkout, for commits none of them had touched.
+- A replay — a rebase, a run of cherry-picks — authors every commit it produced, and all of them belong to the session that ran it, so they are recorded together rather than reduced to one answer plus an apology.
+  The run is bounded, and contributor resolution runs for only the first few of them per event, because one command must not turn one event into fifty object reads.
+- A HEAD transition first found by the checkout monitor records `observed` with `correlated` confidence, and only for the commits the move authored.
+  It proves that the session occupied that checkout when those commits appeared, not that the session ran the mutating command.
+- Occupancy is not recorded at all once another session is known to have run the command that created the commit.
+  An answered question does not need ten more rows saying nothing, and ten of them buried the answer in the ledger view.
 - Contributors are matched from Tier 0 write facts against the commit's own changed files, read once per commit with `git diff-tree`.
   A write is attributed to a file when its normalized target is one the commit changed and the write can be placed in that checkout: an absolute target inside the worktree places itself, and a relative one is placed by its session's checkout.
 - A write *result* fact is read too, but only as content evidence, never as placement.
@@ -117,9 +144,13 @@ The sidebar marks a quantity whose root carries more than one live session
   The initial daemon poll establishes a baseline and does not create provenance for commits that predate the session evidence.
 - Rows are unique by session, run, checkout root, and commit.
   A later stronger observation promotes the existing row while retaining its earliest observation time, so polling cannot duplicate or downgrade exact tool evidence.
+- Retraction is the ledger's only weakening operation, and it exists because promotion alone is not enough.
+  Every field is gated on evidence rank, so a row that later turned out to record occupancy rather than authorship had no way out: "this session had nothing to do with it" is not a stronger claim than the one it replaces, and so could not arrive as one.
+  A retracted row keeps its evidence and its reason, is excluded from every read that does not explicitly ask for it, and is cleared by evidence strictly stronger than what was withdrawn — never by re-observing the same thing.
 - Commit metadata is copied into the row at capture time: full OID, parent OIDs, subject, Git commit time, previous HEAD, checkout root, session label, Project, run, evidence source, tool-call id, source event sequence, role, match method, and the contributed file paths.
   This keeps the association readable after a branch moves or the worktree is removed.
-- The match method names how the attribution was made, so a reader can judge it: `command_range`, `command_subject`, `command_window`, `command_ambiguous`, `monitor_head`, `monitor_range`, `write_content`, `write_path`, `reattributed_ancestry`, or `transcript_*`.
+- The match method names how the attribution was made, so a reader can judge it: `command_range`, `command_subject`, `command_window`, `command_ambiguous`, `command_<kind>` for a replay the command's nature identifies rather than a selection, `monitor_<kind>` for occupancy during a move of that kind, `write_content`, `write_path`, `reattributed_ancestry`, or `transcript_*`.
+  It stays on the "how was this picked" axis: that a commit was a merge is in the row's own two parent OIDs and in the movement recorded for the checkout, not in the method name.
 - Contributed paths are evidence, not classification.
   A later stronger observation that identified none of them never erases the ones an earlier pass proved.
 - Every commit is answered once regardless of how many sessions occupy the checkout: contributor resolution is claimed per commit, so a HEAD move seen by ten sessions reads the commit once.
@@ -131,7 +162,12 @@ The sidebar marks a quantity whose root carries more than one live session
   `python -m swe_mux.git_provenance_backfill PROJECT` is read-only and reports the proposed evidence classes; `--apply` writes the same plan in one bounded transaction.
   `--all-projects` sweeps every registered Project instead of one, which is what re-attributing existing history needs.
   The sweep skips removed Projects, whose checkout is usually gone; naming one explicitly still imports it.
-- The pass has three parts: import commits from native transcripts, promote rows the retired shared-checkout rule downgraded, and derive contributors for the commits already recorded.
+- The pass has four parts: import commits from native transcripts, promote rows the retired shared-checkout rule downgraded, derive contributors for the commits already recorded, and reclassify the occupancy the monitor wrote before it could tell authorship from arrival.
+- The fourth part is the only one that withdraws rows, and it withdraws exactly two kinds: a session that merely had a checkout open when someone else's work landed in it, and a bystander to a commit whose author is already known.
+  It records the movement for the checkout either way, because the movement happened.
+- It re-examines its own previous verdicts rather than skipping them, and restores what it now reads differently.
+  A classifier that could not revisit its own mistakes would leave the first version's errors in the ledger permanently, which is the failure the retraction column exists to avoid rather than to create.
+  Retractions made for any other reason are left exactly as they are, so reconsideration is not a general licence to overwrite the ledger.
 - Re-attribution touches live command evidence only.
   It re-checks that the row's recorded previous HEAD really is an ancestor of the commit, refuses when two sessions' commands claim one object, and leaves a transcript match's confidence alone because ancestry cannot improve an identification the transcript made.
 - The contributor pass runs the same matching code as the live path, so a historical answer and a live one cannot drift apart.
@@ -277,8 +313,15 @@ uncommitted work together.
 
 ### Provenance ledger
 
-- Provenance lists durable session-to-commit associations newest first for the selected Project.
-- Each row shows the short commit OID, copied subject, session label, run-id prefix, what the session did (committed, amended, wrote N files in it, or was in the checkout), confidence, the contributed file paths, checkout root, and first observation time.
+- Provenance lists durable session-to-commit associations newest first for the selected Project, **one card per commit** rather than one per row.
+  The table stores a row per session per commit because that is what each piece of evidence is about; read back flatly, ten occupancy rows buried the one naming who made the commit.
+- A card names the committer and the contributors individually, then collapses everyone else into a single "N sessions had this checkout open" line with their names beside it.
+  The committer and contributors come from the daemon's own per-commit rollup, so the rule for "who made this" has one home; only the occupancy list is assembled in the browser, because it is the part the rollup deliberately leaves out.
+  A session that committed or contributed is never also counted as a bystander to its own work.
+- Reference movements render in their own section below, as checkout facts that name no session: the checkout, the commit, where it moved from, and what it did in plain language — fast-forwarded onto commits written elsewhere, merged, rewritten, or moved back.
+  Keeping them out of the session cards is the point.
+  A branch landing moves every attached session's HEAD and says nothing about any of them, and drawing it in the same shape as a session claim is what made a landing read as an accusation against whoever had the directory open.
+- Each session line shows the session label, run-id prefix, what the session did (committed, amended, wrote N files in it, or was in the checkout when it appeared), confidence, and the contributed file paths; the card carries the short commit OID, subject, checkout root, and observation time.
 - A row carries two names and keeps them apart.
   `session_name` is durable evidence: what the session was called when the commit was observed, never rewritten by a later read.
   `display_name` is what that session is called now, resolved on read so a reader sees the name the rest of the app uses.

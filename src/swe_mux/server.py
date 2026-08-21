@@ -73,7 +73,7 @@ from .behavioral_consumers import BehavioralConsumerService
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
-from .composer_input import note_composer_write
+from .composer_input import DEFAULT_CLEAR_KEYS, note_composer_write
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore, parse_device_report
@@ -7779,7 +7779,11 @@ def _note_composer_write(events: EventBus, session: Any, data: str | bytes, sour
     if composer is None:
         return
     text = data.decode("utf-8", "ignore") if isinstance(data, bytes) else data
-    change = note_composer_write(composer, text, time.time())
+    # Which keys empty a composer is the harness's fact, not this module's. An
+    # unregistered backend keeps the historical Ctrl+U.
+    harness = HARNESSES.get(session.record.backend)
+    clear_keys = harness.composer_clear_keys if harness else DEFAULT_CLEAR_KEYS
+    change = note_composer_write(composer, text, time.time(), clear_keys)
     if change is None:
         return
     ledger = getattr(session, "state_transitions", None)
@@ -12593,7 +12597,8 @@ async def git_provenance(request: web.Request) -> web.Response:
         not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
     ):
         return json_response({"error": "commit must contain full Git object IDs"}, 400)
-    items = await request.app["history"].git_provenance(
+    history = request.app["history"]
+    items = await history.git_provenance(
         project_id=project.id,
         session_id=request.query.get("session_id") or None,
         agent_run_id=request.query.get("agent_run_id") or None,
@@ -12601,10 +12606,21 @@ async def git_provenance(request: web.Request) -> web.Response:
         limit=limit,
     )
     await _decorate_provenance_identity(request.app, items)
+    # Reference moves are checkout facts and are not filtered by session: asking
+    # "what did this session do" and "what happened to this checkout" are
+    # different questions, and answering the first with the second is what used to
+    # put a merge nobody in the checkout had made on every session's ledger.
+    moves = await history.git_ref_moves(project_id=project.id, commit_oids=commit_oids or None)
     # `items` stays one row per session per commit, which is what each piece of
     # evidence is about. `commits` answers the reader's question — who made this
     # commit and whose work is in it — without a second round trip.
-    return json_response({"items": items, "commits": summarize_git_provenance(items)})
+    return json_response(
+        {
+            "items": items,
+            "commits": summarize_git_provenance(items),
+            "ref_moves": moves,
+        }
+    )
 
 
 async def _decorate_provenance_identity(

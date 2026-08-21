@@ -119,6 +119,8 @@ const ACTION_LABELS: Record<string, string> = {
   relaunch: 'Relaunch',
   toggleKeyboard: 'Keyboard',
   clipboardHistory: 'Clipboard',
+  copyInput: 'Copy input',
+  clearInput: 'Clear input',
   endSession: 'End session',
 }
 
@@ -290,12 +292,15 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     },
   }
 
-  // These two built-ins open this drawer, so running either from inside the drawer
-  // would be a no-op; they are filtered out of every row entirely.
+  // These built-ins are shortcuts *to* this drawer — Clipboard and Skills open a
+  // rail drop-up whose own first row lands on the section already rendered below,
+  // and Actions opens the drawer itself. Running any of them from in here is a
+  // round trip to where the reader is standing, so they are filtered out of every
+  // row entirely.
   const visibleRows = session ? rows
     .map(row => ({
       ...row,
-      entries: row.entries.filter(entry => !['clipboardHistory', 'openActions'].includes(entry.item.action || '') && (entry.item.action !== 'attach' || isAgent)),
+      entries: row.entries.filter(entry => !['clipboardHistory', 'skills', 'openActions'].includes(entry.item.action || '') && (entry.item.action !== 'attach' || isAgent)),
     }))
     .filter(row => row.entries.length) : []
   const anyVisible = visibleRows.some(row => row.entries.length)

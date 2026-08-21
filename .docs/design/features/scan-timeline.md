@@ -59,7 +59,9 @@ A tool call is rendered as its name plus a bounded digest of its arguments.
 Tool *results* are not available: the shared transcript parser keeps conversation text and tool inputs and drops results by design.
 Arguments are therefore the only evidence of what a call touched, and discarding them left the summariser guessing which file was read or which command ran.
 
-The fixed default model is the OpenRouter latest alias `deepseek/deepseek-v4-flash`.
+The default model is the OpenRouter latest alias `deepseek/deepseek-v4-flash`.
+It is user-changeable but **pinned** rather than routed: scanning samples continuously over long transcript slices, so it needs a model that is cheap at volume and reliable at structured output at once, which neither routed default promises.
+A blank `scan_timeline_model` is a validation error rather than a fall-through to the cheap model.
 The call requests strict JSON schema, disables reasoning, and locally validates every semantic field.
 
 Validation **repairs** rather than rejects.
@@ -120,7 +122,8 @@ The caps that do apply are:
 - `automation_daily_token_budget` and `automation_daily_budget_usd`, the global emergency ceiling over every automation.
 
 All five are **global**, edited in Settings → Automation → Scan timeline, and apply to every Project.
-The model they route to is chosen in Settings → Accounts with the OpenRouter key that unlocks it.
+`scan_timeline_model` is edited in the same section, beside the caps it is priced against, so which model a given budget is being spent on is answerable without leaving the section.
+The OpenRouter key that unlocks it stays in Settings → Accounts, with the other provider credentials.
 The dollar ceiling used to be a per-Project field in the committed `.swe-mux/config.toml`.
 That put the cap most likely to stop scanning inside a file nobody opens, gave every checkout a different value, and meant raising it was a per-Project chore.
 It is one setting now; a `scan_timeline_daily_budget_usd` still present in a Project file is read tolerantly, ignored, and dropped on the next write.

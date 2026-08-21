@@ -168,6 +168,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                       -> Phase 7.9  Code-structure graph: blast radius + per-session change map [done]
                                       -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [done]
                                       -> Phase 7.11 Scan timeline as an agent-readable surface + window-scoped fields [open]
+                                      -> Phase 7.12 Code-analysis expansion: conflict prediction + entity change facts + quality deltas [open]
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
@@ -2595,6 +2596,55 @@ If the tiered idea is ever revisited, the shape is a cheap observer on `tool_res
 - [ ] `approach_status` and `dead_end` are solicited only on wide-window triggers, an absent field is storage-distinguishable from an asserted one, `PROMPT_VERSION` is bumped, and the `abandoned`/`succeeded` ratio is re-measured on a comparable session to confirm the diagnosis.
 - [ ] The observer model is unchanged, and the reason is recorded: enum conformance was already clean at zero fallback fires, and the residual repairs are `uniqueItems` artifacts that no model choice fixes.
 
+## Phase 7.12 - Code-analysis expansion: conflict prediction, entity-level change facts, and quality deltas
+
+The structural graph (Phase 7.9) knows how the code connects, and the behavioral substrate knows what every session touched, but nothing yet joins the two at the symbol level.
+This phase layers five deterministic analyses over that join, ordered by how much of their value only mux can produce: mux is the only observer that sees every parallel session's edits as they happen, which is what makes cross-session conflict prediction and stale-caller detection possible at all.
+Everything here is model-free, registers as consumers in the enablement DAG (`automation_registry.py`), writes annotations only (never a PTY write), and inherits the Phase 7.9 honesty rules: static results are labeled a lower bound, unresolved is recorded rather than guessed, and empty beats a plausible guess.
+It depends on Phase 7.9 (the graph and its per-write re-parse) and Phase 7.8 (provenance attribution).
+The entity-diff substrate ships first because the conflict and drift detectors consume it.
+
+### Substrate - changed-entity diff per turn
+
+- [ ] On the `file_write` re-parse the graph already performs, diff the file's symbol set against its prior parse: added, deleted, and modified (body-hash changed) functions/classes/methods, plus each modified symbol's signature (name, parameter list) before and after. Store as compact per-run entity-change records keyed on `agent_run_id` and the `normalize_target()` path identity, so they join facts, provenance edges, and graph edges. (`code_graph.py` owns the parse; the diff is a comparison of two `defines` sets plus per-symbol content hashes, not a new parser.)
+- [ ] Do not adopt an external tree-diff tool (the GumTree/`code-diff` class): parsing another tool's text output is brittle, and the symbol-table diff on our own parses answers the questions the consumers below actually ask.
+- [ ] Surface the record where a turn is already narrated: attention-narration input, the change-map node detail card, and doc-debt precision (a doc owning a file where a signature changed owes more than one where only a body changed).
+
+### Cross-session conflict prediction (fleet-unique)
+
+- [ ] Detect symbol-level overlap between concurrently live branches of one repository: session A modified symbol `S` while session B, in a different checkout, modified `S` itself, a caller of `S`, or a file in `S`'s one-hop blast radius. File-level overlap is the cheap first tier; the graph is what makes it symbol-level.
+- [ ] Fire before merge, as a fleet-scoped annotation naming both sessions, the overlapping symbols, and the linking edge kind (same symbol / caller / import), deduped per session pair per symbol per run. This warns about semantic conflicts a clean git merge cannot detect, and only a system observing every session's writes can produce it.
+- [ ] Branch seeds reuse the change map's admission and re-anchoring rules (`_change_map_checkout`): repository-relative identity, worktree-aware, never ingesting worktree copies into the graph.
+
+### Signature drift - stale callers
+
+- [ ] When an entity-change record shows a signature change, intersect the symbol's reverse callers with the run's own `file_write` facts; callers in files the run never touched are flagged in one annotation naming the changed signature and the untouched caller files. Sharper than the shipped `_unexamined_callers` because it names the specific breaking change, and labeled a lower bound for the same dynamic-dispatch reasons.
+
+### Lint delta
+
+- [ ] After a turn's writes, run `ruff` on the touched Python files and report only diagnostics **new** against a per-file baseline captured at the previous parse, never the pre-existing count. Include the `ASYNC` rules: blocking-call-in-async is a bug class that has bitten this codebase (`loop_lag.py` exists because of it). Ruff is a standalone binary with no venv coupling, which is why it clears the bar LSP failed; `tsc`/`dmypy` deltas are explicitly deferred because they carry project-environment coupling.
+- [ ] Bound the cost: touched files only, one run per turn boundary, a hard per-run diagnostic cap, and the annotation deduped per file per run.
+
+### Dependency-introduction detection
+
+- [ ] On a `file_write` to a dependency manifest or lockfile (`pyproject.toml`, `package.json`, `uv.lock`, `package-lock.json`), diff the declared dependency set and annotate each addition with the run that introduced it. Agents add packages casually, and "this run added dependency X" is a decision the human wants surfaced when it happens, not discovered weeks later.
+- [ ] Optionally check additions against a vulnerability database via `osv-scanner` (a single Go binary, Windows-clean), gated separately because it is a network call. An absent scanner degrades to the introduction annotation alone, stated rather than silent.
+
+### Deferred (same substrate, not scheduled)
+
+- [ ] Runtime-traceback-to-graph linking: parse tracebacks out of the PTY stream mux already captures, resolve frames to graph nodes, and record observed dynamic call edges. The most novel derivation, held until the detectors above prove the annotation surface can carry more volume.
+- [ ] Turn-scoped mutation testing: mutate only the turn's changed function bodies and run only the covering tests from the `test_gap` map, answering whether an agent-written test constrains the code it shipped with. Opt-in and background; needs a cost model first.
+- [ ] Cross-language API contract mapping: join FastAPI route definitions to frontend fetch call sites from the same parses, so an endpoint-shape change flags untouched frontend callers - a blast radius that crosses HTTP and that no import graph can see.
+- [ ] Config-schema validation on write, and per-turn complexity deltas.
+
+### Phase 7.12 exit criteria
+
+- [ ] Entity-change records are produced from the existing per-write re-parse, run-attributed, joinable on the shared path identity, with no external tree-diff dependency.
+- [ ] A symbol-level overlap between two live checkouts of one repository produces one fleet-scoped annotation before merge, naming both sessions and the linking edge kind, deduped, and labeled a lower bound.
+- [ ] A signature change with untouched reverse callers produces one annotation naming the change and the stale files.
+- [ ] Lint findings are reported as new-only deltas on touched files with bounded cost, and dependency additions are annotated with the run that introduced them, with an absent vulnerability scanner stated rather than silent.
+- [ ] Every detector is per-Project gated through the enablement DAG, writes annotations only, and pushes nothing into any agent.
+
 ## Phase 8 - Telegram multi-session control (descoped)
 
 **Descoped 2026-08-10 to a decision-gated capability.** The phase number is kept so later
@@ -3559,7 +3609,36 @@ construction, which is the same property that already makes it the one merge sha
 outside a worktree.
 Every prerequisite is shipped: worktree tooling (`../design/features/git.md`), the Phase 7.6
 `off`/`draft`/`granted` authority grant, the Phase 4/5 queue and its readiness contract, the
-project-actions trust contract for repository-owned tasks, and Tier 0 fact capture.
+bounded daemon-owned subprocess runner worktree bootstrap already uses, the project-actions
+exact-content approval model, and Tier 0 fact capture.
+
+### Decisions taken before the build (2026-08-20)
+
+- **The verification task is not a Project Action.** The two mechanisms it would have needed are
+  both refused by their own designs: an action's cwd is bounded by the canonical Project root and
+  is *deliberately* denied the sibling-worktree widening that spawns get
+  (`../design/features/project-actions.md`), and an action step becomes a one-shot terminal
+  session rather than a captured subprocess. The pipeline needs an exit code and bounded output
+  inside a tree that lives outside the Project root, which is exactly what `worktree_setup.py`
+  already does for bootstrap.
+  The verify runner therefore mirrors setup - `[worktree].verify_command` in
+  `.swe-mux/config.toml` else the executable `.worktree-verify` convention - and borrows only the
+  *trust* half from project actions: a machine-local SHA-256 over the resolved command or script
+  bytes, keyed by canonical Project root, un-approved by any edit to it.
+  Say the widening out loud rather than inheriting it quietly: worktree setup runs once per
+  human-initiated create, while verify runs repeatedly on an agent's request, and the fingerprint
+  approval is what makes that acceptable. An agent that edits the verify script un-approves it,
+  so an agent still cannot approve its own command.
+- **One trunk per Project.** A land targets the Project's primary checkout on its effective
+  comparison ref (`git_review.resolve_comparison_ref`, the same inference the Git drawer and the
+  session monitor already share), and any other target refuses. One trunk is one serialization
+  domain, and fast-forward-only is only a safety proof against a trunk the daemon can identify.
+- **The agent-facing request ships in this phase.** Operator-only would leave the operator doing
+  the serializing, which is the whole thing the phase removes. The `draft` default is what makes
+  that safe to ship at once.
+- **A busy worktree waits rather than bouncing.** An agent that requests a land and keeps working
+  is the common case, not an error, so the item holds in a visible `waiting` state and retries
+  until a bounded timeout, and only then hands back.
 
 ### The request, not the action
 
@@ -3569,18 +3648,43 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
 - [ ] Gate agent-initiated requests behind a per-Project grant with the Phase 7.6 shape -
   `off`/`draft`/`granted`, default `draft` so a human approves each land - registered as its own
   `land_queue` automation in the enablement DAG and capped by an hourly budget.
+  Its own automation id rather than a second meaning for `session_control`: that one acts on a
+  *session*, this one acts on a *repository*, and they deserve separate switches and separate
+  budgets.
+- [ ] Bind the request to what it was made about: the worktree root and the branch tip OID at
+  request time. A branch that moved before the item runs is a refusal, not a silent land of
+  something else.
 
 ### The pipeline
 
 - [ ] Serialize per trunk: one land in flight per Project primary checkout; further requests queue
-  in arrival order.
+  in arrival order. Verification is measured parallel-safe across worktrees, but `advance` re-runs
+  every remaining item after each land anyway, so concurrency buys only the first item and is left
+  as a config ceiling the store's shape permits rather than as v1 behaviour.
+- [ ] Check preconditions before **every** mutation rather than once at enqueue, and fail closed:
+  the worktree is clean on tracked paths, its branch tip still matches the bound OID, the resolved
+  trunk is the main tree and not a worktree (the `--absolute-git-dir` versus `--git-common-dir`
+  test, never a name comparison), and no live session rooted in that worktree is `working`.
+  The last one is the hazard the pipeline exists inside: reconcile writes into a checkout an agent
+  owns and may be mid-turn writing to, and `delivery_readiness` already answers that question with
+  the same fail-closed predicate `interrupt` gates on.
+- [ ] Hold a busy item in a visible `waiting` state with its reason, retrying on the ordinary tick
+  until a bounded timeout; only the timeout hands back. A wait is a state a human can read, never
+  an invisible sleep.
 - [ ] Reconcile: merge the trunk into the branch inside its worktree. A conflict stops the item,
   records the conflicting paths, and hands the request back to the originating agent session as a
   bounded deterministic template through the Phase 5 queue - a draft by default, promotable by the
   ordinary auto-delivery grant like any other item.
-- [ ] Verify: run the Project's declared verification task inside the worktree under the shipped
-  project-actions trust contract - exact-content approval, revoked by any change to the task file -
-  and record the exact commit OID that passed.
+- [ ] Verify: run the Project's declared verification command inside the worktree through the
+  daemon's own bounded-subprocess runner, under the fingerprint approval above, and record the
+  exact commit OID that passed.
+  Run it verbatim and read its real exit code: never pipe it, never trim it, never wrap it in a
+  shell that can replace the status. A gate command trimmed inside its own pipeline has already
+  shipped a failing suite green in this repository once.
+  Running under the daemon's `base_session_env` rather than an agent shell also removes the known
+  intermittent false failure `.worktree-verify` shows in an agent shell, by construction.
+- [ ] Skip re-verification only for a reconcile that reported nothing to merge. A verified OID
+  still standing is the one case where re-running the gate proves nothing.
 - [ ] Land: fast-forward-only merge in the primary checkout, refusing when the branch moved past
   the verified OID or the checkout is dirty on touched paths. A refusal is a reported failure,
   never a retried force.
@@ -3589,6 +3693,8 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
   reconciles.
 - [ ] Record each step as Tier 0 facts with the request's provenance, so a land is auditable end to
   end: who asked, what verified, which OID moved the trunk.
+- [ ] Keep the queue itself machine-local, like scheduled runs: a land queue committed to a
+  repository would arm itself in every clone and every worktree of it.
 
 ### Boundaries
 
@@ -3598,6 +3704,11 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
 - [ ] A verification failure hands back like a conflict, with the failing output attached. Retries
   are bounded and explicit - at most one, and only when configured - never silent, because a flaky
   gate that loops is worse than one that stops.
+  A retry that fails *differently* from the first attempt stops rather than retrying again: two
+  unlike failures are evidence about the gate, not about the branch.
+- [ ] A handback body is bounded and redacted before it becomes an agent's prompt: the tail of the
+  output at a few KiB through the same `looks_like_secret` gate every other excerpt uses, keyed by
+  the request id as its `correlation_id` so the queue's existing uniqueness index dedupes repeats.
 - [ ] The daemon is the single writer for the trunk merge, which also closes the race two sessions
   otherwise have over the primary checkout's one index.
 - [ ] Kill switches at the config level and per Project, per the completion policy; `off` is inert
@@ -3612,7 +3723,12 @@ project-actions trust contract for repository-owned tasks, and Tier 0 fact captu
   reconciles against the first's result automatically, and the conflicting third is handed back
   with its conflict list while the trunk stays clean.
 - [ ] The refusal paths - divergence, dirty checkout, branch moved after verify, verification
-  failure - are covered by tests, and each reports rather than retries.
+  failure, a trunk that resolves to a worktree - are covered by tests, and each reports rather than
+  retries.
+- [ ] A worktree whose session is mid-turn holds in a readable `waiting` state and lands once that
+  session settles, and only a bounded timeout converts the wait into a handback.
+- [ ] The verify command is refused until its exact bytes are approved, and editing it un-approves
+  it, so no agent can author the command its own land runs.
 - [ ] The grant defaults to `draft`, `off` is inert, and every land carries provenance, audit, and
   budget accounting.
 - [ ] `../design/features/` carries a land-queue feature document, `../CLAUDE.md` routes to it, and
