@@ -337,6 +337,12 @@
   `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
   the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
   an originating session to attribute it to.
+  A request also carries `verify_gate` - `''`, `full`, or `docs_only` - which is **which gate it
+  ran**, decided from the change set's paths against a closed documentation allowlist. It is
+  persisted rather than left in the event trail alone because a skipped gate must be visible
+  wherever the row is drawn: a documentation-only land never enters `verifying`, so its states
+  read identically to one that passed the full gate. `''` means "never classified" and is never
+  collapsed into `full`, at either end.
 - `land_verify_plans` (same database): what a verification gate's steps were the last time these
   **exact bytes passed**, keyed by `(project_root, digest)` with the step names and the run's
   duration. It is what lets a running gate say "step 3 of 7" instead of an opaque "verifying",

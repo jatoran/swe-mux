@@ -23,19 +23,22 @@ A refusal is a reported failure and never a retried force.
 | Step | What it does | Failure |
 |---|---|---|
 | `reconcile` | Merges the trunk ref into the branch, inside the branch's worktree. | A conflict aborts the merge, leaving the worktree exactly as it was found, and hands the request back with the conflicting paths. |
-| `verify` | Runs the repository's declared verification command in the worktree and records the commit OID that passed. | A nonzero exit hands the request back with the output tail. An unapproved or absent gate refuses instead: neither is a branch problem. |
+| `classify` | Matches the paths the trunk would gain against a closed documentation allowlist, and decides which gate the next step runs. | It cannot fail. Every question it cannot answer - an unreadable diff, an unrecognised status or file mode - answers "the full gate". |
+| `verify` | Runs the repository's declared verification command in the worktree and records the commit OID that passed, unless `classify` said the change set was documentation only. | A nonzero exit hands the request back with the output tail. An unapproved or absent gate refuses instead: neither is a branch problem. |
 | `land` | Fast-forwards the trunk in the primary checkout. | Divergence, a dirty checkout, or a branch that moved past the verified OID refuses. |
 
 `verify` is the step that takes minutes, and it reports on itself while it runs.
 See "What a running gate says about itself" below.
+`classify` is the step that decides whether those minutes are spent at all; see "The documentation-only fast path".
 
 A branch already reachable from the trunk skips all three: there is nothing to land, and running the gate would spend three minutes proving it.
 
 After each successful land the next queued item runs from `reconcile` against the new trunk, so one landing never strands another agent's now-stale reconcile.
 That is the `advance` rule, and it is the queue's ordinary behaviour rather than a separate step.
 
-Re-verification is skipped in exactly one case: a reconcile that reported nothing to merge, on a request whose verified OID still stands.
-Re-running the gate there proves nothing.
+Re-verification is skipped in exactly two cases, and both are "the gate would prove nothing", never "the gate is probably unnecessary".
+The first is a reconcile that reported nothing to merge, on a request whose verified OID still stands.
+The second is a change set every path of which is documentation, which is the fast path below.
 
 ## Preconditions, checked before every mutation
 
@@ -90,6 +93,56 @@ The command is resolved from the **Project's config values**, not from the envel
 Handed the envelope, `resolve_worktree_command` looked for `worktree` at the top level, found nothing, and fell through to the script convention - so `[worktree] verify_command` was declared, documented, and silently ignored while a different gate ran.
 The failure had no symptom, because both paths produce a working gate.
 `read_project_config_values` is the named accessor that exists so the mistake cannot be made quietly again.
+
+### The documentation-only fast path
+
+The gate costs the same three or four minutes whether the branch rewrote the scheduler or fixed a typo in a heading, and this repository's own manual triage rule already says that is wrong: docs-only lands immediately (`CLAUDE.md`).
+`classify` is that rule written down deterministically, so the pipeline applies it without anybody deciding anything.
+
+**Matching paths against a closed allowlist stays on the executing side of the design's line, and that is the load-bearing claim of this whole section.**
+The pipeline runs a fixed vocabulary and never decides anything intelligent.
+A total function from a change set to one of two fixed answers is not a decision: it has no model in it, no heuristic, no configuration, and no repository-specific knowledge, and it returns the same answer for the same input forever.
+What *would* cross the line is asking whether a change "looks risky" or "seems safe", and nothing here asks that.
+The test of whether a future addition still belongs is the same one: can it be stated as a path pattern that a human can read off the allowlist and predict, or does it require judging the content of a change?
+
+**The allowlist, exactly.**
+A path is documentation when one of these holds, and is not documentation otherwise:
+
+1. it ends in `.md`, compared case-insensitively, anywhere in the tree; or
+2. it lies inside `.docs/` or `docs/` at the repository root **and** ends in `.md`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, or `.webp`.
+
+The tree prefix in rule 2 is doing real work rather than decorating rule 1.
+A `.png` under `.docs/` is a diagram; a `.png` under `frontend/` or `tests/` may be a fixture a test compares bytes against, so the same suffix is documentation in one place and not in the other.
+The prefix is matched case-sensitively and anchored at the repository root, because `Docs/` is a different directory from `docs/` on the filesystems Git is honest about, and `frontend/.docs/` is not this repository's documentation tree.
+There is deliberately no `.py`, `.ts`, `.toml`, `.json`, or `.sh` at any depth: a script that happens to live under `.docs/` is the doubt case, not the easy one.
+
+**Everything fails closed, in one direction.**
+The full gate is the answer to every question the classifier cannot answer with certainty, and the reasons are recorded rather than swallowed:
+
+- an unreadable diff, and an *empty* one - "there were no paths" is evidence of nothing, and a branch with genuinely nothing to land settles as `already_landed` before ever reaching here;
+- any status other than added, modified, or deleted - a rename or a copy runs the gate **even when both of its paths are documentation**, because a rename is the shape most likely to be reported differently by a differently-configured Git and three minutes is a cheap price for never having to reason about which form arrived;
+- any file mode other than `100644` and `100755`, which is what excludes a submodule gitlink (`160000`) and a symlink (`120000`) by their modes rather than by their names, and a mode *change* on an otherwise ordinary file;
+- a path whose bytes did not decode as UTF-8, because a mojibaked name still ending in `.md` would otherwise pass as markdown on the strength of bytes nobody read;
+- any output shape the raw parser has not seen, including a combined diff.
+
+The change set is read as `git diff --raw -z -M <trunk HEAD>..<branch tip>`, in the trunk's checkout, after the reconcile.
+The raw form rather than `--name-status` because it is the only one that carries the file modes, and the modes are the whole submodule and symlink test.
+Against the trunk's **actual HEAD** rather than the merge base or the comparison ref, because the trunk's HEAD is what `merge --ff-only` moves from and therefore what the trunk really gains.
+After the reconcile those two readings coincide - the trunk is an ancestor of the branch by then, so this *is* "merge base to tip" - and the one that stays correct when they do not is this one: a branch that merged an upstream ref the local trunk has not seen would otherwise have those commits classified as somebody else's problem while landing them here.
+It also means the trunk's own source commits, which the reconcile just merged into the branch, are correctly not the branch's incoming change - classifying the branch's whole history instead would put every documentation branch back on the full gate the moment anybody else landed anything.
+
+**A skipped gate is never silent** (`no silent caps`).
+`classify` writes a `land_events` row on **both** outcomes, before either gate runs, carrying the class, the sentence that says why, the paths it matched, and what disqualified them.
+Recording only the skips would produce a trail that answers "did anything unusual happen" rather than "which gate ran", which is the question an audit is for.
+The `verify` step is still *in* the trail on the fast path, as an outcome of `skipped` rather than as an absent row, because an absent step is exactly the shape a silent skip would take.
+The class is also persisted on the request itself (`verify_gate`) and drawn wherever the row is, for the reason the surface section gives.
+
+**What this trades away, stated rather than discovered later.**
+The rule's premise is that changing documentation cannot change what a gate does, and that premise is not universally true: a repository may have tests that read its own documents.
+This one does - `tests/test_package_map_shape.py` asserts on the shape of `.docs/technical/*/packages*.md` - so a documentation-only branch here *can* put a change on the trunk that the next branch's gate fails on, and that next branch's agent is the one who finds out.
+The manual triage rule in `CLAUDE.md` has always made exactly this bet; the fast path makes the machine make it too, at the same odds and with a durable record of every time it did.
+The mitigations are the fail-closed direction (a needless three-minute gate costs three minutes, a wrongly-skipped one costs an innocent handback) and the audit trail, which is what makes such an incident diagnosable in one read instead of being a mystery about a bystander branch.
+Narrowing the gate to "just the doc tests" is **not** the fix and is not available: the queue may only run bytes a human approved, so a subset is a different command needing its own approval.
 
 ### Editing it
 
@@ -184,7 +237,8 @@ Every step re-checks the repository from scratch, so re-running one is safe and 
 
 ## Audit
 
-`land_events` is the authoritative per-step trail: request, reconcile, verify, land, and every refusal, handback, and orphan, each with its reason and detail.
+`land_events` is the authoritative per-step trail: request, reconcile, classify, verify, land, and every refusal, handback, and orphan, each with its reason and detail.
+`classify` is written on both of its outcomes and `verify` is written even when it was skipped, so "which gate ran" is answerable from the trail alone for every request that reached the gate.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
 
 ## Surface
@@ -197,6 +251,8 @@ Moving the act onto the row fixed that and exposed the other half: what was left
 So the map holds both halves, split by **what each part is a property of**:
 
 - **The row owns the act**, and only the act. Expanding a worktree shows that branch's Land button, its live land state (including the running gate's own reading of itself), a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths, a refusal's reason, which are facts about *this* branch.
+  A land that **skipped** the gate says so here and in the strip's queue and history, because it is the one thing about a finished land that the states cannot show: a documentation-only row goes from merging the trunk straight to fast-forwarding, never passing through `Verifying`, and afterwards reads exactly like a land that passed three minutes of pytest.
+  A *full* gate is deliberately not labelled, because it is what every land does and the states already narrate it; drawing both would put a redundant chip on every row and bury the one that matters.
   The main tree is the trunk these land *onto* and is never offered; a detached worktree states why rather than offering a button that would be refused.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
 
@@ -231,6 +287,8 @@ POST   /api/land/verify-command/approve  {project_id, worktree_root, digest}
 ```
 
 `GET /api/land` attaches `verify_progress` to a row that is `verifying` under this daemon, and `null` to every other row.
+Every row also carries `verify_gate`: `""` until it is classified, then `"full"` or `"docs_only"`.
+The empty value is not collapsed into `"full"`, at either end - a row that claims a classification nothing recorded is the wrong direction for a field whose entire job is making a skip visible - and the client reads any value it does not recognise as `""` rather than as a skip.
 
 `GET /api/land/verify-command` additionally reports the editable half (`config_command`, `config_revision`, `config_status`, `config_path`), which convention applies (`script_name`, `script_present`), and the `plan` a byte-identical passing run recorded, if any.
 
@@ -260,6 +318,7 @@ It has **no target argument**: the checkout comes from the caller's own live cwd
 - Service, pipeline, handbacks: `src/swe_mux/land_queue.py`
 - Durable rows, the audit trail, and recorded gate plans: `src/swe_mux/land_store.py`
 - Precondition reads and their dispositions: `src/swe_mux/land_preconditions.py`
+- The closed documentation allowlist and the raw-diff parser behind it: `src/swe_mux/land_classify.py`
 - The gate, its approval store, and its runner: `src/swe_mux/worktree_verify.py`
 - What a running gate reports about itself: `src/swe_mux/verify_progress.py`
 - Shared command resolution and bounded execution: `src/swe_mux/worktree_exec.py`
@@ -269,6 +328,7 @@ It has **no target argument**: the checkout comes from the caller's own live cwd
 - The retired segment and its migration: `frontend/src/drawerSegments.ts`, `frontend/src/drawerLayout.ts`, `src/swe_mux/keybindings.py`
 - Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, and the strip's summary line: `frontend/src/gitLand.ts`
 - Tests: `tests/test_land_queue.py`, `tests/test_land_api.py`, `tests/test_verify_progress.py`,
+  `tests/test_land_classify.py`,
   `frontend/test/gitLand.test.ts`, `frontend/test/renderer/git-land.spec.ts`
 
 ## Relates to
