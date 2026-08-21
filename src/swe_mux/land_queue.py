@@ -28,7 +28,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,13 @@ DEFAULT_HOURLY_BUDGET = 12
 _BUDGET_WINDOW_SECONDS = 3600.0
 
 GRANTS = ("off", "draft", "granted")
+
+#: Armed replies one land request may spend. One request has exactly one outcome, so
+#: one bounded answer is the whole of what a `request_land` consented to; a second
+#: message to the same session would be an unsolicited write wearing this authority.
+#: Stated as a number and claimed atomically (`LandStore.claim_armed_reply`) rather
+#: than left to the state machine, which happens to allow only one handback today.
+ARMED_REPLIES_PER_REQUEST = 1
 
 
 class LandRefusal(Exception):
@@ -126,6 +133,7 @@ class LandQueueService:
         project_values: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
         comparison_ref: Callable[[str], Awaitable[str | None]] | None = None,
         busy_sessions: Callable[[str], Awaitable[tuple[str, ...]]] | None = None,
+        session_run: Callable[[str], str] | None = None,
         queue_message: Callable[..., Awaitable[Any]] | None = None,
         record_fact: Callable[..., Awaitable[Any]] | None = None,
         draft_request: Callable[..., Awaitable[Any]] | None = None,
@@ -140,6 +148,7 @@ class LandQueueService:
         self._project_values = project_values
         self._comparison_ref = comparison_ref
         self._busy_sessions = busy_sessions
+        self._session_run = session_run
         self._queue_message = queue_message
         self._record_fact = record_fact
         self._draft_request = draft_request
@@ -883,25 +892,36 @@ class LandQueueService:
         """Return the request to the agent that made it, as a bounded template.
 
         Deliberately a message rather than an action: the pipeline has no way to
-        resolve a conflict and no business trying. It rides the Phase 5 queue as a
-        draft by default, so nothing reaches an agent mid-turn without the ordinary
-        readiness and auto-delivery contract applying.
+        resolve a conflict and no business trying. It rides the Phase 5 queue, and
+        every readiness and auto-delivery gate still decides whether it is delivered
+        - all `_reply_arming` adds is that the request's own author does not have to
+        press send for the answer it asked for.
         """
         body = self._handback_body(row, step=step, summary=summary, paths=paths, output=output)
         message_id = ""
+        armed = False
+        arming_reason = "no origin session"
         if self._queue_message is not None and row.get("origin_session_id"):
+            armed, arming_reason = await self._reply_arming(row)
             try:
                 message = await self._queue_message(
                     target_session_id=row["origin_session_id"],
                     body=body,
+                    armed=armed,
+                    solicited_by=row["id"] if armed else None,
                     sender_kind="rule",
                     sender_id="land_queue",
                     sender_label="Land queue",
                     correlation_id=row["correlation_id"] or row["id"],
                 )
                 message_id = str((message or {}).get("id") or "")
+                # Read the arming back off the row rather than reporting what was
+                # asked for: a retry dedupes into the message it already created,
+                # which may have been staged under different conditions.
+                armed = str((message or {}).get("state") or "") == "armed"
             except Exception:  # noqa: BLE001 - a failed handback must not lose the row
                 log.warning("land_handback_failed request_id=%s", row["id"])
+                armed = False
         updated = await self._store.transition(
             row["id"],
             expect=("queued", "waiting", "reconciling", "verifying", "landing"),
@@ -918,12 +938,92 @@ class LandQueueService:
             step=step,
             outcome="handed_back",
             reason=summary,
-            detail={"message_id": message_id, "paths": list(paths)},
+            detail={
+                "message_id": message_id,
+                "paths": list(paths),
+                # Whether the answer will reach its author without a human press, and
+                # why not when it will not. A handback that sat as a draft nobody
+                # delivered is the failure this records: from the row alone it read
+                # exactly like one that arrived (`land-queue.md`).
+                "armed": armed,
+                "arming_reason": arming_reason,
+            },
             now=self._clock(),
         )
         await self._fact(updated, "land_handed_back", {"step": step, "reason": summary})
         await self._emit("land_changed", updated)
         return updated
+
+    async def _reply_arming(self, row: dict[str, Any]) -> tuple[bool, str]:
+        """Whether this request's answer may reach its author without a human press.
+
+        The Phase 5 floor is that a non-human sender's write ends at a human, and it
+        is right about the thing it was written for: an *unsolicited* write into
+        somebody's terminal. A handback is not that. It is the bounded, deterministic,
+        daemon-authored answer to a `request_land` this very session made, addressed
+        to nobody else, saying nothing a model wrote. The request is the consent, so
+        the floor is narrowed exactly as far as the request reaches and no further:
+
+        - **Only the origin.** The target is the request's recorded
+          ``origin_session_id`` and there is no argument that could make it another
+          session, the same way `request_land` has no target argument.
+        - **Only the run that asked.** A session that resumed into a new conversation
+          is a different correspondent; its predecessor's consent is not its own, which
+          is the same run binding every auto-delivery grant carries.
+        - **Only an agent's own request.** An operator's land was not asked for by the
+          session, so it has no origin to answer and no consent to spend.
+        - **Only while the Project still permits landing.** The install stop and the
+          per-Project `land_queue` opt-in are read here rather than trusted from
+          enqueue time: turning the feature off must stop the unattended half too,
+          and it is the switch an operator reaches for.
+        - **Once.** `ARMED_REPLIES_PER_REQUEST`, claimed atomically.
+
+        Refusing arming is never refusing the message: it is still enqueued, as the
+        draft it used to always be, and a human can still send it.
+        """
+        origin_session_id = str(row.get("origin_session_id") or "")
+        if str(row.get("origin") or "operator") != "agent":
+            return False, "the request was not made by a session"
+        if not await self._enabled(row["project_root"]):
+            return False, "the land queue is not enabled for this Project"
+        expected_run = str(row.get("origin_run_id") or "")
+        if self._session_run is None:
+            # A check that could not be made is not a check that passed, which is the
+            # same rule the preconditions run under. Without a way to ask which run the
+            # origin is on, the consent cannot be shown to still belong to it.
+            return False, "the requesting conversation could not be identified"
+        try:
+            live_run = str(self._session_run(origin_session_id) or "")
+        except Exception:  # noqa: BLE001 - an unreadable run is not the run that asked
+            live_run = ""
+        if not expected_run or not live_run:
+            return False, "the requesting conversation could not be identified"
+        if expected_run != live_run:
+            return False, "the requesting conversation was replaced"
+        if not await self._store.claim_armed_reply(
+            row["id"], cap=ARMED_REPLIES_PER_REQUEST
+        ):
+            return False, "this request has already spent its armed reply"
+        return True, "answering this session's own land request"
+
+    async def origin_windows(
+        self, session_ids: Sequence[str], since: float
+    ) -> dict[str, dict[str, Any]]:
+        """Sessions whose own land request is still open, for the reply window.
+
+        The other half of the same consent, and the half without which arming would
+        not be enough: a session that asks to land then goes quiet *by definition* -
+        it is waiting - so the idle lapse closes its grant precisely while the answer
+        is being computed, and the armed handback arrives with nothing to deliver it.
+        This is the same shape `auto-delivery.md` already gives a delivered agent
+        message, with the land request in place of the message: bounded by the
+        exchange's own end (a terminal request opens nothing) and by ``since``.
+        """
+        found = await self._store.open_origin_requests(session_ids, since)
+        return {
+            session_id: {"kind": "land", **entry}
+            for session_id, entry in found.items()
+        }
 
     def _handback_body(
         self,

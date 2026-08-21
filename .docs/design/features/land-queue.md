@@ -209,7 +209,54 @@ A drafted request writes an inert `land_request` observation that appears as a F
 ## The handback
 
 A conflict, a verification failure, or an expired hold returns the request to the originating session through the ordinary Phase 5 prompt queue as `sender_kind: "rule"` - a bounded deterministic template, not a new agent-to-agent path.
-It is a draft unless that session's own auto-delivery grant promotes it, exactly like every other queued item.
+
+### It arrives armed, because the request is the consent
+
+Observed live twice on 2026-08-21: a conflict handback reached its requesting session as an inert **draft**, and the session idled forever unaware its land had bounced, until a human noticed and pressed send.
+Every other part of the queue had worked - the conflict was detected, the worktree was left untouched, the template was written, the row recorded why - and the answer sat in a list nobody was looking at.
+A handback nobody delivers is a handback that did not happen, and the queue's whole promise is that N branches land while the operator touches only the one that genuinely conflicts.
+
+The Phase 5 floor that produced it - **a non-human sender's write ends at a human** - is right about the thing it was written for, and this is not that thing.
+That floor exists for an *unsolicited* write appearing in somebody's terminal: a rule, an observer, a peer agent, arriving unasked.
+A handback is the bounded, deterministic, daemon-authored **answer to a `request_land` this very session made**, addressed to nobody else, containing nothing a model wrote.
+The request is the consent, and it was given by the session that receives the reply.
+
+So the floor is narrowed by exactly the width of the request and no further.
+Five bounds, each of which is the request's own shape rather than a new permission:
+
+- **Only the origin.** The target is the request's recorded `origin_session_id`. There is no argument that could make it another session, the same way `request_land` has no target argument - "an agent is answered about the checkout it asked to land, and no other" is true by construction.
+- **Only the queue's own templates.** No model writes any part of the body, and the only messages this authority can carry are the ones this document describes.
+- **Only an agent's request.** An operator's Land has no originating session, so there is nothing that asked and no consent to spend; it hands back as a draft exactly as before.
+- **Only the run that asked.** A session that resumed, branched, or restarted into a new conversation is a different correspondent, and its predecessor's consent is not its own - the same run binding every auto-delivery grant carries (`auto-delivery.md`).
+- **Once.** One request has one outcome, so one bounded answer is the whole of what it consented to. The cap is a number claimed atomically (`armed_replies`) rather than an inference from the state machine happening to allow only one handback today.
+
+And it is **off with the Project's `land_queue` automation**, read at the moment the handback is written rather than trusted from when the request was accepted.
+An operator who switches landing off mid-flight is switching off the thing they can see, and a request already in the queue must not keep the authority it was granted under.
+There is deliberately no sixth switch: the install stop, the Project opt-in, and `land_grant` already decide whether any of this happens, and `setting-links.md` forbids a second control for one decision.
+
+**Arming is not delivery**, and nothing here is an override.
+The message is eligible for the ordinary auto-delivery controller, which still requires the install master switch, the origin's own grant, head-of-line order, the stability window, delivery readiness, quiet hours, the consecutive cap, and the emergency pause - every one of which can still refuse it.
+And refusing *arming* never refuses the message: it is still enqueued, as the draft it used to always be, for a human to send.
+
+The mechanism is one field on the queue row.
+`solicited_by` names the request being answered, and it is what lets a `rule` sender arrive armed at all (`agent-messaging.md`, `prompt_queue.enqueue`).
+It is recorded rather than inferred, because arming must never be the sender's claim: a row that arrived armed from a non-human sender has to be able to name what asked for it.
+The handback's `land_events` row carries `armed` and, when it is false, the `arming_reason` - a draft nobody delivered otherwise reads, from the trail alone, exactly like an answer that arrived.
+
+**The same authority is available to any bounded reply a session solicited**, and is not land-specific.
+`watch_session` (`mux-mcp.md`) is the other one in the tree: a watch is likewise an explicit request whose single bounded notice goes back to the session that armed it, and it currently lands as the same inert draft for the same reason.
+Wiring it in is one call site - pass `armed=True` and `solicited_by=<watch id>` - under its own equivalents of the bounds above (the watcher is the target by construction, the notice template is fixed, the run must still be the one that armed the watch, and one watch matures into exactly one notice, so its cap is already 1).
+That is deliberately left as a separate change rather than done blind from here.
+
+### A session that asked to land does not lapse while it waits
+
+Arming alone is not enough, and the second half is easy to miss because it fails the same way.
+A session that requests a land goes quiet **by definition** - it is waiting - so its auto-delivery grant lapses on the idle window precisely while the pipeline computes the answer, and the armed handback then arrives with nothing to deliver it.
+The window is 60 minutes by default; a hold runs to 30 and can be configured to 24 hours, and a serial queue of seventeen branches at three minutes each is an hour on its own.
+
+This is the same shape `auto-delivery.md` already gives a delivered agent message, with the land request in place of the message: the session is the waiting half of a bounded exchange it opened itself, except that what owes the answer is the daemon rather than a peer.
+So it is the same mechanism rather than a parallel one - one more source of evidence behind `reply_windows`, reported as `kind: "land"`, holding off the **idle lapse** and nothing else.
+It is bounded the same two ways: a request that reached a terminal state opens no window, because the answer has already been written; and the clock runs from the last step the pipeline actually recorded, so a queue that has stopped moving stops holding the grant.
 
 The body is a fixed template naming the branch, the two roots, the conflicting paths, and the tail of the gate's output.
 No model writes any part of it.
@@ -238,6 +285,7 @@ Every step re-checks the repository from scratch, so re-running one is safe and 
 ## Audit
 
 `land_events` is the authoritative per-step trail: request, reconcile, classify, verify, land, and every refusal, handback, and orphan, each with its reason and detail.
+A handback additionally records whether its message was **armed**, and when it was not, why not - a draft nobody delivered is otherwise indistinguishable in the trail from an answer that arrived, which is the defect the arming rule exists to fix.
 `classify` is written on both of its outcomes and `verify` is written even when it was skipped, so "which gate ran" is answerable from the trail alone for every request that reached the gate.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
 
@@ -336,6 +384,8 @@ It has **no target argument**: the checkout comes from the caller's own live cwd
 - `git.md` - worktree tooling, the main-tree test, and the comparison ref this lands onto.
 - `project-actions.md` - the exact-content approval model, and why an action cannot be the gate.
 - `prompt-queue.md` - the channel a handback rides.
+- `agent-messaging.md` - the arming floor a solicited reply narrows, and where `solicited_by` is defined.
+- `auto-delivery.md` - the controller that delivers an armed handback, and the reply window an open land request holds open.
 - `automation-enablement.md` - the per-Project opt-in and the grant shape.
 - `mux-mcp.md` - the `request_land` tool and its bounds.
 - `tier0-facts.md` - the joinable copy of each step.

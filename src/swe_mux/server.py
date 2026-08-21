@@ -1787,14 +1787,25 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 busy.append(str(record.id))
         return tuple(busy)
 
+    def _land_origin_run(session_id: str) -> str:
+        """The run id the origin session is on now, for the handback's run binding.
+
+        A land request records the run that made it; a session that resumed into a
+        new conversation is a different correspondent, and its predecessor's consent
+        is not its own (`land_queue.py`, `_reply_arming`).
+        """
+        session = sessions.sessions.get(str(session_id))
+        return str(getattr(getattr(session, "record", None), "agent_run_id", "") or "")
+
     async def _land_queue_message(**kwargs: Any) -> dict[str, Any]:
         """The handback, through the ordinary Phase 5 queue and nothing else.
 
         A `rule` sender, so it is a bounded deterministic template rather than a new
-        agent-to-agent path, and it lands as a draft unless the receiving session's
-        own auto-delivery grant promotes it - the same contract as every other queued
-        item. A target that has ended is not an error worth raising: the branch's
-        agent is gone, and the land row already records why it stopped.
+        agent-to-agent path. It arrives armed only when it is the answer to the
+        target's own `request_land` and the service says so; every readiness and
+        auto-delivery gate still decides the send. A target that has ended is not an
+        error worth raising: the branch's agent is gone, and the land row already
+        records why it stopped.
         """
         try:
             return await prompt_queue.enqueue(**kwargs)
@@ -1856,11 +1867,17 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         project_values=_land_project_values,
         comparison_ref=_land_compare_ref,
         busy_sessions=_land_busy_sessions,
+        session_run=_land_origin_run,
         queue_message=_land_queue_message,
         record_fact=tier0.record_fact if tier0 is not None else None,
         draft_request=_land_draft,
     )
     publish(app, land_queue=land_queue_service)
+    # The second half of the same consent: a session that asked to land is the waiting
+    # half of an exchange it opened, so its grant must not lapse while the pipeline is
+    # still computing the answer. Registered here rather than injected at construction
+    # because the controller is built well before the land service exists.
+    auto_delivery.set_solicited_requests(land_queue_service.origin_windows)
 
     # Phase 10.6 Mux assistant: daemon-owned dialogs behind the voice grammar's
     # tier-3 fallback and the workspace chat surface. Reuses the identical

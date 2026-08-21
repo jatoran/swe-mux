@@ -108,10 +108,25 @@
   `technical/frontend/packages.md`
 - Changing gated auto-delivery (the per-conversation default/override, stability window, quiet hours,
   emergency pause, item scheduling/expiry, the consecutive-send cap and what clears it, mid-turn
-  delivery, or the promotion criteria):
+  delivery, the reply window and what counts as evidence for it, or the promotion criteria):
   `design/features/auto-delivery.md`, `design/features/prompt-queue.md`,
   `design/features/delivery-readiness.md`, `design/features/agent-messaging.md`,
+  `design/features/land-queue.md`,
   `design/interfaces.md`, `design/data-model.md`
+- Changing who may stage a queue message **armed** - the Phase 5 floor, `solicited_by`, or
+  which non-human senders the auto-delivery controller will act on:
+  `design/features/agent-messaging.md`, `design/features/auto-delivery.md`,
+  `design/features/land-queue.md`, `design/data-model.md`,
+  `technical/backend/packages/agent-surfaces.md`, `technical/backend/sqlite.md`.
+  The rule the design turns on: arming is **never** the sender's claim, and there are exactly
+  two forms of receiver authorization - the target's standing `accept_agent_messages` grant,
+  and a per-message `solicited_by` naming a request the target itself made. The floor ("a
+  non-human sender's write ends at a human") is about *unsolicited* writes, so answering a
+  request the receiver explicitly made narrows it rather than eroding it - and the narrowing
+  is only legitimate while it stays exactly as wide as the request: the requester alone, a
+  fixed daemon-authored template, the run that asked, a per-request cap, and off with the
+  authority that accepted the request. Arming is still not delivery, and refusing to arm is
+  never refusing the message.
 - Changing agent-to-agent messages, the fleet queue (the app-wide authorship view, served
   by the older-named `/api/queue/mailbox`), sender provenance, or drafted spawn requests:
   `design/features/agent-messaging.md`, `design/features/mux-mcp.md`,

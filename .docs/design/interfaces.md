@@ -595,10 +595,15 @@ how long the conversation had been idle, the window it was measured against, and
 messages it left waiting - because a lapse is the one disable with no act behind it and so
 the one nobody can look up afterwards; fields are individually null on a row that lapsed
 before the audit existed, and the whole block is cleared when the grant returns.
-A row carries `reply_window` while an active exchange is holding that lapse off (the peer,
-the thread, its expiry, and the thread's used/limit message counts); the block authorizes
-nothing, every other gate still decides each send, and the policy block reports the bound as
-`reply_window_minutes`.
+A row carries `reply_window` while an active exchange is holding that lapse off; the block
+authorizes nothing, every other gate still decides each send, and the policy block reports the
+bound as `reply_window_minutes`.
+It names its evidence in `kind`: `"message"` carries the peer, the thread, its expiry and the
+thread's used/limit message counts, while `"land"` carries the open land request holding it -
+`request_id`, `branch`, `state` - with null thread fields, because what bounds that one is the
+request reaching a terminal state rather than a thread budget (`features/land-queue.md`).
+A client reading an unrecognised `kind` treats it as `"message"`, which is the shape every row
+had before the field existed.
 `/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
 Its view also carries a `spawn_requests` list and, since Phase 7.6, a `control_requests` list of drafted interrupt/end approvals awaiting a human, each sorted newest-first and bounded.
 It backs the **fleet queue** surface; the route keeps its original name because renaming a daemon path for a UI rename would be a breaking change bought with nothing.

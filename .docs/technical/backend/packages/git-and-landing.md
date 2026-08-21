@@ -85,6 +85,10 @@ It owns the *lifetime* of a gate's progress reading: created per attempt, seeded
 
 It also owns *which* gate runs: between reconcile and verify it classifies the change set, records the decision on both outcomes, and either enters `verifying` or transitions straight to `landing` with the `verify` step recorded as `skipped`.
 
+And it owns whether the handback may reach its author **unattended** (`_reply_arming`): only the request's own origin session, only on the run that asked, only for an agent's request, only while the Project still permits landing, and once per request.
+The request is the consent, so the narrowing of the Phase 5 floor is exactly as wide as the request and no wider; the decision and its reason are recorded on the handback event, because a draft nobody delivered otherwise reads exactly like an answer that arrived.
+`origin_windows` is the other half - the open-request evidence `auto_delivery.py` reads so an origin's grant does not lapse while the pipeline is still computing the answer.
+
 **Not:** the precondition reads (`land_preconditions.py`), the allowlist itself (`land_classify.py`), durability and serialization (`land_store.py`), the gate's authority (`worktree_verify.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.
 
 ### `land_classify.py`
@@ -110,6 +114,7 @@ It fails closed, and identifies the main tree by `--absolute-git-dir` versus `--
 
 - Conditional state transitions, the per-step audit trail, and restart recovery of orphaned steps.
 - `verify_gate` on the request row, added at schema version 3 through the `PRAGMA table_info` column migration and backfilled to `''` rather than to `full`.
+- `armed_replies` on the request row (schema version 4, same migration), spent through the conditional `claim_armed_reply` so the per-request cap on unattended handbacks is a claim rather than a read-then-write, and `open_origin_requests`, the live-request-per-origin read behind the reply window.
 - The two partial unique indexes that make one-request-per-branch and one-land-per-trunk properties of the schema rather than of the worker.
 - The upserted per-digest record of what a *passing* gate's steps were; a malformed one reads back as no plan, never as a wrong total.
 

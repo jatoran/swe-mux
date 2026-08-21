@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -779,6 +780,129 @@ async def test_a_reply_window_never_restores_a_decision(tmp_path: Path) -> None:
             policy = await harness.store.auto_policy("s1")
             assert policy is not None and not policy["enabled"], reason
             assert policy["disabled_reason"] == reason
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_solicited_reply_delivers_without_a_human_press(
+    harness: Harness,
+) -> None:
+    """The land-queue handback's half of the floor, tested where the floor lives.
+
+    A `rule` sender is otherwise inert by construction - it cannot be staged armed and
+    the controller will not deliver it - which is exactly right for an unsolicited
+    deterministic write and exactly wrong for the bounded answer to a request the
+    target itself made. `solicited_by` is the difference, and it is one field on the
+    row rather than a second standing switch (`land-queue.md`).
+    """
+    await harness.auto.tick()
+    solicited = await harness.service.enqueue(
+        target_session_id="s1",
+        body="your land of alpha hit a conflict",
+        armed=True,
+        sender_kind="rule",
+        sender_id="land_queue",
+        solicited_by="land_req_1",
+    )
+    assert solicited["state"] == "armed"
+    assert solicited["solicited_by"] == "land_req_1"
+    await harness.settle()
+    assert await harness.auto.tick() == [solicited["id"]]
+
+
+@pytest.mark.asyncio
+async def test_an_unsolicited_rule_message_is_still_an_inert_draft(
+    harness: Harness,
+) -> None:
+    """The floor itself, unchanged for everything that did not name a request.
+
+    A deterministic observer writing into a session nobody asked on behalf of is
+    exactly what "a non-human sender's write ends at a human" was written for, and the
+    narrowing must not reach it. Asserted on both halves: the queue refuses to stage it
+    armed, and the controller refuses to deliver it even if something else armed it.
+    """
+    await harness.auto.tick()
+    drafted = await harness.service.enqueue(
+        target_session_id="s1",
+        body="a scheduled prompt",
+        armed=True,
+        sender_kind="rule",
+        sender_id="scheduler",
+    )
+    assert drafted["state"] == "draft"
+    assert drafted["solicited_by"] is None
+
+    await harness.store.set_armed(drafted["id"], True)
+    await harness.settle()
+    assert await harness.auto.tick() == []
+
+
+@pytest.mark.asyncio
+async def test_an_open_land_request_holds_the_idle_lapse_off(tmp_path: Path) -> None:
+    """The other half of the same consent, and the half arming alone cannot supply.
+
+    A session that asked to land goes quiet *by definition* - it is waiting - so the
+    idle window closes its grant precisely while the pipeline computes the answer, and
+    the armed handback then arrives with nothing to deliver it. A land request is the
+    same waiting half of the same bounded exchange as a delivered message, so it is the
+    same evidence, through the same seam.
+    """
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        open_requests: dict[str, dict[str, object]] = {
+            "s1": {"kind": "land", "request_id": "req_1", "branch": "alpha",
+                   "state": "verifying", "updated_at": time.time()}
+        }
+
+        async def source(ids: Sequence[str], since: float) -> dict[str, dict[str, object]]:
+            return {
+                sid: entry
+                for sid, entry in open_requests.items()
+                if sid in ids and float(entry["updated_at"]) >= since  # type: ignore[arg-type]
+            }
+
+        harness.auto.set_solicited_requests(source)
+        await harness.auto.tick()
+
+        window = (await harness.auto.reply_windows(["s1"]))["s1"]
+        assert window["kind"] == "land"
+        assert window["branch"] == "alpha"
+        # No thread, and therefore no thread budget: what bounds this one is the
+        # request reaching a terminal state, and the clock on its last recorded step.
+        assert window["thread_id"] is None
+
+        await _lapse_now(harness, "s1")
+        held = await harness.store.auto_policy("s1")
+        assert held is not None and held["enabled"], "the open land should hold it open"
+
+        # The request finishes; the exchange is over and the ordinary lapse applies.
+        open_requests.clear()
+        assert await harness.auto.reply_windows(["s1"]) == {}
+        await _lapse_now(harness, "s1")
+        lapsed = await harness.store.auto_policy("s1")
+        assert lapsed is not None and not lapsed["enabled"]
+        assert lapsed["disabled_reason"] == LAPSED_REASON
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_solicited_evidence_is_absent_rather_than_asserted(
+    tmp_path: Path,
+) -> None:
+    """A source that raises must not take the ordinary window down with it."""
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+
+        async def broken(ids: Sequence[str], since: float) -> dict[str, dict[str, object]]:
+            raise RuntimeError("the land store is unreadable")
+
+        harness.auto.set_solicited_requests(broken)
+        await harness.auto.tick()
+        await _deliver_agent_message(harness, sender="s1", target="s2", thread_id="t1")
+        window = (await harness.auto.reply_windows(["s1"]))["s1"]
+        assert window["kind"] == "message"
     finally:
         harness.close()
 

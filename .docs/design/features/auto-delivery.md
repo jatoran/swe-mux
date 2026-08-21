@@ -52,7 +52,20 @@ message on behalf of the user; a per-conversation opt-out remains available.
 - **One thing holds the lapse off: an exchange that is owed a reply.** A session whose own
   message was **delivered** to a peer inside `auto_delivery_reply_window_minutes` (30 by
   default, 0 to disable) is not an untouched conversation - it is the waiting half of a
-  bounded exchange, and losing its grant there is what strands the answer. Observed live
+  bounded exchange, and losing its grant there is what strands the answer.
+  **Two kinds of evidence count, and they are the same fact about two pipes.** `kind: "message"`
+  is the delivered agent message above. `kind: "land"` is an open land request this session
+  made (`land-queue.md`) - the same waiting half of the same bounded exchange, except that what
+  owes the answer is the daemon rather than a peer. That second one is where the lapse bites
+  hardest, because a session that asks to land goes quiet *by definition*: it is waiting, so
+  the window closes its grant precisely while the pipeline computes the answer, and the
+  handback then arrives armed with nothing to deliver it. It is bounded by the request rather
+  than by a thread budget - a terminal request opens no window, because the answer has already
+  been written - and its clock runs from the last step the pipeline actually recorded, so a
+  queue that has stopped moving stops holding the grant. The evidence arrives through an
+  injected callable rather than an import, so nothing in the controller knows what a land
+  request is, and a source that cannot be read is absent rather than fatal.
+  Observed live
   2026-08-21: an orchestrator's notify to a finished worker armed and could not deliver, and
   the worker's reply had nowhere to land either. Three things keep this from being a
   widening. It is evidence rather than authority - the master switch, the pause, quiet hours,
@@ -104,7 +117,11 @@ message on behalf of the user; a per-conversation opt-out remains available.
   `blocked` item carries an unresolved refusal — both need a human act first. Messages from
   other agents are eligible unless the receiving session opted *out* of
   `accept_agent_messages`, which rides along with the same per-run default grant
-  (`agent-messaging.md`). The two remain separate switches - arming is authorization,
+  (`agent-messaging.md`). A message carrying `solicited_by` is eligible on the narrower
+  authorization of the receiver having *asked for it* - the land queue's handback is the one
+  that exists (`land-queue.md`) - which is why it needs no second standing switch here: the
+  authority that accepted the request is the one that bounds the answer, and every gate in this
+  document still decides the send. The two remain separate switches - arming is authorization,
   auto-delivery is who presses send - so cycling one never rewrites the other; only the
   conversation default writes both, and only for a run that has none.
 - **It can never override.** The controller cannot pass `confirm`: `send_next` rejects a
@@ -218,7 +235,10 @@ PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 
 Per-session rows carry `lapse` (the audit, present only while the grant is off for idleness,
 with individually-null fields on a row that lapsed before the audit existed) and `reply_window`
-(present while an exchange is holding the lapse off, with the thread's used/limit counts).
+(present while an exchange is holding the lapse off). A `reply_window` carries `kind`:
+`"message"` with the thread's used/limit counts, or `"land"` with the request id, branch, and
+state and null thread fields. A client reading an unrecognised `kind` treats it as `"message"`,
+which is the shape every row had before the field existed.
 The policy block carries `reply_window_minutes` beside the other bounds.
 
 Per-session rows cover live sessions only.
@@ -248,7 +268,10 @@ SQLite, not config, so the emergency pause never waits on a config write.
 
 - `src/swe_mux/auto_delivery.py` — `AutoDeliveryController` (the loop, the gate, quiet
   hours, counters), `_lapse_session` and `lapse_record` (the audit), `reply_windows` (the one
-  thing that holds a lapse off), `promotion_status`.
+  thing that holds a lapse off) and `set_solicited_requests` (its second evidence source),
+  `promotion_status`.
+- `src/swe_mux/land_queue.py` — `origin_windows`, the land half of that evidence, and
+  `_reply_arming`, which decides whether a handback may arrive armed.
 - `src/swe_mux/prompt_queue.py` — `queue_auto_policy` / `queue_auto_counters` tables (schema
   v5 adds the lapse-audit columns), `open_reply_windows` and `pending_message_count` (the two
   derived reads behind the reply window and the audit),
@@ -266,5 +289,8 @@ SQLite, not config, so the emergency pause never waits on a config write.
 
 - `prompt-queue.md` — the queue and the delivery operation this drives.
 - `delivery-readiness.md` — the evidence the gate consumes.
-- `agent-messaging.md` — the other Phase 5 half: who may put messages in a queue.
+- `agent-messaging.md` — the other Phase 5 half: who may put messages in a queue, and the
+  two forms of receiver authorization that let one arrive armed.
+- `land-queue.md` — the solicited reply this delivers, and the open request that holds a
+  grant open while the pipeline computes it.
 - `../development/ROADMAP.md` Phase 5.

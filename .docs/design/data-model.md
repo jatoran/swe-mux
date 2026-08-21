@@ -245,7 +245,12 @@
   `thread_id` (the relay exchange, assigned by the daemon at the head of a chain and
   inherited by every message continuing it — deliberately *not* the correlation id, which is
   a per-sender idempotency key and would dedup a sender's second message in one exchange),
-  `chain_depth` (distinct sessions that have spoken in the thread), `origin_json` (relay path
+  `chain_depth` (distinct sessions that have spoken in the thread),
+  `solicited_by` (the target's *own* request this message is the bounded answer to, and the
+  only thing that lets a non-human sender other than `agent` be staged `armed` — recorded
+  rather than derived, because arming is never the sender's claim and a row that arrived
+  armed has to be able to name what asked for it; `features/agent-messaging.md`),
+  `origin_json` (relay path
   with the most recent sender last / sender Project label and whether the message crossed a
   Project / rule id / Tier 0 fact fingerprints),
   `payload_json` (typed action payload for control-plane drafts), `constraints_json`
@@ -303,7 +308,9 @@
   The counterpart bound has no column at all: whether an exchange is holding a lapse off is
   derived from `queue_messages` (the caller's most recent `sent` agent message, inside the
   reply window, in a thread that still has budget), like thread identity and chain depth, so no
-  second table can disagree with the audit trail.
+  second table can disagree with the audit trail. The second source of that evidence is derived
+  the same way from a different table - a live `land_requests` row this session originated
+  (`features/land-queue.md`) - and neither is stored, for the same reason.
 - `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start or
   reopen an agent session on their own, and their run history.
   A definition is a deferred `SpawnRequest` (`project_id`, `backend`, `profile_id`, `cwd`,
@@ -347,6 +354,10 @@
   A row left in a step state by a daemon that died mid-flight returns to `queued` on restart
   rather than resuming, because every step re-checks the repository from scratch and guessing
   how far it got is the part that is not safe.
+  `armed_replies` counts the unattended handbacks this one request has spent, capped at one and
+  claimed by a conditional `UPDATE`: the consent a `request_land` carries is for the answer to
+  *that* request, so the cap is denominated per request rather than left to the state machine
+  happening to allow one handback (`features/land-queue.md`).
   `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
   the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
   an originating session to attribute it to.

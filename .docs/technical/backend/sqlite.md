@@ -113,6 +113,13 @@ Version 3 added `land_requests.verify_gate`, which is a **column** and therefore
 It is backfilled to `''` - "this row was never classified" - rather than to `'full'`.
 Every pre-migration land did run the full gate, but that is a fact about history rather than about the column, and this is the one field whose entire job is making a *skipped* gate visible: a row asserting a classification nothing recorded is the wrong direction for it.
 
+Version 4 added `land_requests.armed_replies` through the same check, defaulted to 0, which is the truth for every pre-migration row: nothing could arm a handback then.
+It is spent by a conditional `UPDATE … WHERE armed_replies<?` rather than a read-then-write, so the per-request cap on unattended handbacks is a claim two sweeps cannot both win (`../../design/features/land-queue.md`).
+
+`PromptQueueStore` reached schema version 6 with `queue_messages.solicited_by`, added through its own `PRAGMA table_info` migration list and nullable, because every pre-existing row was unsolicited by construction.
+It is the per-message half of the arming floor: a non-human sender other than `agent` may be staged `armed` only when it names the target's own request here (`../../design/features/agent-messaging.md`).
+Stored rather than derived for the reason the floor exists - arming must never be the sender's claim, so a row that arrived armed has to be able to name what asked for it.
+
 `ScheduleStore` is at schema version 2 and migrates by reading `PRAGMA table_info` rather than by trusting a recorded version, so a database written by a newer build, opened by an older one, and opened again still gains each added column exactly once.
 The added columns are `ALTER TABLE ADD COLUMN` rather than a table rebuild because every default reads as the previous behaviour: a row written before the resume action existed *was* a deferred spawn with no target.
 

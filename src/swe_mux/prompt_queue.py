@@ -55,7 +55,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-QUEUE_SCHEMA_VERSION = 5
+QUEUE_SCHEMA_VERSION = 6
 QUEUE_EVENT_LOOP = "prompt-queue-events"
 
 # States exactly per the roadmap. `delivering` is transient but persisted so a
@@ -75,6 +75,13 @@ SENDER_KINDS = ("user", "remote_user", "rule", "agent", "queue_draft")
 # Sender kinds a human is behind. Only these may be created armed by their
 # author, and only these are eligible for user-authored auto-delivery.
 HUMAN_SENDER_KINDS = frozenset({"user", "remote_user"})
+# Non-human sender kinds whose arming is derived from the *receiver* rather than
+# claimed by the sender, so they may be staged armed without a human act. Only
+# `agent` qualifies standing: it carries the target's own `accept_agent_messages`
+# grant, computed in `agent_messaging.py`. Every other non-human sender arms only
+# per message, by naming the target's own request in `solicited_by` — see
+# `enqueue`.
+SELF_ARMING_SENDER_KINDS = frozenset({"agent"})
 CANCEL_KINDS = ("cancelled", "skipped", "revoked", "expired")
 
 # The auto-delivery policy table keys per-session rows by session id and keeps
@@ -201,6 +208,11 @@ CREATE TABLE IF NOT EXISTS queue_messages (
   correlation_id TEXT,
   thread_id TEXT,
   chain_depth INTEGER NOT NULL DEFAULT 0,
+  -- The target's own request that this message is the bounded answer to, and the
+  -- only thing that lets a non-human sender other than `agent` stage a message
+  -- armed. Recorded rather than inferred so the arming is auditable: a row that
+  -- arrived armed from a `rule` sender must be able to name what asked for it.
+  solicited_by TEXT,
   origin_json TEXT,
   payload_json TEXT,
   constraints_json TEXT,
@@ -379,6 +391,7 @@ class PromptQueueStore:
             ("thread_id", "TEXT"),
             ("chain_depth", "INTEGER NOT NULL DEFAULT 0"),
             ("deleted_at", "REAL"),
+            ("solicited_by", "TEXT"),
         )
         for name, declaration in additions:
             if name not in columns:
@@ -500,6 +513,7 @@ class PromptQueueStore:
         correlation_id: str | None = None,
         thread_id: str | None = None,
         chain_depth: int = 0,
+        solicited_by: str | None = None,
         origin: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
         constraints: dict[str, Any] | None = None,
@@ -538,9 +552,9 @@ class PromptQueueStore:
                 "INSERT INTO queue_messages"
                 "(id,target_session_id,target_agent_run_id,target_backend,target_label,"
                 "project_id,position,state,body,revision,sender_kind,sender_id,sender_label,"
-                "origin_session_id,correlation_id,thread_id,chain_depth,origin_json,"
-                "payload_json,constraints_json,created_at,updated_at,armed_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "origin_session_id,correlation_id,thread_id,chain_depth,solicited_by,"
+                "origin_json,payload_json,constraints_json,created_at,updated_at,armed_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     identity,
                     target_session_id,
@@ -558,6 +572,7 @@ class PromptQueueStore:
                     correlation_id,
                     thread_id,
                     max(0, int(chain_depth)),
+                    str(solicited_by) if solicited_by else None,
                     _dumps(origin),
                     _dumps(payload),
                     _dumps(constraints),
@@ -1883,6 +1898,7 @@ class PromptQueueService:
         correlation_id: str | None = None,
         thread_id: str | None = None,
         chain_depth: int = 0,
+        solicited_by: str | None = None,
         origin: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
         constraints: dict[str, Any] | None = None,
@@ -1896,11 +1912,21 @@ class PromptQueueService:
         if sender_kind not in SENDER_KINDS:
             raise QueueError("invalid_sender", "unknown sender kind", status=400)
         constraints = normalize_constraints(constraints)
-        # Only a human's own message may be staged armed by its author. An
-        # agent-authored message may still *arrive* armed, but that is the
-        # receiving session's standing policy granting it (see
-        # `agent_messaging.py`), never the sender's claim.
-        if sender_kind not in HUMAN_SENDER_KINDS and armed and sender_kind != "agent":
+        # Arming is never the sender's claim. A human's own message may be staged
+        # armed by its author; every other kind arms only on the receiver's own
+        # authorization, of which there are exactly two forms. An agent-authored
+        # message arrives armed under the target's standing `accept_agent_messages`
+        # grant (computed in `agent_messaging.py`). Any other non-human sender must
+        # name, in `solicited_by`, the request the *target itself* made that this
+        # message is the bounded deterministic answer to - which is the consent, and
+        # is what stops the floor ("a non-human write ends at a human") from
+        # stranding a reply the target explicitly asked for (`land-queue.md`).
+        if (
+            armed
+            and sender_kind not in HUMAN_SENDER_KINDS
+            and sender_kind not in SELF_ARMING_SENDER_KINDS
+            and not solicited_by
+        ):
             armed = False
         session = self._live_target(target_session_id)
         record = session.record
@@ -1922,6 +1948,7 @@ class PromptQueueService:
             correlation_id=correlation_id,
             thread_id=thread_id,
             chain_depth=chain_depth,
+            solicited_by=solicited_by,
             origin=origin,
             payload=payload,
             constraints=constraints,

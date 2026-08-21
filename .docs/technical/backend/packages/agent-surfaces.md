@@ -63,6 +63,7 @@ The persistent prompt queue.
 - Typed operations: enqueue, edit, arm, move, cancel, delete, retarget, schedule, send-next.
 - Content-erasing delete tombstones and delivery constraints.
 - Auto-policy and proving-counter tables, including the lapse-audit columns and the two derived reads behind them (`pending_message_count`, `open_reply_windows`).
+- The arming floor, and the two forms of receiver authorization that pass it: the standing `accept_agent_messages` grant for an `agent` sender, and `solicited_by` naming the target's own request for anything else. Recorded on the row (schema version 6) rather than inferred, because a message that arrived armed from a non-human sender has to be able to name what asked for it.
 - Event-driven stranding plus startup reconcile, and the delivery audit.
 - Seed-prompt staging (`stage_seed_argv`).
 
@@ -72,7 +73,8 @@ The persistent prompt queue.
 
 The gate on automatic sends: the install master, a default-on bounded grant per live agent run, conversation opt-out, run binding, expiry, the consecutive cap, the stability window over `delivery_state`, quiet hours, the persisted emergency pause, the expiry sweep, and proving-period counters with `promotion_status`.
 Also the idle lapse and its audit (`_lapse_session`, `lapse_record`) and the bounded reply window that is the single thing allowed to hold that lapse off (`reply_windows`).
-The reply window is deliberately *evidence*, not a second authority: it changes whether a grant lapses and nothing else, and it is capped by the exchange's own `max_thread_turns` budget so two agents cannot renew it between themselves.
+The reply window is deliberately *evidence*, not a second authority: it changes whether a grant lapses and nothing else, and it is capped by the exchange's own end - `max_thread_turns` for a message, a terminal request for a land - so nothing can renew it past the conversation that justifies it.
+It draws that evidence from two sources: the queue's own `open_reply_windows`, and a second one registered through `set_solicited_requests` (the land queue's `origin_windows`). The second is a callable rather than an import so nothing here knows what a land request is, and a source that raises is absent rather than fatal.
 
 **Not:** delivery itself - it calls `send_next` and cannot pass `confirm` - readiness evaluation, relay policy or the thread model it borrows the cap from (`agent_messaging.py`), or HTTP.
 

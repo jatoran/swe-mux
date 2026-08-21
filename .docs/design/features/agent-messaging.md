@@ -51,6 +51,29 @@ its own is the default and nothing widens implicitly.
   privileged), `agent` (from the MCP token), `rule`, `queue_draft`. The HTTP route derives
   the human kinds from the transport; the MCP tools derive `agent` from the token. No API
   anywhere accepts a sender argument.
+- **Arming is never the sender's claim, and there are exactly two forms of receiver
+  authorization.** The floor is that a non-human sender's write ends at a human, and it is
+  enforced in the daemon operation (`prompt_queue.enqueue`) rather than in any tool. The
+  **standing** form is the target's `accept_agent_messages` grant, which admits a peer agent
+  and is described below. The **per-message** form is `solicited_by`: the message names a
+  request the *target itself* made, and is the bounded deterministic answer to it. That is a
+  deliberate narrowing of the floor, not an erosion of it, and the distinction it turns on is
+  **solicited versus unsolicited**. What the floor was written for is a write appearing in
+  somebody's terminal unasked - a rule, an observer, a peer. A reply to a request that session
+  explicitly made is the opposite: the consent was given by the receiver, before the message
+  existed, and it reaches exactly as far as the request did.
+  The first user is the land queue's handback (`land-queue.md`), whose live failure is what
+  produced the rule: a `request_land` bounced on a conflict, the answer arrived as an inert
+  draft, and the requesting session idled unaware until a human pressed send. Its five bounds
+  are stated there and are the pattern any later one must match - only the requester, only a
+  fixed daemon-authored template, only the run that asked, capped per request, and off with the
+  authority that accepted the request. `watch_session` (`mux-mcp.md`) is the same shape and is
+  not yet wired in.
+  Arming is still not delivery: an armed solicited reply waits for head-of-line order, delivery
+  readiness, and the receiver's own auto-delivery grant like everything else, and refusing to
+  arm one never refuses the message - it is enqueued as a draft a human can send.
+  `solicited_by` is stored on the row rather than derived, because a message that arrived armed
+  from a non-human sender must be able to name what asked for it.
 - **The receiver decides how much a message is worth.** `accept_agent_messages` is part of
   the per-run default grant a live agent conversation receives (`auto-delivery.md`), so an
   agent-authored message lands `armed` - at which point it still waits for head-of-line
@@ -313,5 +336,6 @@ state that has to be flippable instantly and per session.
 - `mux-mcp.md` — the transport and caller identity.
 - `prompt-queue.md` — the message model and delivery contract.
 - `auto-delivery.md` — the receiver-side machinery that may deliver an armed message.
+- `land-queue.md` - the first solicited reply, and the consent rationale for narrowing the floor.
 - `observations.md` - compatibility storage after the human inbox surface was retired.
 - `../development/CONTROL_PLANE_ROADMAP.md` §7.1–7.2, §16.

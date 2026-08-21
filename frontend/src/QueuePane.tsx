@@ -145,8 +145,10 @@ function describeAuto(status: QueueAutoStatus | null, sessionId: string): string
   const minutes = row.expires_in_s === null ? null : Math.max(0, Math.round(row.expires_in_s / 60))
   const parts = [`${row.sends_remaining} send${row.sends_remaining === 1 ? '' : 's'} left`]
   if (minutes !== null) parts.push(`${minutes} min left`)
-  // Why the grant is still here rather than lapsed: this conversation is owed a reply.
-  if (row.reply_window) parts.push('reply window open')
+  // Why the grant is still here rather than lapsed: this conversation is owed an
+  // answer — by a peer it messaged, or by the land queue it asked to land a branch.
+  if (row.reply_window)
+    parts.push(row.reply_window.kind === 'land' ? 'land in flight' : 'reply window open')
   if (status.quiet_hours.active) parts.push('quiet hours — paused')
   return `on · ${parts.join(' · ')}`
 }
@@ -667,9 +669,21 @@ export function QueuePane({
           )}
           {sessionTargeted && policy?.reply_window && (
             <p class="queue-auto-lapse">
-              Held open by an exchange: this session is owed a reply, so the idle window
-              is not closing its grant yet ({policy.reply_window.thread_messages_used} of{' '}
-              {policy.reply_window.thread_messages_limit} messages used in that thread).
+              {policy.reply_window.kind === 'land' ? (
+                <>
+                  Held open by a land request: this session asked to land{' '}
+                  {policy.reply_window.branch || 'a branch'} and the queue has not
+                  answered yet, so the idle window is not closing its grant.
+                </>
+              ) : (
+                <>
+                  Held open by an exchange: this session is owed a reply, so the idle
+                  window is not closing its grant yet (
+                  {policy.reply_window.thread_messages_used} of{' '}
+                  {policy.reply_window.thread_messages_limit} messages used in that
+                  thread).
+                </>
+              )}
             </p>
           )}
           {auto && !auto.master_enabled && (

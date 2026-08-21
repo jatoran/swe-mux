@@ -40,7 +40,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-LAND_SCHEMA_VERSION = 3
+LAND_SCHEMA_VERSION = 4
 
 #: States a request can occupy. `queued` is accepted-not-started; `waiting` is a
 #: precondition hold that a human can read; the three step states are in-flight; the
@@ -98,6 +98,12 @@ CREATE TABLE IF NOT EXISTS land_requests(
   trunk_before TEXT NOT NULL DEFAULT '',
   landed_oid TEXT NOT NULL DEFAULT '',
   handback_message_id TEXT NOT NULL DEFAULT '',
+  -- How many armed replies this one request has spent. The consent a `request_land`
+  -- carries is for the *answer to that request*, so it is denominated per request and
+  -- claimed atomically here rather than inferred from the row's state: the state
+  -- machine already allows only one terminal handback, and a cap that depends on
+  -- another invariant staying true is not a cap.
+  armed_replies INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
   started_at REAL,
@@ -194,6 +200,7 @@ def _row_to_request(row: sqlite3.Row) -> dict[str, Any]:
         "trunk_before": str(row["trunk_before"] or ""),
         "landed_oid": str(row["landed_oid"] or ""),
         "handback_message_id": str(row["handback_message_id"] or ""),
+        "armed_replies": int(row["armed_replies"] or 0),
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
         "started_at": row["started_at"],
@@ -258,6 +265,12 @@ class LandStore:
         if columns and "verify_gate" not in columns:
             self._db.execute(
                 "ALTER TABLE land_requests ADD COLUMN verify_gate TEXT NOT NULL DEFAULT ''"
+            )
+        if columns and "armed_replies" not in columns:
+            # Zero for every pre-migration row, which is the truth: none of them could
+            # have spent an armed reply, because nothing could arm one.
+            self._db.execute(
+                "ALTER TABLE land_requests ADD COLUMN armed_replies INTEGER NOT NULL DEFAULT 0"
             )
 
     def _open(self) -> sqlite3.Connection:
@@ -661,5 +674,73 @@ class LandStore:
                 (origin_session_id, since),
             ).fetchone()
             return int(row["n"] or 0)
+
+        return await self._run(op)
+
+    async def claim_armed_reply(self, request_id: str, *, cap: int) -> bool:
+        """Spend one of this request's armed replies, or answer that none are left.
+
+        A conditional UPDATE rather than a read-then-write, for the same reason every
+        other transition here is one: two sweeps racing on one row must produce one
+        claim, and a caller that loses must be told so rather than proceeding on a
+        stale count.
+        """
+        if cap <= 0:
+            return False
+
+        def op() -> bool:
+            cursor = self._db.execute(
+                "UPDATE land_requests SET armed_replies=armed_replies+1"
+                " WHERE id=? AND armed_replies<?",
+                (request_id, int(cap)),
+            )
+            self._db.commit()
+            return cursor.rowcount == 1
+
+        return await self._run(op)
+
+    async def open_origin_requests(
+        self, session_ids: Sequence[str], since: float
+    ) -> dict[str, dict[str, Any]]:
+        """The live land request each of these sessions is currently awaiting.
+
+        The land half of the bounded reply window (`auto-delivery.md`): a session that
+        asked to land and is waiting for the pipeline's answer is the waiting half of an
+        exchange it opened itself, not an untouched conversation. Derived from the
+        request rows rather than tracked separately, exactly like the message window is
+        derived from the queue, so it cannot disagree with the audit trail.
+
+        ``since`` is measured against ``updated_at`` - the last step the pipeline
+        actually recorded - so a queue that is moving holds the window and a row nothing
+        has touched for the whole window does not. Terminal rows are excluded: the answer
+        has already been written by then, and holding a grant open past it would be a
+        window with no exchange in it.
+        """
+        ids = [str(session_id) for session_id in session_ids if str(session_id)]
+        if not ids:
+            return {}
+
+        def op() -> dict[str, dict[str, Any]]:
+            placeholders = ",".join("?" * len(ids))
+            states = ",".join("?" * len(ACTIVE_STATES))
+            rows = self._db.execute(
+                "SELECT origin_session_id, id, branch, state, project_root, origin_run_id,"
+                " MAX(updated_at) updated_at FROM land_requests"
+                f" WHERE origin_session_id IN ({placeholders})"
+                f" AND state IN ({states}) AND updated_at>=?"
+                " GROUP BY origin_session_id",
+                (*ids, *ACTIVE_STATES, since),
+            ).fetchall()
+            return {
+                str(row["origin_session_id"]): {
+                    "request_id": str(row["id"]),
+                    "branch": str(row["branch"] or ""),
+                    "state": str(row["state"]),
+                    "project_root": str(row["project_root"] or ""),
+                    "origin_run_id": str(row["origin_run_id"] or ""),
+                    "updated_at": float(row["updated_at"] or 0.0),
+                }
+                for row in rows
+            }
 
         return await self._run(op)

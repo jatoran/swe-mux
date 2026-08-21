@@ -33,8 +33,11 @@ bound the roadmap requires around that decision:
   the one nobody can look up afterwards. The single exception to the lapse is a
   session that is *mid-exchange and owed a reply*
   (``auto_delivery_reply_window_minutes``): it is bounded by its own clock and by
-  the exchange's message budget, it holds off the lapse and nothing else, and
-  every other gate below still decides each send.
+  the exchange's own end, it holds off the lapse and nothing else, and
+  every other gate below still decides each send. Two things count as an
+  exchange, and they are the same fact about two pipes: a delivered message
+  awaiting a peer's reply, and an open land request awaiting the daemon's
+  bounded answer (`land-queue.md`).
 - **Fail closed and stay stopped.** A failed delivery — where the PTY write may
   or may not have landed — disables the session's grant and requires human
   reconciliation. It never retries blindly.
@@ -53,7 +56,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from typing import Any
 
 from .background_tasks import background
@@ -171,6 +174,14 @@ class AutoDeliveryController:
         self._policy_lock = asyncio.Lock()
         self._ticks = 0
         self.last_error = ""
+        #: A second source of open-exchange evidence, injected after construction
+        #: because the service that owns it is built later (`server.py`). Same
+        #: contract as the queue-derived one: given session ids and a floor
+        #: timestamp, answer which of them are mid-exchange. See
+        #: `set_solicited_requests`.
+        self._solicited_requests: (
+            Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]] | None
+        ) = None
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -446,6 +457,20 @@ class AutoDeliveryController:
 
     # -- the bounded reply window ---------------------------------------------
 
+    def set_solicited_requests(
+        self,
+        source: Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]]
+        | None,
+    ) -> None:
+        """Register the second source of open-exchange evidence.
+
+        Injected rather than constructed because the land queue is built after this
+        controller (`server.py`), and imported by neither direction: the controller
+        asks a callable the same question it asks the queue store, so nothing here
+        knows what a land request is.
+        """
+        self._solicited_requests = source
+
     async def reply_windows(
         self, session_ids: Collection[str]
     ) -> dict[str, dict[str, Any]]:
@@ -457,6 +482,15 @@ class AutoDeliveryController:
         it is the half of a bounded exchange that is waiting. Losing the grant
         there is what strands the answer, which is the failure this exists for.
 
+        There are two kinds of evidence, and they are the same fact about two
+        pipes. ``kind="message"`` is a delivered agent message awaiting a reply.
+        ``kind="land"`` is a land request this session made that the daemon has
+        not answered yet (`land-queue.md`) - the same waiting half of the same
+        bounded exchange, except that what owes the answer is the daemon rather
+        than a peer, and a session that asked to land goes quiet *by definition*,
+        so this is the case where the lapse bites hardest. A message window wins
+        when a session somehow has both, because it carries the thread budget.
+
         Three things keep it from being a widening:
 
         - It is evidence, not authority. Every other gate — the master switch,
@@ -464,13 +498,16 @@ class AutoDeliveryController:
           window, delivery readiness, the consecutive-send cap — is unchanged and
           still decides each send.
         - It is capped by the exchange's own budget. A thread that has spent
-          ``agent_message_max_thread_turns`` opens no window, so the window can
-          never outlive the conversation that justifies it.
-        - It expires on the clock from the moment the message landed, not from
-          the moment anyone looks.
+          ``agent_message_max_thread_turns`` opens no window, and a land request
+          that reached a terminal state opens none either - so neither can outlive
+          the conversation that justifies it.
+        - It expires on the clock from the moment the message landed, or from the
+          last step the land pipeline recorded — never from the moment anyone
+          looks. A queue that has stopped moving stops holding the grant.
 
         Staging a message opens nothing: an armed message nothing ever delivered
-        is the symptom, not the evidence.
+        is the symptom, not the evidence. The land equivalent is the same rule:
+        the request must be live, and a finished one has already been answered.
         """
         ids = [str(session_id) for session_id in session_ids]
         minutes = int(self.config.auto_delivery_reply_window_minutes or 0)
@@ -478,9 +515,31 @@ class AutoDeliveryController:
             return {}
         span = minutes * 60
         now = time.time()
+        windows: dict[str, dict[str, Any]] = {}
+        if self._solicited_requests is not None:
+            try:
+                solicited = await self._solicited_requests(ids, now - span)
+            except Exception:  # noqa: BLE001 - evidence that cannot be read is absent
+                log.warning("auto_delivery_solicited_windows_unreadable")
+                solicited = {}
+            for session_id, entry in solicited.items():
+                windows[str(session_id)] = {
+                    "kind": "land",
+                    "thread_id": None,
+                    "peer_session_id": None,
+                    "sent_at": float(entry.get("updated_at") or 0.0),
+                    "expires_at": float(entry.get("updated_at") or 0.0) + span,
+                    "window_minutes": minutes,
+                    "thread_messages_used": 0,
+                    "thread_messages_limit": 0,
+                    **{
+                        key: entry[key]
+                        for key in ("request_id", "branch", "state")
+                        if key in entry
+                    },
+                }
         found = await self.queue.store.open_reply_windows(ids, now - span)
         max_turns = int(self.config.agent_message_max_thread_turns)
-        windows: dict[str, dict[str, Any]] = {}
         for session_id, entry in found.items():
             thread_id = str(entry.get("thread_id") or "")
             if not thread_id:
@@ -490,7 +549,10 @@ class AutoDeliveryController:
             turns = await self.queue.store.thread_message_count(thread_id)
             if turns >= max_turns:
                 continue
+            # A message window replaces a land one for the same session: it is the
+            # narrower of the two, being additionally bounded by the thread budget.
             windows[session_id] = {
+                "kind": "message",
                 **entry,
                 "expires_at": float(entry.get("sent_at") or 0.0) + span,
                 "window_minutes": minutes,
@@ -855,7 +917,15 @@ class AutoDeliveryController:
             self._stability.pop(session_id, None)
             return None
         sender_kind = str(head.get("sender_kind") or "user")
-        if sender_kind not in HUMAN_SENDER_KINDS:
+        if sender_kind not in HUMAN_SENDER_KINDS and not head.get("solicited_by"):
+            # A non-human message is eligible on the receiver's own authorization,
+            # and there are two forms of it. The standing form is the target's
+            # `accept_agent_messages` grant, which admits a peer agent. The other is
+            # per message: `solicited_by` names a request this session itself made,
+            # and the daemon's bounded answer to it is what the session is waiting
+            # for - so it is admitted here without a second standing switch, and the
+            # authority that bounds it is the one that accepted the request
+            # (`land-queue.md`). Every gate below still decides the send.
             if sender_kind != "agent" or not policy.get("accept_agent_messages"):
                 self._stability.pop(session_id, None)
                 return None

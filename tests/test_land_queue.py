@@ -53,7 +53,13 @@ class FakeQueue:
 
     async def __call__(self, **kwargs: Any) -> dict[str, Any]:
         self.messages.append(kwargs)
-        return {"id": f"msg_{len(self.messages)}"}
+        # Mirrors `PromptQueueStore.create_message`: the state is what arming
+        # produced, and the service reads it back rather than trusting what it asked
+        # for, because a correlated retry dedupes into an already-staged row.
+        return {
+            "id": f"msg_{len(self.messages)}",
+            "state": "armed" if kwargs.get("armed") else "draft",
+        }
 
 
 @pytest.fixture
@@ -116,6 +122,8 @@ def build_service(
     busy: tuple[str, ...] = (),
     config: Any = None,
     grant: str = "granted",
+    automations: set[str] | None = None,
+    session_runs: dict[str, str] | None = None,
 ) -> tuple[LandQueueService, LandStore, VerifyApprovalStore]:
     store = LandStore(tmp_path / "land.sqlite3")
     approvals = VerifyApprovalStore(tmp_path / "data")
@@ -126,8 +134,15 @@ def build_service(
     async def project_values(_root: str) -> dict[str, Any]:
         return {}
 
+    # Mutable so a test can switch the Project off *mid-flight*, which is the case
+    # that matters: the gate is re-read when the handback is written, not trusted
+    # from the moment the request was accepted.
+    enabled = {"land_queue"} if automations is None else automations
+
     async def automation_gate(_root: str) -> frozenset[str]:
-        return frozenset({"land_queue"})
+        return frozenset(enabled)
+
+    runs = {"sess_1": "run_1"} if session_runs is None else session_runs
 
     service = LandQueueService(
         store=store,
@@ -138,6 +153,7 @@ def build_service(
         project_values=project_values,
         comparison_ref=lambda _root: _resolved("main"),
         busy_sessions=busy_sessions,
+        session_run=lambda session_id: runs.get(session_id, ""),
         queue_message=queue,
     )
     return service, store, approvals
@@ -1217,5 +1233,234 @@ async def test_the_hourly_budget_bounds_a_runaway_requester(
                 origin_session_id="sess_1",
             )
         assert caught.value.code == "budget_exhausted"
+    finally:
+        store.close()
+
+
+# -- the handback's arming --------------------------------------------------
+#
+# The defect these cover, observed live twice on 2026-08-21: a conflict handback
+# reached the requesting session as a `rule`-sender DRAFT, and the requester idled
+# forever unaware its land had bounced, until a human pressed send. The narrowing is
+# stated in `land-queue.md`: the request is the consent, and it reaches exactly as far
+# as the request did and no further.
+
+
+async def _bounced(
+    tmp_path: Path,
+    trunk: Path,
+    *,
+    queue: FakeQueue,
+    origin: str = "agent",
+    origin_session_id: str = "sess_1",
+    origin_run_id: str = "run_1",
+    **service_kwargs: Any,
+) -> tuple[dict[str, Any], LandStore]:
+    """One land that hands back, with the conflict already arranged."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "shared.txt", "branch\n", "branch edit")
+    commit(trunk, "shared.txt", "trunk\n", "trunk edit")
+    service, store, approvals = build_service(
+        tmp_path, trunk, queue=queue, **service_kwargs
+    )
+    approve(approvals, worktree, trunk)
+    row = await service.request(
+        project_id="p",
+        project_root=str(trunk),
+        worktree_root=str(worktree),
+        origin=origin,
+        origin_session_id=origin_session_id,
+        origin_run_id=origin_run_id,
+    )
+    results = await service.tick()
+    assert results[0]["state"] == "handed_back"
+    return row, store
+
+
+async def test_a_handback_arms_for_the_session_that_asked(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The whole point: the answer to a `request_land` needs no human press.
+
+    Armed *and* naming the request that solicited it, because arming is never the
+    sender's claim - `solicited_by` is what the queue's floor reads before it lets a
+    `rule` sender arrive armed at all (`prompt_queue.enqueue`).
+    """
+    queue = FakeQueue()
+    row, store = await _bounced(tmp_path, trunk, queue=queue)
+    try:
+        assert queue.messages[0]["target_session_id"] == "sess_1"
+        assert queue.messages[0]["armed"] is True
+        assert queue.messages[0]["solicited_by"] == row["id"]
+        assert queue.messages[0]["sender_kind"] == "rule"
+        handed = next(
+            item
+            for item in await store.events(row["id"])
+            if item["outcome"] == "handed_back"
+        )
+        assert handed["detail"]["armed"] is True
+    finally:
+        store.close()
+
+
+async def test_an_operator_land_hands_back_as_a_draft(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """No session asked, so there is no consent to spend.
+
+    The operator's own land is started from a surface a human is already looking at;
+    nothing about it authorizes an unattended write into a terminal.
+    """
+    queue = FakeQueue()
+    row, store = await _bounced(tmp_path, trunk, queue=queue, origin="operator")
+    try:
+        assert queue.messages[0]["armed"] is False
+        assert queue.messages[0]["solicited_by"] is None
+        handed = next(
+            item
+            for item in await store.events(row["id"])
+            if item["outcome"] == "handed_back"
+        )
+        assert handed["detail"]["arming_reason"] == "the request was not made by a session"
+    finally:
+        store.close()
+
+
+async def test_the_project_switch_kills_the_unattended_handback(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Turning the land queue off for the Project stops the unattended half too.
+
+    Read at handback time rather than trusted from enqueue time: an operator who
+    switches it off mid-flight is switching off the thing they can see, and a request
+    already in the queue would otherwise keep the authority it was granted under.
+    The message is still enqueued - refusing arming never refuses the message.
+    """
+    queue = FakeQueue()
+    automations = {"land_queue"}
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "shared.txt", "branch\n", "branch edit")
+    commit(trunk, "shared.txt", "trunk\n", "trunk edit")
+    service, store, approvals = build_service(
+        tmp_path, trunk, queue=queue, automations=automations
+    )
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        automations.clear()
+        assert (await service.tick())[0]["state"] == "handed_back"
+        assert len(queue.messages) == 1
+        assert queue.messages[0]["armed"] is False
+        handed = next(
+            item
+            for item in await store.events(row["id"])
+            if item["outcome"] == "handed_back"
+        )
+        assert "not enabled for this Project" in handed["detail"]["arming_reason"]
+    finally:
+        store.close()
+
+
+async def test_a_replaced_conversation_does_not_inherit_the_consent(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A session that resumed into a new run is a different correspondent.
+
+    The same run binding every auto-delivery grant carries: the predecessor asked, so
+    the predecessor consented, and the conversation reading that terminal now did not.
+    """
+    queue = FakeQueue()
+    row, store = await _bounced(
+        tmp_path, trunk, queue=queue, session_runs={"sess_1": "run_2"}
+    )
+    try:
+        assert queue.messages[0]["armed"] is False
+        handed = next(
+            item
+            for item in await store.events(row["id"])
+            if item["outcome"] == "handed_back"
+        )
+        assert handed["detail"]["arming_reason"] == "the requesting conversation was replaced"
+    finally:
+        store.close()
+
+
+async def test_an_unaskable_run_fails_closed(tmp_path: Path, trunk: Path) -> None:
+    """A check that could not be made is not a check that passed."""
+    queue = FakeQueue()
+    row, store = await _bounced(tmp_path, trunk, queue=queue, session_runs={})
+    try:
+        assert queue.messages[0]["armed"] is False
+        handed = next(
+            item
+            for item in await store.events(row["id"])
+            if item["outcome"] == "handed_back"
+        )
+        assert "could not be identified" in handed["detail"]["arming_reason"]
+    finally:
+        store.close()
+
+
+async def test_one_request_spends_exactly_one_armed_reply(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The cap is a number claimed atomically, not an inference from the state machine.
+
+    Asserted against the store directly because the pipeline reaches a terminal state
+    after one handback: the cap exists so a second bounded template - a completion
+    notice, a future step - cannot quietly wear this authority twice.
+    """
+    queue = FakeQueue()
+    row, store = await _bounced(tmp_path, trunk, queue=queue)
+    try:
+        current = await store.get(row["id"])
+        assert current is not None
+        assert current["armed_replies"] == 1
+        assert await store.claim_armed_reply(row["id"], cap=1) is False
+    finally:
+        store.close()
+
+
+async def test_an_open_request_is_reply_window_evidence_and_a_finished_one_is_not(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The other half of the consent, read the way auto-delivery reads it.
+
+    A session that asked to land goes quiet by definition, so its grant lapses exactly
+    while the pipeline computes the answer and the armed handback arrives with nothing
+    to deliver it. A terminal request opens no window: the answer is already written.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk, queue=FakeQueue())
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        open_now = await service.origin_windows(["sess_1", "sess_2"], 0.0)
+        assert open_now["sess_1"]["kind"] == "land"
+        assert open_now["sess_1"]["request_id"] == row["id"]
+        assert "sess_2" not in open_now
+        # A floor above the row's own `updated_at` is a queue that has stopped moving.
+        assert await service.origin_windows(["sess_1"], time.time() + 60) == {}
+
+        assert (await service.tick())[0]["state"] == "landed"
+        assert await service.origin_windows(["sess_1"], 0.0) == {}
     finally:
         store.close()
