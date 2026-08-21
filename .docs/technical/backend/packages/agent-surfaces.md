@@ -22,7 +22,8 @@ Reads:
 - `watch_session`, the one read that matures into a message: it reads a sibling's state and stages a single deterministic notice into the *caller's own* queue when that sibling settles, ends, or the caller's timeout elapses.
   Declared a read because it addresses nobody and actuates nothing; the bounds and the fire rules live in `session_watch.py`.
 
-Writes, all thin callers into services that hold the authority: `notify`, `request_spawn`, `run_action`, `interrupt`, `end_session`, and `request_land` - whose worktree is read from the caller's own live cwd rather than accepted as an argument.
+Writes, all thin callers into services that hold the authority: `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, and `request_land` - whose worktree is read from the caller's own live cwd rather than accepted as an argument.
+`notify(dry_run=true)` is the one call on that list that writes nothing, and it is not counted as a write: checking before you send must not read as authority spent.
 
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
 
@@ -78,7 +79,7 @@ The persistent prompt queue.
 - The durable message store: states, strict head-of-line, revisions, sender provenance, correlation, relay depth.
 - Typed operations: enqueue, edit, arm, move, cancel, delete, retarget, schedule, send-next.
 - Content-erasing delete tombstones and delivery constraints.
-- Auto-policy and proving-counter tables.
+- Auto-policy and proving-counter tables, including the lapse-audit columns and the two derived reads behind them (`pending_message_count`, `open_reply_windows`).
 - Event-driven stranding plus startup reconcile, and the delivery audit.
 - Seed-prompt staging (`stage_seed_argv`).
 
@@ -87,13 +88,15 @@ The persistent prompt queue.
 ### `auto_delivery.py`
 
 The gate on automatic sends: the install master, a default-on bounded grant per live agent run, conversation opt-out, run binding, expiry, the consecutive cap, the stability window over `delivery_state`, quiet hours, the persisted emergency pause, the expiry sweep, and proving-period counters with `promotion_status`.
+Also the idle lapse and its audit (`_lapse_session`, `lapse_record`) and the bounded reply window that is the single thing allowed to hold that lapse off (`reply_windows`).
+The reply window is deliberately *evidence*, not a second authority: it changes whether a grant lapses and nothing else, and it is capped by the exchange's own `max_thread_turns` budget so two agents cannot renew it between themselves.
 
-**Not:** delivery itself - it calls `send_next` and cannot pass `confirm` - readiness evaluation, or HTTP.
+**Not:** delivery itself - it calls `send_next` and cannot pass `confirm` - readiness evaluation, relay policy or the thread model it borrows the cap from (`agent_messaging.py`), or HTTP.
 
 ### `agent_messaging.py`
 
 Relay policy for agent-authored messages: requested Project scope re-resolved through `project_scope.py`, size, per-origin budget, target backlog, propagation depth, per-thread turn budget, ring detection, kill switch, and expiry.
-Also sender-only message and request status, inert `spawn_request` drafts, and the Fleet Queue projection over messages plus targetless spawn approvals and drafted `control_request` interrupt and end rows.
+Also the `dry_run` projection (every bound run, nothing staged, no budget spent), sender-attributed `revoke` of a still-undelivered message, sender-only message and request status, inert `spawn_request` drafts, and the Fleet Queue projection over messages plus targetless spawn approvals and drafted `control_request` interrupt and end rows.
 
 **Not:** delivery, spawning (approval is a `server.py` human act), session-control authority (`session_control.py`), or MCP protocol.
 

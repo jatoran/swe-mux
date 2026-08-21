@@ -42,6 +42,21 @@ declares one — a `FOREIGN KEY ... ON DELETE CASCADE` added today would be sile
   derivative data — native transcripts remain authoritative — while a malformed file used to
   raise out of store construction and take the daemon down at startup, which under the
   desktop shell presents as an app that simply refuses to come up.
+- **The probe is answered once per database file per process** (`sqlite_store.verify_database`,
+  warmed by `prepare_database`). `PRAGMA quick_check` reads every page, so its cost is the size
+  of the file, and eleven stores share `mux.db`. Measured 2026-08-21: 11.5s per pass against a
+  2.73 GB `mux.db`, so probing per *store* spent ~126s of every daemon start re-answering a
+  question about a file that had not changed between the answers — the largest single component
+  of a measured 226.6s startup, and invisible, because a passing probe logs nothing.
+  The verdict is a property of the file rather than of the store, so caching it is the stricter
+  reading, not the looser one: after a corrupt file is quarantined and recreated, the later
+  stores were probing a *different* file from the one the first store judged. The replacement is
+  recorded as healthy explicitly (`_remember_integrity`), because a cached "corrupt" verdict
+  there would quarantine the fresh file too.
+  The daemon pays for it under its own startup phase, `database-integrity`, on a worker thread
+  (`asyncio.to_thread`) so the health endpoint and the startup watchdog keep answering while it
+  runs, and logs the elapsed seconds and the file size whenever it exceeds a second — this cost
+  grows with the database and is meant to stay visible as it does.
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.
@@ -90,9 +105,13 @@ That is what makes a fire idempotent across a daemon restart, which no in-memory
 `land_requests_inflight(project_root) WHERE state IN (<running states>)` is the stronger of the two: it makes "one land at a time per trunk" a property of the schema, so the losing `UPDATE` into a step state raises `IntegrityError` even if two workers both concluded they should proceed.
 A partial index is what allows both: the same `(project_root, branch)` pair recurs freely across finished requests, and only the live ones are constrained.
 
-`LandStore` is at schema version 2, which added `land_verify_plans(project_root, digest)` - what a verification gate's steps were the last time those exact bytes passed, so a running one can honestly report "step 3 of 7".
+`LandStore` reached schema version 2 with `land_verify_plans(project_root, digest)` - what a verification gate's steps were the last time those exact bytes passed, so a running one can honestly report "step 3 of 7".
 It is a new table under `CREATE TABLE IF NOT EXISTS` rather than a column migration, so an older database gains it on the next open and a database written by a newer build loses nothing when an older one opens it.
 The row is upserted, never accumulated, and only a *passing* run writes one (`../../design/features/land-queue.md` explains why a failing run's step list would poison the prediction).
+
+Version 3 added `land_requests.verify_gate`, which is a **column** and therefore needs the `PRAGMA table_info` check that `LandStore._migrate` runs: `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so a column added to the schema string alone reaches a fresh install and no other.
+It is backfilled to `''` - "this row was never classified" - rather than to `'full'`.
+Every pre-migration land did run the full gate, but that is a fact about history rather than about the column, and this is the one field whose entire job is making a *skipped* gate visible: a row asserting a classification nothing recorded is the wrong direction for it.
 
 `ScheduleStore` is at schema version 2 and migrates by reading `PRAGMA table_info` rather than by trusting a recorded version, so a database written by a newer build, opened by an older one, and opened again still gains each added column exactly once.
 The added columns are `ALTER TABLE ADD COLUMN` rather than a table rebuild because every default reads as the previous behaviour: a row written before the resume action existed *was* a deferred spawn with no target.

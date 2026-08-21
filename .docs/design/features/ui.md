@@ -1961,6 +1961,13 @@ Its rules, and what each one is defending:
   calls `reset`, which discards whatever the first had pending. Two *devices* are safe by
   contrast (separate queues, separate revisions, so the second write 409s into the ordinary
   conflict banner); only same-browser duplication is silent.
+  Two *views* of one note - here and on a phone - are safe for a different reason, and it is not
+  the revision check: each side rebases onto the revision it was just handed, so a save loop
+  between them is made of individually legitimate writes. What stops it is that a commit is only
+  a save when the content changed and a human touched this editor (`project-resources.md`,
+  `noteEditGuard.ts`); when neither is true and the writes keep coming, the note reports
+  `Autosave paused` in its header with a banner offering **Resume autosave** or
+  **Reload from disk**, and typing anywhere in it resumes immediately.
   Selecting a note for the open drawer makes its pane leaf render an "open in the panel" placeholder.
   Placing that note in a pane closes the drawer before the pane editor takes ownership, while retaining the remembered Notes sub-tab.
 - **The selection and temporary ownership are device-local and never touch the layout.** `project.layout` is persisted

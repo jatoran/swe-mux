@@ -13,6 +13,8 @@ Neither surface is a conversation, and the daemon owns every safety decision.
 Its drawer rendering follows focus, and its `queue:` pane leaf pins a target.
 Delete uses an inline second-click confirmation, applies to every non-delivering visible state, and is also available from `FleetQueue`.
 `QueuePane` is the only surface carrying the **install-wide** brakes - pause-all, report-unsafe, proving counters - because it is the only queue surface that delivers and the one a person is already looking at when they decide delivery must stop.
+Its `auto:` strip is also where a grant explains itself, for the same reason: a lapsed grant states the numbers behind the lapse (idle for how long, under what window, how many messages left waiting) and a grant held open by a live exchange says so, since neither is inferable from "off" or "on".
+The idle window itself is a *value* rather than a switch, so the lapse notice links to Settings through `queue.grantWindow` and never offers a grant - `GrantGate` remains reserved for the install master (`../../../design/features/setting-links.md`).
 
 `FleetQueue` is application-scoped and a **modal**: explicit authorship partition (opening on non-human), daemon-side Project and session filters, cross-target provenance and delivery state, revoke, and delete.
 It delivers nothing and owns no control; it reports install-wide auto-delivery state and hands off to a target's Queue.

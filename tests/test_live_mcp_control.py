@@ -61,6 +61,9 @@ def test_every_write_tool_is_covered_by_a_live_wire_test() -> None:
     """
     driven_on_the_wire = {
         "notify",
+        # Driven in the notify canary: both share notify's target resolution and
+        # sender attribution, so they need no agents of their own.
+        "revoke_message",
         "request_spawn",
         "interrupt",
         "end_session",
@@ -128,7 +131,13 @@ async def test_wire_identity_and_env_isolation(backend: str, tmp_path: Path) -> 
 @pytest.mark.skipif(not RUN_MCP, reason="set SWEMUX_RUN_LIVE_MCP_TESTS=1")
 @pytest.mark.parametrize("backend", CONTROL_HARNESSES)
 async def test_notify_reaches_a_sibling_queue(backend: str, tmp_path: Path) -> None:
-    """A caller's notify lands in a sibling's queue as an attributed message."""
+    """A caller's notify lands in a sibling's queue as an attributed message.
+
+    The same wire also covers the two surfaces that bracket it: the pre-send
+    check that stages nothing, and the sender's own withdrawal of what it did
+    stage. Both share notify's resolution and attribution, so driving them here
+    costs no extra agents.
+    """
     async with isolated_daemon(tmp_path) as daemon:
         project_id = await daemon.register_project()
         _caller_sid, _caller_pid, caller_token = await _spawn_agent(
@@ -138,6 +147,17 @@ async def test_notify_reaches_a_sibling_queue(backend: str, tmp_path: Path) -> N
             daemon, project_id, backend, "target", _IDLE_SEED
         )
 
+        preview, is_error = await daemon.call_tool(
+            caller_token,
+            "notify",
+            {"target": target_sid, "body": "handoff: please continue", "dry_run": True},
+        )
+        assert not is_error, preview
+        assert preview["dry_run"] is True, preview
+        assert preview["target_session_id"] == target_sid, preview
+        assert "message_id" not in preview, preview
+        assert isinstance(preview["target_delivery"]["auto_delivery"], bool), preview
+
         payload, is_error = await daemon.call_tool(
             caller_token,
             "notify",
@@ -146,6 +166,16 @@ async def test_notify_reaches_a_sibling_queue(backend: str, tmp_path: Path) -> N
         assert not is_error, payload
         assert payload["target_session_id"] == target_sid, payload
         assert payload.get("message_id"), payload
+
+        # Nothing has delivered it yet, so its sender can still take it back.
+        revoked, is_error = await daemon.call_tool(
+            caller_token,
+            "revoke_message",
+            {"message_id": payload["message_id"], "reason": "wire canary"},
+        )
+        assert not is_error, revoked
+        assert revoked["status"] == "revoked", revoked
+        assert revoked["queue_state"] == "cancelled", revoked
 
 
 @pytest.mark.live_agent

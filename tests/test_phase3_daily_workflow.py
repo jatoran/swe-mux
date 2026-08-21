@@ -11,7 +11,7 @@ from swe_mux.models import ProjectRecord
 from swe_mux.project_files import parse_project_config, serialize_project_config
 from swe_mux.projects import ProjectManager
 from swe_mux.prompt_library import PromptLibrary, parse_template
-from swe_mux.server import create_app
+from swe_mux.server import create_app, wait_runtime_ready
 
 
 @pytest.mark.asyncio
@@ -221,6 +221,7 @@ async def test_prompt_route_widens_to_every_project_only_when_asked(tmp_path: Pa
         roots[name] = root
     client = TestClient(TestServer(create_app(Config(data_dir=tmp_path / "data"))))
     await client.start_server()
+    await wait_runtime_ready(client.app)
     try:
         manager = client.app["projects"]
         alpha = await manager.create("alpha", str(roots["alpha"]))
@@ -264,6 +265,7 @@ async def test_notification_sound_route_serves_the_packaged_audio(tmp_path: Path
         TestServer(create_app(Config(data_dir=tmp_path / "data"), frontend_dir=frontend))
     )
     await client.start_server()
+    await wait_runtime_ready(client.app)
     try:
         response = await client.get("/notification-sounds/two-tone.mp3")
         assert response.status == 200

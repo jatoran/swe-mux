@@ -24,15 +24,18 @@ continues to own every terminal.
 - One instance exists per resolved config path. A second visible launch signals the existing
   instance to restore/focus; a duplicate hidden login launch exits silently.
 - Startup probes `/api/health`. A healthy daemon is reused; otherwise the tray starts a
-  consoleless child. The daemon is spawned via
+  consoleless child. **A daemon that answers 503 is starting, not healthy**: the daemon binds
+  its listeners before it builds its runtime, so a bound port is no longer evidence of a usable
+  daemon, and every probe here reads readiness (`ok is True`) rather than reachability. The
+  in-progress phase is in the 503 body, and the daemon writes each phase transition to
+  `<data_dir>/lifecycle.log` itself. The daemon is spawned via
   `popen_outside_job` (breakaway from any inherited Job object) so a tray relaunched from
   inside a session cannot hand the daemon that session's kill-on-close Job; the tray also
   checks `process_in_job()` at startup and records a warning in the lifecycle ledger.
 - **A daemon that is still running has not failed.** Only a spawned child that *exits* is a
   startup failure, and it ends the wait immediately; uptime is never evidence against it. The
-  health wait is budgeted at `DAEMON_HEALTH_TIMEOUT_SECONDS` (300s, matching
-  `packaging/redeploy_desktop.py`) because a daemon binds its port only after opening its
-  databases and reattaching supervised sessions, and a start whose page cache was just flushed
+  health wait is budgeted at `DAEMON_HEALTH_TIMEOUT_SECONDS` (300s) because a daemon's runtime
+  is not ready the moment its port is, and a start whose page cache was just flushed
   by a redeploy takes multiples of a warm one. Exhausting the budget with the child alive is
   not fatal either: the tray, the window and the activation signal all come up, and the window
   loads once health finally arrives (`load_when_healthy`). The tray exits only when there is
@@ -139,6 +142,15 @@ continues to own every terminal.
   A failed build never touches the running app, and a new build that never reports healthy is
   rolled back to `swe-mux.prev` (failed bundle kept at `dist/swe-mux.failed`), so a remote
   client cannot be stranded.
+  **The health wait reports progress rather than waiting in silence.** The successor daemon
+  binds before its runtime is built and answers 503 naming the phase it is in, so `wait_healthy`
+  logs each phase *change* to `redeploy.log` and, on expiry, says which phase the budget ran out
+  in. Once-per-phase and not once-per-poll: the elapsed seconds in the line move continuously, so
+  comparing rendered text would write two lines a second. Nothing here estimates a remaining
+  time — phase durations vary by orders of magnitude across fleets, and a wrong number is acted
+  on where an absent one is not. This is what the 300s→600s budget change of 2026-08-21 was
+  really about: a healthy-but-slow deploy was indistinguishable from a hung one, and raising the
+  ceiling only widened the window in which nobody could tell.
   The UI endpoint invokes the script with `--restore-visibility`, so every relaunch path uses the presentation captured immediately before the old shell is stopped.
   The endpoint validates source checkout + `uv`, requires the
   attached supervisor (or `force`), and is single-flight via `<data_dir>/redeploy.lock` with

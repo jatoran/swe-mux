@@ -135,7 +135,13 @@ from .launchers import (
     resolve_npm_shim_pty_command,
 )
 from .layouts import attach_leaf, attach_terminal, stack_leaf
-from .lifecycle import HEARTBEAT_INTERVAL_SECONDS, daemon_clean_exit, daemon_started, heartbeat
+from .lifecycle import (
+    HEARTBEAT_INTERVAL_SECONDS,
+    daemon_clean_exit,
+    daemon_started,
+    heartbeat,
+    ledger,
+)
 from .llm_endpoint import LLM_PROVIDERS, LlmEndpoint, LlmReadiness
 from .llm_endpoint import readiness as llm_readiness
 from .llm_endpoint import resolve_endpoint as resolve_llm_endpoint
@@ -210,6 +216,7 @@ from .project_files import (
     ignored_project_path,
     list_project_directories,
     list_project_directory,
+    note_save_loop_sample,
     project_approval_ceiling,
     project_approval_rules,
     project_automations,
@@ -303,6 +310,8 @@ from .spawn_contract import (
     scrub_claude_session_markers,
 )
 from .spawn_probe import SpawnFailure, spawn_settled
+from .sqlite_store import prepare_database
+from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .subprocess_flags import background_creation_flags, popen_outside_job
@@ -401,6 +410,21 @@ RETENTION_LOOP = "store-retention"
 # budget is the shape of an incident, and it left no trace of its own until a
 # 36s start expired the tray's wait and looked like a daemon that never started.
 SLOW_STARTUP_SECONDS = 20.0
+# The routes that may answer before the runtime exists. Everything else is
+# refused with the current phase, because a handler reaching for a runtime
+# handle that has not been built yet is a 500 that says nothing.
+#
+# Health is the point of the whole arrangement: a probe gets "starting, phase X"
+# instead of a refused connection. The static document and its assets are here
+# so a browser opened during a start renders the app shell and can show that
+# answer, rather than failing to load at all; they read nothing but
+# `frontend_dir`, which `create_app` sets before any listener binds.
+STARTUP_OPEN_PATHS = frozenset({"/api/health", "/", "/manifest.webmanifest", "/sw.js"})
+STARTUP_OPEN_PREFIXES = ("/assets/", "/icons/", "/notification-sounds/")
+# How long a client is asked to wait before probing again while the runtime is
+# still building. Long enough not to be a poll storm from a page full of panes,
+# short enough that readiness is noticed promptly.
+STARTUP_RETRY_AFTER_SECONDS = 3
 # What one task file's approval diff may occupy in a response. Generous enough for
 # a rewritten `tasks.json` and bounded so a generated `package.json` cannot make the
 # approval dialog unrenderable.
@@ -674,6 +698,77 @@ async def security_middleware(request: web.Request, handler: Handler) -> web.Str
     return response
 
 
+def startup_open(path: str) -> bool:
+    """Whether this route may be served before the runtime is built."""
+    return path in STARTUP_OPEN_PATHS or path.startswith(STARTUP_OPEN_PREFIXES)
+
+
+@web.middleware
+async def starting_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    """Refuse routes whose state does not exist yet, naming the phase in flight.
+
+    The daemon binds its listeners before it builds its runtime, so this window
+    is real and a client will hit it. Answering 503 with the phase is the whole
+    improvement over the previous behaviour, which was a refused connection: it
+    is the difference between "the app is starting, it is reattaching sessions"
+    and "there is nothing there".
+
+    503 and not 200: every existing consumer - the tray's health probe, the
+    redeploy script's wait, the browser's post-restart reload - already treats a
+    non-2xx answer as "not up yet". Serving 200 with a `starting` body would make
+    each of them declare victory on a daemon that cannot answer a single request.
+    """
+    timeline: StartupTimeline | None = request.app.get("startup")
+    if timeline is None or timeline.ready or startup_open(request.path):
+        return await handler(request)
+    response = json_response(
+        {
+            "error": "the daemon is still starting",
+            "code": "daemon_starting",
+            **timeline.snapshot(),
+        },
+        503,
+    )
+    response.headers["Retry-After"] = str(STARTUP_RETRY_AFTER_SECONDS)
+    return response
+
+
+def publish(app: web.Application, **handles: Any) -> None:
+    """Write runtime handles into an application whose runner has already started.
+
+    aiohttp freezes an Application once its runner starts and deprecates state
+    writes from that point, on the assumption that every handle exists before
+    the socket does. The daemon deliberately inverts that ordering: it binds
+    first, so a client during a 226s start gets "starting, phase X" instead of a
+    refused connection, and the runtime is published as it is built behind the
+    open socket.
+
+    `Application` is a MutableMapping and `_state` is the dict behind it, so this
+    writes exactly the entries `app[key] = value` writes, minus a freeze check
+    that exists to catch the accidental case rather than this deliberate one.
+    Reads are unaffected - `request.app["history"]` is the same mapping either
+    way. Overriding the check by subclassing is the alternative, and aiohttp
+    deprecates subclassing `Application` as well; this keeps the coupling to one
+    greppable line, pinned by `tests/test_startup_gate.py` so an aiohttp upgrade
+    that moves `_state` fails loudly instead of silently dropping every handle.
+    """
+    app._state.update(handles)
+
+
+async def wait_runtime_ready(app: web.Application) -> None:
+    """Block until the background runtime build has finished (or re-raise it).
+
+    Callers that need a fully built daemon rather than a merely reachable one -
+    the in-process test harnesses, above all - await this instead of assuming
+    that a started server implies a populated app. Deliberately unbounded: the
+    caller owns the deadline (`asyncio.timeout`), because how long a build may
+    take depends on the fleet being rebuilt and not on this function.
+    """
+    build = app.get("runtime_build")
+    if build is not None:
+        await build
+
+
 def create_app(
     config: Config,
     *,
@@ -684,8 +779,16 @@ def create_app(
 ) -> web.Application:
     if desktop_control_token is not None and desktop_shutdown_event is None:
         raise ValueError("desktop control requires a shutdown event")
+    # `starting_middleware` sits inside the security check so an unauthorized
+    # caller is still refused as unauthorized during the startup window, and
+    # outside compression so a 503 is compressed like any other response.
     app = web.Application(
-        middlewares=[error_middleware, security_middleware, compressible_response_middleware],
+        middlewares=[
+            error_middleware,
+            security_middleware,
+            starting_middleware,
+            compressible_response_middleware,
+        ],
         client_max_size=MAX_ATTACHMENT_BYTES + 1024 * 1024,
     )
     app["config"] = config
@@ -819,6 +922,7 @@ def create_app(
             web.get("/api/global-notes/{note_id}", get_global_note),
             web.put("/api/global-notes/{note_id}", put_global_note),
             web.get("/api/notes", list_notes),
+            web.post("/api/notes/save-loop-diagnostic", note_save_loop_diagnostic),
             web.post("/api/projects/{project_id}/notes", create_project_note),
             web.get("/api/projects/{project_id}/notes/{note_id}", get_note),
             web.put("/api/projects/{project_id}/notes/{note_id}", put_note),
@@ -1105,6 +1209,18 @@ def create_app(
     return app
 
 
+def _database_size_gb(path: Path) -> float:
+    """The database's size in GB, or 0 when it cannot be read.
+
+    Only ever used to annotate a log line, so an unreadable file is reported as
+    zero rather than being allowed to interrupt a start.
+    """
+    try:
+        return path.stat().st_size / 1e9
+    except OSError:
+        return 0.0
+
+
 async def _lifecycle_heartbeat_loop(data_dir: Path) -> None:
     """Keep the heartbeat fresh so the next daemon can judge how this one died.
 
@@ -1122,16 +1238,91 @@ async def _lifecycle_heartbeat_loop(data_dir: Path) -> None:
 
 
 async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
+    """Publish a startup report immediately; build the runtime behind it.
+
+    aiohttp runs this during `AppRunner.setup()`, before any listener binds, so
+    everything this context did inline used to be downtime: a measured 226.6s
+    start with 30 live sessions was 226.6s of refused connections, and the tray,
+    the redeploy script and the browser could not tell it from a hung daemon.
+
+    So the build moved into a task and this context returns at once. The socket
+    opens, `/api/health` answers "starting, phase X" from `app["startup"]`, and
+    `starting_middleware` refuses every route whose state does not exist yet.
+    Readiness is a real signal rather than an assumption: `wait_runtime_ready`
+    is how a caller that needs the built daemon waits for one.
+
+    A build that fails still ends the daemon, exactly as an exception raised
+    inline used to - see `_build_runtime`. Half-alive-forever is not an option
+    that existed before this change and must not become one.
+    """
     config: Config = app["config"]
     # Death forensics first: report a predecessor that vanished without a clean
     # shutdown while this daemon is still barely started, then keep our own
     # heartbeat fresh so the next daemon can do the same for us.
     daemon_started(config.data_dir, log)
-    # Nothing here is reachable until the listener binds, which happens only
-    # after this context is fully built, so every second spent below is a second
-    # the daemon is invisible to clients and to the desktop shell's health probe.
-    startup_started = time.monotonic()
+    timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
+    app["startup"] = timeline
+    watchdog = asyncio.create_task(timeline.watchdog(), name="startup-watchdog")
+    build = asyncio.create_task(_build_runtime(app, timeline), name="daemon-runtime-build")
+    app["runtime_build"] = build
+    try:
+        yield
+    finally:
+        watchdog.cancel()
+        if not build.done():
+            build.cancel()
+        await asyncio.gather(build, watchdog, return_exceptions=True)
+        await _teardown_runtime(app)
+
+
+async def _build_runtime(app: web.Application, timeline: StartupTimeline) -> None:
+    """Build the runtime, and stop the daemon if it cannot be built.
+
+    The failure path is the reason this wrapper exists. While the build ran
+    inline, an exception propagated out of `AppRunner.setup()` and the process
+    died - loudly, and in a way the desktop shell and the redeploy script both
+    already handle. Now that the listener is already open, an unhandled build
+    failure would instead leave a daemon serving 503 forever, which is a worse
+    outcome than the crash it replaced. So a failure is recorded on the
+    timeline (a probe reads a reason, not a stall) and then asks the daemon to
+    stop through the same event a restart uses.
+    """
+    try:
+        await _build_runtime_handles(app, timeline)
+    except asyncio.CancelledError:
+        raise
+    except BaseException as error:  # noqa: BLE001 - re-raised after being reported
+        timeline.fail(error)
+        log.exception("daemon runtime build failed; stopping the daemon")
+        stop_event: asyncio.Event | None = app.get("daemon_stop_event")
+        if stop_event is not None:
+            stop_event.set()
+        raise
+
+
+async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
+    app: web.Application, timeline: StartupTimeline
+) -> None:
+    config: Config = app["config"]
     background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
+    # `PRAGMA quick_check` reads every page of the database and eleven stores
+    # share `mux.db`, so this used to be paid eleven times, on the event loop,
+    # inside whichever store constructor happened to touch the file first: 11.5s
+    # per pass against a measured 2.73 GB file, ~126s per start, logged nowhere.
+    # It is answered once now (`sqlite_store.verify_database` caches per file),
+    # off the loop so the startup watchdog and the health endpoint keep running
+    # while it happens, and under a name so its growth is visible.
+    timeline.mark("database-integrity")
+    probe_seconds = await asyncio.to_thread(prepare_database, config.database_path)
+    if probe_seconds >= 1.0:
+        log.info(
+            "database integrity probe took %.1fs for %s (%.2f GB); this cost is the size "
+            "of the file and is now paid once per start rather than once per store",
+            probe_seconds,
+            config.database_path,
+            _database_size_gb(config.database_path),
+        )
+    timeline.mark("stores")
     history = HistoryIndex(config.database_path)
     events = EventBus(history.append_event)
     telemetry = OperationalTelemetryStore(
@@ -1143,7 +1334,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # runs it 5s after start and hourly after that. The identity repair below is
     # not: it hides false runs that would otherwise be served as history from the
     # first request, and it is index-backed rather than a scan of the retention
-    # tables, so it stays on the startup path.
+    # tables, so it stays on the startup path. Measured at 4ms against a 4,909-row
+    # history table, so there is nothing here to defer even if it were deferrable.
+    timeline.mark("history-identity-reconcile")
     historical_identity_repairs = await history.reconcile_historical_provider_collisions()
     for session_id, false_run_id, canonical_root_run_id in historical_identity_repairs:
         await telemetry.quarantine_agent_run_provider_observations(
@@ -1162,12 +1355,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             len(historical_identity_repairs),
         )
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
+    timeline.mark("stores")
     tier0 = Tier0Store(config.database_path, retention_days=config.process_evidence_retention_days)
     # Phase 7.9 structural graph, maintained off the same Tier 0 file_write stream
     # by the deterministic consumer and read by the blast-radius/navigation MCP
     # tools and the per-session change map. Shares mux.db.
     code_graph_store = CodeGraphStore(config.database_path)
-    app["code_graph"] = code_graph_store
+    publish(app, code_graph=code_graph_store)
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
     # (status-detection.md § durable timeline). Pruned by its own flush loop.
@@ -1185,14 +1379,25 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     status_timeline = StatusTimelineStore(
         config.database_path, retention_days=config.status_timeline_retention_days
     )
+    timeline.mark("projects")
     projects = ProjectManager(history)
     await projects.start()
     agent_context = AgentContextService(config.data_dir / "agent-context-backups")
-    for project in projects.projects.values():
-        agent_context.capture_project(project.root)
+    # Hashes each Project's instruction files so a later sync can tell a change
+    # this daemon made from one the user made. It is per-Project file I/O on a
+    # path that has no business blocking the loop - and with the listener now
+    # open, blocking the loop is blocking the health answer.
+    captured_roots = tuple(project.root for project in projects.projects.values())
+
+    def _capture_project_instructions() -> None:
+        for root in captured_roots:
+            agent_context.capture_project(root)
+
+    await asyncio.to_thread(_capture_project_instructions)
     history_backfills = HistoryBackfillManager(history, projects)
     history_scan = HistoryScanManager(history, config)
     reaper = create_reaper()
+    timeline.mark("supervisor-connect")
     supervisor_client: SupervisorClient | None = None
     if config.pty_supervisor_enabled:
         try:
@@ -1208,6 +1413,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 "PTY supervisor unavailable; sessions will run in-process and "
                 "will not survive a daemon restart"
             )
+    timeline.mark("adapters-and-shims")
     mcp_url = f"http://127.0.0.1:{config.port}/mcp"
     adapters: dict[str, BackendAdapter] = {"shell": ShellAdapter(config.shell_exe)}
     for name, harness in HARNESSES.items():
@@ -1280,6 +1486,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         approval_keystroke_delivery=config.approval_keystroke_delivery,
         approval_keystroke_window_seconds=config.approval_keystroke_window_seconds,
     )
+    timeline.mark("session-reattach")
     if supervisor_client is not None:
         try:
             adopted = await sessions.adopt_supervisor_sessions()
@@ -1297,6 +1504,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                     "could not reset misattributed provider telemetry for session %s",
                     repaired_session_id,
                 )
+    timeline.mark("cold-session-restore")
     if session_recovery is not None:
         # Strictly after adoption: an open recovery row for a session the
         # supervisor just handed back describes a *live* process, and restoring
@@ -1323,6 +1531,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             log.info("closed %d history run(s) left open by an unclean shutdown", closed)
     except Exception:
         log.exception("could not close orphaned history runs")
+
+    timeline.mark("services")
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -1440,12 +1650,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     telemetry.start(events, sessions=sessions, history=history)
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
-    app["automation_gate_cache"] = automation_gate_cache
+    publish(app, automation_gate_cache=automation_gate_cache)
     # The install-wide half of the gate, cached beside the per-Project half and on
     # the same clock. Its input is a config read plus one SQLite row, which is
     # cheap but not free, and `_enabled_automations` runs on every Tier 0 write.
     llm_readiness_cache: dict[str, tuple[float, LlmReadiness]] = {}
-    app["llm_readiness_cache"] = llm_readiness_cache
+    publish(app, llm_readiness_cache=llm_readiness_cache)
 
     async def _llm_ready() -> LlmReadiness:
         """Whether a proven model provider exists, and the sentence saying why not.
@@ -1473,7 +1683,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         llm_readiness_cache["current"] = (now, answer)
         return answer
 
-    app["llm_ready"] = _llm_ready
+    publish(app, llm_ready=_llm_ready)
 
     async def _enabled_automations(root: str) -> frozenset[str]:
         """Per-project opt-in closure, resolved off-loop with a short TTL cache.
@@ -1500,7 +1710,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
 
     # Exposed so module-level endpoints (Phase 7.7 scan-timeline consumers) can
     # resolve a Project's opt-in closure the same way the in-loop consumers do.
-    app["automation_gate"] = _enabled_automations
+    publish(app, automation_gate=_enabled_automations)
 
     # Phase 7.6 session control. Every bound lives here in the daemon operation;
     # the MCP tools are thin callers. The interrupt and graceful-end operations
@@ -1528,7 +1738,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         append_observation=append_observation,
         read_observations=read_observations,
     )
-    app["session_control"] = session_control
+    publish(app, session_control=session_control)
 
     # Session-settle watches. Same shape again: the service owns the bounds and
     # the MCP tool is a caller. The only write it produces is a `rule`-sender
@@ -1556,16 +1766,16 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         events=events,
         queue_message=_session_watch_notice,
     )
-    app["session_watch"] = session_watch
+    publish(app, session_watch=session_watch)
 
     # Phase 14 land queue. Same shape as session control: every bound lives in the
     # service and the MCP tool and HTTP route are thin callers. The trunk is the
     # Project root and the ref is the one the Git drawer and the session monitor
     # already share, so no third opinion about "the base" can appear here.
     land_store = LandStore(config.data_dir / "land-queue.sqlite3")
-    app["land_store"] = land_store
+    publish(app, land_store=land_store)
     verify_approvals = VerifyApprovalStore(config.data_dir)
-    app["verify_approvals"] = verify_approvals
+    publish(app, verify_approvals=verify_approvals)
 
     async def _land_compare_ref(root: str) -> str | None:
         project = next(
@@ -1679,7 +1889,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         record_fact=tier0.record_fact if tier0 is not None else None,
         draft_request=_land_draft,
     )
-    app["land_queue"] = land_queue_service
+    publish(app, land_queue=land_queue_service)
 
     # Phase 10.6 Mux assistant: daemon-owned dialogs behind the voice grammar's
     # tier-3 fallback and the workspace chat surface. Reuses the identical
@@ -1932,8 +2142,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         action_preview=_assistant_action_preview,
         action_run=_assistant_run_action,
     )
-    app["assistant"] = assistant
-    app["assistant_store"] = assistant_store
+    publish(app, assistant=assistant)
+    publish(app, assistant_store=assistant_store)
 
     # Scheduled runs. Machine-local definitions, the same spawn path the Run menu
     # uses, and the same prompt queue for anything staged behind the seed prompt.
@@ -1957,8 +2167,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         history=history,
         automation_store=automation_store,
     )
-    app["schedules"] = schedules
-    app["schedule_store"] = schedule_store
+    publish(app, schedules=schedules)
+    publish(app, schedule_store=schedule_store)
 
     def _session_project_root(session_id: str) -> tuple[Any, str] | None:
         session = sessions.sessions.get(session_id)
@@ -2052,7 +2262,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         provider=openrouter,
         events=events,
     )
-    app["behavioral_consumers"] = behavioral_consumers
+    publish(app, behavioral_consumers=behavioral_consumers)
     scan_timeline = ScanTimelineService(
         store=automation_store,
         tier0=tier0,
@@ -2088,24 +2298,61 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         resolve_context=consumer_context,
         narrator=attention_narrator,
     )
+    # Each `restore()` below reads durable state its own loop is about to act
+    # on, so none of them may be moved behind the `start()` that follows it: a
+    # loop that ticks before its restore double-fires, re-strands, or re-runs a
+    # step nothing recorded. They stay on the startup path deliberately, and are
+    # now named so a restore that grows is visible rather than inferred.
+    timeline.mark("restore-attention")
     await attention_ranking.restore()
     attention_ranking.start()
+    timeline.mark("restore-scan-timeline")
     await scan_timeline.restore()
     scan_timeline.start()
+    timeline.mark("start-loops")
     git_provenance_service.start()
     git_monitor.start()
     hooks.start()
     automation.start()
     usage.start()
+    # Left on the startup path on purpose. Provider *system* auth is
+    # authoritative (architecture.md invariant 10) and this is what derives the
+    # saved selection from it; running it behind the listener would let the
+    # daemon answer "which account is active" from pre-restart registry memory
+    # for as long as it took, which is the one answer this reconcile exists to
+    # prevent anyone giving.
+    timeline.mark("provider-accounts-reconcile")
     await provider_accounts.reconcile_startup()
     provider_accounts.start()
-    await process_inspector.restore()
-    process_inspector.start()
+    # Deferred: a full psutil sweep of every process on the machine, measured at
+    # 20.7s cold and 6.0s warm across 482 processes, and it was the second silent
+    # stretch of a 226.6s start. Nothing that serves a request depends on it -
+    # it populates process ownership for the Processes surfaces, which the
+    # inspector's own poll refreshes on the same cadence forever afterwards, so
+    # the only consequence of deferring is that the first reading arrives a few
+    # seconds later than the rest of the daemon.
+    #
+    # `start()` stays *inside* the task rather than beside it: the periodic
+    # reconcile must not run against a half-restored ownership map, and one task
+    # doing restore-then-start preserves that ordering exactly as the inline
+    # sequence did.
+    async def _restore_process_ownership() -> None:
+        await process_inspector.restore()
+        process_inspector.start()
+
+    deferred_tasks: list[asyncio.Task[Any]] = []
+    publish(app, startup_deferred_tasks=deferred_tasks)
+    process_restore_task = asyncio.create_task(
+        _restore_process_ownership(), name="process-ownership-restore"
+    )
+    process_restore_task.add_done_callback(_log_task_failure)
+    deferred_tasks.append(process_restore_task)
     ghost_windows.start()
     fleet.start()
     voice.start()
     # After supervisor adoption: the startup reconcile strands queue items
     # whose target session or agent run did not survive the restart.
+    timeline.mark("restore-queues")
     await prompt_queue.start()
     # Repairs a cron schedule's next fire against the current timezone database
     # and arms anything an older build left without one, then sweeps. A window
@@ -2132,8 +2379,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # /api/diagnostics/background. An unsupervised loop that dies is invisible.
     # Started first among the supervised loops, so its own baseline is measured from
     # the same moment everything that can stall it begins running.
+    timeline.mark("background-loops")
     loop_lag = LoopLagMonitor()
-    app["loop_lag"] = loop_lag
+    publish(app, loop_lag=loop_lag)
     background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag))
     background.start(CONFIG_WATCH_LOOP, lambda: _watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
@@ -2174,7 +2422,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         # A one-shot task that dies is silent by default; the scan's failure mode
         # is "external history is quietly stale", which nothing else reports.
         reconcile_task.add_done_callback(_log_task_failure)
-    app.update(
+    publish(
+        app,
         history=history,
         events=events,
         projects=projects,
@@ -2269,44 +2518,69 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         # Kept beside the automation set and cancelled the same way, so a daemon
         # shutdown does not leave a timer holding a reference to a dead session.
         action_timeout_tasks=set(),
+        # Cancelled in teardown alongside every other one-shot task; published
+        # rather than kept as a local because teardown no longer shares this
+        # function's scope.
+        reconcile_task=reconcile_task,
+        history_search_maintenance_task=history_search_maintenance_task,
+        prompt_queue_store=prompt_queue_store,
     )
-    # The startup duration nobody could see. A daemon takes this long to become
-    # reachable, and the desktop shell budgets its health wait against it, so a
-    # start that drifts is worth a line of its own rather than an inference from
-    # the gap between two unrelated INFO timestamps.
-    startup_seconds = time.monotonic() - startup_started
+    # The startup duration nobody could see. The listeners are already bound by
+    # the time this runs, so it is no longer downtime - but it is still the
+    # number the desktop shell's health wait and the redeploy budget are set
+    # against, and every phase that makes it up is on the lines above.
+    startup_seconds = timeline.finish(f"{len(sessions.sessions)} live session(s)")
     log.log(
         logging.WARNING if startup_seconds > SLOW_STARTUP_SECONDS else logging.INFO,
-        "daemon runtime ready in %.1fs (%d live session(s)); binding listeners",
+        "daemon runtime ready in %.1fs (%d live session(s)); serving every route",
         startup_seconds,
         len(sessions.sessions),
     )
-    yield
-    network_snapshot = cast(NetworkUsage, app["network_usage"]).snapshot()
-    network_totals = network_snapshot["totals"]
-    log.info(
-        "network usage at daemon shutdown after %.1fs: http_rx=%d http_tx=%d ws_rx=%d ws_tx=%d",
-        network_snapshot["uptime_seconds"],
-        network_totals["http"]["request_bytes"],
-        network_totals["http"]["response_bytes"],
-        network_totals["websocket"]["received_bytes"],
-        network_totals["websocket"]["sent_bytes"],
-    )
-    if reconcile_task:
-        if not reconcile_task.done():
-            reconcile_task.cancel()
-        await asyncio.gather(reconcile_task, return_exceptions=True)
-    if not history_search_maintenance_task.done():
-        history_search_maintenance_task.cancel()
-    await asyncio.gather(history_search_maintenance_task, return_exceptions=True)
-    await history_backfills.stop()
-    await history_scan.stop()
-    for task in tuple(app["automation_tasks"]):
-        task.cancel()
-    await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
-    for task in tuple(app["action_timeout_tasks"]):
-        task.cancel()
-    await asyncio.gather(*app["action_timeout_tasks"], return_exceptions=True)
+
+
+async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR0915
+    """Stop and close whatever the build managed to construct.
+
+    Every handle is read back out of `app` rather than closed over, and every
+    one is optional. That is not defensiveness for its own sake: the build now
+    runs as a task, so a shutdown (or a build failure) can arrive with the
+    runtime half-constructed, and a teardown that assumed a complete runtime
+    would raise on the first missing handle and leak everything after it.
+    """
+    config: Config = app["config"]
+    supervisor_client: SupervisorClient | None = app.get("supervisor")
+    network_usage: NetworkUsage | None = app.get("network_usage")
+    if network_usage is not None:
+        network_snapshot = network_usage.snapshot()
+        network_totals = network_snapshot["totals"]
+        log.info(
+            "network usage at daemon shutdown after %.1fs: http_rx=%d http_tx=%d ws_rx=%d ws_tx=%d",
+            network_snapshot["uptime_seconds"],
+            network_totals["http"]["request_bytes"],
+            network_totals["http"]["response_bytes"],
+            network_totals["websocket"]["received_bytes"],
+            network_totals["websocket"]["sent_bytes"],
+        )
+    one_shot_tasks = [
+        task
+        for task in (
+            app.get("reconcile_task"),
+            app.get("history_search_maintenance_task"),
+            *(app.get("startup_deferred_tasks") or ()),
+        )
+        if task is not None
+    ]
+    for task in one_shot_tasks:
+        if not task.done():
+            task.cancel()
+    if one_shot_tasks:
+        await asyncio.gather(*one_shot_tasks, return_exceptions=True)
+    for holder in ("automation_tasks", "action_timeout_tasks"):
+        pending = tuple(app.get(holder) or ())
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
     for loop_name in (
         CONFIG_WATCH_LOOP,
         MEDIA_CLEANUP_LOOP,
@@ -2315,32 +2589,49 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         PUSH_SENDER_LOOP,
     ):
         await background.stop(loop_name)
-    await hooks.stop()
-    await automation.stop()
-    await scan_timeline.stop()
-    await consumers.stop()
+    # Stopped in the order they were started, each skipped when the build never
+    # got far enough to construct it. `history_backfills`/`history_scan` lead
+    # because they own cancellable scans over the stores closed further down.
+    for key in (
+        "history_backfills",
+        "history_scan",
+        "hooks",
+        "automation",
+        "scan_timeline",
+        "deterministic_consumers",
+    ):
+        await _stop_handle(app.get(key), key)
     # The fan-out estimate is built from weeks of interaction samples; persisting
     # them is what keeps a daemon restart from resetting the estimate to unknown.
-    await attention_ranking.persist_telemetry()
-    await attention_ranking.stop()
-    await auto_delivery.stop()
-    await schedules.stop()
-    await land_queue_service.stop()
-    # Before the queue stops, and that order is load-bearing: stopping the watch
-    # service flushes every open watch as a durable notice, which is what keeps a
-    # routine daemon restart from silently un-arming an orchestrator's watches.
-    await session_watch.stop()
-    await prompt_queue.stop()
-    await assistant.stop()
-    await voice.stop()
-    await project_watcher.stop()
-    await usage.stop()
-    await provider_accounts.stop()
-    await fleet.stop()
-    await process_inspector.stop()
-    await ghost_windows.stop()
-    await git_monitor.stop()
-    await git_provenance_service.stop()
+    attention_ranking = app.get("attention_ranking")
+    if attention_ranking is not None:
+        try:
+            await attention_ranking.persist_telemetry()
+        except Exception:  # noqa: BLE001 - one store must not strand the rest
+            log.exception("could not persist attention telemetry at shutdown")
+    for key in (
+        "attention_ranking",
+        "auto_delivery",
+        "schedules",
+        "land_queue",
+        # Before `prompt_queue`, and that position is load-bearing rather than
+        # alphabetical: stopping the watch service flushes every open watch as a
+        # durable notice, which is what keeps a routine daemon restart from
+        # silently un-arming an orchestrator's watches.
+        "session_watch",
+        "prompt_queue",
+        "assistant",
+        "voice",
+        "project_watcher",
+        "usage",
+        "provider_accounts",
+        "fleet",
+        "process_inspector",
+        "ghost_windows",
+        "git_monitor",
+        "git_provenance",
+    ):
+        await _stop_handle(app.get(key), key)
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
     # (today's behavior, and always the case without a supervisor); "detach"
     # leaves supervisor-owned sessions running so the next daemon reattaches.
@@ -2348,7 +2639,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # with a supervisor attached, an unqualified exit (Ctrl-C, crash-adjacent
     # teardown) defaults to detach — the tmux model.
     intent = app["shutdown_state"]["intent"] or ("detach" if supervisor_client else "quit")
-    await sessions.shutdown(intent=intent)
+    sessions: SessionManager | None = app.get("sessions")
+    if sessions is not None:
+        await sessions.shutdown(intent=intent)
     if supervisor_client is not None:
         if intent == "quit":
             await supervisor_client.reap_all_and_exit()
@@ -2360,33 +2653,56 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         await supervisor_client.close()
     # After sessions.shutdown(): the terminal ledger entries it appends are the
     # final drain's whole point.
-    await status_timeline.stop()
-    if session_recovery is not None:
-        # Also after shutdown, and for the mirror-image reason: a `quit` closes
-        # every session's row on the way out, and a `detach` leaves the surviving
-        # sessions' rows open on purpose — they are still running, and the next
-        # daemon reaches them through the supervisor rather than through here.
-        await session_recovery.stop()
-    await telemetry.stop()
-    await tier0.stop()
-    await clipboard.stop()
-    history.close()
-    automation_store.close()
-    prompt_queue_store.close()
-    schedule_store.close()
-    land_store.close()
-    voice_store.close()
-    assistant_store.close()
-    telemetry.close()
-    status_timeline.close()
-    if session_recovery is not None:
-        session_recovery.close()
-    tier0.close()
-    clipboard.close()
-    reaper.close()
+    #
+    # `session_recovery` is also after shutdown, and for the mirror-image reason:
+    # a `quit` closes every session's row on the way out, and a `detach` leaves
+    # the surviving sessions' rows open on purpose — they are still running, and
+    # the next daemon reaches them through the supervisor rather than through here.
+    for key in ("status_timeline", "session_recovery", "telemetry", "tier0", "clipboard"):
+        await _stop_handle(app.get(key), key)
+    for key in (
+        "history",
+        "automation_store",
+        "prompt_queue_store",
+        "schedule_store",
+        "land_store",
+        "voice_store",
+        "assistant_store",
+        "telemetry",
+        "status_timeline",
+        "session_recovery",
+        "tier0",
+        "clipboard",
+        "reaper",
+    ):
+        _close_handle(app.get(key), key)
     await background.stop(LIFECYCLE_HEARTBEAT_LOOP)
     # Last so an exception anywhere above still reads as an unclean exit.
     await asyncio.to_thread(daemon_clean_exit, config.data_dir, intent)
+
+
+async def _stop_handle(handle: Any, name: str) -> None:
+    """`await handle.stop()`, tolerating both absence and failure.
+
+    One service raising on the way down used to abandon every service after it,
+    which is how a shutdown leaves a WAL file open and the next start finds work
+    to recover that never needed doing.
+    """
+    if handle is None:
+        return
+    try:
+        await handle.stop()
+    except Exception:  # noqa: BLE001 - shutdown continues past one bad citizen
+        log.exception("could not stop %s at shutdown", name)
+
+
+def _close_handle(handle: Any, name: str) -> None:
+    if handle is None:
+        return
+    try:
+        handle.close()
+    except Exception:  # noqa: BLE001 - same rule as `_stop_handle`
+        log.exception("could not close %s at shutdown", name)
 
 
 def _config_mtime(path: Path) -> int:
@@ -2574,6 +2890,23 @@ async def service_worker(request: web.Request) -> web.StreamResponse:
 
 
 async def health(request: web.Request) -> web.Response:
+    """Liveness *and* readiness, in one answer, from the moment the socket opens.
+
+    The daemon now binds its listeners before it builds its runtime, so this
+    endpoint answers during a start that used to refuse connections outright.
+    That window is reported as HTTP 503 carrying the phase in flight and the
+    phases already done, which is what turns a 5-minute wait from an outage into
+    progress - both for the redeploy script and for whoever is watching it.
+
+    `ok` and the status code move together, and both stay false until the
+    runtime is built. Every existing consumer already reads one or the other as
+    "not up yet"; the tray, the redeploy wait, and the browser's post-restart
+    reload would each declare a daemon usable on a 200 here, and it would not be.
+    """
+    timeline: StartupTimeline | None = request.app.get("startup")
+    startup = timeline.snapshot() if timeline is not None else {"status": "ready"}
+    if timeline is not None and not timeline.ready:
+        return json_response({"ok": False, "version": "0.1.0", **startup}, 503)
     sessions: SessionManager = request.app.get("sessions")
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
     supervisor = request.app.get("supervisor")
@@ -2602,6 +2935,10 @@ async def health(request: web.Request) -> web.Response:
                 sum(1 for s in sessions.sessions.values() if s.record.cold) if sessions else 0
             ),
             "session_recovery": request.app.get("session_recovery") is not None,
+            # The same block the starting answer carries, so one consumer reads
+            # one shape either way - and so the phase breakdown of the start that
+            # just finished stays readable without going to the log.
+            **startup,
         }
     )
 
@@ -5026,6 +5363,15 @@ async def list_notes(request: web.Request) -> web.Response:
             items.append({**summary, "project_id": project.id, "project_name": project.name})
     items.sort(key=lambda item: float(item["updated_at"]), reverse=True)
     return json_response({"items": items})
+
+
+async def note_save_loop_diagnostic(request: web.Request) -> web.Response:
+    """Record one browser-side note save loop the client's guards ended."""
+    try:
+        sample = note_save_loop_sample(await request.json())
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(sample)
 
 
 async def create_project_note(request: web.Request) -> web.Response:

@@ -54,7 +54,11 @@ adoption has claimed everything that is still running (`features/session-recover
 
 ## Package boundaries
 
-- `server.py`: transport composition and Project-bound session operations.
+- `server.py`: transport composition and Project-bound session operations. Binds its listeners
+  before it builds the runtime; the build runs as a background task and every route but health
+  and the app shell is refused with the current phase until it finishes.
+- `startup_phases.py`: the named, timed phases of one daemon start, the watchdog that reports a
+  phase still running, and the snapshot health serves while the runtime is being built.
 - `desktop.py`: Windows single-instance shell, tray/window lifecycle, login startup, daemon
   supervision, and desktop control token.
 - `desktop_window_state.py`: versioned desktop geometry persistence and monitor-safe restore.
@@ -134,7 +138,13 @@ adoption has claimed everything that is still running (`features/session-recover
 14. Desktop window close/minimize hides the viewport; it never stops the daemon or PTYs. Tray
     Quit confirms live sessions and requests graceful daemon shutdown through a secret-gated
     loopback route. A desktop crash leaves the separate daemon process running.
-15. A session's root provider identity is immutable. Nested-agent promotion is a shell-only
+15. A bound listener is not a ready daemon. The daemon serves `/api/health` from the moment its
+    socket opens and answers 503 with the startup phase in flight until its runtime exists;
+    every consumer decides on readiness (`ok is True`), never on reachability. The inversion is
+    deliberate: building the runtime first made the whole of a measured 226.6s start into refused
+    connections, and made a slow deploy indistinguishable from a hung one. A build that fails
+    stops the daemon rather than leaving it reachable and useless.
+16. A session's root provider identity is immutable. Nested-agent promotion is a shell-only
     state transition, live transcript paths/native IDs have one owner, and supervisor metadata
     is revalidated against those facts before daemon reattachment publishes the session. The
     one-owner rule is also enforced continuously: the state watchdog's identity sweep reports
@@ -144,6 +154,10 @@ adoption has claimed everything that is still running (`features/session-recover
 
 ## Failure modes
 
+- A daemon whose runtime build fails records the failing phase and its error on the health
+  answer, then stops. It never lingers reachable-but-unusable: the desktop shell and the redeploy
+  script both already handle a daemon that exits, and neither can act on one that serves 503
+  forever.
 - Daemon crash closes the global job and terminates owned child processes — in-process PTY
   mode only. With the PTY supervisor, a daemon crash or restart leaves agents running; the
   next daemon reattaches and revalidates mirrored provider/transcript identity. Proven legacy

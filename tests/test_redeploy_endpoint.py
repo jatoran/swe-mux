@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 from pathlib import Path
@@ -243,7 +244,7 @@ def test_redeploy_health_wait_allows_cold_start_but_stops_on_process_exit(
     health_calls: list[object] = []
     monkeypatch.setattr(
         module,
-        "health",
+        "health_payload",
         lambda *_args, **_kwargs: health_calls.append(object()) or None,
     )
     process = SimpleNamespace(poll=lambda: 7, returncode=7)
@@ -251,6 +252,66 @@ def test_redeploy_health_wait_allows_cold_start_but_stops_on_process_exit(
     assert module.APP_HEALTH_TIMEOUT_SECONDS >= 300
     assert module.wait_healthy(SimpleNamespace(), process=process) is None
     assert len(health_calls) == 1
+
+
+def test_health_wait_reports_each_startup_phase_once(monkeypatch: Any) -> None:
+    """The wait must read as progress, not as an outage.
+
+    This is the redeploy half of the startup-legibility change: the daemon binds
+    its listeners before its runtime exists and answers 503 with the phase it is
+    in, so a multi-minute wait can name what is happening. The once-per-*phase*
+    rule is the point - the elapsed seconds in the rendered line move on every
+    poll, so comparing rendered text would put two lines a second in the log.
+    """
+    module = _redeploy_module()
+    answers = [
+        {"ok": False, "status": "starting", "phase": "stores", "phase_seconds": 1.0,
+         "elapsed_seconds": 1.0, "phases": []},
+        {"ok": False, "status": "starting", "phase": "stores", "phase_seconds": 9.0,
+         "elapsed_seconds": 9.0, "phases": []},
+        {"ok": False, "status": "starting", "phase": "session-reattach", "phase_seconds": 0.5,
+         "elapsed_seconds": 12.0, "phases": [{"name": "stores", "seconds": 11.5}]},
+        {"ok": True, "status": "ready", "live_sessions": 3},
+    ]
+    monkeypatch.setattr(module, "health_payload", lambda *_a, **_k: answers.pop(0))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    lines: list[str] = []
+    monkeypatch.setattr(module, "log", lines.append)
+
+    payload = module.wait_healthy(SimpleNamespace())
+
+    assert payload is not None and payload["status"] == "ready"
+    # Two phases seen, two lines - the repeated `stores` poll adds nothing.
+    assert len(lines) == 2
+    assert "phase stores" in lines[0]
+    assert "phase session-reattach" in lines[1]
+    # A finished phase is named with its cost, so the log says where the time went.
+    assert "done: stores" in lines[1]
+
+
+def test_health_reads_the_starting_daemons_503_body(monkeypatch: Any) -> None:
+    """A starting daemon answers 503; the body is a response, not a failure.
+
+    `health()` must still say "no usable daemon" for it - every caller of that
+    means "can I use this port" - while `health_payload()` recovers the phase.
+    """
+    module = _redeploy_module()
+    body = json.dumps({"ok": False, "status": "starting", "phase": "supervisor-connect"})
+
+    def raise_503(*_args: Any, **_kwargs: Any) -> Any:
+        raise module.urllib.error.HTTPError(
+            "http://127.0.0.1:8765/api/health", 503, "starting", {}, io.BytesIO(body.encode())
+        )
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", raise_503)
+    config = SimpleNamespace(port=8765)
+
+    assert module.health(config) is None
+    payload = module.health_payload(config)
+    assert payload is not None and payload["phase"] == "supervisor-connect"
+    assert module.startup_progress(payload).startswith("starting - phase supervisor-connect")
+    # A ready payload is not startup progress and must render as nothing.
+    assert module.startup_progress({"ok": True, "status": "ready"}) == ""
 
 
 @pytest.mark.parametrize(

@@ -28,6 +28,10 @@ The shared Windows-safe filesystem-leaf validator - invalid characters, reserved
 - Recoverable note deletion into `notes/trash/`, plus the last-note `ProjectNoteProtected` refusal.
 - The tree, exclusive leaf-only file and folder creation, and bounded recursive name and content search.
 - Revision-checked text reads and writes.
+- The bounded validator behind `POST /notes/save-loop-diagnostic`, which logs one browser-reported
+  note save loop at WARNING.
+  The daemon cannot detect the episode itself: every write in it is individually legitimate, and
+  only the browser knows whether a human touched the note (`noteEditGuard.ts`).
 - Allowlisted image inspection and content, with byte, dimension, pixel, and frame limits.
 
 `read_project_config_values` is the named accessor for the *values* rather than the envelope.

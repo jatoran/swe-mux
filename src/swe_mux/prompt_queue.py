@@ -55,7 +55,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-QUEUE_SCHEMA_VERSION = 4
+QUEUE_SCHEMA_VERSION = 5
 QUEUE_EVENT_LOOP = "prompt-queue-events"
 
 # States exactly per the roadmap. `delivering` is transient but persisted so a
@@ -272,6 +272,17 @@ CREATE TABLE IF NOT EXISTS queue_auto_policy (
   paused INTEGER NOT NULL DEFAULT 0,
   disabled_reason TEXT,
   enabled_at REAL,
+  -- Lapse audit. A grant that switches itself off while nobody was looking is
+  -- the one disable reason with no act behind it, so the *only* record of it
+  -- used to be a sentence in `disabled_reason` — which says that it happened
+  -- and nothing about when, after how much idleness, under what window, or how
+  -- many messages it stranded. A sender that finds its notification undelivered
+  -- has to be able to read that back, so it is recorded when the lapse fires and
+  -- cleared when the grant returns.
+  disabled_at REAL,
+  lapse_idle_seconds REAL,
+  lapse_window_minutes REAL,
+  lapse_pending INTEGER,
   updated_at REAL NOT NULL,
   updated_by TEXT
 );
@@ -418,6 +429,22 @@ class PromptQueueStore:
                 "UPDATE queue_auto_policy SET accept_agent_interjections=1"
                 " WHERE enabled=1 AND accept_agent_messages=1"
             )
+        if policy_columns:
+            # The lapse audit. Nullable throughout and backfilled by nothing: a
+            # row written before the columns existed lapsed without the evidence
+            # being kept, and inventing values for it would be worse than the
+            # honest absence the reader already has to handle for a grant that
+            # was switched off for some other reason.
+            for name, declaration in (
+                ("disabled_at", "REAL"),
+                ("lapse_idle_seconds", "REAL"),
+                ("lapse_window_minutes", "REAL"),
+                ("lapse_pending", "INTEGER"),
+            ):
+                if name not in policy_columns:
+                    self._db.execute(
+                        f"ALTER TABLE queue_auto_policy ADD COLUMN {name} {declaration}"
+                    )
         self._db.commit()
 
     def _open(self) -> sqlite3.Connection:
@@ -1187,6 +1214,63 @@ class PromptQueueStore:
 
         return await self._run(op)
 
+    async def pending_message_count(self, target_session_id: str) -> int:
+        """Undelivered items of any authorship waiting at one target.
+
+        Read at the moment a grant lapses, because "how many messages did this
+        strand" is the fact that turns a lapse from a state into an incident.
+        """
+
+        def op() -> int:
+            row = self._db.execute(
+                "SELECT COUNT(*) n FROM queue_messages WHERE target_session_id=?"
+                " AND state IN ('draft','armed','blocked','delivering')",
+                (target_session_id,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
+        return await self._run(op)
+
+    async def open_reply_windows(
+        self, session_ids: Collection[str], since: float
+    ) -> dict[str, dict[str, Any]]:
+        """The most recent *delivered* agent message each of these sessions sent.
+
+        The evidence behind the bounded reply window (`auto-delivery.md`): a
+        session whose own message reached a peer inside ``since`` is waiting on
+        an answer, which is the opposite of the untouched conversation the idle
+        lapse exists to close. Derived from the queue rather than tracked in a
+        second table, exactly like thread identity and chain depth, so it cannot
+        disagree with the audit trail.
+
+        ``state='sent'`` is deliberate: staging a message proves nothing about
+        whether an exchange is live, and an armed message nothing ever delivered
+        is the very failure this is meant to explain rather than to reward.
+        """
+        ids = list(session_ids)
+        if not ids:
+            return {}
+
+        def op() -> dict[str, dict[str, Any]]:
+            placeholders = ",".join("?" * len(ids))
+            rows = self._db.execute(
+                "SELECT sender_id, thread_id, target_session_id, MAX(sent_at) sent_at"
+                " FROM queue_messages WHERE sender_kind='agent' AND state='sent'"
+                f" AND sent_at>=? AND sender_id IN ({placeholders})"
+                " GROUP BY sender_id",
+                (since, *ids),
+            ).fetchall()
+            return {
+                str(row["sender_id"]): {
+                    "thread_id": str(row["thread_id"] or "") or None,
+                    "peer_session_id": str(row["target_session_id"] or "") or None,
+                    "sent_at": float(row["sent_at"] or 0.0),
+                }
+                for row in rows
+            }
+
+        return await self._run(op)
+
     async def pending_from_sender_kind(
         self, target_session_id: str, sender_kind: str
     ) -> int:
@@ -1323,6 +1407,10 @@ class PromptQueueStore:
             "paused",
             "disabled_reason",
             "enabled_at",
+            "disabled_at",
+            "lapse_idle_seconds",
+            "lapse_window_minutes",
+            "lapse_pending",
             "updated_by",
         }
         unknown = set(fields) - allowed

@@ -31,7 +31,7 @@ import psutil
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.config import Config
-from swe_mux.server import create_app
+from swe_mux.server import create_app, wait_runtime_ready
 
 # A registered Project that has granted agents direct interrupt/end and spawn, so
 # the wire tests exercise the acting path rather than only the inert draft.
@@ -166,6 +166,10 @@ async def isolated_daemon(tmp_path: Path) -> AsyncIterator[IsolatedDaemon]:
     server = TestServer(create_app(config), host="127.0.0.1", port=port)
     client = TestClient(server)
     await client.start_server()
+    # The daemon binds its listeners before it builds its runtime, so a started
+    # server is a *reachable* daemon and not yet a usable one. Every route but
+    # health and the static document answers 503 until this returns.
+    await wait_runtime_ready(client.app)
     try:
         yield IsolatedDaemon(client, root, port)
     finally:

@@ -10,8 +10,17 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 ### `__main__.py`
 
 Daemon argument and config resolution, and the reusable aiohttp site lifecycle.
+The listeners bind as soon as `AppRunner.setup()` returns, which is now immediately — the runtime is built behind them (`server.runtime_context`).
+Mobile-voice Serve setup waits for `wait_runtime_ready` before running, because Serve reclamation asks whether a swe-mux daemon answers health on the port behind an existing route, and this daemon would answer "no" about itself for the whole of its own startup.
 
 **Not:** desktop window or tray state.
+
+### `startup_phases.py`
+
+`StartupTimeline`: the named, timed phases of one daemon start, the watchdog that reports a phase still *running*, and the `snapshot()` the health endpoint serves while the build is in flight.
+Phase transitions also go to `lifecycle.log`, so a long start reads as progress from outside the process.
+
+**Not:** any decision. It measures; what a phase does and whether it may be deferred belongs to `server.py`.
 
 ### `background_tasks.py`
 
@@ -33,6 +42,18 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, a
 **Not:** the supervisor's logging, which is stdlib-inline there to keep its import closure frozen.
 
 ## Transport
+
+### `server.py` startup
+
+- **Bind first, build behind it.** `runtime_context` returns at once and the runtime is constructed by a background task (`_build_runtime`), so the socket is open for the whole start.
+  Until it finishes, `/api/health` answers HTTP 503 with the phase in flight and the phases already done, and `starting_middleware` refuses every other route with the same body — `STARTUP_OPEN_PATHS`/`STARTUP_OPEN_PREFIXES` are the exceptions, and they read nothing but `frontend_dir`.
+  `wait_runtime_ready(app)` is how a caller that needs a *built* daemon waits for one; a started server is only a reachable one.
+- A build that fails records the failure on the timeline and sets the daemon stop event.
+  This is not defensiveness: while the build ran inline, an exception propagated out of `AppRunner.setup()` and the process died, which the tray and the redeploy script both already handle — a daemon left serving 503 forever would be worse than the crash it replaced.
+- `publish(app, ...)` writes handles into the started (frozen) application. aiohttp deprecates state writes after the runner starts, on the assumption that every handle exists before the socket does; the daemon inverts that ordering deliberately, and this keeps the coupling to one line, pinned by `tests/test_startup_gate.py`.
+- `_teardown_runtime` reads every handle back out of `app` and treats each as optional, because a shutdown can now arrive with the runtime half-built.
+- What may be deferred is decided by whether serving depends on it, and the reason is recorded at each site. Deferred: process-ownership restore (a full psutil sweep, measured 20.7s cold / 6.0s warm over 482 processes; the inspector's own poll refreshes it forever afterwards, and `start()` lives inside the deferring task so the poll cannot run against a half-restored map).
+  Deliberately not deferred: the historical provider-collision reconcile (it hides false runs from the first request), the provider-account reconcile (system auth is authoritative, `architecture.md` invariant 10), and every `restore()` whose loop is started immediately after it.
 
 ### `server.py` event and PTY transport
 

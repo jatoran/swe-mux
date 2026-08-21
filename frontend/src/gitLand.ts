@@ -49,6 +49,16 @@ export type LandVerifyProgress = {
   attempts: number
 }
 
+/**
+ * Which gate a request ran, decided by the daemon from the change set's paths alone.
+ *
+ * `''` is "not classified yet", which is every row before it reaches the gate and every
+ * row written by a build that predates the classifier. It is deliberately *not*
+ * collapsed into `'full'`: a row that claims a classification nobody recorded is the
+ * wrong direction for a field whose entire job is making a skipped gate visible.
+ */
+export type LandGate = '' | 'full' | 'docs_only'
+
 export type LandRequest = {
   id: string
   projectId: string
@@ -70,6 +80,8 @@ export type LandRequest = {
   finishedAt: number | null
   /** Present only while this row's gate is actually running under this daemon. */
   verifyProgress: LandVerifyProgress | null
+  /** Which gate this land ran, once the daemon has classified its change set. */
+  verifyGate: LandGate
 }
 
 /** The Project's authority for *agent*-initiated landing. An operator never needs it. */
@@ -214,6 +226,10 @@ function parseRequest(raw: unknown): LandRequest | null {
     // Attached by the daemon only while this row's gate is running under it. A row that
     // a restart returned to `queued` carries none rather than a stale snapshot.
     verifyProgress: state === 'verifying' ? parseVerifyProgress(row.verify_progress) : null,
+    // Anything the parser does not recognise reads as "not classified", never as a
+    // gate that ran. An unknown value must not be able to render as `docs_only`.
+    verifyGate: row.verify_gate === 'docs_only' ? 'docs_only'
+      : row.verify_gate === 'full' ? 'full' : '',
   }
 }
 
@@ -387,6 +403,22 @@ export function verifyPlanNote(plan: LandVerifyPlan | null): string {
     : `Last passing run of these exact bytes: ${steps}.`
 }
 
+/**
+ * A note about which gate a land ran, or '' when there is nothing worth saying.
+ *
+ * **Only the skip is drawn.** A full gate is what every land does and what the states
+ * already narrate — `Verifying`, with the running gate's own step under it — so labelling
+ * it would put a redundant chip on every row. A *skipped* gate has no state of its own to
+ * show it: the row goes from merging the trunk straight to fast-forwarding, and finishes
+ * reading exactly like one that passed three minutes of pytest. That is the one thing
+ * here that must never be silent, so it is the one thing that gets a line.
+ */
+export function landGateNote(request: LandRequest): string {
+  return request.verifyGate === 'docs_only'
+    ? 'documentation only · verification skipped'
+    : ''
+}
+
 export function landStateTone(state: LandState): 'ok' | 'warn' | 'busy' | 'idle' {
   if (state === 'landed') return 'ok'
   // Not 'ok': nothing moved. Not 'warn' either - nothing went wrong, the answer is
@@ -454,8 +486,13 @@ export function landingSummary(
   } else if (running) {
     const progress = verifyProgressLabel(running.verifyProgress)
     const behind = active.length - 1
+    // The gate note, not the progress label, is what a skipping run has to say about
+    // itself: it has no `verifying` state to report a step from, and without this the
+    // strip narrates a land that quietly went round the gate as an ordinary one.
+    const gateNote = landGateNote(running)
     queueText = `${running.branch} · ${landStateLabel(running.state).toLowerCase()}`
       + (progress ? ` · ${progress}` : '')
+      + (gateNote ? ` · ${gateNote}` : '')
       + (behind > 0 ? ` · ${behind} behind` : '')
     tone = 'busy'
   } else if (active.length) {

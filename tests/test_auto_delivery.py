@@ -20,9 +20,11 @@ from typing import Any
 import pytest
 
 from swe_mux.auto_delivery import (
+    COUNTER_LAPSED,
     COUNTER_SENT,
     COUNTER_UNSAFE,
     FAILED_DELIVERY_REASON,
+    LAPSED_REASON,
     AutoDeliveryController,
     in_quiet_window,
     promotion_status,
@@ -534,6 +536,251 @@ async def test_a_grant_the_previous_build_disabled_is_restored_too(
     await harness.auto.status()
     restored = await harness.store.auto_policy("s1")
     assert restored is not None and restored["enabled"]
+
+
+async def _lapse_now(harness: Harness, session_id: str) -> None:
+    """Push one conversation past its idle window and run the controller once."""
+    record = harness.manager.sessions[session_id].record
+    idle_seconds = harness.auto.config.auto_delivery_session_ttl_minutes * 60 + 60
+    record.last_activity_ts = time.time() - idle_seconds
+    await harness.store.set_auto_policy(
+        session_id, enabled_at=time.time() - idle_seconds
+    )
+    await harness.auto.tick()
+
+
+@pytest.mark.asyncio
+async def test_a_lapse_records_what_it_stranded(harness: Harness) -> None:
+    """A lapse is the one disable with no act behind it, so it audits itself.
+
+    "Lapsed while the conversation was idle" is true and unusable: it cannot
+    tell an operator whether the window is too short or the conversation really
+    was abandoned, and it cannot tell a sender whose message is sitting there
+    anything at all. The numbers are cheap at the moment it fires and
+    unrecoverable afterwards.
+    """
+    await harness.auto.enable_session("s1")
+    await harness.service.enqueue(target_session_id="s1", body="first", armed=True)
+    await harness.service.enqueue(target_session_id="s1", body="second", armed=True)
+    await _lapse_now(harness, "s1")
+
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and not policy["enabled"]
+    assert policy["disabled_reason"] == LAPSED_REASON
+    assert float(policy["disabled_at"]) > 0
+    # Idle for longer than the window, under the window that was configured,
+    # with both waiting messages counted.
+    window_seconds = harness.config.auto_delivery_session_ttl_minutes * 60
+    assert float(policy["lapse_idle_seconds"]) >= window_seconds
+    assert float(policy["lapse_window_minutes"]) == float(
+        harness.config.auto_delivery_session_ttl_minutes
+    )
+    assert int(policy["lapse_pending"]) == 2
+
+    counters = await harness.store.counters()
+    assert counters[COUNTER_LAPSED] == 1
+
+    # And a sender asking whether anything will deliver reads the same facts.
+    outlook = await harness.auto.outlook("s1")
+    assert outlook["auto_delivery"] is False
+    assert outlook["blocked_by"] == LAPSED_REASON
+    assert outlook["lapse"]["pending"] == 2
+
+
+@pytest.mark.asyncio
+async def test_the_lapse_audit_is_cleared_rather_than_left_behind(
+    harness: Harness,
+) -> None:
+    """A stale audit is worse than none: a reader acts on it.
+
+    A conversation that lapsed at lunchtime and was picked up again must not
+    still read as one that just stranded messages, and a grant the user then
+    switched off by hand must not borrow the lapse's numbers to explain itself.
+    """
+    await harness.auto.enable_session("s1")
+    await _lapse_now(harness, "s1")
+    assert (await harness.store.auto_policy("s1") or {})["lapse_pending"] is not None
+
+    harness.manager.sessions["s1"].record.last_activity_ts = time.time()
+    await harness.auto.status()
+    restored = await harness.store.auto_policy("s1")
+    assert restored is not None and restored["enabled"]
+    assert restored["lapse_idle_seconds"] is None
+    assert restored["disabled_at"] is None
+
+    await harness.auto.disable_session("s1", reason="disabled by user")
+    opted_out = await harness.store.auto_policy("s1")
+    assert opted_out is not None
+    assert opted_out["lapse_pending"] is None
+    assert AutoDeliveryController.lapse_record(opted_out) is None
+
+
+async def _deliver_agent_message(
+    harness: Harness, *, sender: str, target: str, thread_id: str
+) -> str:
+    """Actually deliver one agent message, which is what opens a reply window.
+
+    Staging is deliberately not enough: an armed message nothing ever delivered
+    is the symptom the window exists to prevent, not evidence of a live
+    exchange.
+    """
+    message = await harness.service.enqueue(
+        target_session_id=target,
+        body="over to you",
+        armed=True,
+        sender_kind="agent",
+        sender_id=sender,
+        thread_id=thread_id,
+    )
+    await harness.settle()
+    assert await harness.auto.tick() == [message["id"]]
+    return str(message["id"])
+
+
+@pytest.mark.asyncio
+async def test_an_exchange_awaiting_a_reply_holds_the_idle_lapse_off(
+    tmp_path: Path,
+) -> None:
+    """A session owed an answer is mid-exchange, not untouched.
+
+    This is the failure the window exists for: an orchestrator hands work to a
+    worker, goes quiet while the worker runs, loses its grant to the idle
+    window, and then nothing can deliver the answer back to it.
+    """
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+        await harness.auto.tick()
+        await _deliver_agent_message(harness, sender="s1", target="s2", thread_id="t1")
+
+        await _lapse_now(harness, "s1")
+        held = await harness.store.auto_policy("s1")
+        assert held is not None and held["enabled"], "the exchange should hold it open"
+
+        window = (await harness.auto.reply_windows(["s1"]))["s1"]
+        assert window["peer_session_id"] == "s2"
+        assert window["thread_id"] == "t1"
+        assert window["thread_messages_limit"] == (
+            harness.config.agent_message_max_thread_turns
+        )
+
+        # And the reply itself now has somewhere to land.
+        reply = await harness.service.enqueue(
+            target_session_id="s1",
+            body="done",
+            armed=True,
+            sender_kind="agent",
+            sender_id="s2",
+            thread_id="t1",
+        )
+        await harness.settle()
+        assert await harness.auto.tick() == [reply["id"]]
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_the_reply_window_is_capped_by_the_exchange_message_budget(
+    tmp_path: Path,
+) -> None:
+    """The window can never outlive the conversation that justifies it.
+
+    Once a thread has spent the budget that bounds its volume, there is no
+    exchange left to protect and the ordinary idle lapse applies again — which
+    is what keeps this from becoming an indefinite grant two agents can renew
+    between themselves.
+    """
+    harness = Harness(
+        tmp_path,
+        live_session("s1"),
+        live_session("s2"),
+        agent_message_max_thread_turns=1,
+    )
+    try:
+        await harness.auto.tick()
+        await _deliver_agent_message(harness, sender="s1", target="s2", thread_id="t1")
+        assert await harness.auto.reply_windows(["s1"]) == {}
+
+        await _lapse_now(harness, "s1")
+        policy = await harness.store.auto_policy("s1")
+        assert policy is not None and not policy["enabled"]
+        assert policy["disabled_reason"] == LAPSED_REASON
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_reply_window_restores_a_grant_that_already_lapsed(
+    tmp_path: Path,
+) -> None:
+    """The window opens after the fact too, not only before the lapse.
+
+    A conversation that went quiet before it had anything outstanding still
+    ends up mid-exchange the moment its message lands, and a lapse records that
+    time passed rather than a decision — so the same evidence that would have
+    held it open brings it back.
+    """
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+        await harness.auto.tick()
+        await harness.auto.disable_session(
+            "s1", reason=LAPSED_REASON, by="controller", audit={"pending": 0}
+        )
+        harness.manager.sessions["s1"].record.last_activity_ts = (
+            time.time() - harness.config.auto_delivery_session_ttl_minutes * 60 - 60
+        )
+        await harness.auto.status()
+        still_off = await harness.store.auto_policy("s1")
+        assert still_off is not None and not still_off["enabled"]
+
+        await _deliver_agent_message(harness, sender="s1", target="s2", thread_id="t1")
+        await harness.auto.status()
+        restored = await harness.store.auto_policy("s1")
+        assert restored is not None and restored["enabled"]
+        assert restored["disabled_reason"] is None
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_the_reply_window_can_be_switched_off_entirely(tmp_path: Path) -> None:
+    """0 restores the behaviour that shipped before it existed."""
+    harness = Harness(
+        tmp_path,
+        live_session("s1"),
+        live_session("s2"),
+        auto_delivery_reply_window_minutes=0,
+    )
+    try:
+        await harness.auto.tick()
+        await _deliver_agent_message(harness, sender="s1", target="s2", thread_id="t1")
+        assert await harness.auto.reply_windows(["s1"]) == {}
+        await _lapse_now(harness, "s1")
+        policy = await harness.store.auto_policy("s1")
+        assert policy is not None and not policy["enabled"]
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_reply_window_never_restores_a_decision(tmp_path: Path) -> None:
+    """It holds off a *lapse* and nothing else.
+
+    An opt-out, an exhausted send budget, and a failed delivery each record
+    something that happened, and being mid-exchange is not an answer to any of
+    them.
+    """
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+        await harness.auto.tick()
+        await _deliver_agent_message(harness, sender="s1", target="s2", thread_id="t1")
+        for reason in ("disabled by user", FAILED_DELIVERY_REASON, SEND_CAP_REASON):
+            await harness.auto.disable_session("s1", reason=reason, by="controller")
+            await harness.auto.status()
+            policy = await harness.store.auto_policy("s1")
+            assert policy is not None and not policy["enabled"], reason
+            assert policy["disabled_reason"] == reason
+    finally:
+        harness.close()
 
 
 @pytest.mark.asyncio

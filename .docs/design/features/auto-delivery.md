@@ -32,6 +32,38 @@ message on behalf of the user; a per-conversation opt-out remains available.
   worked in: observed live 2026-08-13 with the whole fleet reading
   `disabled_reason: grant expired` at `sends_used: 0`, so an agent-authored message arrived
   `armed` and then waited for a human indefinitely.
+  The window is `auto_delivery_session_ttl_minutes`, edited in Settings → Prompt queue and
+  nowhere else, conservative by default and lengthenable by the operator up to a day. It is a
+  *value* rather than a switch, so every surface that reports a lapse links to that one editor
+  instead of offering a second control (`setting-links.md`).
+- **A lapse audits itself, because it is the one disable nobody can look up afterwards.**
+  Every other disabled state records an act - a person opted out, a delivery failed, a budget
+  ran down - and the act is what explains it. A lapse records only that time passed, so
+  "auto-delivery grant lapsed while the conversation was idle" was the entire account
+  available to an operator deciding whether the window was too short, and to a sender whose
+  notification was sitting in that queue. It now writes, at the moment it fires: when, how
+  long the conversation had been idle, which window it was measured against, and **how many
+  messages it left waiting** - the last being what turns a lapse from a state into a stalled
+  delivery. The record lives on the policy row (`disabled_at`, `lapse_idle_seconds`,
+  `lapse_window_minutes`, `lapse_pending`), is logged at WARNING, is counted
+  (`auto_lapsed`), and is cleared when the grant returns, because a stale audit is worse
+  than none. It reaches the sender through `target_delivery.lapse` on `notify` and
+  `message_status`, and the operator through the Queue tab's `auto:` strip.
+- **One thing holds the lapse off: an exchange that is owed a reply.** A session whose own
+  message was **delivered** to a peer inside `auto_delivery_reply_window_minutes` (30 by
+  default, 0 to disable) is not an untouched conversation - it is the waiting half of a
+  bounded exchange, and losing its grant there is what strands the answer. Observed live
+  2026-08-21: an orchestrator's notify to a finished worker armed and could not deliver, and
+  the worker's reply had nowhere to land either. Three things keep this from being a
+  widening. It is evidence rather than authority - the master switch, the pause, quiet hours,
+  head-of-line order, the stability window, readiness, and the consecutive cap all still
+  decide each send, and it holds off the *lapse* alone, never an opt-out, a failed delivery,
+  or a spent send budget. It is capped by the exchange's own `max_thread_turns` budget
+  (`agent-messaging.md`), so it can never outlive the conversation that justifies it, and two
+  agents cannot renew it between themselves past that bound. And **staging** a message opens
+  nothing: an armed message nothing ever delivered is the symptom this exists to prevent, not
+  evidence of a live exchange. The window is derived from the queue rows themselves, like
+  thread identity and chain depth, so no second table can disagree with the audit trail.
 - **A lapse is recoverable by time; the send cap is recoverable by evidence; a decision is
   not recoverable at all.** Lapsing records only that time passed, so the conversation default
   restores it once the session is in use again, without touching a separate
@@ -132,7 +164,11 @@ Quantitative, machine-checked, and visible rather than asserted:
 
 These gate *widening* the capability (enabling the install master by default, dropping the TTL
 or the consecutive cap) — they do not gate a conversation grant itself, which is bounded by
-construction. Current values
+construction. Nor do they gate the reply window: it delivers nothing a lapse-free conversation
+would not already have delivered, it is bounded by the exchange's own budget, and every other
+gate still runs. Lengthening the *idle* window is an operator turning a dial the feature always
+had, within the same validated range; raising the consecutive cap remains the widening these
+criteria hold. Current values
 are on `GET /api/queue/auto`, in the Queue tab's `auto:` disclosure, and in the fleet queue's
 status line.
 
@@ -141,7 +177,11 @@ status line.
 - **Queue panel, `auto:` strip**: a one-line status (on/off, sends left, minutes left, quiet
   hours, why it is off) that discloses the default-on per-conversation toggle, the
   `accept agent messages armed` toggle, and `accept mid-turn agent messages`. All three are on
-  by default for a live agent conversation, so the disclosure is an opt-out surface. They are
+  by default for a live agent conversation, so the disclosure is an opt-out surface.
+  A lapsed grant states its audit there in words - how long the conversation was idle, under
+  what window, how many messages were left waiting - and links to the window itself; a grant
+  being held open by an exchange says so, because otherwise it is indistinguishable from one
+  granted a moment ago. They are
   independent: arming decides whether a peer's message counts as authorized, auto-delivery
   decides who presses send, and the third decides whether send may happen while a turn is
   still running. Cycling one never rewrites another. The auto-delivery toggle alone is unavailable when
@@ -159,8 +199,10 @@ status line.
   an overlay is a brake you cannot reach in the moment you want it. The fleet queue reports
   the state and never owns it.
 - **Settings → Prompt queue → Auto-delivery**: the install-wide master switch and the bounds every
-  grant runs under (stability window, consecutive-send cap, grant expiry, refusal back-off,
-  quiet hours). The queue strip's "off for this install" note names that control.
+  grant runs under (stability window, consecutive-send cap, idle window, reply window, refusal
+  back-off, quiet hours). The queue strip's "off for this install" note names that control, and
+  a lapse notice links to the idle window here. Both windows carry `data-setting` marks so a
+  deep link lands on the control rather than on the panel.
 
 ## API surface
 
@@ -174,6 +216,11 @@ POST /api/queue/auto/report-unsafe         {note}            operator review inp
 PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 ```
 
+Per-session rows carry `lapse` (the audit, present only while the grant is off for idleness,
+with individually-null fields on a row that lapsed before the audit existed) and `reply_window`
+(present while an exchange is holding the lapse off, with the thread's used/limit counts).
+The policy block carries `reply_window_minutes` beside the other bounds.
+
 Per-session rows cover live sessions only.
 Policy rows themselves are never deleted — an explicit opt-out or a failed-delivery hold
 must survive a restart — so the table holds one row per session ever granted, and both the
@@ -184,10 +231,14 @@ install, scanned every second.
 ## Configuration
 
 `auto_delivery_enabled`, `auto_delivery_stable_seconds`, `auto_delivery_max_consecutive`,
-`auto_delivery_session_ttl_minutes`, `auto_delivery_quiet_start`, `auto_delivery_quiet_end`,
+`auto_delivery_session_ttl_minutes`, `auto_delivery_reply_window_minutes`,
+`auto_delivery_quiet_start`, `auto_delivery_quiet_end`,
 `auto_delivery_refusal_backoff_seconds` (`config.py`, validated with lower bounds — a
 zero-length stability window would defeat the gate it exists to be), all editable in
 Settings → Prompt queue.
+`auto_delivery_reply_window_minutes` is the one bound whose lower limit is 0, because it is
+the only one that *holds off* another bound rather than granting anything: switching it off
+is a narrowing, where a zero-length stability window or an unbounded grant would not be.
 Mid-turn delivery adds `agent_interject_enabled` (install master, on),
 `agent_interject_hourly_budget` (10 per origin session) and
 `agent_interject_min_interval_seconds` (60, per target). Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
@@ -196,8 +247,11 @@ SQLite, not config, so the emergency pause never waits on a config write.
 ## Key files
 
 - `src/swe_mux/auto_delivery.py` — `AutoDeliveryController` (the loop, the gate, quiet
-  hours, counters), `promotion_status`.
-- `src/swe_mux/prompt_queue.py` — `queue_auto_policy` / `queue_auto_counters` tables,
+  hours, counters), `_lapse_session` and `lapse_record` (the audit), `reply_windows` (the one
+  thing that holds a lapse off), `promotion_status`.
+- `src/swe_mux/prompt_queue.py` — `queue_auto_policy` / `queue_auto_counters` tables (schema
+  v5 adds the lapse-audit columns), `open_reply_windows` and `pending_message_count` (the two
+  derived reads behind the reply window and the audit),
   constraint enforcement in `send_next`, `normalize_constraints`, `schedule_status`.
 - `src/swe_mux/server.py` — the `/api/queue/auto*` handlers and lifecycle wiring.
 - `frontend/src/QueuePane.tsx` - the `auto:` strip, schedule presets, and the install-wide

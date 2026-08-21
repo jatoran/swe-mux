@@ -134,6 +134,33 @@ The file tree and notes collection are utility-drawer tabs.
   same clean-state revision check so a browser returning from suspension catches up.
 - A browser ignores its own echoed save event by comparing storage revisions. Simultaneous edits
   remain intentionally non-merged and use the existing optimistic revision conflict flow.
+- **An editor commit is not automatically a save.**
+  Three guards in `noteEditGuard.ts` decide, and only the third is a failsafe:
+  a commit whose *canonical* form matches the last loaded or last saved document is a
+  re-serialization rather than an edit and writes nothing;
+  a commit that arrives after a reload with no local input since is the re-seeded engine's echo,
+  so it neither dirties the note nor schedules a save;
+  and saves that keep coming with no local input between them stop autosaving for that note,
+  say so, and are reported.
+  The canonical form erases only what markdown cannot render - line endings, a byte-order mark,
+  Unicode composition, trailing blank lines, and the *width* of a trailing whitespace run - so a
+  hard line break survives as content while a single stray trailing space does not.
+  Local input means a *trusted* browser event on that editor (a keystroke, a pointer, a paste, a
+  drop, an IME composition) or an app-mediated insert routed through it, never a programmatic
+  edit, which is what makes the failsafe safe to key on: genuinely fast typing can never trip it,
+  and typing always releases it.
+  The revision CAS cannot do this job. Two views that each rebase onto the revision they were
+  just handed both write legitimately, so every write is accepted and every write pokes the
+  other - which is exactly what happened for three days in August 2026: about one save per
+  second in long bursts, 1904 across the daemon logs, ending only when a view was closed.
+- A note that stops autosaving says so where its state is already drawn: `Autosave paused` in
+  the resource header, and a banner offering **Resume autosave** or **Reload from disk**.
+  A paused note still live-follows remote revisions, because nothing local is being held and a
+  view that has stopped writing should still show what the note now says.
+- Both guarded episodes - a pause, and a run of suppressed echoes that guard 2 already made
+  harmless - `POST /notes/save-loop-diagnostic`, which logs a bounded record at WARNING.
+  An incident that leaves no trace is one nobody can attribute next time, and the first one was
+  reconstructed from an access log days after it ended.
 - One shared Continuity editor renders every editable Markdown surface (notes and Markdown files
   opened from the browser) on desktop and mobile, and all of them
   autosave through the same resource-scoped queue. Only the save target differs: notes PUT the

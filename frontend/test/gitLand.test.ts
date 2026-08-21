@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   formatDuration,
   isActiveLand,
+  landGateNote,
   landHistoryOrder,
   landQueueOrder,
   landStateLabel,
@@ -380,4 +381,51 @@ test('a summary with no queue read at all still renders', () => {
   const summary = landingSummary(null, null)
   assert.equal(summary.blocked, false)
   assert.equal(summary.queue, 'nothing queued')
+})
+
+// -- which gate a land ran ----------------------------------------------------
+//
+// A skipped gate is the one thing on a finished row that the row's own states cannot
+// show: it goes from merging the trunk straight to fast-forwarding, and reads afterwards
+// exactly like a land that passed three minutes of pytest. So it is the one thing the
+// vocabulary here draws, and the parser refuses to infer it from anything ambiguous.
+
+test('only a skipped gate earns a note; a full one is what the states already say', () => {
+  const rowOf = (verify_gate: unknown) => parseLandQueue({
+    requests: [{ id: 'a', state: 'landed', branch: 'worktree-alpha', created_at: 10, verify_gate }],
+  }).requests[0]
+
+  assert.equal(rowOf('docs_only').verifyGate, 'docs_only')
+  assert.equal(landGateNote(rowOf('docs_only')), 'documentation only · verification skipped')
+
+  assert.equal(rowOf('full').verifyGate, 'full')
+  assert.equal(landGateNote(rowOf('full')), '')
+})
+
+test('an unrecognised gate value reads as unclassified, never as a skip', () => {
+  // The direction is the whole point: a value this build does not know must not be able
+  // to render as "nothing verified this", and a row from a build that predates the
+  // classifier has no classification rather than a full gate it never recorded.
+  for (const value of [undefined, null, '', 'DOCS_ONLY', 'partial', 7, { gate: 'docs_only' }]) {
+    const row = parseLandQueue({
+      requests: [{ id: 'a', state: 'landed', branch: 'b', created_at: 10, verify_gate: value }],
+    }).requests[0]
+    assert.equal(row.verifyGate, '')
+    assert.equal(landGateNote(row), '')
+  }
+})
+
+test('a land going round the gate says so on the summary line while it runs', () => {
+  // `landing` is the only state a skipping row is ever seen in, and it has no progress
+  // reading of its own — without this the strip narrates it as an ordinary fast-forward.
+  const summary = landingSummary(queueOf({
+    requests: [{ id: 'a', state: 'landing', branch: 'worktree-docs', created_at: 10, verify_gate: 'docs_only' }],
+  }), gateOf({}))
+  assert.equal(
+    summary.queue,
+    'worktree-docs · fast-forwarding · documentation only · verification skipped',
+  )
+  assert.equal(summary.tone, 'busy')
+  // Skipping the gate is not a *block*: nothing needs a human, and the strip stays shut.
+  assert.equal(summary.blocked, false)
 })

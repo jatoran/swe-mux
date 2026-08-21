@@ -160,6 +160,15 @@
   which is what stops an agent approving the command its own land runs - editing the
   command and approving it stay two acts against two routes, and a write can never produce
   an approved command because the approval is a digest over the bytes it just moved.
+  *Which* gate runs is decided by a `classify` step, and it stays on the executing side of
+  the same line: matching paths against a **closed** documentation allowlist is a total
+  function with no model, heuristic, or configuration in it, so it is not a decision -
+  what would cross the line is judging whether a change "looks risky". Everything it
+  cannot answer with certainty answers "the full gate", including a rename between two
+  documents; and the classification is recorded on **both** outcomes, with the skipped
+  `verify` step still present in the trail and the class persisted on the row, because a
+  documentation-only land never enters `verifying` and would otherwise read exactly like
+  one that passed three minutes of pytest.
   A second rule governs what a *running* gate may say: every signal is observed or absent,
   never estimated. A step number counts markers the gate itself printed, a step *total*
   exists only where a byte-identical run has already passed and is withdrawn the moment a
@@ -214,6 +223,21 @@
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`
+- Changing what the daemon does before it can serve - adding a startup phase, moving one
+  behind the listener, or changing what health says while the runtime is being built:
+  `development/PERFORMANCE_RUNBOOK.md` (§Startup latency), `design/architecture.md`
+  (invariant 15), `design/interfaces.md`, `design/features/desktop-shell.md`,
+  `technical/backend/packages/daemon-runtime.md`, `technical/backend/sqlite.md`.
+  Two rules the split exists to enforce. **A bound listener is not a ready daemon**: health
+  answers 503 with the phase in flight until the runtime exists, and every consumer decides on
+  readiness rather than reachability - a 200 during the build would have the tray, the redeploy
+  wait, and the browser's post-restart reload each declare a daemon usable that cannot answer a
+  single request. And **nothing may run unlogged for minutes**: a phase is named and timed *and*
+  reported while it is still running, because both silent stretches of the 226.6s start this was
+  built for were work in flight, which a completion line would never have shown. Anything that
+  blocks the event loop on this path defeats both, so it goes in a thread.
+  Measure before moving a phase: the obvious suspect (a 2.73 GB `mux.db`) was innocent and the
+  real cost was a per-store integrity probe nobody had timed.
 - Changing HTTP/WebSocket traffic accounting, response compression, static precompression,
   or browser polling cadence: `design/features/remote-access.md`, `design/interfaces.md`,
   `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,

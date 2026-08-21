@@ -14,7 +14,7 @@ from .config import LOOPBACK_HOSTS, Config, load_config
 from .lifecycle import ledger
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
 from .process_reaper import process_in_job
-from .server import create_app
+from .server import create_app, wait_runtime_ready
 from .tailscale import enable_mobile_voice_serve, listener_hosts
 from .timer_resolution import raise_timer_resolution
 
@@ -126,21 +126,31 @@ async def serve(
             rendered_host = f"[{host}]" if ":" in host else host
             print(f"======== Running on http://{rendered_host}:{config.port} ========", flush=True)
         if config.tailnet_enabled:
-            asyncio.create_task(_auto_enable_mobile_voice(config.port))
+            asyncio.create_task(_auto_enable_mobile_voice(app, config.port))
         await shutdown_event.wait()
     finally:
         await runner.cleanup()
 
 
-async def _auto_enable_mobile_voice(port: int) -> None:
+async def _auto_enable_mobile_voice(app: web.Application, port: int) -> None:
     """Bring up the private HTTPS mobile-voice proxy in the background.
 
     Tailscale Serve on 443 gives phones a secure-context origin for microphone
     capture while the direct 100.x HTTP listener stays as a fallback. This is
     best-effort: the daemon still runs if Tailscale is absent or HTTPS is not
     yet approved for the tailnet, and Settings exposes the same one-tap setup.
+
+    Waits for the runtime first. The listeners now bind before the runtime is
+    built, and Serve reclamation decides whether an existing route is abandoned
+    by asking whether a swe-mux daemon answers health on the port behind it - a
+    question this daemon would answer "no" about *itself* for the whole of its
+    own startup.
     """
     log = logging.getLogger(__name__)
+    try:
+        await wait_runtime_ready(app)
+    except Exception:  # noqa: BLE001 - a failed build already stops the daemon
+        return
     try:
         result = await enable_mobile_voice_serve(port)
     except Exception:  # noqa: BLE001 - startup helper must never crash the daemon
