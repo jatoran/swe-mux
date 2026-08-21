@@ -38,7 +38,15 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
-from . import budget, git_init, git_review, session_titles, worktree_graveyard
+from . import (
+    agent_environment,
+    budget,
+    git_init,
+    git_review,
+    mcp_tools,
+    session_titles,
+    worktree_graveyard,
+)
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -264,6 +272,7 @@ from .provider_accounts import (
     ProviderAccountManager,
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
+from .recent_files import read_recent_files
 from .reconcile import reconcile_external_history
 from .scan_consumers import catch_me_up, handoff_progress, live_blocker, search_scan_records
 from .scan_timeline import SCAN_RULE_ID, ScanContext, ScanTimelineService
@@ -804,6 +813,11 @@ def create_app(
     app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app["hook_ingress_windows"] = {}
     app["mcp_rate_windows"] = {}
+    # Newest runtime tool inventory per session, published by the injected OMP
+    # extension. In memory only: it describes one process generation, and a
+    # snapshot that outlived its process would be a false liveness claim.
+    app["runtime_inventories"] = mcp_tools.LiveSnapshotStore()
+    app["mcp_tools_windows"] = {}
     app["attachment_locks"] = {}
     # Mutable holder because aiohttp freezes app keys once started; carries the
     # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
@@ -979,6 +993,7 @@ def create_app(
                 restore_agent_context,
             ),
             web.get("/api/projects/{project_id}/files/tree", list_project_files_tree),
+            web.get("/api/projects/{project_id}/files/recent", list_recent_project_files),
             web.get("/api/projects/{project_id}/files", list_project_files),
             web.post("/api/projects/{project_id}/resources", post_project_resource),
             web.get("/api/projects/{project_id}/search", search_project_files_route),
@@ -1042,6 +1057,12 @@ def create_app(
             web.get("/api/history/scan-search", scan_timeline_search),
             web.get("/api/sessions/{sid}/skills", session_skills),
             web.get("/api/sessions/{sid}/agent-environment", session_agent_environment),
+            # POST because it is the one Agent Environment call that reaches a
+            # server: it may start a short-lived probe process and open a network
+            # connection, which is exactly what a GET promises not to do.
+            web.post(
+                "/api/sessions/{sid}/agent-environment/mcp-tools", session_mcp_tools
+            ),
             web.patch("/api/sessions/{sid}", patch_session),
             web.post("/api/sessions/{sid}/read", mark_session_read),
             web.post("/api/sessions/{sid}/title/regenerate", regenerate_session_title),
@@ -1162,6 +1183,7 @@ def create_app(
             web.post("/api/previews/{preview_id}/capture", capture_preview),
             web.route("*", "/preview/{preview_id}/{tail:.*}", preview_proxy),
             web.post("/api/hooks/{sid}", hook_ingress),
+            web.post("/api/sessions/{sid}/runtime-inventory", runtime_inventory_ingress),
             web.post("/mcp", mcp_endpoint),
             web.get("/api/git/worktrees", list_worktrees),
             web.get("/api/git/graph", git_graph),
@@ -4191,6 +4213,28 @@ async def _annotation_session_run_ids(app: web.Application, session_id: str) -> 
     return sorted(run_ids)
 
 
+def _mark_unsupported(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Retract, at read time, findings whose own evidence no longer supports them.
+
+    A stored finding is a record of what a detector concluded and is never edited
+    or deleted to change that record. What *can* change is whether a reader is
+    told it stands: the loop detector now refuses to seed on a fact carrying no
+    target and no content hash, and the same rule applied here withdraws the 390
+    of 397 historical findings that rest on exactly those facts
+    (`deterministic_consumers.loop_finding_unsupported`). The row keeps saying
+    what it said; the read says why it does not hold.
+    """
+    from .deterministic_consumers import LOOP_UNSUPPORTED_REASON, loop_finding_unsupported
+
+    for item in items:
+        if item.get("tag") != "loop-detected":
+            continue
+        if loop_finding_unsupported(item.get("evidence_json")):
+            item["unsupported"] = True
+            item["unsupported_reason"] = LOOP_UNSUPPORTED_REASON
+    return items
+
+
 async def list_annotations(request: web.Request) -> web.Response:
     """Findings read: annotations filtered by tag, project, session, run, and time.
 
@@ -4215,14 +4259,14 @@ async def list_annotations(request: web.Request) -> web.Response:
     )
     return json_response(
         {
-            "items": await store.annotations(
+            "items": _mark_unsupported(await store.annotations(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,
                 project_id=project_id,
                 tag=tag,
                 since=since,
                 limit=int(query.get("limit", 200)),
-            ),
+            )),
             "tag_counts": await store.annotation_tag_counts(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,
@@ -10625,6 +10669,22 @@ async def list_project_files_tree(request: web.Request) -> web.Response:
     return json_response(result)
 
 
+async def list_recent_project_files(request: web.Request) -> web.Response:
+    """The Files explorer's Recent view: what Git says was touched here, newest first.
+
+    Deliberately Git-backed rather than an mtime walk - see `recent_files`. The ignore
+    patterns are read off the loop because they parse the Project's config file; the Git
+    calls are already async and bounded.
+    """
+    project = _request_project(request)
+    patterns = await asyncio.to_thread(
+        effective_project_ignores,
+        project.root,
+        request.app["config"].project_ignore_patterns,
+    )
+    return json_response(await read_recent_files(project.root, ignore_patterns=patterns))
+
+
 async def search_project_files_route(request: web.Request) -> web.Response:
     project = _request_project(request)
     mode = request.query.get("mode", "names")
@@ -12475,6 +12535,25 @@ def _agent_loaded_at(session: Any) -> float:
     )
 
 
+def _agent_environment_cwd(record: Any) -> Path:
+    """The directory the CLI actually trusts, with a fallback that always exists.
+
+    Shared by the inventory and the tool fetch so a probe is configured from the
+    same project the inventory described: the live cwd decides which project
+    configuration layer wins, and answering the two questions from two
+    directories would let a fetch dial a server the row never mentioned.
+    """
+    cwd = Path(
+        (record.runtime_cwd if record.runtime_cwd_live else None)
+        or record.run_cwd
+        or record.spawn_cwd
+        or record.cwd
+    )
+    if not cwd.is_dir():
+        cwd = Path(record.spawn_cwd or record.cwd)
+    return cwd
+
+
 async def session_agent_environment(request: web.Request) -> web.Response:
     """Return a bounded passive inventory for the focused agent CLI."""
     session = request.app["sessions"].resolve(request.match_info["sid"])
@@ -12500,14 +12579,7 @@ async def session_agent_environment(request: web.Request) -> web.Response:
         return json_response(
             {"error": "agent environment is available only for agent sessions"}, 409
         )
-    cwd = Path(
-        (record.runtime_cwd if record.runtime_cwd_live else None)
-        or record.run_cwd
-        or record.spawn_cwd
-        or record.cwd
-    )
-    if not cwd.is_dir():
-        cwd = Path(record.spawn_cwd or record.cwd)
+    cwd = _agent_environment_cwd(record)
     refresh = request.query.get("refresh") in {"1", "true"}
     payload = await asyncio.to_thread(
         discover_agent_environment,
@@ -12529,6 +12601,140 @@ async def session_agent_environment(request: web.Request) -> web.Response:
             len(payload["sections"]),
         )
     return json_response(payload)
+
+
+#: A tool fetch may start a probe process, so it is rate limited per session on
+#: top of the cache. Nothing here is expensive to *serve* - the cost is entirely
+#: in what a burst of clicks would spawn.
+MCP_TOOLS_RATE_LIMIT = 20
+MCP_TOOLS_RATE_WINDOW_SECONDS = 60.0
+
+
+async def session_mcp_tools(request: web.Request) -> web.Response:
+    """Fetch one configured MCP server's published tools, on explicit request.
+
+    This is deliberately not part of the inventory GET. Opening the Agent tab
+    must stay passive (`features/agent-environment.md`), and folding a probe into
+    the payload every tab-open reads would start servers and open connections for
+    a user who only wanted to see a model name.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    record = session.record
+    if record.runtime_boundary != "local":
+        boundary = record.runtime_boundary
+        return json_response(
+            {
+                "error": "agent environment is unavailable across a non-local terminal boundary",
+                "code": "agent_bridge_unavailable",
+                "capability": "agent-bridge-unavailable",
+                "reason": (
+                    "remote_terminal_boundary"
+                    if boundary == "remote"
+                    else "terminal_boundary_unknown"
+                ),
+                "boundary": boundary,
+                "authority": record.remote_authority,
+            },
+            409,
+        )
+    if not is_agent_harness(record.backend):
+        return json_response(
+            {"error": "agent environment is available only for agent sessions"}, 409
+        )
+    body = await request.json() if request.can_read_body else {}
+    if not isinstance(body, dict):
+        raise ValueError("request body must be a JSON object")
+    server = str(body.get("server") or "").strip()
+    if not server:
+        return json_response({"error": "a server name is required"}, 400)
+    refresh = bool(body.get("refresh"))
+
+    now = time.monotonic()
+    windows: dict[str, deque[float]] = request.app["mcp_tools_windows"]
+    if len(windows) > HOOK_WINDOW_SWEEP_AT:
+        live = request.app["sessions"].sessions
+        for stale in [sid for sid in windows if sid not in live]:
+            windows.pop(stale, None)
+    window = windows.setdefault(record.id, deque())
+    while window and now - window[0] >= MCP_TOOLS_RATE_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= MCP_TOOLS_RATE_LIMIT:
+        raise web.HTTPTooManyRequests(
+            text="too many MCP tool fetches for this session", headers={"Retry-After": "5"}
+        )
+    window.append(now)
+
+    cwd = _agent_environment_cwd(record)
+    args = list(record.args)
+    loaded_at = _agent_loaded_at(session)
+    try:
+        configs = await asyncio.to_thread(
+            agent_environment.resolve_mcp_servers,
+            backend=record.backend,
+            cwd=cwd,
+            args=args,
+            loaded_at=loaded_at,
+        )
+    except ValueError as exc:
+        return json_response({"error": str(exc)}, 409)
+    entry = configs.get(server.casefold())
+    if entry is None:
+        return json_response(
+            {"error": "no MCP server with that name is configured for this session"}, 404
+        )
+    payload = await mcp_tools.fetch_server_tools(
+        backend=record.backend,
+        server=entry.name,
+        entry=entry,
+        cwd=cwd,
+        executable=record.exe,
+        args=args,
+        version=await asyncio.to_thread(
+            agent_environment.probe_cli_version, record.backend, record.exe
+        ),
+        mux_mcp_url=f"{request.app['sessions'].ingress_url}/mcp",
+        live_snapshot=request.app["runtime_inventories"].get(record.id),
+        session_id=record.id,
+        refresh=refresh,
+    )
+    return json_response(payload)
+
+
+async def runtime_inventory_ingress(request: web.Request) -> web.Response:
+    """Accept a runtime tool inventory published by a session's injected extension.
+
+    Loopback-only and authenticated with the session's own hook secret, like hook
+    ingress - but on its own route, because this is not a lifecycle event and
+    must never touch status detection, history, or the prompt queue. The body is
+    whitelisted and bounded before anything is retained; an extension runs inside
+    the user's agent and its payload is untrusted input like any other.
+    """
+    if request.content_length is not None and request.content_length > 256 * 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=request.content_length)
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    host = peer[0] if peer else ""
+    if host not in {"127.0.0.1", "::1"}:
+        raise web.HTTPForbidden(text="runtime inventory ingress is loopback-only")
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    if session.record.state in {"exited", "crashed"}:
+        raise web.HTTPGone(text="session has ended")
+    supplied = request.headers.get("X-Mux-Hook-Secret", "")
+    if not secrets.compare_digest(supplied, session.hook_secret):
+        raise web.HTTPForbidden(text="invalid hook secret")
+    raw = await request.read()
+    if len(raw) > 256 * 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=len(raw))
+    snapshot = mcp_tools.normalize_live_snapshot(json.loads(raw))
+    store: mcp_tools.LiveSnapshotStore = request.app["runtime_inventories"]
+    store.put(session.record.id, snapshot)
+    store.sweep(set(request.app["sessions"].sessions))
+    log.info(
+        "runtime inventory published session=%s tools=%d reason=%s",
+        session.record.id,
+        len(snapshot["tools"]),
+        snapshot["reason"] or "-",
+    )
+    return json_response({"ok": True, "tools": len(snapshot["tools"])})
 
 
 async def voice_generate(request: web.Request) -> web.Response:

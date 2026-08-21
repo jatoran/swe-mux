@@ -91,7 +91,8 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   It was confined to its own list originally, on the argument that Group membership is an explicit
   decision rather than a drop side effect. In practice a Group could only be filled from a menu two
   levels away from the tree it rearranges, which is the surface the decision is actually made on.
-  The Project-menu Group select and the registry's Group field remain, unchanged.
+  The Project menu's Group control and the registry's Group field remain as the explicit routes.
+  The menu control is now a scrolling pop-out submenu rather than a native `<select>`, listing Ungrouped, every Group, and `Create new group` - which mints the Group *and* moves this Project into it, since a create that left the Project where it was would be a detour to the sidebar menu (`ui.md` § Menus and overlays).
 - A drop commits **two writes, in this order**: `PATCH /api/projects/{id}` for the Group, then
   `PUT /api/projects/order` for the position. The reorder is validated against the positions it was
   planned from, and a Group write changes none of them, so the order is safe either way round.

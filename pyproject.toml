@@ -8,6 +8,16 @@ dependencies = [
   "aiohttp>=3.11",
   "en-core-web-sm",
   "faster-whisper>=1.2",
+  # The official MCP client, used only by the Agent Environment tool-catalog
+  # fetch to dial a Claude-configured server (`mcp_tools.claude_probe`). swe-mux
+  # implements the MCP *server* side itself (`mcp.py`); the client is taken as a
+  # dependency rather than written because the value is precisely the part that
+  # rots - transport selection and negotiating both the legacy and the 2026
+  # stateless protocol revisions. Imported inside the probe, so the daemon does
+  # not pay for it at startup; `packaging/swe_mux.spec` collects it explicitly
+  # because a lazy import is what PyInstaller's source graph is least likely to
+  # follow.
+  "mcp>=2.0.0",
   # Pillow is not a Windows feature: Project image presentation is the same
   # capability on every target and Pillow ships wheels for all of them. It was
   # marked win32 only while Windows was the sole host, which then made

@@ -73,10 +73,13 @@ function delay(ms: number): Promise<void> {
 export default function sweMuxHook(pi: ExtensionAPI): void {
   const url = process.env.MUX_HOOK_URL;
   const secret = process.env.MUX_HOOK_SECRET;
+  const runtimeUrl = process.env.MUX_RUNTIME_URL;
   let nextSequence = 0;
   let nextRootTurn = 0;
   let activeRootTurnId: string | undefined;
   let deliveryTail = Promise.resolve();
+  let inventoryTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastPublished: string | undefined;
 
   async function post(envelope: HookEnvelope): Promise<void> {
     if (!url || !secret) return;
@@ -113,16 +116,95 @@ export default function sweMuxHook(pi: ExtensionAPI): void {
     return delivery;
   }
 
-  pi.on("session_start", (_event, ctx) =>
-    emit("SessionStart", { ...sessionPayload(ctx), source: "startup", omp_event: "session_start" }),
-  );
-  pi.on("before_agent_start", (event, ctx) =>
-    emit("UserPromptSubmit", {
+  /**
+   * Publish this process's live MCP tool inventory.
+   *
+   * The runtime tool list is the one thing swe-mux's passive configuration scan
+   * provably cannot know, and OMP is the only harness that can answer it without
+   * a second process: this extension is already inside the real session. Only
+   * `mcp__*` tools are sent - built-ins and extension tools are already covered
+   * by the documented catalog, and shipping their schemas would make this a
+   * large payload for no added answer.
+   *
+   * Failure is silent by design. This is a drawer feature; nothing about the
+   * session's status, history, or queue may depend on it, and a delivery error
+   * must never surface in the user's terminal.
+   */
+  function publishToolInventory(reason: string): void {
+    if (!runtimeUrl || !secret) return;
+    let tools: Array<{ name: string; description: string }>;
+    try {
+      tools = pi
+        .getAllTools()
+        .filter((tool) => tool.sourceInfo.source === "mcp" || tool.name.startsWith("mcp__"))
+        .map((tool) => ({ name: tool.name, description: tool.description ?? "" }));
+    } catch {
+      return;
+    }
+    // Identical lists are not resent. This is what makes it safe to schedule a
+    // publication on ordinary turn boundaries: the first one after startup
+    // catches servers that were still connecting, and every later one costs
+    // nothing at all.
+    const signature = tools.map((tool) => tool.name).join(",");
+    if (signature === lastPublished) return;
+    lastPublished = signature;
+    void fetch(runtimeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Mux-Hook-Secret": secret },
+      body: JSON.stringify({ tools, reason }),
+      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+    }).catch(() => {
+      // Let the next boundary try again rather than pretending this landed.
+      lastPublished = undefined;
+    });
+  }
+
+  /**
+   * Coalesce bursts and let the runtime settle.
+   *
+   * A server reconnecting emits several `list_changed` notifications in a row,
+   * and each one would otherwise be a separate POST of a nearly identical list.
+   * The delay matters most at startup, where MCP servers are still connecting
+   * and an immediate read returns an empty list.
+   */
+  function scheduleInventory(reason: string, delayMs = 250): void {
+    if (inventoryTimer) clearTimeout(inventoryTimer);
+    inventoryTimer = setTimeout(() => {
+      inventoryTimer = undefined;
+      publishToolInventory(reason);
+    }, delayMs);
+  }
+
+  pi.on("mcp_notification", (event) => {
+    // The runtime handles the list refresh itself before extensions see this,
+    // so by now `getAllTools()` already reflects the change.
+    if (event.method === "notifications/tools/list_changed") {
+      scheduleInventory(`mcp:${event.server}`);
+    }
+  });
+
+  pi.on("session_start", (_event, ctx) => {
+    // Deferred, not immediate: MCP servers connect asynchronously during
+    // startup, and a list read at this instant is usually empty.
+    scheduleInventory("session_start", 3000);
+    return emit("SessionStart", {
+      ...sessionPayload(ctx),
+      source: "startup",
+      omp_event: "session_start",
+    });
+  });
+  pi.on("before_agent_start", (event, ctx) => {
+    // The catch-all for a server that finished connecting after the startup
+    // read: `notifications/tools/list_changed` announces a list that *changed*,
+    // not one that arrived. Deduplicated, so this is a no-op on every turn but
+    // the one where the list actually differs.
+    scheduleInventory("turn");
+    return emit("UserPromptSubmit", {
       ...sessionPayload(ctx),
       prompt: event.prompt,
       omp_event: "before_agent_start",
-    }),
-  );
+    });
+  });
   pi.on("turn_start", (event, ctx) =>
     emit("turn_started", {
       ...sessionPayload(ctx),

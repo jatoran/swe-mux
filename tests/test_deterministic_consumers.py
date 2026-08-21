@@ -58,7 +58,10 @@ def fact(
 
 
 def test_a_repeated_action_with_no_progress_is_a_loop() -> None:
-    facts = [fact("command", at=index, fingerprint="same") for index in range(1, 5)]
+    facts = [
+        fact("command", at=index, fingerprint="same", target="pytest tests/test_a.py")
+        for index in range(1, 5)
+    ]
     finding = detect_loop(facts)
     assert finding is not None
     assert finding.repeats == 4
@@ -71,10 +74,68 @@ def test_a_repeated_action_with_no_progress_is_a_loop() -> None:
 
 def test_two_repeats_are_not_a_loop() -> None:
     facts = [
-        fact("command", at=index, fingerprint="same")
+        fact("command", at=index, fingerprint="same", target="pytest -q")
         for index in range(LOOP_REPEAT_THRESHOLD - 1)
     ]
     assert detect_loop(facts) is None
+
+
+def test_a_fact_with_no_discriminator_never_seeds_a_loop() -> None:
+    # The single largest source of false loops (measured 2026-08-21): a `PreToolUse`
+    # hook emitted `tool_use` with only a tool name, so 25,362 unrelated Bash calls
+    # shared the fingerprint of `{"scope":"root","tool":"Bash"}` and 390 of 397
+    # lifetime findings rested on six such fingerprints. Capture now carries the
+    # target; this is the fail-closed half, which does not depend on it.
+    from swe_mux.deterministic_consumers import has_loop_discriminator
+
+    blind = [fact("command", at=index, fingerprint="same") for index in range(1, 6)]
+    assert detect_loop(blind) is None
+    assert has_loop_discriminator(blind[0]) is False
+    # Either half of the discriminator is enough: a write names itself by what it
+    # wrote even with no target key, and a test result by its failing set.
+    assert has_loop_discriminator(fact("file_write", at=1, content_hash="h1")) is True
+    outcome = {"test_outcome": {"failed": 2, "failing_tests": ["a", "b"]}}
+    tested = [
+        fact("test_result", at=index, fingerprint="same", detail=outcome)
+        for index in range(1, 6)
+    ]
+    assert has_loop_discriminator(tested[0]) is True
+    assert detect_loop(tested) is not None
+
+
+def test_a_repeated_read_only_shell_command_is_not_a_loop() -> None:
+    # Live calibration case (2026-08-21): `grep -nE ... tasks/bpberjtk2.output` five
+    # times was flagged — an agent polling a background task's output. Every Bash
+    # call classifies as `command`, a change-attempting kind, so the exclusion that
+    # already protects `tool`/`file_read` did not reach the shell.
+    for command in (
+        "grep -nE '^(=== |verification passed)' /tmp/tasks/x.output",
+        "git -C D:/PROJECTS/swe-mux status --porcelain",
+        "netstat -ano",
+        "curl -s http://127.0.0.1:8765/api/health",
+        "ls -la src/swe_mux",
+    ):
+        facts = [
+            fact("command", at=index, fingerprint="same", target=command)
+            for index in range(1, 6)
+        ]
+        assert detect_loop(facts) is None, command
+
+
+def test_a_shell_command_that_writes_still_seeds_a_loop() -> None:
+    # The predicate fails toward keeping the detector: a redirection, a
+    # substitution, an unknown verb, or a truncated command is not read-only.
+    for command in (
+        "grep -r foo src > out.txt",
+        "cat template.py && python build.py",
+        "npm run build",
+        "grep foo src | tee out.txt",
+    ):
+        facts = [
+            fact("command", at=index, fingerprint="same", target=command)
+            for index in range(1, 6)
+        ]
+        assert detect_loop(facts) is not None, command
 
 
 def test_a_shrinking_failing_test_set_is_progress_not_a_loop() -> None:
@@ -134,10 +195,10 @@ def test_read_only_facts_still_feed_the_progress_gate() -> None:
     # other facts from the gate: a repeated command interleaved with reads is
     # still judged on whether anything measurable moved.
     facts = [
-        fact("command", at=1, fingerprint="same"),
+        fact("command", at=1, fingerprint="same", target="pytest -q"),
         fact("file_read", at=2, fingerprint="r", target="a.py"),
-        fact("command", at=3, fingerprint="same"),
-        fact("command", at=4, fingerprint="same"),
+        fact("command", at=3, fingerprint="same", target="pytest -q"),
+        fact("command", at=4, fingerprint="same", target="pytest -q"),
     ]
     finding = detect_loop(facts)
     assert finding is not None
@@ -146,25 +207,69 @@ def test_read_only_facts_still_feed_the_progress_gate() -> None:
 
 def test_new_file_content_in_the_window_is_progress() -> None:
     facts = [
-        fact("command", at=1, fingerprint="same"),
+        fact("command", at=1, fingerprint="same", target="pytest -q"),
         fact("file_write", at=2, fingerprint="w", target="a.py", content_hash="h1"),
-        fact("command", at=3, fingerprint="same"),
-        fact("command", at=4, fingerprint="same"),
+        fact("command", at=3, fingerprint="same", target="pytest -q"),
+        fact("command", at=4, fingerprint="same", target="pytest -q"),
     ]
     assert detect_loop(facts) is None
+
+
+def test_a_stored_loop_finding_with_no_discriminator_is_retracted_at_read_time() -> None:
+    # The stored row is never rewritten: it is a record of what was concluded. What
+    # changes is what a reader is told about it, by the same rule the detector now
+    # applies before seeding.
+    from swe_mux.deterministic_consumers import loop_finding_unsupported
+
+    legacy = json.dumps(
+        [{"fact_id": "f1", "kind": "command", "target": None, "fingerprint": "ae90"}] * 4
+    )
+    assert loop_finding_unsupported(legacy) is True
+    # A finding resting on real evidence still stands, by target or by hash.
+    assert loop_finding_unsupported(json.dumps([{"target": "pytest -q"}])) is False
+    assert loop_finding_unsupported(json.dumps([{"content_hash": "h1"}])) is False
+    # An empty or unreadable evidence set is not a positive claim either way.
+    assert loop_finding_unsupported("[]") is False
+    assert loop_finding_unsupported("not json") is False
 
 
 # ------------------------------------------------------- declared vs verified
 
 
-def test_a_completion_claim_with_no_test_run_is_reported_as_three_facts() -> None:
-    finding = detect_declared_vs_verified("Everything is fixed now.", [])
+def test_a_run_with_no_test_facts_produces_no_finding() -> None:
+    # Measured 2026-08-21: one `test_result` fact stood against 4,485
+    # `command_result` facts in a 24-hour window, because the land queue's gate
+    # runs out-of-band and never became a fact. With nothing captured the detector
+    # cannot tell "this agent verified nothing" from "this install captured
+    # nothing", and it was saying the first about every run while only the second
+    # was known. Silence is the honest answer; the gate fact is the repair.
+    assert detect_declared_vs_verified("Everything is fixed now.", []) is None
+
+
+def test_a_completion_claim_against_a_red_run_reports_three_separate_facts() -> None:
+    facts = [
+        fact("test_result", at=5, detail={"test_outcome": {"failed": 2, "failing_tests": ["x"]}})
+    ]
+    finding = detect_declared_vs_verified("Everything is fixed now.", facts)
     assert finding is not None
-    assert (finding.declared, finding.tests_ran, finding.tests_passed) == (True, False, False)
+    assert (finding.declared, finding.tests_ran, finding.tests_passed) == (True, True, False)
     # Declared, verified, and correct stay strictly apart — never one ✓.
     assert "claims done" in finding.content
-    assert "tests not run" in finding.content
     assert "✓" not in finding.content
+
+
+def test_a_claim_finding_carries_a_pointer_back_to_the_turn_that_made_it() -> None:
+    # Every one of the 42 lifetime findings carried an empty evidence set, which
+    # breaks the "evidence is a set" contract outright: the reader had nothing to
+    # check the claim against, not even the message it was read from.
+    facts = [fact("test_result", at=5, detail={"test_outcome": {"failed": 1}})]
+    pointer = {"kind": "claim", "session_id": "s1", "message_ts": 1700.0}
+    finding = detect_declared_vs_verified(
+        "Everything is fixed now.", facts, claim_evidence=pointer
+    )
+    assert finding is not None
+    assert finding.evidence[0] == pointer
+    assert finding.evidence[1]["fact_id"] == facts[0]["id"]
 
 
 def test_a_claim_backed_by_a_green_run_is_not_a_finding() -> None:
@@ -193,12 +298,40 @@ def test_a_claim_contradicted_by_a_red_run_is_a_finding() -> None:
 
 
 def test_ordinary_prose_is_not_a_completion_claim() -> None:
+    red = [fact("test_result", at=5, detail={"test_outcome": {"failed": 1}})]
     for text in (
         "I'll start by reading the tests.",
         "The tests are in tests/test_core.py.",
         "This might be why it fails.",
+        # The optional copula made these claims. 27 of 42 lifetime findings came
+        # from this one alternative, and every sampled one was English rather than
+        # an assertion (measured 2026-08-21).
+        "Land it from this working tree, not the primary checkout.",
+        "Is it working, or awaiting input?",
+        "Leave it fixed and unexposed for now.",
+        # A failure word immediately before the claim inverts it.
+        "The pipe once shipped a failing test green.",
+        "Not all tests pass yet.",
+        # Quotation is not assertion: both anti-overclaim findings in the lifetime
+        # corpus fired on a message quoting the requirement.
+        "Anti-overclaim (`all tests pass`) can fire when the model is quoting you.",
+        "```\nall tests pass\n```\nThat pattern is the one to avoid.",
     ):
-        assert detect_declared_vs_verified(text, []) is None, text
+        assert detect_declared_vs_verified(text, red) is None, text
+
+
+def test_a_claim_is_read_from_the_closing_summary_not_the_body() -> None:
+    # A multi-thousand-word report describing what a *future* state would look
+    # like is not a verdict on the work just done.
+    from swe_mux.deterministic_consumers import CLAIM_SCOPE_CHARS
+
+    red = [fact("test_result", at=5, detail={"test_outcome": {"failed": 1}})]
+    buried = "Everything is fixed now.\n\n" + ("Body prose about the audit. " * 200)
+    assert len(buried) > CLAIM_SCOPE_CHARS
+    assert detect_declared_vs_verified(buried, red) is None
+    # The same sentence in the closing paragraph is a claim.
+    closing = ("Body prose about the audit. " * 200) + "\n\nEverything is fixed now."
+    assert detect_declared_vs_verified(closing, red) is not None
 
 
 # ------------------------------------------------------------------ doc debt
@@ -274,19 +407,45 @@ def test_doc_debt_ignores_files_no_doc_claims() -> None:
     assert detect_doc_debt([fact("file_write", at=1, target="scratch/notes.py")], {}) is None
 
 
-def test_doc_debt_dedupe_key_is_stable_for_the_same_dirty_set() -> None:
-    ownership = {normalize_target("a.py"): ("one.md",), normalize_target("b.py"): ("two.md",)}
-    first = detect_doc_debt(
-        [fact("file_write", at=1, target="a.py"), fact("file_write", at=2, target="b.py")],
-        ownership,
+def test_doc_debt_dedupe_key_is_per_doc_so_a_growing_set_never_restates() -> None:
+    # The old key hashed the whole dirty *set* — the identical pattern removed
+    # from provenance for being quadratic-restating. One more dirty doc minted a
+    # new row restating all the others: 137 rows carried 137 distinct keys, and
+    # one window's 8-doc set was a strict subset of the 9-doc set beside it
+    # (measured 2026-08-21). Per doc, one dirty doc is one row forever.
+    assert doc_debt_dedupe_key("p1", "one.md") == doc_debt_dedupe_key("p1", "one.md")
+    assert doc_debt_dedupe_key("p1", "one.md") != doc_debt_dedupe_key("p1", "two.md")
+    assert doc_debt_dedupe_key("p1", "one.md") != doc_debt_dedupe_key("p2", "one.md")
+
+
+def test_doc_debt_reach_drops_a_hub_rather_than_naming_every_doc() -> None:
+    # The reach refinement re-admitted through the back door exactly the explosion
+    # DOC_HUB_OWNER_LIMIT was calibrated to prevent: one window's finding read "21
+    # doc(s) owe an update for 3 changed source file(s)" — very nearly the whole
+    # `.docs` tree — from edits to three composition roots (measured 2026-08-21).
+    from swe_mux.deterministic_consumers import (
+        DOC_REACH_DEPENDENT_LIMIT,
+        build_doc_debt_map,
     )
-    second = detect_doc_debt(
-        [fact("file_write", at=3, target="b.py"), fact("file_write", at=4, target="a.py")],
-        ownership,
-    )
-    assert first is not None and second is not None
-    # Order of discovery must not create a second ledger entry for one debt.
-    assert doc_debt_dedupe_key("p1", first) == doc_debt_dedupe_key("p1", second)
+
+    ownership = {
+        normalize_target(f"dep{index}.py"): (f"doc{index}.md",) for index in range(12)
+    }
+    changed = [fact("file_write", at=1, target="hub.py")]
+    wide = {
+        normalize_target("hub.py"): tuple(
+            normalize_target(f"dep{index}.py") or "" for index in range(12)
+        )
+    }
+    assert build_doc_debt_map(changed, ownership, dependents=wide) == {}
+    # A reach small enough to mean something is kept.
+    narrow = {
+        normalize_target("hub.py"): tuple(
+            normalize_target(f"dep{index}.py") or ""
+            for index in range(DOC_REACH_DEPENDENT_LIMIT - 6)
+        )
+    }
+    assert build_doc_debt_map(changed, ownership, dependents=narrow) != {}
 
 
 # ------------------------------------------------------------- provenance
@@ -523,6 +682,7 @@ async def test_findings_are_written_as_annotations_with_fact_evidence(tmp_path: 
                 agent_run_id="run-1",
                 project_id="p1",
                 kind="command",
+                target="pytest tests/test_a.py",
                 fingerprint="stuck",
                 created_at=now + index,
             )

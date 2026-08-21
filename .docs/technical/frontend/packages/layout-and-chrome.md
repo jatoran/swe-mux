@@ -81,7 +81,8 @@ The stylesheet is the only consumer of the *property* but not the only consumer 
 
 The app's stroke marks, kept in shared modules so one concept is one drawing wherever it appears.
 
-- `railIcons.tsx` holds the Action rail marks, the `DRAWER_TAB_ICONS` map every drawer tab must appear in, and the app-menu marks the sidebar menus and their `MenuGroup` headers read.
+- `railIcons.tsx` holds the Action rail marks, the `DRAWER_TAB_ICONS` map every drawer tab must appear in, and the menu marks the app menu, the sidebar menu, and the Project and session context menus read - including their `MenuGroup` headers.
+  A mark is added here rather than inline so a concept drawn in more than one menu (History, Groups, Settings, Prompts) stays one drawing.
   Sizes come from CSS rather than `1em`, because these surfaces run a 9-10 px font that would render an em-sized icon unreadably small.
 - `harnessIcons.tsx` is the per-harness mark (`harnessMark`), read by the sidebar row's provider prefix, the session tab strip, the account switcher, and the Run menu's launch rows.
   A harness with no drawing falls back to its initial, which is all a browser can honestly say about a harness its daemon added and it does not know.

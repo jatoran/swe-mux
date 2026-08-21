@@ -456,6 +456,27 @@ include a registered Project nested below another Git root.
   content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
   path-ordered result list (content matches show the first matching line); clearing it restores
   the tree. Results and the tree share the same open, context-menu, and drag behavior.
+- A **Recent** toggle beside the search-scope button replaces the tree with the files Git says
+  were touched here, at most twenty of them.
+  Working-tree changes lead, in the order `git status` prints them, then paths from the most
+  recent commits, newest first.
+  A working-tree row has no timestamp and needs none - an uncommitted edit is by definition
+  more recent than any commit - so it states *what* changed (`new`, `modified`, `conflicted`)
+  while a committed row states how long ago.
+  A path in both sources is listed once, from the working tree, because that is where its newest
+  state is.
+  Rows are the search-result rows, so open, drag, and context-menu behaviour is identical.
+- Recent is Git-backed rather than a filesystem sweep, deliberately.
+  An mtime walk is dominated by `node_modules` and `.venv`, whose mtimes move on every install
+  and whose hundreds of thousands of entries are what makes the walk expensive.
+  Git already knows the answer and both calls are bounded: one status, and one log capped at
+  sixty commits.
+- The Project's ignore patterns apply on top of Git's own, so Recent never lists a file the tree
+  beside it hides; paths that no longer exist on disk are dropped, because a deleted file is a
+  fact about history rather than something the explorer can open.
+  "Not a Git repository" and "nothing changed recently" render as different sentences: the first
+  is a fact about the Project and the second about the work, and one standing in for the other
+  would be a lie the reader cannot see through.
 - Clicking a file opens it as a tab in the focused pane and, on mobile, closes the drawer that
   was covering it. A file row can also be dragged out of the tree or results and dropped onto any
   pane as a tab or a new edge split, reusing the ordinary workspace-tab drop targets — desktop

@@ -42,6 +42,16 @@ Git discovery answers "which worktree contains this path", which is the wrong qu
 
 **Not:** layout placement, browser drafts, generic browser MIME rendering, or generic browser-file overwrite, move, and delete operations.
 
+### `recent_files.py`
+
+The Files explorer's Recent view: two bounded read-only Git calls (`status --porcelain -z` and a `log --name-only` capped at `COMMIT_SCAN` commits) folded into one list of at most twenty paths, working tree first and then newest commit first.
+Owns the parsing (`-z` records, rename sources, the `%x02%ct` commit header), the repository-prefix re-rooting that turns Git coordinates into Project ones, and the de-duplication that reports a path appearing in both sources once, from the working tree.
+
+The reason it is Git-backed rather than an mtime walk: `node_modules` and `.venv` hold hundreds of thousands of files whose mtimes move on every install, so a filesystem sweep is both expensive and dominated by paths nobody edited.
+The reason `-z` is not a tuning knob: it disables path quoting, so a path holding a quote, a backslash, or a newline arrives verbatim instead of as a C-escaped string this would have to decode.
+
+**Not:** running Git (`git_monitor.read_git`, which is what keeps `--no-optional-locks` on every read), the ignore rules themselves (`project_files.effective_project_ignores`), or any writing.
+
 ### `project_watcher.py`
 
 Leased non-recursive directory watches keyed by Project, exact root, path set, and watch id.

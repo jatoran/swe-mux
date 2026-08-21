@@ -364,7 +364,10 @@ async def test_provenance_reports_tests_that_ran_on_the_file() -> None:
 @pytest.mark.asyncio
 async def test_verified_status_flags_declared_but_untested() -> None:
     caller = _caller()
-    # No test facts in the run: the claim is declared, nothing verified.
+    # No test facts in the run: the claim is declared, and what the tool can say
+    # about it is a statement about *capture* rather than about the claim. Saying
+    # "verified" here — the shape this branch had before — would report a green run
+    # that never happened.
     service = _service(caller, tier0=Tier0Stub(run_facts={"s1": []}))
     result = await service.verified_status(
         caller, {"claim": "I fixed the auth bug"}
@@ -372,7 +375,7 @@ async def test_verified_status_flags_declared_but_untested() -> None:
     assert result["declared"] is True
     assert result["tests_ran"] is False
     assert result["verified"] is False
-    assert "tests not run" in result["status"]
+    assert "no test facts recorded for this run" in result["status"]
     assert result["checked"]["run"]["run_relation"] == "your_current_run"
 
 

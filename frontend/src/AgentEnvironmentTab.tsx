@@ -9,8 +9,11 @@ import {
   agentStateLabel,
   filterAgentEnvironmentSections,
   groupAgentEnvironmentItems,
+  mcpEvidenceLabel,
+  mcpStatusLabel,
   type AgentEnvironmentInventory,
   type AgentEnvironmentItem,
+  type McpToolCatalog,
 } from './agentEnvironment'
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
@@ -252,7 +255,7 @@ export function AgentToolsTab({ session }: { session: Session | null }) {
 
       <div class="agent-environment-sections">
         {query && !capabilitySections.length && <p class="drawer-empty">No capability matches “{query}”.</p>}
-        {capabilitySections.map(section => <EnvironmentSection key={section.id} section={section} query={query} open={!!query} />)}
+        {capabilitySections.map(section => <EnvironmentSection key={section.id} section={section} query={query} open={!!query} sessionId={session.id} />)}
       </div>
     </>}
   </div>
@@ -261,10 +264,76 @@ export function AgentToolsTab({ session }: { session: Session | null }) {
 /** Sections that answer "how is this configured" rather than "what can it do". */
 const CONFIG_SECTION_IDS = new Set(['policies', 'features'])
 
-function EnvironmentSection({ section, query, open }: {
+/**
+ * Fetch and render one MCP server's published tools.
+ *
+ * A button rather than part of the section's own load, because this is the only
+ * control in the whole tab that reaches a server: it can start a short-lived
+ * probe process and open a network connection, which is exactly what opening the
+ * tab is documented never to do. Everything the fetch returns is labelled with
+ * the evidence that produced it, and an empty result still says *why* it is
+ * empty — "not probed" and "publishes no tools" mean opposite things and would
+ * otherwise render identically.
+ */
+function McpServerTools({ sessionId, server }: { sessionId: string; server: string }) {
+  const [catalog, setCatalog] = useState<McpToolCatalog | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  useEffect(() => { setCatalog(null); setError(''); setLoading(false) }, [sessionId, server])
+
+  const fetchTools = async (refresh: boolean) => {
+    setLoading(true)
+    setError('')
+    try {
+      const result = await api<McpToolCatalog>(
+        'POST',
+        `/api/sessions/${encodeURIComponent(sessionId)}/agent-environment/mcp-tools`,
+        { server, refresh },
+        // Generous: a Codex sidecar has to start and connect every configured
+        // server, and the client giving up first would report a probe failure
+        // that did not happen.
+        { timeoutMs: 45_000 },
+      )
+      setCatalog(result)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <div class="agent-mcp-tools">
+    <div class="agent-mcp-tools-actions">
+      <button
+        disabled={loading}
+        title="Ask this server what tools it publishes. This may briefly start a probe process and open a network connection."
+        onClick={() => void fetchTools(!!catalog)}
+      >{loading ? 'Fetching…' : catalog ? 'Refetch tools' : 'Fetch tools'}</button>
+      {catalog && <span class={`agent-evidence evidence-${catalog.evidence}`}>{mcpEvidenceLabel(catalog.evidence)}</span>}
+      {catalog && catalog.status !== 'ok' && <span class="agent-state">{mcpStatusLabel(catalog.status)}</span>}
+      {catalog?.cached && <span class="agent-mcp-cached">cached</span>}
+    </div>
+    {error && <p class="drawer-empty">Tools could not be fetched: {error}</p>}
+    {catalog && <>
+      {!!catalog.tools.length && <ul class="agent-mcp-tool-list">
+        {catalog.tools.map(tool => <li key={tool.name}>
+          <strong>{tool.name}</strong>
+          {tool.read_only === false && <span class="agent-state state-configured">write</span>}
+          {tool.description && <span>{tool.description}</span>}
+        </li>)}
+      </ul>}
+      {catalog.truncated && <p class="agent-environment-note">Showing {catalog.tools.length} of {catalog.total} tools.</p>}
+      {catalog.diagnostic && <p class="agent-environment-note">{catalog.diagnostic}</p>}
+      <p class="agent-environment-note">{catalog.note}</p>
+    </>}
+  </div>
+}
+
+function EnvironmentSection({ section, query, open, sessionId }: {
   section: AgentEnvironmentInventory['sections'][number]
   query: string
   open: boolean
+  sessionId?: string
 }) {
   return <details open={open}>
     <summary>
@@ -291,6 +360,12 @@ function EnvironmentSection({ section, query, open }: {
             {item.changed_after_start && <span class="warn">changed since load</span>}
           </div>
           {!!item.meta.length && <dl>{item.meta.map(meta => <div key={`${meta.label}:${meta.value}`}><dt>{meta.label}</dt><dd title={meta.value}>{meta.value}</dd></div>)}</dl>}
+          {/* Only the row the CLI would actually use. A `shadowed` row lost to a
+              later layer and a `disabled` one is not loaded at all, and both
+              would fetch the winning layer's tools and present them as their
+              own — two rows with one name, each claiming the other's answer. */}
+          {section.id === 'mcp' && sessionId && item.state === 'configured'
+            && <McpServerTools sessionId={sessionId} server={item.name} />}
         </article>)}
       </Fragment>)}
       {section.truncated && <p class="agent-environment-note">Showing {section.items.length} of {section.total} entries.</p>}

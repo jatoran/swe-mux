@@ -62,6 +62,52 @@ MCP endpoints omit credentials and query strings.
 Stdio entries expose only the executable basename.
 Policy values are limited to known non-secret keys and structured collections are summarized by count.
 
+## MCP tool catalogs
+
+The passive scan can say which MCP servers a CLI is configured with and stops there, because which tools a server publishes exists only inside a running MCP client.
+That answer is reachable through exactly one control: a per-server **Fetch tools** action on an MCP row.
+It is the only thing in this tab that reaches a server, and the invariant above is unchanged - opening or rescanning the tab still probes nothing.
+
+Each result is labelled with the evidence that produced it, and the labels are never collapsed into an unqualified "connected" or "available".
+
+| Evidence | Harness | What it is |
+|---|---|---|
+| `swe_mux_owned` | any, for mux's own server | Read from the tool definitions the mux server answers `tools/list` from. Exact and free. |
+| `live_process` | omp | Published by the extension mux already injected into the running session. No second process, and it is that session's own inventory. |
+| `parallel_probe` | codex | A short-lived `codex app-server` sidecar answering `mcpServerStatus/list` with `toolsAndAuthOnly`. |
+| `parallel_probe` | claude | The daemon dialling the configured server itself with the official `mcp` client (initialize, then `tools/list`). |
+| `not_supported` | opencode, pi | opencode's server surface reports connection status rather than tools; pi ships no MCP client. |
+
+Three properties of that table are load-bearing.
+
+A probe's health is **not** the running TUI's health, and the UI says so on every row rather than in a footnote.
+For Codex the sidecar is a different process with its own connection and authentication state.
+For Claude there is no headless path to an already-running TUI at all, so dialling the configuration is strictly weaker evidence than the CLI's own `/mcp`: it reaches neither account connectors nor plugin gating.
+`codex mcp list` is not an alternative for Codex - it reports configuration, which the passive scan already has, and misses exactly the surfaces this feature exists to show (`codex_apps` and account connectors).
+
+An HTTP server whose configuration carries credentials is **not dialled**.
+It renders as "auth required / not probed", because a probe would either fail confusingly or succeed by spending a credential the user handed to their CLI rather than to this drawer.
+Codex's own `notLoggedIn` answer is surfaced the same way.
+
+An empty catalog always says which kind of empty it is.
+"Not probed", "not reported by this session", and "the server connected and published no tools" are different facts that would otherwise render identically.
+
+mux's own server is recognized by **endpoint**, compared against the daemon's own MCP URL after the same sanitization the rows use - not by the name `mux`.
+A user is free to name a server `mux`, and publishing swe-mux's catalog for it would be a confident lie.
+Its tools come from the implementation rather than a second hand-maintained list, cross-checked against the closed contract in `mcp_contract.py`, so a tool added to the server appears here with no second edit.
+
+Results are cached by **config-content fingerprint** - a one-way digest over the server's command, arguments, environment, endpoint and headers, the CLI binary and its version, and the trusted working directory - rather than per session, so several sessions sharing a profile share one probe.
+A credential can therefore decide cache identity without being retained anywhere.
+Concurrent requests for one fingerprint await a single in-flight probe.
+Sharing is withdrawn for a reading the server marked `cacheScope: private`: the entry remembers which session collected it and a different session probes again.
+That check lives on the read rather than in the key, because the scope is something the answer tells us and the key has to exist before the question is asked.
+A server-supplied `ttlMs` overrides the default expiry; OMP readings are session-scoped from the start, because one process's live snapshot must never be handed to another session that merely shares its configuration.
+
+The OMP snapshot arrives by publication rather than request: the injected extension posts its `mcp__*` tool list to a session-scoped route at session start and whenever a server sends `notifications/tools/list_changed`.
+That route is deliberately separate from hook ingress - this is not a lifecycle event, nothing about status detection, history, or the prompt queue may depend on it, and hook ingress is the path Claude blocks a user's turn on.
+The payload is whitelisted to names and descriptions and held only in memory, because a snapshot that outlived its process would be the false-liveness claim the whole evidence model exists to prevent.
+A session started before this shipped, or launched clean, publishes nothing and reads as "not reported".
+
 ### Hook handler targets
 
 A hook whose only identity is its event answers nothing: with both CLIs keying hooks by event, every row read `PreToolUse` and no row said what it ran or who put it there.
@@ -87,8 +133,11 @@ Items that carry a `group` render under a sticky in-section heading for their ru
 Policies open by default; a local substring filter opens matching sections and searches item identity, group, owner, origin, scope, state, description, and safe metadata, so `swe-mux` filters the Hooks section to the ones swe-mux installed.
 Metadata values wrap rather than ellipsing, because the ones that overflow (a hook's script path, an MCP endpoint) are the ones worth reading and a touch device has no tooltip.
 
+An MCP row the CLI would actually use carries a Fetch tools button, its evidence chip, and the tools it returned; a refetch is the same button once a catalog is present.
+A `shadowed` or `disabled` row has none, because the fetch resolves a server by name to the winning layer: both would show the winner's tools as their own, so two rows with one name would each claim the other's answer.
 Configuration sources and diagnostics are separate disclosures below the capability sections.
 The tab has no insert, send, enable, disable, connect, edit, or install action.
+Fetch tools is a read that may start a probe, not an action on the session: it changes nothing about the CLI, the configuration, or the servers.
 Shell sessions render a typed ordinary empty state and the endpoint returns `409`.
 
 ## Boundaries
