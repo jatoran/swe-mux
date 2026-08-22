@@ -1,4 +1,4 @@
-import { isAgentBackend } from './harnessRegistry.ts'
+import { DEFAULT_COMPOSER_NEWLINE, composerNewline, isAgentBackend } from './harnessRegistry.ts'
 
 export type TerminalKeyDecision =
   | { kind: 'pass' }
@@ -17,7 +17,11 @@ export type TerminalKey = {
 // "insert a newline" - verified against live Claude and Codex panes over the same ConPTY the
 // server uses, where Codex reports alt+enter bound to editor.insert_newline and Claude keeps
 // the draft on a second line. Shells keep xterm's CR, where Enter variants already mean submit.
-export const AGENT_NEWLINE = '\x1b\r'
+//
+// The per-harness answer now lives in the registry (`composerNewline`), so this is the default
+// a daemon too old to declare one falls back to, and the payload the rail's static Markdown
+// helpers are built from. It is re-exported here because that is where its consumers look.
+export const AGENT_NEWLINE = DEFAULT_COMPOSER_NEWLINE
 
 export function terminalKeyDecision(
   event: TerminalKey,
@@ -32,7 +36,7 @@ export function terminalKeyDecision(
   }
   const key = event.key.toLowerCase()
   if (key === 'enter' && (event.shiftKey || event.ctrlKey) && !event.altKey && !event.metaKey) {
-    if (isAgentBackend(backend)) return { kind: 'sendInput', data: AGENT_NEWLINE }
+    if (isAgentBackend(backend)) return { kind: 'sendInput', data: composerNewline(backend) }
   }
   if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'v') return { kind: 'browserPaste' }
   if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'c' && hasSelection) {

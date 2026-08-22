@@ -17,18 +17,25 @@ from typing import Any
 import pytest
 
 from swe_mux import server
-from swe_mux.prompt_queue import BRACKETED_PASTE_END, paste_payload
+from swe_mux.composer_input import BRACKETED_PASTE_END, composer_insertion
+from swe_mux.harness import composer_insertion_rules
 
 
 class _Record:
-    def __init__(self) -> None:
+    def __init__(self, backend: str = "claude") -> None:
         self.id = "s1"
         self.state = "starting"
+        self.backend = backend
+
+
+def _staged(text: str, backend: str = "claude") -> str:
+    newline_keys, lift = composer_insertion_rules(backend)
+    return composer_insertion(text, newline_keys=newline_keys, lift_leading_newline=lift)
 
 
 class _Session:
-    def __init__(self) -> None:
-        self.record = _Record()
+    def __init__(self, backend: str = "claude") -> None:
+        self.record = _Record(backend)
 
 
 class _Events:
@@ -66,7 +73,7 @@ async def test_stage_waits_for_readiness_then_pastes_without_enter(
     settle = asyncio.create_task(become_ready())
     await server._stage_spawn_text({"events": events}, session, "line one\nline two")
     await settle
-    assert writes == [(paste_payload("line one\nline two"), "spawn_stage")]
+    assert writes == [(_staged("line one\nline two"), "spawn_stage")]
     # The whole point: the write ends on the paste terminator, never on Enter.
     assert writes[0][0].endswith(BRACKETED_PASTE_END)
     assert "\r" not in writes[0][0].split(BRACKETED_PASTE_END)[-1]
@@ -92,7 +99,7 @@ async def test_stage_timeout_still_pastes_and_says_so(monkeypatch: pytest.Monkey
     writes = _capture_writes(monkeypatch)
     monkeypatch.setattr(server, "STAGE_READY_TIMEOUT_SECONDS", 0.02)
     await server._stage_spawn_text({"events": events}, session, "parked prompt")
-    assert writes == [(paste_payload("parked prompt"), "spawn_stage")]
+    assert writes == [(_staged("parked prompt"), "spawn_stage")]
     assert events.emitted[0][1]["ready"] is False
 
 

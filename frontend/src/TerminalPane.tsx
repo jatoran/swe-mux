@@ -65,7 +65,7 @@ import {
   type OwnershipView,
 } from './inputOwnership'
 import { pendingInputDecision } from './pendingInput'
-import { pastePayload } from './noteSelection'
+import { bracketedPaste, composerInsertionParts } from './composerInsertion'
 import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
 import {
   attachmentNeedsManualBracketing,
@@ -76,7 +76,7 @@ import {
   type UploadedTerminalAttachment,
 } from './terminalAttachments'
 import { localPreviewUrl } from './previewLinks'
-import { settleTerminalInsertion } from './terminalActions.ts'
+import { insertionRefusal, settleTerminalInsertion } from './terminalActions.ts'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, terminalAttachAllowed, watchLiveness, type ConnectionPhase } from './liveness'
 import {
   shouldLoadWebgl,
@@ -271,19 +271,27 @@ function acceptsTerminalAttachments(session: Session) {
  * the backstop for a session so long-lived that even retained scrollback has rolled
  * past the enable. Restricted to multi-line text into an agent session: that is the
  * only shape this bug can affect, so nothing else changes behaviour.
+ *
+ * The paste wrapper does not protect a payload's FIRST newline, which is a separate
+ * measured defect and is why the leading run is lifted out into key presses ahead of
+ * the paste (`composerInsertion.ts`). It goes through `term.input` rather than being
+ * prepended to the paste text, because xterm would rewrite it to a bare CR.
  */
 function pasteIntoTerminal(term: Terminal, session: Session, text: string) {
+  const { leading, body } = composerInsertionParts(text, session.backend)
+  if (leading) term.input(leading, true)
+  if (!body) return
   if (pasteNeedsManualBracketing({
-    text,
+    text: body,
     agentBackend: acceptsTerminalAttachments(session),
     bracketedPasteMode: term.modes.bracketedPasteMode,
   })) {
     // term.input keeps this on the normal onData path, so broadcast membership and
     // the replay guard treat it exactly like a real paste.
-    term.input(pastePayload(text), true)
+    term.input(bracketedPaste(body), true)
     return
   }
-  term.paste(text)
+  term.paste(body)
 }
 
 function terminalCaretSnapshot(term: Terminal): TerminalCaretSnapshot {
@@ -981,7 +989,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     pasteAttachmentRef.current=(text,nativeImage)=>{
       attachmentPasteDepth+=1
       try{
-        if(attachmentNeedsManualBracketing(nativeImage,acceptsTerminalAttachments(session),term.modes.bracketedPasteMode))term.input(pastePayload(text),true)
+        if(attachmentNeedsManualBracketing(nativeImage,acceptsTerminalAttachments(session),term.modes.bracketedPasteMode))term.input(bracketedPaste(text),true)
         else if(nativeImage)term.paste(text)
         else pasteIntoTerminal(term,session,text)
       }finally{
@@ -3352,8 +3360,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   // Inject literal text (skills, slash commands, custom macros) then optionally
   // submit with Enter, mirroring the raw onData path used by sendKey.
+  //
+  // This is the single chokepoint every insert path funnels through - prompt
+  // templates, skills, clipboard entries, voice append, the mobile draft, the
+  // branch seed - so the dialog refusal lives here and covers all of them at once.
   const injectText=async(text:string,submit?:boolean):Promise<void>=>{
     if(!text)return
+    const refusal=insertionRefusal(session)
+    if(refusal)throw new Error(refusal)
     const target=termRef.current
     if(!target)throw new Error('The target terminal is not ready. Draft kept.')
     await settleTerminalInsertion(

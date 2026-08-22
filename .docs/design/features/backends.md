@@ -98,6 +98,8 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | Can a branch be cut at a chosen message? | `branches_from_message(name)` (frontend `branchesFromMessage(name)`, published `branch_from_message`) | Whether the rail's Branch opens a point picker or forks on the click |
 | What does a user type to invoke a skill? | published `skill_invocation_prefix` | Skill inventories and the command rail's injected payload |
 | What key discards its whole composer? | published `composer_clear_keys` (frontend `composerClearKeys(name)`) | Whether the daemon's unsent-input estimate treats a write as a clear. No rail button sends it any more (`features/ui.md`): on Claude the sequence is a double Esc, which interrupts a running turn |
+| What key inserts a newline instead of submitting? | published `composer_newline` (frontend `composerNewline(name)`) | Shift/Ctrl+Enter in a pane, the mobile IME's Enter, the rail's Markdown helpers, and what the unsent-input estimate must not read as a submit |
+| Does a paste beginning with a newline submit its composer? | published `paste_leading_newline_submits`, `composer_insertion_rules(name)` | Whether an insertion lifts a leading newline run into key presses ahead of the paste (`features/terminal-input.md`) |
 | Which root instruction file does the CLI read? | `instruction_harnesses()`, `instruction_file_name`, `global_instruction_parts` | Agent Context inventory and sync |
 | Which harness is this command line running? | `harness_for_command(executable, args)` | Recognizing an already-launched agent, including the history backend-mismatch repair |
 | Can this harness be driven by the live canary? | `live_canary_harnesses()`, `live_subagent_harnesses()`, `live_telemetry_harnesses()`, from `headless_probes` | The live conformance tier |
@@ -183,6 +185,11 @@ The descriptor is the source of truth for all generic surfaces.
   The estimate is now the only consumer: the rail's Clear button was retired rather than corrected, because Claude's true discard sequence is a double Esc and a rail button that sends it interrupts whatever turn is running (`features/ui.md`).
   The rail carries a raw `^U` key instead, which is honest about killing one line.
   `spawn_id_argv` is non-empty exactly when `assigns_conversation_id` is true, and the descriptor rejects a pair that disagrees.
+- Every harness declares how text is put into its composer: `composer_newline` and `paste_leading_newline_submits`.
+  Both are required for the same reason `composer_clear_keys` is - a per-CLI keyboard fact compiled into a frontend module is a second copy that drifts, and the daemon's own unsent-input accounting has to agree with what the browser sent.
+  `composer_newline` is ESC+CR on every row: it is measured on claude and codex (Codex reports alt+enter bound to `editor.insert_newline`; Claude keeps the draft on a second line), and the other three carry it because it is the blanket constant the browser sent them before the field existed.
+  `paste_leading_newline_submits` is true only for codex, measured 2026-08-22 against v0.149.0 over a real pseudoterminal: a bracketed paste whose first character is a newline is read as Enter and submits whatever the composer already held.
+  False is also the honest answer for an unmeasured harness, because it is the behaviour mux has always had.
 - Every harness declares `publishes_cli_state`, `branch_strategy` (or `None`), and `requires_direct_entrypoint`.
   `transcript_fork` is the strategy where mux writes the forked conversation itself; declaring it obliges two dialect-keyed entries, both keyed on `transcript_dialect` rather than the harness name so two harnesses sharing a record format share one implementation: a cut-point scanner (`transcript_view._OPEN_TOOL_SCANNERS`, which answers what a cut at each record boundary would leave unanswered) and a fork writer (`transcript_fork._FORK_WRITERS`).
   A dialect present in neither is a dialect mux refuses to fork rather than one it forks blindly; adding both is the whole cost of making a new harness branchable from a point, and nothing in the server, the API, or the browser changes.

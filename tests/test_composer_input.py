@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from swe_mux.composer_input import (
+    BRACKETED_PASTE_END,
+    BRACKETED_PASTE_START,
+    DEFAULT_NEWLINE_KEYS,
     ComposerState,
     classify_composer_write,
     clear_composer,
+    composer_insertion,
     note_composer_write,
 )
+from swe_mux.harness import HARNESSES, composer_insertion_rules
 from tests.support.detection_replay import ReplaySession
 
 NOW = 1_770_000_000.0
@@ -167,3 +172,121 @@ def test_clear_composer_reports_whether_anything_was_standing() -> None:
     note_composer_write(state, "x", NOW)
     assert clear_composer(state) is True
     assert state.since == 0.0
+
+
+# ------------------------------------------------- the composer newline key
+
+
+def test_the_composer_newline_key_is_composed_text_and_not_a_submit() -> None:
+    # ESC+CR is not a control sequence the escape stripper matches, so its bare
+    # CR used to survive and classify the whole write as a submit. That is a
+    # false "empty" over a standing draft, and it fired on the rail's own
+    # Markdown divider button, which has always sent exactly these bytes.
+    state = ComposerState()
+    note_composer_write(state, "first line", NOW)
+    assert note_composer_write(state, DEFAULT_NEWLINE_KEYS, NOW + 1) is None
+    assert state.pending
+    assert state.chars == len("first line") + 1
+
+
+def test_a_whole_markdown_divider_leaves_the_draft_standing() -> None:
+    state = ComposerState()
+    note_composer_write(state, "a paragraph", NOW)
+    break_ = DEFAULT_NEWLINE_KEYS
+    divider = f"{break_}{break_}---{break_}{break_}"
+    assert note_composer_write(state, divider, NOW + 1) is None
+    assert state.pending
+    assert state.chars == len("a paragraph") + 4 + len("---")
+
+
+def test_a_harness_that_declares_no_newline_key_keeps_the_old_reading() -> None:
+    # Passing "" turns the recognition off rather than guessing, and a bare CR
+    # is then what it has always been.
+    assert classify_composer_write("\x1b\r", newline_keys="").kind == "submit"
+
+
+def test_a_real_carriage_return_is_still_a_submit() -> None:
+    state = ComposerState()
+    note_composer_write(state, "ship it", NOW)
+    assert note_composer_write(state, "\r", NOW + 1) == "cleared"
+
+
+# --------------------------------------------------- building an insertion
+
+
+def test_an_insertion_is_a_bracketed_paste_with_cr_line_breaks() -> None:
+    assert composer_insertion("a\r\nb\rc\nd") == (
+        f"{BRACKETED_PASTE_START}a\rb\rc\rd{BRACKETED_PASTE_END}"
+    )
+
+
+def test_a_leading_newline_is_lifted_into_keys_where_a_paste_would_submit() -> None:
+    """The measured Codex defect, and the shape of the repair.
+
+    Measured 2026-08-22 against Codex v0.149.0 over a real pseudoterminal with
+    `PREVIOUSTEXT` unsent in the composer: a paste with interior newlines is a
+    three-line draft, while the same paste with one leading CR submits the draft
+    and pastes the rest. The live "Tree" template begins with a newline, which is
+    how a prompt button came to send someone's half-typed draft to the model.
+    """
+    tree = "\nWork in a separate worktree. Do not land it and do not redeploy."
+    body = tree.lstrip("\n")
+    lifted = composer_insertion(tree, lift_leading_newline=True)
+    assert lifted == (
+        f"{DEFAULT_NEWLINE_KEYS}{BRACKETED_PASTE_START}{body}{BRACKETED_PASTE_END}"
+    )
+    # And the untouched reading, for a harness that has no such defect.
+    assert composer_insertion(tree) == (
+        f"{BRACKETED_PASTE_START}\r{body}{BRACKETED_PASTE_END}"
+    )
+
+
+def test_every_leading_newline_is_lifted_and_interior_ones_are_not() -> None:
+    assert composer_insertion("\n\n\nx", lift_leading_newline=True) == (
+        f"{DEFAULT_NEWLINE_KEYS * 3}{BRACKETED_PASTE_START}x{BRACKETED_PASTE_END}"
+    )
+    assert composer_insertion("a\nb", lift_leading_newline=True) == (
+        f"{BRACKETED_PASTE_START}a\rb{BRACKETED_PASTE_END}"
+    )
+
+
+def test_text_that_is_only_newlines_produces_keys_and_no_empty_paste() -> None:
+    assert composer_insertion("\n\n", lift_leading_newline=True) == DEFAULT_NEWLINE_KEYS * 2
+    assert composer_insertion("", lift_leading_newline=True) == ""
+
+
+def test_an_insertion_never_opens_with_a_bare_newline_on_any_harness() -> None:
+    # The invariant the builder exists to hold: the first byte written is never a
+    # newline, because that is the one byte the paste wrapper cannot protect.
+    tree = "\n\nWork in a separate worktree."
+    for name in [*HARNESSES, "shell", "not-a-harness"]:
+        newline_keys, lift = composer_insertion_rules(name)
+        payload = composer_insertion(
+            tree, newline_keys=newline_keys, lift_leading_newline=lift
+        )
+        assert not payload.startswith(("\r", "\n")), name
+        if lift:
+            assert payload.startswith(newline_keys), name
+            assert not payload.startswith(BRACKETED_PASTE_START), name
+
+
+def test_only_codex_is_declared_as_submitting_on_a_leading_newline() -> None:
+    # A measured fact, so the registry says which harness it was measured on.
+    # Everything else keeps the bytes mux has always sent it.
+    submits = {name for name, rules in HARNESSES.items() if rules.paste_leading_newline_submits}
+    assert submits == {"codex"}
+
+
+def test_a_lifted_insertion_reads_back_as_composed_text_not_a_submit() -> None:
+    # The builder and the classifier are the two halves of the same fact, and
+    # this is the seam where they used to disagree: the lifted ESC+CR would have
+    # zeroed the very estimate the write was supposed to raise.
+    state = ComposerState()
+    note_composer_write(state, "half typed", NOW)
+    newline_keys, lift = composer_insertion_rules("codex")
+    payload = composer_insertion(
+        "\nappended", newline_keys=newline_keys, lift_leading_newline=lift
+    )
+    assert note_composer_write(state, payload, NOW + 1, newline_keys=newline_keys) is None
+    assert state.pending
+    assert state.chars == len("half typed") + 1 + len("appended")
