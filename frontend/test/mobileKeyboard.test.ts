@@ -12,6 +12,7 @@ import {
   softKeyboardInputMode,
   softKeyboardInset,
   softKeyboardLost,
+  softKeyboardVisualOffset,
 } from '../src/mobileKeyboard.ts'
 import type { FocusedField, FocusScope } from '../src/mobileKeyboard.ts'
 
@@ -153,6 +154,37 @@ test('a visual viewport larger than the layout never slides the workspace down',
   assert.equal(softKeyboardInset(915, 1000), 0)
   assert.equal(softKeyboardInset(Number.NaN, 500), 0)
   assert.equal(softKeyboardInset(915, Number.NaN), 0)
+})
+
+test('the visual viewport scroll is subtracted from what the keyboard covers', () => {
+  // Chrome scrolls the visual viewport to lift a focused field above the keys, because
+  // `overflow:hidden` on the document and `position:fixed` on the panels leave it nothing
+  // else to scroll. A surface that then shortens by the full inset stops that many pixels
+  // short of the screen, and the strip below it shows the workspace through the scrim -
+  // the black band under the drawer's prompt editor. 415 of keyboard with 120 already
+  // scrolled away leaves 295 still to give up.
+  assert.equal(softKeyboardVisualOffset(120, 415), 120)
+  assert.equal(softKeyboardVisualOffset(0, 415), 0)
+})
+
+test('the visual scroll can never exceed the keyboard it compensates for', () => {
+  // The clamp is not defensive tidying: `--keyboard-cover` subtracts this from the inset,
+  // so an over-large value would *grow* a surface past full height instead of shortening
+  // it, and a negative one would grow it too.
+  assert.equal(softKeyboardVisualOffset(600, 415), 415)
+  assert.equal(softKeyboardVisualOffset(-40, 415), 0)
+  // Fractional device pixels round the same way the inset does, so the two always subtract
+  // to a whole number.
+  assert.equal(softKeyboardVisualOffset(119.6, 415), 120)
+})
+
+test('no keyboard means no scroll to compensate for', () => {
+  // A scrolled visual viewport with no keyboard is browser chrome or pinch-zoom, and
+  // nothing has shortened for it. Reporting an offset there would shorten a surface that
+  // had no reason to move.
+  assert.equal(softKeyboardVisualOffset(120, 0), 0)
+  assert.equal(softKeyboardVisualOffset(120, Number.NaN), 0)
+  assert.equal(softKeyboardVisualOffset(Number.NaN, 415), 0)
 })
 
 test('peeking at the top of a grid survives output and ends on input', () => {

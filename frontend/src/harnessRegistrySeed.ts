@@ -35,6 +35,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       ],
       "skill_invocation_prefix": "/",
       "composer_clear_keys": "\u001b\u001b",
+      "composer_newline": "\u001b\r",
+      "paste_leading_newline_submits": false,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -78,6 +80,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       ],
       "skill_invocation_prefix": "$",
       "composer_clear_keys": "\u0015",
+      "composer_newline": "\u001b\r",
+      "paste_leading_newline_submits": true,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -119,6 +123,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       ],
       "skill_invocation_prefix": "/skill:",
       "composer_clear_keys": "\u0015",
+      "composer_newline": "\u001b\r",
+      "paste_leading_newline_submits": false,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -161,6 +167,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       ],
       "skill_invocation_prefix": "/",
       "composer_clear_keys": "\u0015",
+      "composer_newline": "\u001b\r",
+      "paste_leading_newline_submits": false,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -200,6 +208,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       ],
       "skill_invocation_prefix": "/",
       "composer_clear_keys": "\u0015",
+      "composer_newline": "\u001b\r",
+      "paste_leading_newline_submits": false,
       "capabilities": {
         "observed": true,
         "transcript": true,

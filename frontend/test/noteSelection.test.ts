@@ -1,12 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  BRACKETED_PASTE_END,
-  BRACKETED_PASTE_START,
   comparePositions,
   composeAgentMessage,
   hasSelection,
-  pastePayload,
   selectionText,
   utf16IndexForByte,
   type EditorSelection,
@@ -118,15 +115,4 @@ test('a whole-document message retains its source', () => {
 test('the message keeps leading indentation and drops only the trailing run', () => {
   const message = composeAgentMessage('    indented\n\n', { label: 'a.md', scope: 'selection' })
   assert.equal(message, '    indented')
-})
-
-test('a delivered body is wrapped in bracketed paste with CR line breaks', () => {
-  const payload = pastePayload('one\ntwo')
-  assert.equal(payload, `${BRACKETED_PASTE_START}one\rtwo${BRACKETED_PASTE_END}`)
-  assert.ok(!payload.includes('\n'))
-})
-
-test('CRLF and bare CR normalize to the same single break', () => {
-  assert.equal(pastePayload('a\r\nb'), pastePayload('a\nb'))
-  assert.equal(pastePayload('a\rb'), pastePayload('a\nb'))
 })

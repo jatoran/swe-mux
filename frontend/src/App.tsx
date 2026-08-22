@@ -16,7 +16,7 @@ import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
-import { pastePayload } from './noteSelection'
+import { composerInsertion } from './composerInsertion'
 import { QueuePane } from './QueuePane'
 import { ChangeMapPane } from './ChangeMapPane'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
@@ -142,7 +142,7 @@ import {
   forgetJoinAttempts, joinSessions, joinableSessionIds, recordJoinFailure, unjoinedSessionIds,
   type JoinAttempts,
 } from './sessionJoin'
-import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
+import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { ApprovalMode, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
@@ -166,7 +166,7 @@ import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalView
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
-import { insertIntoTerminal, requestTerminalAction } from './terminalActions.ts'
+import { insertIntoTerminal, insertionRefusal, requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -184,7 +184,8 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
+import { RESERVE_INTENT_WINDOW_MS, reservedKeyboardPx } from './keyboardReserve'
+import { SOFT_KEYBOARD_EVENT, deepActiveElement, dismissSoftKeyboard, lastSoftKeyboardInset, raisesSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset, softKeyboardVisualOffset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
@@ -354,6 +355,10 @@ type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|
 type ProjectContext = { project: Project; x: number; y: number } | null
 type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
+/** Right-click on a *static* preview's sidebar row. Deliberately not offered on the
+ *  session-owned preview rows: those follow their listener and are retired by it stopping,
+ *  so there is nothing on them for a menu to do. */
+type StaticPreviewContext = { previewId:string;projectId:string;label:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
@@ -541,6 +546,7 @@ export function App() {
   // return to the pane reads it rather than the mark outliving the reason for it.
   const [pinVisits,setPinVisits]=useState<PinVisits>({})
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
+  const [staticPreviewMenu,setStaticPreviewMenu]=useState<StaticPreviewContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
   const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail';tab?:DrawerTabId}|null>(null)
@@ -1904,7 +1910,19 @@ export function App() {
 
   useEffect(() => {
     const viewport = window.visualViewport
+    const root = document.documentElement
     let lastInset = -1
+    let pendingTimer: number | null = null
+    // Retire a predicted reservation. Called both when a real keyboard shows up (the
+    // measurement supersedes the guess) and when the guess turns out to be wrong - a focus
+    // that never raises a keyboard, or one the operator moves away from. Holding a prediction
+    // past either is how `keyboardReserve.ts` once left a pane rendering on half a screen
+    // with nothing covering the other half.
+    const clearPending = () => {
+      if (pendingTimer !== null) { window.clearTimeout(pendingTimer); pendingTimer = null }
+      root.style.removeProperty('--keyboard-pending')
+      root.classList.remove('soft-keyboard-pending')
+    }
     // The shell is the *layout* viewport, which `interactive-widget=resizes-visual` keeps at
     // full height while the keyboard is up. Sizing it from `visualViewport` instead is what
     // used to shrink every terminal when the keyboard opened — and shrinking an
@@ -1913,13 +1931,21 @@ export function App() {
     const updateAppHeight = () => {
       const layout = Math.round(window.innerHeight)
       const inset = softKeyboardInset(layout, Math.round(viewport?.height ?? layout))
-      const root = document.documentElement
       root.style.setProperty('--app-height', `${layout}px`)
       root.style.setProperty('--keyboard-inset', `${inset}px`)
+      // Where the browser has scrolled the visual viewport to, which is a separate fact from
+      // how tall the keyboard is and is what `--keyboard-cover` subtracts. See
+      // `softKeyboardVisualOffset` and the `--keyboard-cover` block in `style.css`.
+      root.style.setProperty('--visual-offset', `${softKeyboardVisualOffset(viewport?.offsetTop ?? 0, inset)}px`)
       // A class as well as the length, so the slide can be scoped to the keyboard being up.
       // A `translateY(0)` still makes an element a containing block for its `position:fixed`
       // descendants, which would silently re-anchor the drawer and sidebar overlays.
       root.classList.toggle('soft-keyboard-open', inset > 0)
+      // A measured keyboard outranks a predicted one, and dropping the prediction here rather
+      // than leaving it shadowed by the class is what makes the *close* correct too: dismissing
+      // the keyboard with the field still focused returns the inset to zero, and a prediction
+      // still armed would take over again and hold half the screen back with nothing on it.
+      if (inset > 0) clearPending()
       // Panes need this as state, not only as a length: a terminal shows a peek-at-the-top
       // control while the keyboard covers part of it. Published on change only, because the
       // keyboard fires resizes throughout its open animation.
@@ -1933,17 +1959,49 @@ export function App() {
       }
       setViewportWidth(window.innerWidth)
     }
+    // Give the keyboard its space before it arrives, rather than compensating once it has.
+    //
+    // The browser scrolls the visual viewport because the field it just focused is under the
+    // keys at the moment they appear. A panel that has already shortened puts that field above
+    // them, so there is nothing to scroll and `--visual-offset` stays zero - which is why this
+    // is the fix and the offset arithmetic is the backstop for when the prediction is wrong,
+    // absent (no keyboard measured on this device yet), or beaten by a rotation.
+    //
+    // Focus is the earliest honest signal a keyboard is coming, and the *only* one: Android
+    // announces nothing else. `RESERVE_INTENT_WINDOW_MS` is how long that signal is trusted,
+    // shared with the terminal's own reservation because it is the same bet on the same
+    // animation. Nothing arms on a device that types with a real keyboard.
+    const armPending = () => {
+      if (!hasSoftKeyboard() || root.classList.contains('soft-keyboard-open')) return
+      if (!raisesSoftKeyboard(deepActiveElement(document))) return
+      const predicted = reservedKeyboardPx(lastSoftKeyboardInset(), Math.round(window.innerHeight))
+      if (predicted <= 0) return
+      if (pendingTimer !== null) window.clearTimeout(pendingTimer)
+      root.style.setProperty('--keyboard-pending', `${predicted}px`)
+      root.classList.add('soft-keyboard-pending')
+      pendingTimer = window.setTimeout(clearPending, RESERVE_INTENT_WINDOW_MS)
+    }
+    // `focusout` runs before the incoming element takes focus, so this reads "nothing is
+    // focused" even for a move between two fields - and that is fine, because the `focusin`
+    // that follows re-arms in the same task and nothing is painted in between.
+    const onFocusOut = () => { if (!raisesSoftKeyboard(deepActiveElement(document))) clearPending() }
     updateAppHeight()
     window.addEventListener('resize', updateAppHeight)
+    window.addEventListener('focusin', armPending)
+    window.addEventListener('focusout', onFocusOut)
     viewport?.addEventListener('resize', updateAppHeight)
     viewport?.addEventListener('scroll', updateAppHeight)
     return () => {
       window.removeEventListener('resize', updateAppHeight)
+      window.removeEventListener('focusin', armPending)
+      window.removeEventListener('focusout', onFocusOut)
       viewport?.removeEventListener('resize', updateAppHeight)
       viewport?.removeEventListener('scroll', updateAppHeight)
-      document.documentElement.style.removeProperty('--app-height')
-      document.documentElement.style.removeProperty('--keyboard-inset')
-      document.documentElement.classList.remove('soft-keyboard-open')
+      clearPending()
+      root.style.removeProperty('--app-height')
+      root.style.removeProperty('--keyboard-inset')
+      root.style.removeProperty('--visual-offset')
+      root.classList.remove('soft-keyboard-open')
     }
   }, [])
 
@@ -2839,18 +2897,18 @@ export function App() {
   // it, which also keeps that event from reaching the document's dismiss handler —
   // so opening this menu has to close whatever else was open itself.
   const openSortMenu=(x:number,y:number)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setGroupMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setGroupMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
   }
   const openGroupMenu=(groupId:string,x:number,y:number)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setSortMenu(null);setRunMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setSortMenu(null);setRunMenu(null);setMainMenuOpen(false)
     // Each opening starts from "not asked yet", so a confirm armed on one Group cannot
     // be inherited by the next menu the user opens.
     setConfirmGroupDeleteId(null)
     setGroupMenu({groupId,x,y})
   }
   const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail',tab?:DrawerTabId)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
     setDrawerDisplayMenu({x,y,surface,tab})
   }
   const groupIdFor=(project:Project)=>
@@ -3168,7 +3226,7 @@ export function App() {
   // dismiss level, and the single Escape branch in the `mux:command` effect pops one.
 
   useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen) return
+    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !staticPreviewMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     menuDismissedByPointer.current = false
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.context-menu button:not(:disabled)')?.focus())
@@ -3196,7 +3254,7 @@ export function App() {
       menuDismissedByPointer.current = false
       if (!claimed) previous?.focus()
     }
-  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen])
+  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, staticPreviewMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen])
 
   useEffect(() => {
     if (!confirmKillId) return
@@ -3315,7 +3373,7 @@ export function App() {
   }
 
   const openProjectMenuAt=(project:Project,x:number,y:number)=>{
-    setContextMenu(null);setNoteMenu(null);setTabMenu(null);setSidebarMenu(null);setRunMenu(null);setGroupMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setSidebarMenu(null);setRunMenu(null);setGroupMenu(null);setMainMenuOpen(false)
     setProjectMenu({project,x,y})
   }
 
@@ -4230,7 +4288,11 @@ export function App() {
     const sid = target.session.id
     try {
       if (!target.submit) {
-        await api('POST',`/api/sessions/${sid}/input`,{data:pastePayload(message)})
+        // Filling a composer is an insert, not a delivery, so it does not pass the
+        // queue's readiness gate — and therefore has to refuse a dialog itself.
+        const refusal=insertionRefusal(target.session)
+        if(refusal)return{status:'error',error:refusal}
+        await api('POST',`/api/sessions/${sid}/input`,{data:composerInsertion(message,target.session.backend)})
         await selectSession(target.session)
         return { status: 'done' }
       }
@@ -5506,6 +5568,7 @@ export function App() {
       setSortMenu(null)
       setGroupMenu(null)
       setNoteMenu(null)
+      setStaticPreviewMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
       setDrawerDisplayMenu(null)
@@ -5561,6 +5624,7 @@ export function App() {
   useDismissLevel(() => setSortMenu(null), !!sortMenu, 'sort-menu')
   useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')
   useDismissLevel(() => setNoteMenu(null), !!noteMenu, 'note-menu')
+  useDismissLevel(() => setStaticPreviewMenu(null), !!staticPreviewMenu, 'static-preview-menu')
   useDismissLevel(() => setTabMenu(null), !!tabMenu, 'tab-menu')
   useDismissLevel(() => setEmptyMenu(null), !!emptyMenu, 'empty-menu')
   useDismissLevel(() => setDrawerDisplayMenu(null), !!drawerDisplayMenu, 'drawer-display-menu')
@@ -6304,7 +6368,15 @@ export function App() {
     const layout=layoutMap[project.id]||parseLayout(project.layout)
     const previewStack=stackForView(layout,preview.id)
     const selected=previewStack?.active_child_id===preview.id
-    return <div key={preview.id} class={`static-preview-entry ${selected?'active':''}`}>
+    // The right-click menu covers the whole entry, `×` included: that button sits outside
+    // `.sidebar-note-row`, so a menu bound to the row alone would let a right-click on the
+    // × fall through to the sidebar's own background menu.
+    return <div key={preview.id} class={`static-preview-entry ${selected?'active':''}`} onContextMenu={event=>{
+      event.preventDefault()
+      event.stopPropagation()
+      if(mobileWorkspace)return
+      openStaticPreviewMenu(preview,event.clientX,event.clientY)
+    }}>
       <button class={`sidebar-note-row preview-row static-preview-row ${selected?'active':''}`} title={`${preview.url} · served from disk by mux`} onClick={event=>{
         event.stopPropagation()
         setProjectId(project.id)
@@ -6325,6 +6397,10 @@ export function App() {
           control that actually retires it. */}
       <button class="static-preview-remove" title={`Remove the ${previewLabel(preview)} preview`} aria-label={`Remove the ${previewLabel(preview)} preview`} onClick={event=>{event.stopPropagation();void removeStaticPreview(preview)}}>×</button>
     </div>
+  }
+  const openStaticPreviewMenu=(preview:Preview,x:number,y:number)=>{
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setGroupMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setRunMenu(null);setMainMenuOpen(false)
+    setStaticPreviewMenu({previewId:preview.id,projectId:preview.project_id,label:previewLabel(preview),x,y})
   }
   const removeStaticPreview=async(preview:Preview)=>{
     try{
@@ -6661,7 +6737,7 @@ export function App() {
       <header class="app-topbar">
         <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
-      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
+      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.static-preview-entry,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
             rows, while only explicit Groups receive their own headers.
             Its five controls are the tree's own: filter, fold, sort, the registry
@@ -6955,14 +7031,14 @@ export function App() {
         defaultWidth={DRAWER_DEFAULT_WIDTH}
         onWidth={width=>persistDrawerWidth(width,drawerWidthLimit)}
         onInsert={text=>{
-          const target=insertIntoFocusedSurface(text,activeId)
+          const target=insertIntoFocusedSurface(text,activeId,{onRefused:setError})
           if(target==='none')setError('Focus a terminal or note before inserting text.')
           return target
         }}
         // A prompt template is written for an agent to read: routing one into whichever
         // note or file pane happened to be focused last edits that document instead.
         onInsertPrompt={text=>{
-          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true})
+          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true,onRefused:setError})
           if(target==='none')setError('Focus an agent session before inserting a prompt.')
           return target
         }}
@@ -7242,6 +7318,17 @@ export function App() {
       {workspaceNoteIds(noteMenu.projectId).includes(noteMenu.resourceId)&&<><div class="context-rule"/><button onClick={()=>{const target=noteMenu;setNoteMenu(null);void removeWorkspaceNote(target.projectId,target.resourceId)}}>Close resource tab</button></>}
     </div>}
 
+    {/* Static previews only. A session-owned preview row has no equivalent: it follows its
+        listener and is retired when that stops, so there is nothing here for it to do. */}
+    {staticPreviewMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Preview actions for ${staticPreviewMenu.label}`} style={{left:clampContextMenuLeft(staticPreviewMenu.x,innerWidth),top:Math.max(4,Math.min(staticPreviewMenu.y,innerHeight-90))}}>
+      <div class="context-title"><strong>{staticPreviewMenu.label}</strong></div>
+      <button onClick={()=>{
+        const target=previews[staticPreviewMenu.previewId]
+        setStaticPreviewMenu(null)
+        if(target)void removeStaticPreview(target)
+      }}>Close preview</button>
+    </div>}
+
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
       {/* Same rule as the session menu above, on every platform: no context menu moves,
@@ -7444,7 +7531,7 @@ export function App() {
         under the dialog closes it instead of leaving it aimed at a pane that is gone. */}
     {(()=>{const target=branchPickerId?sessions.find(item=>item.id===branchPickerId):null
       return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
-    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
+    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>{const sid=promptTargetId||activeId;if(sid)void insertIntoTerminal(sid,text,false).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))}}/>}
 
     {resourcesOpen&&<ResourcesModal
       initial={resourcesOpen}

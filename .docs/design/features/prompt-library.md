@@ -63,8 +63,11 @@ Search covers title, tags, and body and filters by the focused backend.
 A template can be favorited, copied, edited, or filled through its `{{variable}}` fields with a read-only preview.
 Successful local creates, edits, deletes, favorites, and uses invalidate every open prompt list.
 The Actions drawer refreshes in place even while the full library is open over it.
-Insert dispatches `insertText` to the focused xterm, which uses paste semantics.
+Insert requests `insertText` from the focused pane and waits for its acknowledgement, which uses paste semantics (`features/terminal-input.md` — "Inserting authored text").
 It never adds a newline, Enter, submit, or execute action.
+A body that *begins* with a newline is the shape that made this dangerous: sent as the first character of a bracketed paste it is read as Enter by Codex, so the live `Tree` template submitted whatever the operator had half-typed before its own text arrived (measured 2026-08-22 against v0.149.0).
+The builder lifts that leading run into the harness's own newline key ahead of the paste, so the template does what its author meant and the standing draft survives.
+Insert also refuses outright when the target session is showing an approval or a question, because there the text answers the dialog rather than filling a composer — and the refusal reaches the button, which is why insertion waits for an acknowledgement instead of dispatching and walking away.
 Editor changes use explicit Save/Discard and an in-app close confirmation.
 
 Insert routing is **terminals-only** for prompts. Everything else that injects text (clipboard

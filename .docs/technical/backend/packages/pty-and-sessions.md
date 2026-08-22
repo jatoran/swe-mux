@@ -71,9 +71,17 @@ Which keys count as a discard is a *parameter* (`clear_keys`) rather than a cons
 Ctrl+U is a line kill in Claude Code, so a fixed set reads a one-line kill on a four-line draft as "now empty" - the false safe this module exists to avoid.
 The declared sequence is matched against the raw frame, since Claude's is itself an escape sequence and the escape stripper would have eaten it.
 
+`newline_keys` is the same shape of parameter, from `HarnessDescriptor.composer_newline`.
+ESC+CR is not a control sequence the escape stripper matches, so without naming it the bare CR survived and every composer-newline write classified as a submit - the same false safe, already live through the rail's Markdown divider and code-fence buttons.
+
+It also **builds** an insertion (`composer_insertion`), not only classifies one, so the construction and the reading of these bytes cannot disagree.
+The body is a bracketed paste with newlines as CR; a *leading* newline run is lifted out and emitted as `newline_keys` presses ahead of it when the harness declares `paste_leading_newline_submits`, because Codex reads a paste's first newline as Enter and submits whatever the composer held (measured 2026-08-22 against v0.149.0).
+`harness.composer_insertion_rules(backend)` resolves the pair, `server._composer_insertion` is the daemon's one caller-facing wrapper, and `composerInsertion.ts` is the browser's mirror.
+
 `server.py` calls it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
 
 **Not:** reading the composer, which nothing can, or authorizing anything - `delivery_readiness.py` keeps its own coarse boundary and never consults this.
+Not the queue's delivery bytes either: `prompt_queue.delivery_payload` builds those on top of this, and *drops* a leading newline rather than lifting it, because a delivery has passed the readiness gate and is about to submit.
 
 ## `spawn_contract.py`
 

@@ -6,6 +6,7 @@ Design: `../../../design/features/terminal-input.md`.
 ## Terminal viewport
 
 `TerminalPane.tsx`, `terminalInputDiagnostics.ts`, `terminalCaretPlacement.ts`, `composerText.ts`,
+`composerInsertion.ts`,
 `railKeyRepeat.ts`, `RailRepeatKey.tsx`, `terminalAttachments.ts`, `terminalProtocol.ts`,
 `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts`, `terminalRenderPause.ts`,
 `mobileInput.ts`
@@ -35,6 +36,14 @@ A resolver also returns that contract as a `ComposerRegion` rectangle, so readin
 `composerRegionForBackend` is the wider registry over the same measurements: it adds Claude, which negotiates mouse tracking and therefore needs no caret resolver but whose draft is still on screen.
 
 `composerText.ts` is the pure assembly on top: dim cells dropped so a placeholder hint and a ghost completion never reach the clipboard, soft wraps rejoined at the measured wrap column, trailing box padding discarded, and `null` reserved for "this screen is not showing a readable draft" as distinct from an empty one.
+
+`composerInsertion.ts` is the other direction: the bytes that put authored text *into* a composer, for every path that pushes text somebody wrote elsewhere - a prompt template, a skill, a clipboard entry, a dictated draft, a note selection - plus the native paste handlers, all of which reach it through `pasteIntoTerminal`.
+It mirrors `composer_input.composer_insertion` in the daemon, and the pair is kept in step by the harness registry rather than by matching constants.
+Its one non-obvious rule: a bracketed paste does not protect its own first character, and Codex reads a paste that *begins* with a newline as Enter (measured 2026-08-22 against v0.149.0), so a leading newline run is lifted out and written as the harness's `composerNewline` keys ahead of the paste.
+`term.input` rather than prepending to the paste text, because xterm would rewrite it to a bare CR.
+
+`terminalActions.ts` carries the request/acknowledgement contract for those insertions and `insertionRefusal`, the pure predicate that refuses one into a session showing an approval or a question - the same three sub-reasons `prompt_queue.PROTECTED_AWAITING_REASONS` names, because typed text there answers the dialog rather than filling a composer.
+The refusal is why insertion is acknowledged at all: a dispatch-and-forget reported every insert as done, including the ones that never happened.
 
 ## Multi-device terminal input
 
@@ -70,6 +79,15 @@ Each is expressed as a focus move, because Android exposes no keyboard API:
 
 `softKeyboardInset` is the thresholded layout-minus-visual viewport difference `App.tsx` publishes as `--keyboard-inset`.
 The keyboard overlays the layout rather than resizing it, so this is a slide distance and never a new height.
+
+`softKeyboardVisualOffset` is the second half of that geometry and answers a different question: how far the browser has scrolled the visual viewport inside the layout one, published as `--visual-offset`.
+Chrome scrolls it to lift a focused field above the keys, and with the document at `overflow:hidden` and the panels `position:fixed` there is nothing else it can scroll.
+The inset alone is therefore wrong for any surface that *shortens*: it would stop that many pixels above the bottom of what the operator can see.
+`style.css` derives `--keyboard-cover` as the inset minus the offset, and every shortening surface subtracts that instead; the terminal's slide keeps the raw inset because `--peek-offset` is denominated in it.
+The clamp to the inset is load-bearing rather than defensive, since a larger value would grow a surface past full height.
+
+The pre-arrival reservation lives in `App.tsx` beside the measurement, not here: `focusin` on a keyboard-raising field sets `--keyboard-pending` from `lastSoftKeyboardInset()` and `soft-keyboard-pending` on the root, so a panel has already shortened when the keys appear and the browser never needs to scroll.
+It borrows `reservedKeyboardPx` and `RESERVE_INTENT_WINDOW_MS` from `keyboardReserve.ts` because it is the same bet on the same animation, and is retired outright once a real inset is measured rather than being shadowed by `soft-keyboard-open` - a keyboard dismissed while the field keeps focus would otherwise re-arm it over nothing.
 
 Its predicates and shadow-root walk are pure and duck-typed.
 `deepActiveElement` exists because `document.activeElement` retargets to a shadow host and the Continuity editor's `<textarea>` lives behind one.
