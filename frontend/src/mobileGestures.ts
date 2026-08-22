@@ -98,9 +98,13 @@ type HorizontalScrollElement = Pick<Element, 'matches' | 'scrollWidth' | 'client
  *
  * It is named separately from the list below rather than removed from it: the rail
  * still owns every *horizontal* touch (that is its pan), and the exception is only
- * the single-finger vertical channel, which the rail has no use for. The note
- * editor's own command rail is deliberately not here — it is a different surface
- * inside a different pane, and its strip is reached through `.overflow-rail-touch-drag`.
+ * the single-finger vertical channel, which the rail has no use for.
+ *
+ * The note editor's own command rail is deliberately not this rail — a different
+ * surface in a different pane — and it is not one of the named scrollers below
+ * either: it lives in Continuity's shadow root as `.command-rail-buttons`, so what
+ * vetoes a gesture over it is the generic computed-`overflow-x` branch, which is
+ * exactly why that branch walks the composed path.
  */
 export const RAIL_GESTURE_SELECTOR = '.terminal-action-rail'
 
