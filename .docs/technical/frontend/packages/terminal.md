@@ -71,6 +71,15 @@ Each is expressed as a focus move, because Android exposes no keyboard API:
 `softKeyboardInset` is the thresholded layout-minus-visual viewport difference `App.tsx` publishes as `--keyboard-inset`.
 The keyboard overlays the layout rather than resizing it, so this is a slide distance and never a new height.
 
+`softKeyboardVisualOffset` is the second half of that geometry and answers a different question: how far the browser has scrolled the visual viewport inside the layout one, published as `--visual-offset`.
+Chrome scrolls it to lift a focused field above the keys, and with the document at `overflow:hidden` and the panels `position:fixed` there is nothing else it can scroll.
+The inset alone is therefore wrong for any surface that *shortens*: it would stop that many pixels above the bottom of what the operator can see.
+`style.css` derives `--keyboard-cover` as the inset minus the offset, and every shortening surface subtracts that instead; the terminal's slide keeps the raw inset because `--peek-offset` is denominated in it.
+The clamp to the inset is load-bearing rather than defensive, since a larger value would grow a surface past full height.
+
+The pre-arrival reservation lives in `App.tsx` beside the measurement, not here: `focusin` on a keyboard-raising field sets `--keyboard-pending` from `lastSoftKeyboardInset()` and `soft-keyboard-pending` on the root, so a panel has already shortened when the keys appear and the browser never needs to scroll.
+It borrows `reservedKeyboardPx` and `RESERVE_INTENT_WINDOW_MS` from `keyboardReserve.ts` because it is the same bet on the same animation, and is retired outright once a real inset is measured rather than being shadowed by `soft-keyboard-open` - a keyboard dismissed while the field keeps focus would otherwise re-arm it over nothing.
+
 Its predicates and shadow-root walk are pure and duck-typed.
 `deepActiveElement` exists because `document.activeElement` retargets to a shadow host and the Continuity editor's `<textarea>` lives behind one.
 

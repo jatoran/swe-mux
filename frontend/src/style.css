@@ -2592,6 +2592,34 @@ body {
 
 @media(max-width:760px){
   .app-shell{height:var(--app-height,100dvh);min-height:0;overflow:hidden}
+  /* How much of what the operator can actually SEE the keyboard still hides, which is not
+     the same number as how tall the keyboard is.
+     `--keyboard-inset` is the keyboard's height, measured against the layout viewport, and
+     it is the right number for a surface laid out from the top of that viewport - right up
+     until the browser scrolls the *visual* viewport inside it. Chrome does exactly that to
+     put a focused field above the keys, and with `html`/`body` at `overflow:hidden` and the
+     panels `position:fixed` there is nothing else it can scroll, so `visualViewport.offsetTop`
+     is where it lands. A surface that then shortens by the full inset ends `offsetTop` pixels
+     short of the screen, and the strip below it is the workspace showing through: the "black
+     space between the keyboard and the UI" reported against the Actions tab's prompt editor,
+     which focuses a field low in a long column and so provokes the largest scroll.
+     Subtracting the offset is what keeps a shortened surface's bottom edge on the keyboard's
+     top edge wherever the browser has scrolled to, and `--visual-offset` is clamped to the
+     inset in `App.tsx` so this can never grow a surface past full height.
+     Deliberately NOT applied to the terminal's slide. The peek control pushes the grid back
+     down by `--peek-offset`, which `clampPeekOffset` denominates in the full inset and JS
+     writes as a length; sliding by a smaller number here without changing that would let a
+     peek overshoot the top of the grid by the offset. The terminal's own reservation
+     (`keyboardReserve.ts`) is the mechanism that keeps its content off the keyboard. */
+  :root{--keyboard-cover:calc(var(--keyboard-inset,0px) - var(--visual-offset,0px))}
+  /* Reserving the space *before* the keyboard arrives, which is the half that stops the
+     scroll rather than compensating for it. The browser only scrolls because the field is
+     under the keys at the moment they appear; a panel that has already given the keyboard
+     its height puts the field above them, and there is nothing to scroll. `App.tsx` arms this
+     from `lastSoftKeyboardInset()` on `focusin` and retires it the moment a real keyboard is
+     measured, so the prediction is never what a visible keyboard is drawn against and a
+     keyboard that never opens times out instead of holding half the screen back. */
+  :root.soft-keyboard-pending:not(.soft-keyboard-open){--keyboard-cover:var(--keyboard-pending,0px)}
   /* The soft keyboard overlays the layout viewport instead of resizing it, so nothing here
      reflows and every terminal keeps its grid and its PTY size. What is left is that the
      bottom of the terminal, the agent composer and the Action rail, sits behind the
@@ -2653,11 +2681,28 @@ body {
      This is what the note editor's own command rail needs. Continuity pins that rail to the
      bottom of the element the host gives it, so a box that still runs to the bottom of the
      layout viewport puts the rail behind the keyboard however the editor is scrolled — the
-     host owns the box, so the host owns the fix. */
-  :root.soft-keyboard-open .mobile-unified-active>.project-resource,
-  :root.soft-keyboard-open .mobile-unified-active>.preview-pane{height:calc(100% - var(--keyboard-inset,0px))}
-  :root.soft-keyboard-open .utility-drawer.overlay,
-  :root.soft-keyboard-open .sidebar.open{bottom:var(--keyboard-inset,0px)}
+     host owns the box, so the host owns the fix.
+     Ungated by `.soft-keyboard-open`, unlike the terminal's slide. That gate exists
+     because a transform makes an element the containing block for its `position:fixed`
+     descendants even at `translateY(0)`; a `height`, a `top`, and a `bottom` do no such
+     thing, so `calc(100% - 0px)` and `bottom:0px` are exactly the rules that were already in
+     force. Dropping it also lets the *pending* reservation apply, which is the whole point of
+     arming one before the class the keyboard sets exists.
+     The bare `:root` that replaces it is load-bearing and not a habit: it is the specificity
+     the class was also supplying. `.utility-drawer.overlay` declares its own `top:0;bottom:0`
+     further down this stylesheet, so an equally specific rule up here loses to it on order and
+     neither rule would do anything at all. */
+  :root .mobile-unified-active>.project-resource,
+  :root .mobile-unified-active>.preview-pane{height:calc(100% - var(--keyboard-cover,0px))}
+  /* The two fixed panels shorten AND move, where the panes above them only shorten, and the
+     difference is what each has above it. A pane is in flow under the toolbar and the tab
+     strip: moving it down would open a gap between it and the strip, so it grows downward to
+     meet the keyboard and lets the browser's scroll carry its header off the top like
+     everything else in the shell. A panel covers all of that and has nothing to leave behind,
+     so it is pinned to the band the operator can see - same height, offset by the scroll -
+     which keeps its own tab header reachable instead of scrolled off. */
+  :root .utility-drawer.overlay,
+  :root .sidebar.open{top:var(--visual-offset,0px);bottom:var(--keyboard-cover,0px)}
   /* [nav] [quota] [project name] [Talk] [Run] [drawer]. Flex, not grid: only the title flexes and
      the rest are content-sized, which grid expressed poorly here — an `auto` track next to
      the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`

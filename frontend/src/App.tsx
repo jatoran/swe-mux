@@ -142,7 +142,7 @@ import {
   forgetJoinAttempts, joinSessions, joinableSessionIds, recordJoinFailure, unjoinedSessionIds,
   type JoinAttempts,
 } from './sessionJoin'
-import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
+import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { ApprovalMode, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
@@ -184,7 +184,8 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
+import { RESERVE_INTENT_WINDOW_MS, reservedKeyboardPx } from './keyboardReserve'
+import { SOFT_KEYBOARD_EVENT, deepActiveElement, dismissSoftKeyboard, lastSoftKeyboardInset, raisesSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset, softKeyboardVisualOffset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
@@ -1909,7 +1910,19 @@ export function App() {
 
   useEffect(() => {
     const viewport = window.visualViewport
+    const root = document.documentElement
     let lastInset = -1
+    let pendingTimer: number | null = null
+    // Retire a predicted reservation. Called both when a real keyboard shows up (the
+    // measurement supersedes the guess) and when the guess turns out to be wrong - a focus
+    // that never raises a keyboard, or one the operator moves away from. Holding a prediction
+    // past either is how `keyboardReserve.ts` once left a pane rendering on half a screen
+    // with nothing covering the other half.
+    const clearPending = () => {
+      if (pendingTimer !== null) { window.clearTimeout(pendingTimer); pendingTimer = null }
+      root.style.removeProperty('--keyboard-pending')
+      root.classList.remove('soft-keyboard-pending')
+    }
     // The shell is the *layout* viewport, which `interactive-widget=resizes-visual` keeps at
     // full height while the keyboard is up. Sizing it from `visualViewport` instead is what
     // used to shrink every terminal when the keyboard opened — and shrinking an
@@ -1918,13 +1931,21 @@ export function App() {
     const updateAppHeight = () => {
       const layout = Math.round(window.innerHeight)
       const inset = softKeyboardInset(layout, Math.round(viewport?.height ?? layout))
-      const root = document.documentElement
       root.style.setProperty('--app-height', `${layout}px`)
       root.style.setProperty('--keyboard-inset', `${inset}px`)
+      // Where the browser has scrolled the visual viewport to, which is a separate fact from
+      // how tall the keyboard is and is what `--keyboard-cover` subtracts. See
+      // `softKeyboardVisualOffset` and the `--keyboard-cover` block in `style.css`.
+      root.style.setProperty('--visual-offset', `${softKeyboardVisualOffset(viewport?.offsetTop ?? 0, inset)}px`)
       // A class as well as the length, so the slide can be scoped to the keyboard being up.
       // A `translateY(0)` still makes an element a containing block for its `position:fixed`
       // descendants, which would silently re-anchor the drawer and sidebar overlays.
       root.classList.toggle('soft-keyboard-open', inset > 0)
+      // A measured keyboard outranks a predicted one, and dropping the prediction here rather
+      // than leaving it shadowed by the class is what makes the *close* correct too: dismissing
+      // the keyboard with the field still focused returns the inset to zero, and a prediction
+      // still armed would take over again and hold half the screen back with nothing on it.
+      if (inset > 0) clearPending()
       // Panes need this as state, not only as a length: a terminal shows a peek-at-the-top
       // control while the keyboard covers part of it. Published on change only, because the
       // keyboard fires resizes throughout its open animation.
@@ -1938,17 +1959,49 @@ export function App() {
       }
       setViewportWidth(window.innerWidth)
     }
+    // Give the keyboard its space before it arrives, rather than compensating once it has.
+    //
+    // The browser scrolls the visual viewport because the field it just focused is under the
+    // keys at the moment they appear. A panel that has already shortened puts that field above
+    // them, so there is nothing to scroll and `--visual-offset` stays zero - which is why this
+    // is the fix and the offset arithmetic is the backstop for when the prediction is wrong,
+    // absent (no keyboard measured on this device yet), or beaten by a rotation.
+    //
+    // Focus is the earliest honest signal a keyboard is coming, and the *only* one: Android
+    // announces nothing else. `RESERVE_INTENT_WINDOW_MS` is how long that signal is trusted,
+    // shared with the terminal's own reservation because it is the same bet on the same
+    // animation. Nothing arms on a device that types with a real keyboard.
+    const armPending = () => {
+      if (!hasSoftKeyboard() || root.classList.contains('soft-keyboard-open')) return
+      if (!raisesSoftKeyboard(deepActiveElement(document))) return
+      const predicted = reservedKeyboardPx(lastSoftKeyboardInset(), Math.round(window.innerHeight))
+      if (predicted <= 0) return
+      if (pendingTimer !== null) window.clearTimeout(pendingTimer)
+      root.style.setProperty('--keyboard-pending', `${predicted}px`)
+      root.classList.add('soft-keyboard-pending')
+      pendingTimer = window.setTimeout(clearPending, RESERVE_INTENT_WINDOW_MS)
+    }
+    // `focusout` runs before the incoming element takes focus, so this reads "nothing is
+    // focused" even for a move between two fields - and that is fine, because the `focusin`
+    // that follows re-arms in the same task and nothing is painted in between.
+    const onFocusOut = () => { if (!raisesSoftKeyboard(deepActiveElement(document))) clearPending() }
     updateAppHeight()
     window.addEventListener('resize', updateAppHeight)
+    window.addEventListener('focusin', armPending)
+    window.addEventListener('focusout', onFocusOut)
     viewport?.addEventListener('resize', updateAppHeight)
     viewport?.addEventListener('scroll', updateAppHeight)
     return () => {
       window.removeEventListener('resize', updateAppHeight)
+      window.removeEventListener('focusin', armPending)
+      window.removeEventListener('focusout', onFocusOut)
       viewport?.removeEventListener('resize', updateAppHeight)
       viewport?.removeEventListener('scroll', updateAppHeight)
-      document.documentElement.style.removeProperty('--app-height')
-      document.documentElement.style.removeProperty('--keyboard-inset')
-      document.documentElement.classList.remove('soft-keyboard-open')
+      clearPending()
+      root.style.removeProperty('--app-height')
+      root.style.removeProperty('--keyboard-inset')
+      root.style.removeProperty('--visual-offset')
+      root.classList.remove('soft-keyboard-open')
     }
   }, [])
 

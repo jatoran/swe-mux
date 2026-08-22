@@ -2517,8 +2517,49 @@ Its rules, and what each one is defending:
   a terminal must not resize because shrinking an alternate-screen PTY destroys rows, while a note
   editor, file view, or drawer reflows losslessly. Shortening is strictly better where it is safe,
   because the entire surface stays reachable instead of having its top pushed off screen. The
-  mobile resource pane loses `--keyboard-inset` from its height; the drawer and mobile sidebar
-  overlays take it as a `bottom` offset.
+  mobile resource pane and the mobile preview pane lose `--keyboard-cover` from their height; the
+  drawer and mobile sidebar overlays take it as a `bottom` offset.
+- **A shortening surface subtracts `--keyboard-cover`, never `--keyboard-inset`.** The two differ
+  by where the browser has scrolled the *visual* viewport, and the difference is the whole bug:
+  Chrome lifts a focused field above the keys by scrolling, `html`/`body` are `overflow:hidden` and
+  the panels are `position:fixed`, so the only thing it can scroll is the visual viewport itself.
+  A surface laid out from the top of the layout viewport then ends `visualViewport.offsetTop`
+  pixels above the bottom of what the operator can see, and the strip below it shows the workspace
+  through the scrim. Reported as black space between the keyboard and the UI when editing a prompt
+  template on the Actions tab, which focuses a field low in a long scrolling column and so provokes
+  the largest scroll. `--visual-offset` publishes the scroll (`softKeyboardVisualOffset`, clamped to
+  the inset so a surface can never be grown past full height) and `--keyboard-cover` is
+  `--keyboard-inset` minus it.
+- The two fixed panels shorten **and** move, where the in-flow panes only shorten, and what decides
+  it is what each has above it. A pane sits under the mobile toolbar and the tab strip, so moving it
+  down would open a gap between them; it grows downward to meet the keyboard instead, and the
+  browser's scroll carries its header off the top along with everything else in the shell. A panel
+  covers all of that and has nothing to leave behind, so it takes `top:var(--visual-offset)` as well
+  and is pinned to the band the operator can see, which keeps its own tab header reachable.
+- The terminal's slide deliberately keeps using the full `--keyboard-inset`. The peek control pushes
+  the grid back down by `--peek-offset`, which `clampPeekOffset` denominates in the inset and JS
+  writes as a length, so sliding by a smaller number without changing that would let a peek overshoot
+  the top of the grid. The terminal's own reservation is what keeps its content off the keyboard.
+- **The panels also reserve the keyboard's height before it opens, which is what stops the scroll
+  rather than compensating for it.** The browser only scrolls because the focused field is under the
+  keys at the moment they appear, so a panel that has already shortened leaves it nothing to do and
+  `--visual-offset` stays zero. Focus is the earliest honest signal a keyboard is coming and the only
+  one Android gives, so `focusin` on a field that raises a keyboard arms `soft-keyboard-pending` and
+  `--keyboard-pending` from `lastSoftKeyboardInset()` (the same remembered measurement the terminal's
+  reservation uses, and the same `RESERVE_INTENT_WINDOW_MS` trust window). The arithmetic above is
+  then the backstop for a prediction that is absent, too small, or beaten by a rotation.
+- A prediction is retired the moment a real keyboard is measured, not merely shadowed by
+  `soft-keyboard-open`. Dismissing the keyboard with the field still focused returns the inset to
+  zero, and a prediction still armed would take over again and hold ~40% of the screen back with
+  nothing covering it, which is the same failure the terminal's reservation had before it grew a
+  keyboard term.
+- The shortening rules are not gated on `soft-keyboard-open`, unlike the terminal's slide. That gate
+  exists because a transform is a containing block for `position:fixed` descendants even at zero,
+  which a `height`, a `top`, or a `bottom` is not; dropping it is also what lets the pending
+  reservation apply before the keyboard's own class exists. The bare `:root` that replaces it is
+  load-bearing rather than habit: `.utility-drawer.overlay` declares its own `top:0;bottom:0` further
+  down the stylesheet, so an equally specific rule earlier in the file would lose on order and do
+  nothing at all.
 - This is what the note editor's command rail needs. Continuity pins that rail to the bottom of
   the element the host gives it, so a box still running to the bottom of the layout viewport puts
   the rail behind the keyboard however the editor is scrolled — the host owns the box, so the host
