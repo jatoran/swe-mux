@@ -1164,7 +1164,11 @@ export function VoiceDock({
     aria-label="Voice panel"
     aria-hidden={dock==='chip'?'true':undefined}
   >
-    <header>
+    {/* The header carries a class of its own because it is a gesture region
+        (`mobileGestures.ts`): swiping it works the panel — up/down between its three
+        sizes, left/right across its three modes. The header and not the whole dock,
+        because every body below it scrolls. */}
+    <header class="voice-dock-head">
       {/* Two steps rather than one cycling button, so neither direction is a guess and
           each can be disabled at its end. The chip in the top bar is the third stop and
           the way back from it. */}

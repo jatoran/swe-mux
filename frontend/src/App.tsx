@@ -187,7 +187,7 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { RESERVE_INTENT_WINDOW_MS, reservedKeyboardPx } from './keyboardReserve'
 import { SOFT_KEYBOARD_EVENT, deepActiveElement, dismissSoftKeyboard, lastSoftKeyboardInset, raisesSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset, softKeyboardVisualOffset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
-import { classifyGesture, classifyRailGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, pathOwnsRailGesture, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, classifyRailGesture, classifyRegionGesture, defaultMobileGestureSettings, gestureOverlayDepth, isHorizontalDirection, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, regionForPath, resolveGestureCommand, surfaceGestureFor, surfaceGesturesEnabled, swipeAwayCloseEnabled, type GestureRegion, type MobileGestureSettings, type SurfaceGesture } from './mobileGestures'
 import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
@@ -822,6 +822,7 @@ export function App() {
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
   const [swipeAwayClose, setSwipeAwayClose] = useState(true)
   const [overlayBack, setOverlayBack] = useState(true)
+  const [surfaceGestures, setSurfaceGestures] = useState(true)
   const [viewBack, setViewBack] = useState(true)
   // On a phone the navigation sidebar and the clipboard panel are both full-height
   // drawers over the workspace, entering from opposite edges. Two open at once leave
@@ -1741,6 +1742,7 @@ export function App() {
     setMobileGestures(mobileGestureSettings(config))
     setSwipeAwayClose(swipeAwayCloseEnabled(config))
     setOverlayBack(overlayBackEnabled(config))
+    setSurfaceGestures(surfaceGesturesEnabled(config))
     setViewBack(viewBackEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
@@ -2350,6 +2352,14 @@ export function App() {
   // does not remove the Projects from the rail or the numbered shortcuts.
   const displayProjects=rootEntries.flatMap(entry=>entry.kind==='group'?entry.bucket.items:[entry.project])
   const displayProjectIds=mergeVisibleOrder(orderedProjects.map(project=>project.id),displayProjects.map(project=>project.id))
+  /** The Project `step` places away from the active one in sidebar reading order, or null
+   *  at either end. Drawn from `displayProjects` so it agrees with the numbered shortcuts
+   *  and the collapsed rail rather than with the stored positions. */
+  const adjacentProject=(step:1|-1):Project|null=>{
+    const index=displayProjects.findIndex(project=>project.id===projectId)
+    if(index<0)return null
+    return displayProjects[index+step]||null
+  }
   // Which rows the typed filter still leaves on screen, or null while nothing is typed
   // — which means *not filtering*, and is why opening the filter changes nothing until
   // a character lands. Computed here rather than beside the tree it edits because the
@@ -2670,6 +2680,16 @@ export function App() {
   // is stored as, because `effectiveVoiceMode` in this file is already the read-aloud
   // mode of one session, which is an unrelated thing.
   const voiceBody=effectiveVoicePanelMode(voicePanelMode,talkActive)
+  // The panel's modes in the order its tablist draws them, minus the one that tablist
+  // disables: `dictation` needs a live capture to show anything, so stepping onto it with
+  // Talk off would land on an empty body the tab itself refuses to open.
+  const voicePanelModeOrder:VoicePanelMode[]=talkActive?['dictation','chat','read']:['chat','read']
+  const stepVoicePanelMode=(step:1|-1)=>{
+    const order=voicePanelModeOrder
+    if(!order.length)return
+    const at=order.indexOf(voicePanelMode)
+    setVoicePanelMode(order[((at<0?0:at)+step+order.length)%order.length])
+  }
   // Capture start/stop is a dock *event*, not a dock setter: only the reducer decides
   // whether it may open anything, and it may only ever open the dictation draft, which
   // has no other surface. Any other body leaves a collapsed dock collapsed.
@@ -5108,6 +5128,17 @@ export function App() {
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
+    // Step through Projects in the order the sidebar draws them — `displayProjects`, the
+    // same list the numbered `project.activate(N)` shortcuts and the collapsed rail follow,
+    // so a sorted or grouped sidebar never disagrees with what "next" means. No wrap: the
+    // ends of a list are information, and wrapping makes a repeated swipe a loop with no
+    // way to tell you have arrived. Carries the top bar's horizontal swipe.
+    { id: 'project.next', label: 'Focus the next Project (sidebar order)', category: 'project', available: adjacentProject(1) !== null, disabledReason: 'The last Project in the sidebar is already selected', run: () => { const next = adjacentProject(1); if (next) selectProject(next.id) }, voice:{
+      phrases:['next project','go to the next project'],
+    } },
+    { id: 'project.previous', label: 'Focus the previous Project (sidebar order)', category: 'project', available: adjacentProject(-1) !== null, disabledReason: 'The first Project in the sidebar is already selected', run: () => { const previous = adjacentProject(-1); if (previous) selectProject(previous.id) }, voice:{
+      phrases:['previous project','go to the previous project'],
+    } },
     // The app menu, as a command rather than only a button. Its two triggers live in the
     // sidebar (the footer's `: menu`, and the collapsed rail's `:`), so on a phone the
     // menu was reachable only by pulling the sidebar in first — yet the menu itself is a
@@ -5398,6 +5429,13 @@ export function App() {
     },voice:{phrases:['assistant','open assistant','open the assistant','chat','close assistant','close the assistant']}},
     { id:'voice.dockExpand',label:'Expand the voice panel',category:'voice',available:canExpandVoiceDock(voiceDock.state),disabledReason:'The voice panel is already at full size',run:()=>dispatchVoiceDock({kind:'expand'}),voice:{phrases:['expand the voice panel','expand voice panel','expand the panel']}},
     { id:'voice.dockCollapse',label:'Collapse the voice panel',category:'voice',available:canCollapseVoiceDock(voiceDock.state),disabledReason:'The voice panel is already in the top bar',run:()=>dispatchVoiceDock({kind:'collapse'}),voice:{phrases:['collapse the voice panel','collapse voice panel','collapse the panel']}},
+    // Step across the panel's three bodies in the order its own tablist draws them, and
+    // skip `dictation` while Talk is off for the same reason that tab is disabled: there
+    // is no draft to show. Wrapping is right here where it is wrong for Projects — three
+    // tabs one swipe apart are a ring, not a list with ends worth reporting. These carry
+    // the dock's horizontal swipe.
+    { id:'voice.panelModeNext',label:'Voice panel: next mode',category:'voice',available:voicePanelModeOrder.length>1,disabledReason:'Only one voice panel mode is available',run:()=>stepVoicePanelMode(1)},
+    { id:'voice.panelModePrevious',label:'Voice panel: previous mode',category:'voice',available:voicePanelModeOrder.length>1,disabledReason:'Only one voice panel mode is available',run:()=>stepVoicePanelMode(-1)},
     // Clearing context is the one assistant act that runs on the word with no
     // confirmation card, because nothing is destroyed: the prior dialog is
     // unremembered, not deleted, and the panel keeps it readable. The spoken
@@ -5856,9 +5894,14 @@ export function App() {
   // theme picker opened over it is what a swipe then means, not the drawer underneath.
   const settingsNav = useRef({ open: false })
   settingsNav.current = { open: settingsNavOpen }
+  // Region gestures act on the element the touch began on, and two of them need things
+  // declared far below this recognizer (the mobile tab list, the menu openers). A ref so
+  // the effect's dependency list stays the four values that actually change how a touch
+  // is *read* — rebuilding these listeners on every render would drop sequences in flight.
+  const runSurfaceGestureRef = useRef<(surface: SurfaceGesture, path: readonly Element[], at: { x: number; y: number }) => void>(() => {})
   useEffect(() => {
     if (!mobileWorkspace) return
-    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; rail:boolean; claims:ReturnType<typeof markPointerDragClaims> } | null = null
+    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; region:GestureRegion|null; panning:boolean; path:readonly Element[]; claims:ReturnType<typeof markPointerDragClaims> } | null = null
     const centroid = (touches: TouchList) => {
       let x = 0, y = 0
       for (let i = 0; i < touches.length; i++) { x += touches[i].clientX; y += touches[i].clientY }
@@ -5885,18 +5928,24 @@ export function App() {
       // Overlays stay immune to that hijacking by a stronger rule than exclusion:
       // `resolveGestureCommand` resolves every non-back slot to nothing whenever the
       // dismiss stack is non-empty.
-      // The command rail is the one scroller that keeps a gesture of its own: it owns
-      // every horizontal touch, and has no vertical scroll for the upward swipe to
-      // steal. Recognized without the `touchmove` listener below — there is nothing to
-      // preventDefault, and attaching one is precisely what swallows the rail's first
-      // horizontal drag — so its travel is measured from the touch that lifts.
-      const rail = pathOwnsRailGesture(path)
-      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer, .settings-layer, .usage-layer, .process-layer, .folder-picker-layer, .palette-layer') || (!rail && pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX))) { state = null; detachMove(); return }
+      // A **region** answers to a swipe of its own, and is admitted on its own terms:
+      // past the workspace allowlist above (the top bar and the voice dock are chrome
+      // outside it), and past the horizontal-scroller veto (three of the five regions
+      // *are* one). Recognized without the `touchmove` listener below — there is nothing
+      // to preventDefault, and attaching one is precisely what swallows a rail's first
+      // horizontal drag — so travel is measured from the touch that lifts.
+      const region = regionForPath(path)
+      if (!(target instanceof Element) || (!region && (!target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer, .settings-layer, .usage-layer, .process-layer, .folder-picker-layer, .palette-layer') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)))) { state = null; detachMove(); return }
+      // Which panning a horizontal region swipe would be stealing, decided here while the
+      // path is in hand. Two regions claim horizontal, and both sit next to a strip that
+      // scrolls only when it overflows — the dock's actions, the top bar's account
+      // switcher — so a fixed answer would be right half the time.
+      const panning = region ? pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX) : false
       // A drag that has claimed the pointer owns it outright (`pointerDragClaim.ts`); a
       // second finger landing mid-drag does not get to start a gesture behind it.
       if (pointerDragOwnsPointer()) { state = null; detachMove(); return }
       const point = centroid(event.touches)
-      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?', rail, claims: markPointerDragClaims() }
+      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?', region, panning, path, claims: markPointerDragClaims() }
       else state.maxPointers = Math.max(state.maxPointers, event.touches.length)
       // Two fingers is never text entry, so lower the keyboard the moment the second
       // one lands rather than waiting for the command at touchend. An editor focuses
@@ -5904,12 +5953,12 @@ export function App() {
       // two-finger swipe starting over a note raises the keyboard on the way in — and
       // a swipe later is far too late to hide that it happened. Blurring in the same
       // frame the focus landed is what keeps it from ever animating up.
-      // Not for a rail sequence: that slot is single-finger by construction, so a second
-      // finger there resolves to nothing — exactly as it did when the rail was excluded
-      // outright — and dropping the keyboard for a gesture that will not run is a change
-      // this one has no business making.
-      if (event.touches.length >= 2 && !state.rail) dismissSoftKeyboard()
-      if (!state.rail) attachMove()
+      // Not for a region sequence: every region gesture is single-finger by construction,
+      // so a second finger there resolves to nothing — exactly as it did when the regions
+      // were excluded outright — and dropping the keyboard for a gesture that will not run
+      // is a change this one has no business making.
+      if (event.touches.length >= 2 && !state.region) dismissSoftKeyboard()
+      if (!state.region) attachMove()
     }
     const onMove = (event: TouchEvent) => {
       if (!state) return
@@ -5944,15 +5993,34 @@ export function App() {
       // `pointerup` precedes `touchend`, so a drag that just released its claim is still
       // the owner of everything this sequence measured.
       if (pointerDragOwnsPointer(state.claims)) { state = null; return }
-      // A rail sequence ran with no move listener, so the last position it recorded is
+      // A region sequence ran with no move listener, so the last position it recorded is
       // still the touch-down one. The finger that lifted is where it ended.
-      const lifted = state.rail ? event.changedTouches[0] : undefined
+      const lifted = state.region ? event.changedTouches[0] : undefined
       if (lifted) { state.lastX = lifted.clientX; state.lastY = lifted.clientY }
       const sample = { pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start }
-      const slot = state.rail ? classifyRailGesture(sample) : classifyGesture(sample)
+      const panels = overlayPanels.current
+      // A region that is not the command rail resolves to its own act and never to a slot.
+      // Everything about it is local, so anything painted over the workspace — a modal, or
+      // either slide-in panel — means the swipe is about that instead, and nothing runs.
+      if (state.region && state.region !== 'commandRail') {
+        const { region, panning, path } = state
+        const at = { x: state.lastX, y: state.lastY }
+        state = null
+        if (!surfaceGestures) return
+        if (panels.sidebarOpen || panels.drawerOpen || gestureOverlayDepth(dismissStack.depth(), panels) > 0) return
+        const direction = classifyRegionGesture(sample)
+        if (!direction) return
+        // Horizontal yields to whatever is already panning under the finger.
+        if (panning && isHorizontalDirection(direction)) return
+        const surface = surfaceGestureFor(region, direction)
+        if (!surface) return
+        navigator.vibrate?.(12)
+        runSurfaceGestureRef.current(surface, path, at)
+        return
+      }
+      const slot = state.region ? classifyRailGesture(sample) : classifyGesture(sample)
       state = null
       if (!slot) return
-      const panels = overlayPanels.current
       // `topLabel()` rather than a `settingsOpen` flag: what matters is whether Settings
       // (or its own drawer) is the level on top, so a picker opened above it keeps the
       // swipe for itself instead of quietly working the drawer behind it.
@@ -5980,7 +6048,7 @@ export function App() {
       window.removeEventListener('touchend', onEnd)
       window.removeEventListener('touchcancel', onEnd)
     }
-  }, [mobileWorkspace, mobileGestures, swipeAwayClose, overlayBack])
+  }, [mobileWorkspace, mobileGestures, swipeAwayClose, overlayBack, surfaceGestures])
 
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
     const current=clientStartupTimingValues.current[sessionId]||{}
@@ -6627,11 +6695,72 @@ export function App() {
       mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
     )
   }
+  /** The name a mobile tab's menu is titled with. Shared with the swipe that opens the
+   *  same menu, so the two doors cannot drift into naming the tab differently. */
+  const mobileTabMenuLabel=(leaf:PaneLeaf):string=>{
+    if(leaf.kind==='terminal'){const session=sessions.find(item=>item.id===leaf.id);return session?sessionName(session):leaf.id}
+    if(leaf.kind==='preview')return previews[leaf.id]?.url||leaf.id
+    if(leaf.kind==='history')return 'History'
+    if(leaf.kind==='queue')return queueTabLabel(leaf.id)
+    if(leaf.kind==='changemap')return changeMapTabLabel(leaf.id)
+    return noteTabLabel(leaf.id)
+  }
+  /**
+   * Carry out a recognized region gesture.
+   *
+   * Four of the nine resolve to ordinary commands, so a chord, the palette and a swipe
+   * all reach the same code. The other three cannot: they act on *the element the touch
+   * started on*, which no command id can name — so they read their target back out of
+   * the composed path the recognizer kept, and open the menu the tab's own hold would
+   * have opened, at the point the finger left.
+   */
+  const runSurfaceGesture=(surface:SurfaceGesture,path:readonly Element[],at:{x:number;y:number})=>{
+    const inPath=<T extends Element>(match:(element:Element)=>element is T):T|null=>path.find(match) as T|null
+    switch(surface){
+      case 'voiceDock.expand': runNamedCommand('voice.dockExpand'); return
+      case 'voiceDock.collapse': runNamedCommand('voice.dockCollapse'); return
+      case 'voiceDock.modeNext': runNamedCommand('voice.panelModeNext'); return
+      case 'voiceDock.modePrevious': runNamedCommand('voice.panelModePrevious'); return
+      case 'projectName.next': runNamedCommand('project.next'); return
+      case 'projectName.previous': runNamedCommand('project.previous'); return
+      case 'projectName.menu': {
+        // The same toggle the button's own tap does, including the closing half: this
+        // element carries `data-menu-toggle`, so the document dismisser deliberately
+        // leaves it alone and a second swipe would otherwise only ever reopen.
+        if(!activeProject)return
+        if(projectMenu){setProjectMenu(null);return}
+        openProjectMenuAt(activeProject,at.x,at.y)
+        return
+      }
+      case 'tabRail.menu': {
+        const shell=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&!!element.dataset.reorderId)
+        const leaf=shell?mobileProjection.tabs.find(tab=>tab.id===shell.dataset.reorderId):undefined
+        if(!leaf)return
+        // The hold this swipe is a faster door to may have already fired and opened the
+        // very same menu; reopening it a few pixels away is not a second act.
+        if(contextMenu?.session?.id===leaf.id||tabMenu?.leaf.id===leaf.id)return
+        const session=leaf.kind==='terminal'?sessions.find(item=>item.id===leaf.id):undefined
+        mobileTabHeldRef.current=true
+        if(session&&!session.pending)openSessionMenu(session,at.x,at.y,'mobile')
+        else if(leaf.kind!=='terminal')openTabMenu(leaf,mobileTabMenuLabel(leaf),at.x,at.y,'mobile')
+        return
+      }
+      case 'noteRail.outline': {
+        // `note.outline` asks "who has focus?", and a rail is not focus — touching it
+        // never made that note the insert target. The gesture already knows the editor
+        // it started on, so it names it and skips the question.
+        const editor=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        if(!editor)return
+        window.dispatchEvent(new CustomEvent('mux:note-outline',{cancelable:true,detail:{editor}}))
+        return
+      }
+    }
+  }
+  runSurfaceGestureRef.current=runSurfaceGesture
   const mobileTab=(leaf:PaneLeaf):ComponentChildren=>{
     const selected=leaf.id===mobileProjection.selected?.id
     const session=leaf.kind==='terminal'?sessions.find(item=>item.id===leaf.id):undefined
-    const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
-    const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):leaf.kind==='changemap'?changeMapTabLabel(leaf.id):noteTabLabel(leaf.id)
+    const label=mobileTabMenuLabel(leaf)
     const visibleLabel=mobileTabLabel(leaf)
     const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':leaf.kind==='changemap'?'◈':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap

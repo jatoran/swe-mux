@@ -1013,8 +1013,20 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     if(!autosaved)return
     const onOutline=(event:Event)=>{
       const element=editorElement.current
+      if(!element)return
+      // A caller that already knows which editor it means says so, and focus is not
+      // consulted. The command-rail swipe is that caller: touching a rail never made
+      // its note the insert target, so asking "who has focus?" would answer "nobody"
+      // for the note the finger is on.
+      const named=(event as CustomEvent<{editor?:unknown}>).detail?.editor
+      if(named!==undefined&&named!==null){
+        if(named!==element)return
+        event.preventDefault()
+        openOutline()
+        return
+      }
       const target=currentInsertTarget()
-      if(!element||target?.kind!=='editor'||target.editor!==element)return
+      if(target?.kind!=='editor'||target.editor!==element)return
       event.preventDefault()
       openOutline()
     }

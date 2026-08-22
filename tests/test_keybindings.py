@@ -98,6 +98,10 @@ def test_keybinding_editor_metadata_exposes_commands_and_reserved_lists() -> Non
     # The app menu's only buttons live in the sidebar, so the gesture that opens it
     # without one needs the menu to be an ordinary command.
     assert "menu.toggle" in commands
+    # Carried by the mobile top bar's horizontal swipe, and bindable so a chord and the
+    # palette step Projects the same way the numbered shortcuts select them.
+    assert "project.next" in commands
+    assert "project.previous" in commands
     assert "project.activate(9)" in commands
     assert "ctrl+w" in policy["browser_reserved"]
     assert policy["desktop_only"] == ["ctrl+shift+tab", "ctrl+tab"]

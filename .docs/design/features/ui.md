@@ -1236,20 +1236,54 @@ Its rules, and what each one is defending:
   channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real
   mappable slot. Edge- and top-anchored swipes stay with the OS. Slot names are validated
   server-side, so adding one requires the same slot list in `config.py`.
-- **One slot is scoped to a region rather than to the screen: `rail_swipe_up`.**
-  A single-finger upward swipe that *starts on the command rail* runs it; the default is
-  `menu.toggle`, the app menu.
-  The reservation the other bullet states is about the terminal's scrollback, and the rail has
-  none - it scrolls sideways and never up - so the channel is free exactly there and nowhere
-  else. Scoping it to that strip is also what makes it discoverable: the rail is a row of
-  controls at the bottom of the pane, and swiping up off a row of controls is a familiar way to
-  ask for more of them.
-  The rail keeps every *horizontal* touch for its own pan and a second finger over it has never
-  resolved to anything, so the slot is deliberately one finger and one direction
-  (`classifyRailGesture`): widening it would take input away from a control rather than find
-  input nobody was using.
-  The note editor's own command rail is not this rail. It is a different surface in a different
-  pane, and it keeps the older rule.
+- **Some swipes belong to a piece of chrome rather than to the screen.**
+  A **region** is chrome that answers to a swipe of its own, because the channel the rest of the
+  app reserves is dead there. There are five (`GESTURE_REGION_SELECTORS`): the terminal's command
+  rail, the mobile tab rail, the voice panel's header, the mobile top bar's Project name, and the
+  note editor's command rail.
+  Three rules hold for all of them and are what keep this from eating the app.
+  **One finger** - two fingers are the global slots' channel everywhere, and no region has ever
+  resolved a two-finger gesture.
+  **A region decides its own directions**, and a direction it does not claim resolves to
+  *nothing* rather than falling through to the workspace binding - without that, a swipe over
+  chrome would change tabs behind it.
+  **Horizontal only where nothing else pans**: vertical is free in all five, horizontal is claimed
+  by two, and even there the swipe yields when the composed path owns a horizontal scroller, so
+  the dock's action strip and the top bar's account switcher keep their drags when they overflow.
+  That last rule exists because the overflow veto is *conditional* - a strip that scrolls only
+  when full would otherwise make a gesture beside it work half the time, which is worse than not
+  having it.
+- **Only the command rail's swipe is a rebindable slot** (`rail_swipe_up`, default `menu.toggle`),
+  because it is the only one whose action is not about the surface it starts on - it opens the app
+  menu, and any command would make sense there.
+  The other four act on what they touch, one action per direction is the only thing that means
+  anything on those surfaces, and there is correspondingly nothing to rebind: they are fixed, and
+  the hot-reloadable `mobile_surface_gestures` bool (default on, checkbox in Settings → Input →
+  touch gestures) turns all four off together.
+  What each does:
+  the **voice panel header** steps size vertically (down expands, up collapses - it is
+  top-anchored and grows downward, the same sense as its own `▾`/`▴` buttons) and mode
+  horizontally across talk/chat/tts, skipping `dictation` while Talk is off exactly as that tab
+  is disabled;
+  the **Project name** steps Projects left/right in sidebar reading order (`project.next` /
+  `project.previous`, drawn from `displayProjects` so it agrees with the numbered shortcuts, and
+  deliberately not wrapping) and opens the Project menu vertically;
+  a **tab on the mobile tab rail** opens that tab's menu on either vertical direction - the same
+  menu its 350 ms hold opens, reached faster, which is the shape the "reaching a menu should never
+  require a hold on touch" rule prefers;
+  the **note editor's command rail** opens the heading outline.
+  Both slide-in panels and any overlay suppress all four: they are workspace chrome, so anything
+  painted over the workspace means the swipe is about that instead.
+- **A region gesture that acts on an element carries that element, not a command id.**
+  Four of the nine resolve to ordinary commands, so a chord, the palette and a swipe reach the
+  same code. Three cannot, because no command id can name "the tab I just swiped" - they read
+  their target back out of the composed path the recognizer kept.
+  The note rail's is the instructive one: `note.outline` asks *who has focus*, and touching a rail
+  never made its note the insert target, so the swipe names its editor in the event's `detail`
+  and the claim protocol skips the question. A caller that does not name one keeps the focus rule.
+  The note rail is also matched by the CSS shadow **part** Continuity exports rather than by the
+  `.command-rail-buttons` class behind it: the part is the contract, the class is an internal a
+  version bump may rename.
 - **The app menu is a command (`menu.toggle`), not only a button.**
   Both of its triggers live in the sidebar - the footer's `: menu` and the collapsed rail's `:` -
   so on a phone the menu was reachable only by pulling the sidebar in first, which then sat open
@@ -1278,11 +1312,13 @@ Its rules, and what each one is defending:
   touchstart has claimed the gesture, then dropped when the sequence ends. Registering it during
   touchstart dispatch still yields cancelable moves, so owned gestures keep working while drags
   inside a scroller meet no handler at all.
-  The rail swipe above is recognized **without** that listener for the same reason: it has
-  nothing to `preventDefault` (a vertical drag on the rail cancels the pan by itself,
-  `RailScroller`), and attaching one for every touch that lands on the rail is precisely the
-  swallowed first drag this rule exists to avoid. Its travel is measured from the touch that
-  lifts (`changedTouches`) rather than from moves nobody listened for.
+  Region swipes are recognized **without** that listener for the same reason: they have nothing
+  to `preventDefault` (a vertical drag on a rail cancels its pan by itself, `RailScroller`), and
+  attaching one for every touch that lands on a rail is precisely the swallowed first drag this
+  rule exists to avoid. Their travel is measured from the touch that lifts (`changedTouches`)
+  rather than from moves nobody listened for.
+  Regions are also admitted **past the target allowlist**, because two of them are chrome outside
+  the workspace element: the top bar and the voice dock.
 - It also yields to a **pointer drag**, and that yield is stated rather than measured. Dragging a
   drawer tab along the strip is, in coordinates, exactly the single-finger horizontal swipe that
   toggles a panel — so rearranging tabs on a phone fired the swipe bindings until the drag began

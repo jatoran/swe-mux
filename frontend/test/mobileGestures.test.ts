@@ -4,6 +4,11 @@ import {
   BACK_COMMAND,
   classifyGesture,
   classifyRailGesture,
+  classifyRegionGesture,
+  isHorizontalDirection,
+  regionForPath,
+  surfaceGestureFor,
+  surfaceGesturesEnabled,
   defaultMobileGestureSettings,
   GESTURE_SLOTS,
   gestureOverlayDepth,
@@ -121,14 +126,92 @@ test('gesture settings fall back to opinionated defaults and accept overrides', 
 test('the command rail is recognized from the composed path, and only that rail', () => {
   const railChip = fakeElement('term-key', 30, 30, 'visible')
   const rail = fakeElement('terminal-action-rail', 520, 300, 'hidden')
-  const noteRail = fakeElement('overflow-rail-touch-drag', 520, 300, 'auto')
   const drawerTabs = fakeElement('drawer-tabs', 520, 300, 'auto')
 
   assert.equal(pathOwnsRailGesture([railChip, rail]), true)
-  // The note editor's own strip and the drawer's tab bar are horizontal scrollers too,
-  // and both keep the older rule: a vertical drag there is not a swe-mux gesture.
-  assert.equal(pathOwnsRailGesture([noteRail]), false)
+  // The drawer's tab bar is a horizontal scroller too, and keeps the older rule: a
+  // vertical drag there is not a swe-mux gesture.
   assert.equal(pathOwnsRailGesture([drawerTabs]), false)
+})
+
+test('each region is recognized from the composed path, and everything else is not', () => {
+  const region = (selector: string) => [{ matches: (query: string) => query === selector }]
+
+  assert.equal(regionForPath(region('.terminal-action-rail')), 'commandRail')
+  assert.equal(regionForPath(region('.mobile-unified-tabs')), 'tabRail')
+  assert.equal(regionForPath(region('.voice-dock-head')), 'voiceDock')
+  assert.equal(regionForPath(region('.mobile-project-name')), 'projectName')
+  // The note rail is named by the shadow part Continuity exports, not by the internal
+  // class behind it — the class is free to be renamed by a version bump, the part is not.
+  assert.equal(regionForPath(region('[part~="command-rail"]')), 'noteRail')
+  assert.equal(regionForPath(region('.command-rail-buttons')), null)
+  // The drawer tab bar and the desktop tab strip are scrollers, not regions.
+  assert.equal(regionForPath(region('.drawer-tabs')), null)
+  assert.equal(regionForPath(region('.stack-tabs')), null)
+  assert.equal(regionForPath([]), null)
+})
+
+test('a region swipe resolves a direction on one finger and nothing on two', () => {
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: 8, dy: -90, durationMs: 200 }), 'up')
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: 8, dy: 90, durationMs: 200 }), 'down')
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: -90, dy: 8, durationMs: 200 }), 'left')
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: 90, dy: 8, durationMs: 200 }), 'right')
+  // Two fingers are the global slots' channel, region or not.
+  assert.equal(classifyRegionGesture({ pointerCount: 2, dx: 8, dy: -90, durationMs: 200 }), null)
+})
+
+test('a region swipe answers to the same distance, axis and duration bars as every other', () => {
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: 4, dy: -30, durationMs: 120 }), null)
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: 60, dy: -62, durationMs: 150 }), null)
+  // A long press that then travels is a hold-to-repeat or a drag, not a flick.
+  assert.equal(classifyRegionGesture({ pointerCount: 1, dx: 4, dy: -120, durationMs: 2000 }), null)
+})
+
+test('the voice dock steps its size vertically and its mode horizontally', () => {
+  // Down expands because the dock is top-anchored and grows downward — the same sense as
+  // its own ▾/▴ buttons, and the opposite of a bottom-anchored sheet.
+  assert.equal(surfaceGestureFor('voiceDock', 'down'), 'voiceDock.expand')
+  assert.equal(surfaceGestureFor('voiceDock', 'up'), 'voiceDock.collapse')
+  // Leftward is "next" because that is already what leftward means here (swipe_left is
+  // mobileTab.next).
+  assert.equal(surfaceGestureFor('voiceDock', 'left'), 'voiceDock.modeNext')
+  assert.equal(surfaceGestureFor('voiceDock', 'right'), 'voiceDock.modePrevious')
+})
+
+test('the top bar Project name steps Projects sideways and opens its menu vertically', () => {
+  assert.equal(surfaceGestureFor('projectName', 'left'), 'projectName.next')
+  assert.equal(surfaceGestureFor('projectName', 'right'), 'projectName.previous')
+  assert.equal(surfaceGestureFor('projectName', 'up'), 'projectName.menu')
+  assert.equal(surfaceGestureFor('projectName', 'down'), 'projectName.menu')
+})
+
+test('the tab rail and the note rail claim only the directions they mean', () => {
+  // Either vertical direction opens a tab's menu: the next touch anywhere dismisses it,
+  // so a "close" direction would be a gesture for something that already happened.
+  assert.equal(surfaceGestureFor('tabRail', 'up'), 'tabRail.menu')
+  assert.equal(surfaceGestureFor('tabRail', 'down'), 'tabRail.menu')
+  // Horizontal on the tab rail is its own pan, and always was.
+  assert.equal(surfaceGestureFor('tabRail', 'left'), null)
+  assert.equal(surfaceGestureFor('tabRail', 'right'), null)
+  assert.equal(surfaceGestureFor('noteRail', 'up'), 'noteRail.outline')
+  assert.equal(surfaceGestureFor('noteRail', 'down'), null)
+  // The command rail resolves through the slot system instead, so it has no surface act.
+  for (const direction of ['up', 'down', 'left', 'right'] as const) {
+    assert.equal(surfaceGestureFor('commandRail', direction), null)
+  }
+})
+
+test('only the two horizontal directions yield to something already panning', () => {
+  assert.equal(isHorizontalDirection('left'), true)
+  assert.equal(isHorizontalDirection('right'), true)
+  assert.equal(isHorizontalDirection('up'), false)
+  assert.equal(isHorizontalDirection('down'), false)
+})
+
+test('surface gestures are on unless the config explicitly disables them', () => {
+  assert.equal(surfaceGesturesEnabled({}), true)
+  assert.equal(surfaceGesturesEnabled({ mobile_surface_gestures: true }), true)
+  assert.equal(surfaceGesturesEnabled({ mobile_surface_gestures: false }), false)
 })
 
 test('a single-finger upward swipe on the command rail is a slot of its own', () => {

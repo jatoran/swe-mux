@@ -59,6 +59,11 @@ KEYBINDING_COMMANDS = (
     ("project.create", "Create project", "project"),
     ("project.newTerminal", "New terminal in selected project", "project"),
     ("project.newTerminalCustom", "New custom terminal in selected project", "project"),
+    # Step through Projects in the order the sidebar draws them, which is also the order
+    # the numbered `project.activate(N)` shortcuts follow. They carry the mobile top bar's
+    # horizontal swipe, and exist here so a chord and the palette reach the same step.
+    ("project.next", "Focus the next Project (sidebar order)", "project"),
+    ("project.previous", "Focus the previous Project (sidebar order)", "project"),
     ("project.rename", "Rename selected project", "project"),
     ("project.settings", "Open selected project settings", "project"),
     ("project.delete", "Remove selected project from swe-mux", "project"),

@@ -138,6 +138,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "middle_click_paste": true,
   "mobile_back_view_history": true,
   "mobile_gesture_overlay_back": true,
+  "mobile_surface_gestures": true,
   "mobile_gesture_swipe_away_close": true,
   "mobile_gestures": {
     "swipe_left": "mobileTab.next",

@@ -723,6 +723,14 @@ class Config:
     # the app. Off restores the original behaviour, where back on a session backgrounded
     # the whole PWA.
     mobile_back_view_history: bool = True
+    # Swipes that belong to one piece of chrome rather than to the screen: the voice
+    # panel's header (size and mode), the mobile top bar's Project name (step through
+    # Projects, or open the Project menu), a tab on the mobile tab rail (its menu), and
+    # the note editor's command rail (the heading outline). Each acts on the surface it
+    # starts on, so unlike `mobile_gestures` there is nothing to rebind - one action per
+    # direction is the only one that means anything there. Off turns all four off; the
+    # command rail's swipe is a rebindable slot instead and is unaffected.
+    mobile_surface_gestures: bool = True
     terminal_auto_copy_selection: bool = True
     # Clipboard history (clipboard_store.py). Capture is in-app only — nothing
     # polls the OS clipboard — and the ring is memory-only unless `persist` is

@@ -84,6 +84,7 @@ type Config = {
   mobile_long_press:'context_menu'|'disabled'
   mobile_gestures:Record<string,string>
   mobile_gesture_swipe_away_close:boolean
+  mobile_surface_gestures:boolean
   mobile_gesture_overlay_back:boolean
   mobile_back_view_history:boolean
   terminal_auto_copy_selection:boolean
@@ -1681,6 +1682,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',label:'Disabled'},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
           <label class="check"><span>Swipe-away closes an open panel: either horizontal direction closes the left sidebar; swiping right closes the right side panel instead of running that swipe's binding</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
           <label class="check"><span>Swipe back closes an open overlay: while a dialog is open, swiping right closes one level (the transcript inside session history returns to the results). Off restores the older behaviour where a dialog ignored every swipe; the Android back gesture keeps working either way</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Surface swipes: a swipe that starts on one piece of chrome works that chrome. The voice panel's header steps its size (up/down) and its mode (left/right); the top bar's Project name steps Projects (left/right) or opens the Project menu (up/down); a tab on the tab rail opens its menu (up/down); the note editor's command rail opens the heading outline (up). There is nothing to rebind — one action per direction is the only one that means anything on those surfaces — so this switch turns all four off together</span><input type="checkbox" checked={draft.mobile_surface_gestures!==false} onChange={e=>change('mobile_surface_gestures',e.currentTarget.checked)}/></label>
           <label class="check"><span>Back steps through recent tabs: with nothing open, the system back gesture returns to the tabs and Projects you were last looking at (up to ten on this device) before it leaves the app. Off restores the older behaviour, where back on a session closed swe-mux outright</span><input type="checkbox" checked={draft.mobile_back_view_history!==false} onChange={e=>change('mobile_back_view_history',e.currentTarget.checked)}/></label>
           </section>
 

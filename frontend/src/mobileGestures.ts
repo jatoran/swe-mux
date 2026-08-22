@@ -128,15 +128,151 @@ export function pathOwnsHorizontalScroll<T extends HorizontalScrollElement>(
   return false
 }
 
+// ---------------------------------------------------------------------------
+// Surface gestures
+// ---------------------------------------------------------------------------
+//
+// A **region** is a piece of chrome that answers to a swipe of its own, because the
+// channel the rest of the app reserves is dead there. The command rail was the first
+// (single-finger vertical means nothing to a strip that only pans sideways); four
+// more follow the same test, and each one is a *place with an obvious local meaning*
+// rather than another global slot: swiping the voice dock works the voice dock,
+// swiping a tab works that tab.
+//
+// Three rules hold for every region and are what keep this from eating the app:
+//
+//  * **One finger.** Two fingers are the global slots' channel everywhere, region or
+//    not, and no region has ever resolved a two-finger gesture.
+//  * **A region decides its own directions.** A matched region that does not claim
+//    the direction resolves to nothing — it never falls through to the workspace
+//    binding, or a swipe over chrome would change tabs behind it.
+//  * **Horizontal only where nothing else pans.** Vertical is free in all five
+//    regions; horizontal is claimed by two, and the caller still drops it when the
+//    composed path owns a horizontal scroller, so the dock's action strip and the
+//    top bar's account switcher keep their drags when they overflow.
+//
+// Only the command rail's gesture is a rebindable slot, because it is the only one
+// whose action is not about the surface it starts on — it opens the app menu, and any
+// command would make sense there. The rest are part of their surface's design and are
+// turned off together (`surfaceGesturesEnabled`) rather than remapped one by one.
+
+export type GestureDirection = 'up' | 'down' | 'left' | 'right'
+
+export type GestureRegion = 'noteRail' | 'tabRail' | 'voiceDock' | 'projectName' | 'commandRail'
+
+/** What a region gesture asks for. Resolved to a command, or to an act needing the
+ *  element the touch started on, by the caller — this module owns only the mapping. */
+export type SurfaceGesture =
+  | 'voiceDock.expand'
+  | 'voiceDock.collapse'
+  | 'voiceDock.modeNext'
+  | 'voiceDock.modePrevious'
+  | 'projectName.next'
+  | 'projectName.previous'
+  | 'projectName.menu'
+  | 'tabRail.menu'
+  | 'noteRail.outline'
+
 /**
- * Whether this touch began on the command rail.
+ * Region selectors, matched against the composed path, **most specific first**.
+ *
+ * `noteRail` names a CSS shadow part rather than a class on purpose: Continuity's rail
+ * lives in its shadow root, and `part` is the contract it exports, where
+ * `.command-rail-buttons` is an internal that a version bump may rename under us.
+ */
+export const GESTURE_REGION_SELECTORS: readonly (readonly [GestureRegion, string])[] = [
+  ['noteRail', '[part~="command-rail"]'],
+  ['tabRail', '.mobile-unified-tabs'],
+  ['voiceDock', '.voice-dock-head'],
+  ['projectName', '.mobile-project-name'],
+  ['commandRail', RAIL_GESTURE_SELECTOR],
+]
+
+/**
+ * What each region does per direction. `commandRail` is absent because it resolves
+ * through the ordinary slot system instead (`rail_swipe_up`).
+ *
+ * The dock is **top-anchored and grows downward** (`.voice-dock{position:absolute;top:6px}`),
+ * which is why down expands and up collapses — the same sense as its own `▾`/`▴` buttons,
+ * and the opposite of what a bottom-anchored sheet would want.
+ *
+ * Leftward means "next" for the dock's modes because that is already what leftward means
+ * on this device: `swipe_left` is `mobileTab.next`. Same for Projects.
+ *
+ * Both vertical directions on a tab open its menu rather than one opening and one closing:
+ * the menu is dismissed by the next touch anywhere, so a "close" direction would be a
+ * gesture for something that has already happened.
+ */
+const REGION_GESTURES: Partial<Record<GestureRegion, Partial<Record<GestureDirection, SurfaceGesture>>>> = {
+  voiceDock: {
+    up: 'voiceDock.collapse',
+    down: 'voiceDock.expand',
+    left: 'voiceDock.modeNext',
+    right: 'voiceDock.modePrevious',
+  },
+  projectName: {
+    left: 'projectName.next',
+    right: 'projectName.previous',
+    up: 'projectName.menu',
+    down: 'projectName.menu',
+  },
+  tabRail: { up: 'tabRail.menu', down: 'tabRail.menu' },
+  noteRail: { up: 'noteRail.outline' },
+}
+
+/**
+ * The region a touch began in, or null.
  *
  * Composed path for the same reason `pathOwnsHorizontalScroll` uses one: a window
- * listener sees a retargeted target, and the rail's chips include components that
- * bring their own shadow roots.
+ * listener sees a retargeted target, so an ancestor walk cannot see a shadow root's
+ * internals — which for `noteRail` is the whole question.
  */
+export function regionForPath(path: readonly { matches: (selector: string) => boolean }[]): GestureRegion | null {
+  for (const element of path) {
+    for (const [region, selector] of GESTURE_REGION_SELECTORS) {
+      if (element.matches(selector)) return region
+    }
+  }
+  return null
+}
+
+/** Kept for the command rail's own name, and because the docs and tests speak of it. */
 export function pathOwnsRailGesture(path: readonly { matches: (selector: string) => boolean }[]): boolean {
-  return path.some(element => element.matches(RAIL_GESTURE_SELECTOR))
+  return regionForPath(path) === 'commandRail'
+}
+
+/**
+ * Direction of a region swipe: **one finger**, past the shared distance, axis-ratio and
+ * duration bars. A hesitant drag is no more a region swipe than it is a tab flick, and a
+ * long press that becomes a hold-to-repeat or a drag is settled before this by the
+ * pointer-drag claim.
+ */
+export function classifyRegionGesture(sample: GestureSample): GestureDirection | null {
+  const { pointerCount, dx, dy, durationMs } = sample
+  if (pointerCount !== 1) return null
+  if (durationMs > GESTURE_THRESHOLDS.singleFingerSwipeMaxDurationMs) return null
+  const absX = Math.abs(dx)
+  const absY = Math.abs(dy)
+  if (absY >= GESTURE_THRESHOLDS.swipeMinDistance && absY >= absX * GESTURE_THRESHOLDS.swipeAxisRatio) {
+    return dy < 0 ? 'up' : 'down'
+  }
+  if (absX >= GESTURE_THRESHOLDS.swipeMinDistance && absX >= absY * GESTURE_THRESHOLDS.swipeAxisRatio) {
+    return dx < 0 ? 'left' : 'right'
+  }
+  return null
+}
+
+/** True for the two directions a horizontal scroller in the path would be panning. */
+export const isHorizontalDirection = (direction: GestureDirection): boolean =>
+  direction === 'left' || direction === 'right'
+
+/** What this region does in this direction, if anything. */
+export function surfaceGestureFor(region: GestureRegion, direction: GestureDirection): SurfaceGesture | null {
+  return REGION_GESTURES[region]?.[direction] ?? null
+}
+
+export function surfaceGesturesEnabled(config: Record<string, unknown>): boolean {
+  return config.mobile_surface_gestures !== false
 }
 
 /**
@@ -145,19 +281,10 @@ export function pathOwnsRailGesture(path: readonly { matches: (selector: string)
  * Deliberately narrow: **one finger, upward, and nothing else.** The rail keeps every
  * horizontal touch for its own pan, and a second finger over it has never resolved to
  * anything, so widening this would take input away from a control rather than find
- * unused input. The distance, axis-ratio and duration bars are the shared ones, so a
- * hesitant drag up the pane is no more a rail swipe than it is a tab flick, and a
- * long press that becomes a hold-to-repeat or a drag is settled before this by the
- * pointer-drag claim.
+ * unused input.
  */
 export function classifyRailGesture(sample: GestureSample): GestureSlot | null {
-  const { pointerCount, dx, dy, durationMs } = sample
-  if (pointerCount !== 1 || dy >= 0) return null
-  if (durationMs > GESTURE_THRESHOLDS.singleFingerSwipeMaxDurationMs) return null
-  const absX = Math.abs(dx)
-  const absY = Math.abs(dy)
-  if (absY < GESTURE_THRESHOLDS.swipeMinDistance || absY < absX * GESTURE_THRESHOLDS.swipeAxisRatio) return null
-  return 'rail_swipe_up'
+  return classifyRegionGesture(sample) === 'up' ? 'rail_swipe_up' : null
 }
 
 export function classifyGesture(sample: GestureSample): GestureSlot | null {

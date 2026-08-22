@@ -773,6 +773,20 @@ def test_swipe_away_close_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> N
     assert reloaded.mobile_gesture_swipe_away_close is False
 
 
+def test_surface_gestures_default_on_and_are_hot_reloadable(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.mobile_surface_gestures is True
+
+    hot, restart = update_config(config, {"mobile_surface_gestures": False})
+    assert hot == {"mobile_surface_gestures"}
+    assert restart == set()
+    assert config.mobile_surface_gestures is False
+
+    reloaded = load_config(path)
+    assert reloaded.mobile_surface_gestures is False
+
+
 def test_overlay_back_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)
