@@ -12575,16 +12575,11 @@ def _agent_environment_cwd(record: Any) -> Path:
     Shared by the inventory and the tool fetch so a probe is configured from the
     same project the inventory described: the live cwd decides which project
     configuration layer wins, and answering the two questions from two
-    directories would let a fetch dial a server the row never mentioned.
+    directories would let a fetch dial a server the row never mentioned. The
+    rule lives on the record because the drift baseline capture (`session.py`)
+    has to take a snapshot from that same directory.
     """
-    cwd = Path(
-        (record.runtime_cwd if record.runtime_cwd_live else None)
-        or record.run_cwd
-        or record.spawn_cwd
-        or record.cwd
-    )
-    if not cwd.is_dir():
-        cwd = Path(record.spawn_cwd or record.cwd)
+    cwd: Path = record.agent_environment_cwd
     return cwd
 
 
@@ -12624,6 +12619,7 @@ async def session_agent_environment(request: web.Request) -> web.Response:
         model=record.model,
         loaded_at=_agent_loaded_at(session),
         run_started_at=record.agent_run_started_at,
+        baseline=dict(record.agent_env_baseline) or None,
         refresh=refresh,
     )
     if refresh:
@@ -12700,14 +12696,12 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
 
     cwd = _agent_environment_cwd(record)
     args = list(record.args)
-    loaded_at = _agent_loaded_at(session)
     try:
         configs = await asyncio.to_thread(
             agent_environment.resolve_mcp_servers,
             backend=record.backend,
             cwd=cwd,
             args=args,
-            loaded_at=loaded_at,
         )
     except ValueError as exc:
         return json_response({"error": str(exc)}, 409)

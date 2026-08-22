@@ -43,6 +43,27 @@ def claude_data_home() -> Path:
     return descriptor("claude").data_home()
 
 
+def _write_config_if_changed(path: Path, payload: object) -> Path:
+    """Write a generated config file atomically, and only when it differs.
+
+    These files carry the same bytes on every daemon start, and both are listed
+    in the Agent Config tab as configuration sources. Replacing an identical
+    file still moves its mtime, which is what made every session that predated a
+    daemon restart report its MCP registration and hook settings as having
+    changed. Skipping the no-op write keeps the file, and the claim, stable.
+    """
+    body = json.dumps(payload, indent=2)
+    try:
+        if path.read_text(encoding="utf-8") == body:
+            return path
+    except (OSError, UnicodeError):
+        pass
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
 def _bash_executable_path(executable: str) -> str:
     """Translate a Windows executable path for Claude's Bash hook runner."""
     normalized = executable.replace("\\", "/")
@@ -143,10 +164,7 @@ class ClaudeAdapter(BackendAdapter):
                 }
             }
         }
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temporary.replace(path)
-        return path
+        return _write_config_if_changed(path, payload)
 
     def _write_hook_settings(self, data_dir: Path, identity: Path | None = None) -> Path:
         path = data_dir / f"{self.script_base_name}-hooks.json"
@@ -163,13 +181,10 @@ class ClaudeAdapter(BackendAdapter):
                 # costing ten minutes of an agent parked on a dialog.
                 entry["timeout"] = self._approval_hook_timeout
             hooks[event] = [{"hooks": [entry]}]
-        temporary = path.with_suffix(".json.tmp")
         payload: dict[str, object] = {"hooks": hooks}
         if self._mux_read_permissions:
             payload["permissions"] = {"allow": self._mux_read_permissions}
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temporary.replace(path)
-        return path
+        return _write_config_if_changed(path, payload)
 
     @staticmethod
     def _write_hook_identity(directory: Path, opts: SpawnOptions) -> Path | None:

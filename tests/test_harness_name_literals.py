@@ -106,7 +106,7 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     "mcp_tools.py::_claude_list": "labels the catalog it collected for one harness",
     "mcp_tools.py::omp_live_catalog": "one harness's own runtime tool-name convention",
     "agent_environment.py::_hook_inventory": "additively prepends one harness's extension items",
-    "agent_environment.py::discover_agent_environment": "orders one harness's extension section",
+    "agent_environment.py::_scan_config": "orders one harness's extension section",
     "launchers.py::resolve_codex_pty_command": "resolves one npm package's JS entrypoint",
     "reconcile.py::inspect_claude": "one harness's own discovery header reader",
     "reconcile.py::inspect_codex": "one harness's own discovery header reader",

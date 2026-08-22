@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from .harness import Backend
@@ -379,6 +380,13 @@ class SessionRecord:
     # Start of the current CLI process generation. Unlike agent_run_started_at,
     # this does not move when /clear or /new replaces the conversation.
     agent_loaded_at: float | None = None
+    # Per-source content digest of the agent configuration this CLI generation
+    # loaded (`agent_environment.capture_config_baseline`), captured once when
+    # `agent_loaded_at` is set. The Agent Config tab reports drift by comparing
+    # against it; empty means "no snapshot", which the tab shows as untracked
+    # rather than as "nothing changed". A handful of short strings, so it costs
+    # nothing to mirror to the supervisor with the rest of the record.
+    agent_env_baseline: dict[str, str] = field(default_factory=dict)
     # Which agent run of this session this is: 0 is the run the session spawned
     # (or was promoted into), and every in-CLI conversation replacement (`/clear`,
     # `/new`) increments it. A root agent's run id is otherwise indistinguishable
@@ -541,6 +549,25 @@ class SessionRecord:
         if self.runtime_cwd_live and self.runtime_cwd:
             return self.runtime_cwd
         return self.spawn_cwd or self.cwd
+
+    @property
+    def agent_environment_cwd(self) -> Path:
+        """The directory the CLI actually trusts, with a fallback that exists.
+
+        The live cwd decides which project configuration layer wins. Shared by
+        the inventory, the MCP tool fetch, and the drift baseline capture, so a
+        baseline is never taken from a different project than the one the tab
+        later describes.
+        """
+        cwd = Path(
+            (self.runtime_cwd if self.runtime_cwd_live else None)
+            or self.run_cwd
+            or self.spawn_cwd
+            or self.cwd
+        )
+        if not cwd.is_dir():
+            cwd = Path(self.spawn_cwd or self.cwd)
+        return cwd
 
 
 @dataclass(slots=True)

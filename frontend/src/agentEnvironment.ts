@@ -19,6 +19,7 @@ export interface AgentEnvironmentItem {
   owner?: string
   source_id: string | null
   source_label: string | null
+  /** Differs from the snapshot taken when the CLI loaded. Always false when `config_baseline` is `unavailable`. */
   changed_after_start: boolean
   meta: AgentEnvironmentMeta[]
 }
@@ -48,6 +49,13 @@ export interface AgentEnvironmentInventory {
   backend: string
   cwd: string
   generated_at: number
+  /**
+   * Whether "changed since load" is answerable at all. `unavailable` means no
+   * load-time snapshot exists for this CLI generation (it started before the
+   * daemon began taking them, or was recovered cold), so every source reads
+   * unchanged because nothing is known — not because nothing moved.
+   */
+  config_baseline: 'captured' | 'unavailable'
   runtime: {
     executable: string
     version: string | null

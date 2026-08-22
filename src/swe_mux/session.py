@@ -24,6 +24,7 @@ from typing import Any, Literal, cast
 
 from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
+from .agent_environment import capture_config_baseline
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ConversationHolder, ParkedMove
 from .composer_input import ComposerState, clear_composer
@@ -3067,6 +3068,7 @@ class SessionManager:
         registration_task.add_done_callback(session.tasks.discard)
         session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
         session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
+        self._capture_agent_env_baseline(session)
         if has_observable_transcript(backend):
             record.parser_status = "waiting"
             self._start_observer(session, transcript)
@@ -3181,6 +3183,46 @@ class SessionManager:
 
         session.meta_sink = push
         push()
+
+    def _capture_agent_env_baseline(self, session: Session) -> None:
+        """Snapshot the agent configuration this CLI generation is loading.
+
+        Fire-and-forget rather than awaited on the spawn path: it is a bounded
+        read of a handful of small files, but it is filesystem work and the PTY
+        is already attachable. The window it opens is the only inaccuracy - a
+        config edited between exec and this read is baselined as if the CLI had
+        loaded it - and it is microseconds against the hours a session lives.
+
+        Not attempted for a session with no live CLI generation, and dropped if
+        a newer generation started while the read was in flight: a baseline that
+        does not belong to the process it describes is worse than none, because
+        the tab presents it as fact rather than as a guess.
+        """
+        record = session.record
+        if record.backend not in AGENT_BACKENDS or record.agent_loaded_at is None:
+            return
+        task = asyncio.create_task(
+            self._read_agent_env_baseline(session), name=f"env-baseline-{record.id}"
+        )
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
+
+    async def _read_agent_env_baseline(self, session: Session) -> None:
+        record = session.record
+        generation = record.agent_loaded_at
+        try:
+            baseline = await asyncio.to_thread(
+                capture_config_baseline,
+                backend=record.backend,
+                cwd=record.agent_environment_cwd,
+                args=list(record.args),
+            )
+        except (OSError, ValueError):
+            log.debug("agent config baseline unavailable session=%s", record.id, exc_info=True)
+            return
+        if record.agent_loaded_at != generation:
+            return
+        record.agent_env_baseline = baseline
 
     def _attach_recovery(self, session: Session) -> None:
         """Track a live session for the durable recovery registry.
@@ -3776,6 +3818,7 @@ class SessionManager:
             record.agent_run_id = None
             record.agent_run_started_at = None
             record.agent_loaded_at = None
+            record.agent_env_baseline = {}
             record.run_cwd = None
             record.run_project_scope_id = None
             record.run_repo_group_id = None
@@ -4596,6 +4639,7 @@ class SessionManager:
         session.record.agent_run_id = None
         session.record.agent_run_started_at = None
         session.record.agent_loaded_at = None
+        session.record.agent_env_baseline = {}
         session.record.run_cwd = None
         session.record.run_project_scope_id = None
         session.record.run_repo_group_id = None
@@ -6883,6 +6927,12 @@ class SessionManager:
         session.record.context_peak_pct = 0
         session.record.model = None
         session.record.measurement_source = None
+        # A new run means a new CLI generation (a promotion, or a launcher-driven
+        # relaunch), so the old snapshot describes a process that is gone. The
+        # replacement is taken at the end of this method, once `run_cwd` and the
+        # runtime cwd are settled: a baseline read from the previous project's
+        # directory would report every project-scoped layer as drifted.
+        session.record.agent_env_baseline = {}
         if launch_cwd:
             session.record.runtime_cwd = session.record.run_cwd
             session.record.runtime_cwd_live = True
@@ -6896,6 +6946,7 @@ class SessionManager:
         session.record.project_root = project.root
         session.record.project_scope_id = project.id
         session.record.repo_group_id = project.repo_group_id
+        self._capture_agent_env_baseline(session)
 
     async def _ticker(self, session: Session) -> None:
         while not session.stopping and session.record.state not in {"exited", "crashed"}:

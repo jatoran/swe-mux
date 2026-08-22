@@ -191,9 +191,15 @@ export function AgentConfigTab({ session }: { session: Session | null }) {
         {!!inventory.runtime.modes.length && <div><span>Modes</span><b>{inventory.runtime.modes.join(', ')}</b></div>}
       </section>
 
+      {/* Drift is a content comparison against the snapshot taken when the CLI
+          loaded. Without that snapshot the honest answer is "not tracked", not
+          a silent zero: a session adopted from before the daemon took baselines
+          would otherwise read as "nothing has changed" on no evidence. */}
       <div class="agent-environment-summary">
         <span>{inventory.sources.length} sources</span>
-        {!!changedSources.length && <span class="warn">{changedSources.length} changed since load</span>}
+        {inventory.config_baseline !== 'captured'
+          ? <span title="No snapshot was taken when this CLI generation started, so nothing can be compared against it. Restarting the agent begins tracking.">drift not tracked</span>
+          : !!changedSources.length && <span class="warn">{changedSources.length} changed since load</span>}
       </div>
 
       <div class="agent-environment-sections">

@@ -574,6 +574,33 @@ def test_claude_hook_command_is_bash_safe_for_windows_venv(tmp_path: Path) -> No
     assert not (tmp_path / "claude-hooks.json.tmp").exists()
 
 
+def test_generated_config_is_not_rewritten_when_it_would_not_change(tmp_path: Path) -> None:
+    """An adapter is constructed on every daemon start, with identical bytes.
+
+    Both generated files are listed in the Agent Config tab as configuration
+    sources, so an unconditional atomic replace moved their mtimes and marked
+    every session that predated the restart as having drifted. Content that
+    genuinely changes still lands.
+    """
+    ClaudeAdapter(data_dir=tmp_path, mcp_url="http://127.0.0.1:8765/mcp")
+    hooks = tmp_path / "claude-hooks.json"
+    mcp = tmp_path / "claude-mcp.json"
+    os.utime(hooks, (1_000.0, 1_000.0))
+    os.utime(mcp, (1_000.0, 1_000.0))
+
+    ClaudeAdapter(data_dir=tmp_path, mcp_url="http://127.0.0.1:8765/mcp")
+
+    assert hooks.stat().st_mtime == 1_000.0
+    assert mcp.stat().st_mtime == 1_000.0
+
+    ClaudeAdapter(data_dir=tmp_path, mcp_url="http://127.0.0.1:9999/mcp")
+
+    assert mcp.stat().st_mtime != 1_000.0
+    registered = json.loads(mcp.read_text(encoding="utf-8"))
+    assert registered["mcpServers"]["mux"]["url"] == "http://127.0.0.1:9999/mcp"
+    assert not (tmp_path / "claude-mcp.json.tmp").exists()
+
+
 def test_the_decision_hook_carries_an_explicit_timeout(tmp_path: Path) -> None:
     """Claude's own default is 600 s, and a timed-out hook does not block.
 

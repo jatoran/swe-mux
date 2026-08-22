@@ -2,8 +2,19 @@
 
 The inventory describes current configuration and the launch options retained by
 swe-mux.  It never starts an MCP server, loads plugin code, runs a hook, or claims
-that a file visible now was loaded by an already-running CLI.  Source mtimes are
-compared with the CLI process-generation start so drift is explicit.
+that a file visible now was loaded by an already-running CLI.
+
+Drift is reported by *content*, against a baseline captured when the CLI
+generation loaded (`capture_config_baseline`), not by comparing an mtime with the
+load time.  An mtime comparison reported drift that was not there and did so
+almost always: `~/.claude.json` is Claude's own state file and is rewritten
+continuously with bookkeeping the inventory never reads, swe-mux rewrites its
+`--mcp-config` and hook-settings files with identical bytes on every daemon
+start, and Codex persists trust decisions into `~/.codex/config.toml`.  Every
+live session therefore reported "changed since load" within seconds of starting,
+which is the same as reporting nothing at all.  The baseline digests what each
+source actually *contributes* to this inventory, so a rewrite that changes no
+reported value is silent and a real edit is not.
 """
 
 from __future__ import annotations
@@ -17,8 +28,8 @@ import subprocess
 import threading
 import time
 import tomllib
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, assert_never
 from urllib.parse import urlsplit, urlunsplit
@@ -83,6 +94,9 @@ _SHELL_KEYWORDS = frozenset(
 
 @dataclass(slots=True)
 class ConfigSource:
+    #: `changed_after_start` starts False and is decided only by
+    #: `_apply_baseline`, against the load-time content digest. A scan run
+    #: without a baseline leaves every source unmarked rather than guessing.
     source_id: str
     label: str
     scope: Scope
@@ -90,7 +104,7 @@ class ConfigSource:
     data: dict[str, Any]
     status: str
     mtime: float | None
-    changed_after_start: bool
+    changed_after_start: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -130,7 +144,6 @@ def _load_source(
     label: str,
     scope: Scope,
     format_name: Literal["json", "toml"],
-    loaded_at: float,
 ) -> ConfigSource:
     text, status, mtime = _bounded_text(path)
     data: dict[str, Any] = {}
@@ -151,7 +164,6 @@ def _load_source(
         data,
         status,
         mtime,
-        bool(mtime and mtime > loaded_at),
     )
 
 
@@ -166,7 +178,6 @@ def _virtual_source(
         data,
         "ready" if data else "empty",
         None,
-        False,
     )
 
 
@@ -307,6 +318,45 @@ def _item(
     }
 
 
+def _item_material(item: dict[str, Any]) -> str:
+    """One row reduced to the values this inventory actually reports.
+
+    The drift baseline is built from these, so it tracks whatever the tab shows
+    and cannot drift away from it the way an enumerated key allowlist would.
+    `id` is omitted because it is a digest of these same fields, and
+    `changed_after_start` because it is the answer being computed.
+    """
+    return json.dumps(
+        [
+            item["kind"],
+            item["name"],
+            item["scope"],
+            item["origin"],
+            item["state"],
+            item["description"],
+            item["group"],
+            item["owner"],
+            [[entry["label"], entry["value"]] for entry in item["meta"]],
+        ],
+        separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _data_material(source: ConfigSource) -> str:
+    """A whole parsed file reduced to one comparable string.
+
+    For files that are read but never listed as their own configuration source
+    (plugin manifests), where there is no derived row to digest instead.
+    """
+    try:
+        body = json.dumps(source.data, separators=(",", ":"), sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        body = repr(sorted(source.data))
+    return f"{source.status}:{body}"
+
+
 def _section(
     section_id: str,
     label: str,
@@ -445,9 +495,7 @@ def probe_cli_version(backend: str, executable: str, *, refresh: bool = False) -
     return version
 
 
-def _config_sources(
-    backend: Backend, cwd: Path, args: list[str], loaded_at: float
-) -> list[ConfigSource]:
+def _config_sources(backend: Backend, cwd: Path, args: list[str]) -> list[ConfigSource]:
     sources: list[ConfigSource] = []
     if backend == "claude":
         home = claude_data_home()
@@ -459,14 +507,14 @@ def _config_sources(
             (Path.home() / ".claude.json", "~/.claude.json", "user"),
         )
         for path, label, scope in claude_sources:
-            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+            _source_once(sources, _load_source(path, label, scope, "json"))
         for index, raw in enumerate(_values_after(args, "--settings"), start=1):
             path = Path(raw)
             if not path.is_absolute():
                 path = cwd / path
             _source_once(
                 sources,
-                _load_source(path, f"Session settings {index}", "session", "json", loaded_at),
+                _load_source(path, f"Session settings {index}", "session", "json"),
             )
         for index, raw in enumerate(_values_after(args, "--mcp-config", variadic=True), start=1):
             path = Path(raw)
@@ -474,12 +522,12 @@ def _config_sources(
                 path = cwd / path
             _source_once(
                 sources,
-                _load_source(path, f"Session MCP config {index}", "session", "json", loaded_at),
+                _load_source(path, f"Session MCP config {index}", "session", "json"),
             )
     elif backend == "codex":
         home = codex_data_home()
         user_config = _load_source(
-            home / "config.toml", "~/.codex/config.toml", "user", "toml", loaded_at
+            home / "config.toml", "~/.codex/config.toml", "user", "toml"
         )
         _source_once(sources, user_config)
         profile = _value_after(args, "--profile", "-p")
@@ -490,13 +538,12 @@ def _config_sources(
                 source = _virtual_source(
                     f"Codex profile: {profile}", "user", profile_data, format_name="toml-profile"
                 )
-                source.changed_after_start = user_config.changed_after_start
                 source.mtime = user_config.mtime
                 _source_once(sources, source)
         _source_once(
             sources,
             _load_source(
-                cwd / ".codex" / "config.toml", ".codex/config.toml", "project", "toml", loaded_at
+                cwd / ".codex" / "config.toml", ".codex/config.toml", "project", "toml"
             ),
         )
         codex_hook_sources: tuple[tuple[Path, str, Scope], ...] = (
@@ -504,7 +551,7 @@ def _config_sources(
             (cwd / ".codex" / "hooks.json", ".codex/hooks.json", "project"),
         )
         for path, label, scope in codex_hook_sources:
-            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+            _source_once(sources, _load_source(path, label, scope, "json"))
         cli = _codex_cli_config(args)
         if cli:
             sources.append(_virtual_source("CLI overrides", "session", cli))
@@ -521,7 +568,7 @@ def _config_sources(
             (cwd / ".mcp.json", ".mcp.json", "project"),
         )
         for path, label, scope in omp_sources:
-            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+            _source_once(sources, _load_source(path, label, scope, "json"))
         for index, raw in enumerate(_values_after(args, "--extension"), start=1):
             root = Path(raw)
             if not root.is_absolute():
@@ -534,7 +581,6 @@ def _config_sources(
                         f"Session extension MCP config {index}",
                         "session",
                         "json",
-                        loaded_at,
                     ),
                 )
     elif backend == "pi":
@@ -544,7 +590,7 @@ def _config_sources(
             (cwd / ".pi" / "settings.json", ".pi/settings.json", "project"),
         )
         for path, label, scope in pi_sources:
-            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+            _source_once(sources, _load_source(path, label, scope, "json"))
     elif backend == "opencode":
         opencode_sources: tuple[tuple[Path, str, Scope], ...] = (
             (
@@ -561,7 +607,7 @@ def _config_sources(
             (cwd / "opencode.jsonc", "opencode.jsonc", "project"),
         )
         for path, label, scope in opencode_sources:
-            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+            _source_once(sources, _load_source(path, label, scope, "json"))
         # The mux-owned layer added through OPENCODE_CONFIG. Listing it keeps the
         # inventory honest about the plugin mux injected.
         session_config = os.environ.get("OPENCODE_CONFIG")
@@ -573,7 +619,6 @@ def _config_sources(
                     "Session config (OPENCODE_CONFIG)",
                     "session",
                     "json",
-                    loaded_at,
                 ),
             )
     elif backend == "shell":
@@ -584,10 +629,19 @@ def _config_sources(
 
 
 def _plugin_inventory(
-    backend: Backend, cwd: Path, sources: list[ConfigSource], loaded_at: float
-) -> tuple[list[dict[str, Any]], list[tuple[Path, str, Scope]]]:
+    backend: Backend, cwd: Path, sources: list[ConfigSource]
+) -> tuple[list[dict[str, Any]], list[tuple[Path, str, Scope]], list[tuple[str, str]]]:
+    """Plugin rows, the roots they install into, and extra fingerprint material.
+
+    A plugin manifest is read but is not itself a listed configuration source:
+    scanning it as one would feed its `hooks`/`mcpServers` keys to the hook and
+    MCP walks, which read every source, and invent rows the CLI never loads. Its
+    content therefore reaches the drift baseline as extra material attributed to
+    the source that *declares* the plugin, so a manifest edit still registers.
+    """
     items: list[dict[str, Any]] = []
     roots: list[tuple[Path, str, Scope]] = []
+    material: list[tuple[str, str]] = []
     if backend == "claude":
         home = claude_data_home()
         registry = _load_source(
@@ -595,7 +649,6 @@ def _plugin_inventory(
             "Claude plugin registry",
             "user",
             "json",
-            loaded_at,
         )
         _source_once(sources, registry)
         enabled: dict[str, tuple[bool, Scope, ConfigSource]] = {}
@@ -620,17 +673,15 @@ def _plugin_inventory(
                     Path(install_path) if isinstance(install_path, str) and install_path else None
                 )
                 manifest_data: dict[str, Any] = {}
-                changed = False
                 if root:
                     manifest = _load_source(
                         root / ".claude-plugin" / "plugin.json",
                         f"Plugin manifest: {str(plugin_id).split('@')[0]}",
                         definition_scope,
                         "json",
-                        loaded_at,
                     )
                     manifest_data = manifest.data
-                    changed = manifest.changed_after_start
+                    material.append((source.source_id, _data_material(manifest)))
                     if state:
                         roots.append((root, str(plugin_id), definition_scope))
                 meta = []
@@ -655,7 +706,6 @@ def _plugin_inventory(
                     meta=meta,
                     unique=str(row_index),
                 )
-                item["changed_after_start"] = item["changed_after_start"] or changed
                 items.append(item)
     elif backend == "codex":
         plugin_settings: dict[str, tuple[dict[str, Any], ConfigSource]] = {}
@@ -683,17 +733,15 @@ def _plugin_inventory(
                 if dated:
                     codex_root = max(dated)[1]
             codex_manifest_data: dict[str, Any] = {}
-            changed = False
             if codex_root:
                 manifest = _load_source(
                     codex_root / ".codex-plugin" / "plugin.json",
                     f"Plugin manifest: {plugin_id.split('@')[0]}",
                     source.scope,
                     "json",
-                    loaded_at,
                 )
                 codex_manifest_data = manifest.data
-                changed = manifest.changed_after_start
+                material.append((source.source_id, _data_material(manifest)))
                 if is_enabled:
                     roots.append((codex_root, plugin_id, source.scope))
             meta = []
@@ -716,7 +764,6 @@ def _plugin_inventory(
                 source=source,
                 meta=meta,
             )
-            item["changed_after_start"] = item["changed_after_start"] or changed
             items.append(item)
     elif backend == "omp":
         pass
@@ -726,7 +773,7 @@ def _plugin_inventory(
         raise ValueError("shell sessions do not have agent plugins")
     else:
         assert_never(backend)
-    return items, roots
+    return items, roots, material
 
 
 def _command_tokens(raw: str) -> list[str]:
@@ -867,7 +914,7 @@ def _hooks_from_data(
 
 
 def _hook_inventory(
-    sources: list[ConfigSource], plugin_roots: list[tuple[Path, str, Scope]], loaded_at: float
+    sources: list[ConfigSource], plugin_roots: list[tuple[Path, str, Scope]]
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for source in sources:
@@ -878,7 +925,6 @@ def _hook_inventory(
             f"Plugin hooks: {plugin_id.split('@')[0]}",
             scope,
             "json",
-            loaded_at,
         )
         if source.status == "ready":
             _source_once(sources, source)
@@ -1062,7 +1108,6 @@ def _mcp_inventory(
     cwd: Path,
     sources: list[ConfigSource],
     plugin_roots: list[tuple[Path, str, Scope]],
-    loaded_at: float,
 ) -> tuple[list[dict[str, Any]], dict[str, McpServerConfig]]:
     """Rows in layer order, plus the *winning* configuration per server name.
 
@@ -1092,7 +1137,6 @@ def _mcp_inventory(
             f"Plugin MCP: {plugin_id.split('@')[0]}",
             scope,
             "json",
-            loaded_at,
         )
         if source.status == "ready":
             _source_once(sources, source)
@@ -1109,7 +1153,6 @@ def resolve_mcp_servers(
     backend: str,
     cwd: Path | str,
     args: list[str],
-    loaded_at: float,
 ) -> dict[str, McpServerConfig]:
     """The configuration a fetch would dial, keyed by casefolded server name.
 
@@ -1122,9 +1165,9 @@ def resolve_mcp_servers(
     if not is_agent_harness(resolved):
         raise ValueError("agent environment is available only for registered agent sessions")
     root = Path(cwd).resolve()
-    sources = _config_sources(resolved, root, args, loaded_at)
-    _, plugin_roots = _plugin_inventory(resolved, root, sources, loaded_at)
-    _, configs = _mcp_inventory(resolved, root, sources, plugin_roots, loaded_at)
+    sources = _config_sources(resolved, root, args)
+    _, plugin_roots, _ = _plugin_inventory(resolved, root, sources)
+    _, configs = _mcp_inventory(resolved, root, sources, plugin_roots)
     return configs
 
 
@@ -1132,7 +1175,6 @@ def _markdown_agents(
     root: Path,
     scope: Scope,
     origin: str,
-    loaded_at: float,
     sources: list[ConfigSource],
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
@@ -1160,7 +1202,6 @@ def _markdown_agents(
             {},
             "ready",
             mtime,
-            bool(mtime and mtime > loaded_at),
         )
         _source_once(sources, source)
         items.append(
@@ -1183,23 +1224,22 @@ def _agent_inventory(
     cwd: Path,
     sources: list[ConfigSource],
     plugin_roots: list[tuple[Path, str, Scope]],
-    loaded_at: float,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     if backend == "claude":
         items.extend(
             _markdown_agents(
-                claude_data_home() / "agents", "user", "user agents", loaded_at, sources
+                claude_data_home() / "agents", "user", "user agents", sources
             )
         )
         items.extend(
             _markdown_agents(
-                cwd / ".claude" / "agents", "project", "project agents", loaded_at, sources
+                cwd / ".claude" / "agents", "project", "project agents", sources
             )
         )
         for root, plugin_id, scope in plugin_roots:
             items.extend(
-                _markdown_agents(root / "agents", scope, f"plugin: {plugin_id}", loaded_at, sources)
+                _markdown_agents(root / "agents", scope, f"plugin: {plugin_id}", sources)
             )
         for name, description in (
             ("general-purpose", "Built-in general-purpose subagent"),
@@ -1416,6 +1456,133 @@ def _feature_inventory(backend: Backend, sources: list[ConfigSource]) -> list[di
     ]
 
 
+@dataclass(slots=True)
+class _ConfigScan:
+    """Everything the inventory derives from configuration files.
+
+    Deliberately excludes the two expensive parts of a full inventory - the
+    ``--version`` probe and skill discovery - so capturing a drift baseline at
+    CLI launch costs only the bounded file reads it already performs.
+    """
+
+    sources: list[ConfigSource] = field(default_factory=list)
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    plugins: list[dict[str, Any]] = field(default_factory=list)
+    plugin_roots: list[tuple[Path, str, Scope]] = field(default_factory=list)
+    hooks: list[dict[str, Any]] = field(default_factory=list)
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    mcp_configs: dict[str, McpServerConfig] = field(default_factory=dict)
+    agents: list[dict[str, Any]] = field(default_factory=list)
+    policies: list[dict[str, Any]] = field(default_factory=list)
+    features: list[dict[str, Any]] = field(default_factory=list)
+    #: (source_id, material) for content read but not listed as its own source.
+    extra_material: list[tuple[str, str]] = field(default_factory=list)
+
+    def items(self) -> list[dict[str, Any]]:
+        return [
+            *self.tools,
+            *self.plugins,
+            *self.hooks,
+            *self.mcp_servers,
+            *self.agents,
+            *self.policies,
+            *self.features,
+        ]
+
+
+def _scan_config(backend: Backend, cwd: Path, args: list[str]) -> _ConfigScan:
+    """Read every configuration layer once, in the order later layers depend on.
+
+    Each inventory appends the further files it discovers to ``sources`` (plugin
+    hooks, plugin MCP, markdown agents), so policies and features run last and
+    see the complete set.
+    """
+    sources = _config_sources(backend, cwd, args)
+    plugins, plugin_roots, extra_material = _plugin_inventory(backend, cwd, sources)
+    tools = _tool_inventory(backend, sources, args)
+    hooks = _hook_inventory(sources, plugin_roots)
+    # OMP's lifecycle wiring is an in-process extension in argv, not a hooks
+    # table; it leads the section because for OMP it is the section.
+    if backend == "omp":
+        hooks = _omp_extension_hook_items(args) + hooks
+    mcp_servers, mcp_configs = _mcp_inventory(backend, cwd, sources, plugin_roots)
+    agents = _agent_inventory(backend, cwd, sources, plugin_roots)
+    return _ConfigScan(
+        sources=sources,
+        tools=tools,
+        plugins=plugins,
+        plugin_roots=plugin_roots,
+        hooks=hooks,
+        mcp_servers=mcp_servers,
+        mcp_configs=mcp_configs,
+        agents=agents,
+        policies=_policy_inventory(backend, sources),
+        features=_feature_inventory(backend, sources),
+        extra_material=extra_material,
+    )
+
+
+def _fingerprints(scan: _ConfigScan) -> dict[str, str]:
+    """One digest per configuration source over everything it contributes.
+
+    Sorted rather than ordered, so a reordering that changes no reported value -
+    a re-serialized JSON object, a differently ordered table - is not drift.
+    """
+    material: dict[str, list[str]] = {
+        source.source_id: [f"status:{source.status}"] for source in scan.sources
+    }
+    for item in scan.items():
+        rows = material.get(item["source_id"] or "")
+        if rows is not None:
+            rows.append(_item_material(item))
+    for source_id, extra in scan.extra_material:
+        rows = material.get(source_id)
+        if rows is not None:
+            rows.append(extra)
+    return {
+        source_id: _opaque("fp", "\n".join(sorted(rows)))
+        for source_id, rows in material.items()
+    }
+
+
+def _apply_baseline(scan: _ConfigScan, baseline: Mapping[str, str] | None) -> bool:
+    """Mark what differs from the snapshot taken when this CLI generation loaded.
+
+    A source the baseline does not name is left unmarked rather than reported as
+    new. Source ids are path digests, so a session whose working directory moved
+    after launch resolves *different* project-scoped paths than the baseline
+    covers, and calling those "changed since load" would recreate the false
+    alarm this replaced. User-scoped layers keep the same ids and stay tracked.
+    """
+    if not baseline:
+        return False
+    current = _fingerprints(scan)
+    changed = {
+        source_id
+        for source_id, digest in current.items()
+        if source_id in baseline and baseline[source_id] != digest
+    }
+    for source in scan.sources:
+        source.changed_after_start = source.source_id in changed
+    for item in scan.items():
+        item["changed_after_start"] = item["source_id"] in changed
+    return True
+
+
+def capture_config_baseline(*, backend: str, cwd: Path | str, args: list[str]) -> dict[str, str]:
+    """Digest the configuration a CLI generation is loading, per source.
+
+    Called once when an agent CLI starts, and compared on every later scan. It
+    performs the same bounded file reads as the inventory and starts no process,
+    so it is cheap enough to run on the spawn path - but it must run *off* the
+    asyncio event loop like the inventory itself.
+    """
+    resolved = require_backend(backend)
+    if not is_agent_harness(resolved):
+        raise ValueError("agent environment is available only for registered agent sessions")
+    return _fingerprints(_scan_config(resolved, Path(cwd).resolve(), list(args)))
+
+
 def _skill_section(
     backend: Backend, cwd: Path, loaded_at: float, refresh: bool
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1474,12 +1641,21 @@ def discover_agent_environment(
     model: str | None,
     loaded_at: float,
     run_started_at: float | None,
+    baseline: Mapping[str, str] | None = None,
     refresh: bool = False,
 ) -> dict[str, Any]:
     """Return one JSON-ready, passive environment inventory.
 
     This function performs bounded filesystem reads and one cached ``--version``
     probe.  Call it off the asyncio event loop.
+
+    ``baseline`` is the per-source digest captured when this CLI generation
+    loaded (`capture_config_baseline`).  Without one, ``config_baseline`` reads
+    ``unavailable`` and nothing is reported as changed: a session that started
+    before its baseline existed - adopted across an upgrade, or recovered cold -
+    has no honest answer, and inventing drift is what made this field useless
+    before.  ``loaded_at`` still dates the skills section, whose files are
+    user-owned and do not churn.
     """
     if not is_agent_harness(backend):
         raise ValueError("agent environment is available only for registered agent sessions")
@@ -1493,6 +1669,7 @@ def discover_agent_environment(
         model,
         loaded_at,
         run_started_at,
+        _opaque("baseline", json.dumps(sorted((baseline or {}).items()))),
         str(descriptor(backend).data_home()),
     )
     now = time.monotonic()
@@ -1501,19 +1678,10 @@ def discover_agent_environment(
     if cached and not refresh and now - cached[0] < CACHE_SECONDS:
         return cached[1]
 
-    sources = _config_sources(backend, root, args, loaded_at)
-    plugins, plugin_roots = _plugin_inventory(backend, root, sources, loaded_at)
+    scan = _scan_config(backend, root, args)
+    tracked = _apply_baseline(scan, baseline)
     skill_section, skill_inventory = _skill_section(backend, root, loaded_at, refresh)
-    tools = _tool_inventory(backend, sources, args)
-    hooks = _hook_inventory(sources, plugin_roots, loaded_at)
-    # OMP's lifecycle wiring is an in-process extension in argv, not a hooks
-    # table; it leads the section because for OMP it is the section.
-    if backend == "omp":
-        hooks = _omp_extension_hook_items(args) + hooks
-    mcp_servers, _ = _mcp_inventory(backend, root, sources, plugin_roots, loaded_at)
-    agents = _agent_inventory(backend, root, sources, plugin_roots, loaded_at)
-    policies = _policy_inventory(backend, sources)
-    features = _feature_inventory(backend, sources)
+    sources = scan.sources
 
     runtime = _runtime(backend, executable, args, model)
     runtime.update(
@@ -1546,6 +1714,10 @@ def discover_agent_environment(
         "backend": backend,
         "cwd": str(root),
         "generated_at": time.time(),
+        # Whether "changed since load" is an answer at all. `unavailable` means
+        # no load-time snapshot exists for this CLI generation, so every source
+        # reads unchanged because nothing is known, not because nothing moved.
+        "config_baseline": "captured" if tracked else "unavailable",
         "runtime": runtime,
         "sources": [source.public() for source in sources],
         "sections": [
@@ -1553,7 +1725,7 @@ def discover_agent_environment(
                 "tools",
                 "Built-in tools",
                 descriptor(backend).tool_catalog_source,
-                tools,
+                scan.tools,
                 "Documented core catalog. Restrictions are applied when they can be resolved "
                 "passively; host and runtime policy can narrow it further.",
             ),
@@ -1562,7 +1734,7 @@ def discover_agent_environment(
                 "mcp",
                 "MCP servers",
                 "configured_only",
-                mcp_servers,
+                scan.mcp_servers,
                 "Passive inventory only. Opening this tab never starts servers or performs "
                 "authentication and therefore does not claim connection health or a complete "
                 "tool list. A row the CLI would actually use can fetch its published tools on "
@@ -1573,14 +1745,14 @@ def discover_agent_environment(
                 "plugins",
                 "Plugins",
                 "installed_config",
-                plugins,
+                scan.plugins,
                 "Installed and configured plugin state; plugin code is never loaded by this scan.",
             ),
             _section(
                 "hooks",
                 "Hooks",
                 "configured_only",
-                hooks,
+                scan.hooks,
                 "Definitions only, grouped by lifecycle event and never executed. Each row "
                 "names the program and the one script or module its command runs; the "
                 "remaining arguments, inline shell bodies, prompts, URLs, environment, and "
@@ -1592,7 +1764,7 @@ def discover_agent_environment(
                 "agents",
                 "Custom agents",
                 "documented_and_configured",
-                agents,
+                scan.agents,
                 "Custom definitions plus documented Claude built-ins. Runtime-only agents that "
                 "have no passive inventory are not inferred.",
             ),
@@ -1600,7 +1772,7 @@ def discover_agent_environment(
                 "policies",
                 "Policies and configuration",
                 "resolved_known_keys",
-                policies,
+                scan.policies,
                 "Security-sensitive values are summarized. Later configuration layers win for "
                 "the displayed known keys.",
             ),
@@ -1608,7 +1780,7 @@ def discover_agent_environment(
                 "features",
                 "Feature flags",
                 "configured_only",
-                features,
+                scan.features,
                 "Explicit Codex feature overrides. Defaults owned by the installed CLI are not "
                 "guessed.",
             ),
