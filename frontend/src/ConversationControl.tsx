@@ -11,7 +11,8 @@ import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import {
   autoplayEnabled, bargeInPlayback, beginRequestedStream, cancelRequestedStream, getPlayback,
-  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPinnedPlaybackSession,
+  newVoiceStreamId, playClipGroup, playRequestedStreamFirst, setAutoplayEnabled,
+  setPinnedPlaybackSession,
   setPlaybackDucked, unlockPlayback,
 } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
@@ -637,7 +638,9 @@ export function useConversation(
       try{
         unlockPlayback();beginRequestedStream(streamId,session.id,'agent')
         const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`,{stream_id:streamId})
-        await playRequestedStreamFirst(clip.id,clip.stream_id||streamId,session.id,'agent');setPhase('listening');respond('Reply playback started. Still listening.')
+        // The whole reply: a clip answered from the store arrives with every
+        // segment it already had, and a fresh one continues on its claimed stream.
+        await playClipGroup(clip,session.id,'agent');setPhase('listening');respond('Reply playback started. Still listening.')
       }catch(cause){cancelRequestedStream(streamId);reportFailure(cause)}
       return
     }

@@ -93,14 +93,26 @@
   so segments and sections are registered in `drawerSegments.ts` rather than held in a tab's
   local state, their selection persists per Project beside the tab's, and every retired command
   and tab id migrates forward (`keybindings.py`, `drawerLayout.ts`) rather than being dropped.
-- Changing the Resources dialog (its four segments - processes, bandwidth, storage, tokens - or
-  what any of them measures): `design/features/ui.md`,
+- Changing the Resources dialog (its four segments - processes, bandwidth, storage, fleet
+  activity - or what any of them measures): `design/features/ui.md`,
   `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
-  `design/features/usage.md`, `technical/frontend/packages.md`.
+  `design/features/operational-telemetry.md`, `technical/frontend/packages.md`.
   The rule it turns on: the drawer's Processes *tab* is not made redundant by the dialog's
   Processes segment - a modal covers the terminal, and the tab exists to answer "what is this
   session running" beside it - which is the same watch-here/act-there split the prompt Queue
   has with the Fleet Queue.
+- Changing the Usage dialog (its four segments - overview, agents, automation, quota - or how
+  any spend figure is drawn): `design/features/usage.md`, `design/features/ui.md`,
+  `design/features/automation.md`, `design/features/budgets.md`,
+  `technical/frontend/packages.md`.
+  The rule it turns on: **the three pots are never summed, and every figure carries its
+  basis**. Agent spend is a subscription reconstructed from transcripts and is an estimate,
+  automation spend is a metered key billed by the call, and quota is a share of a provider
+  window and is not money - so no surface computes a total across them, and a figure drawn
+  without its basis is the bug. Its corollary is the one that already shipped wrong once:
+  agent spend has *two denominators* (ccusage over every transcript, and
+  `provider_cost_dimensions` over only observed runs), so the subset is labelled by its
+  denominator everywhere it appears and never presented as the agent total.
 - Changing agent-skill discovery (which CLI directories are scanned, the metadata read from
   them, or how the Actions tab lists them): `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
@@ -466,9 +478,10 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `POST /api/voice/lexicon/check` and auditions via `GET /api/voice/lexicon/preview`);
   exact sounds use misaki's `[word](/phonemes/)` form, atomic in the ladder.
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
+  Those segments are **rows, not clips**: `stream_id`/`segment_index`/`segment_count` (schema 3) make one reply one entry everywhere a person looks (`clip_groups`/`group_snapshot`, growing live as its segments land), a completed stream is joined into a single file under a new id with the segments kept servable for ten minutes, eviction and deletion take whole streams, and pre-schema-3 rows are discarded by the migration because they cannot be reassembled.
   Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`) because that clip *is* time-to-first-sound, and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
-  Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block and owns the master; the voice panel's `tts` tab is the operational surface for layers 2 and 3 and for the global clip list, ordered by the *source message's* arrival (`voice_clips.source_ts`/`message_anchor`, schema 2) rather than by synthesis time.
+  Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block and owns the master; the voice panel's `tts` tab is the operational surface for layers 2 and 3 and for the global clip list, ordered by the *source message's* arrival (`voice_clips.source_ts`/`message_anchor`) rather than by synthesis time.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
   **Silero VAD** (`sileroVad.ts`, lazy ~11 MB WASM runtime + ~2.3 MB ONNX model assets; energy detector as fallback) → the

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import type { VoiceClip } from '../src/types.ts'
+
 // voice.ts owns one module-level <audio> element and reads localStorage, so both are
 // stubbed before the module is imported. Tests share that singleton and therefore run
 // in order, each leaving playback stopped.
@@ -18,6 +20,9 @@ class FakeAudio {
   get src() { return this.source }
   set src(value: string) { this.source = value; this.ended = false; this.paused = true }
   addEventListener(type: string, handler: () => void) { (this.handlers[type] ||= []).push(handler) }
+  removeEventListener(type: string, handler: () => void) {
+    this.handlers[type] = (this.handlers[type] || []).filter(item => item !== handler)
+  }
   emit(type: string) { for (const handler of this.handlers[type] || []) handler() }
   async play() { this.paused = false; this.emit('play') }
   pause() { this.paused = true; this.emit('pause') }
@@ -374,5 +379,146 @@ test('with no session focused everything holds, but an unattributed clip still p
   await settle()
   assert.equal(voice.getPlayback().clipId,'none-2')
   assert.equal(voice.heldClipTotal(),0)
+  voice.stopAllPlayback()
+})
+
+// ------------------------------------------------------------- whole replies
+//
+// A long reply is synthesized in segments so its first sentence can play while
+// the rest is made. Every control here addresses the reply, never a segment.
+
+const reply = (id: string, parts: Array<[string, number]>, overrides: Partial<VoiceClip> = {}): VoiceClip => ({
+  id, session_id: 'session-a', created_at: 1, trigger: 'auto', content_mode: 'verbatim',
+  engine: 'sapi', voice: 'system default', text: 'hello', format: 'wav',
+  size_bytes: 0, status: 'ready', stream_id: `stream-${id}`,
+  duration_hint_s: parts.reduce((total, [, duration]) => total + duration, 0),
+  parts: parts.map(([partId, duration], index) => ({
+    id: partId, segment_index: index, status: 'ready' as const,
+    duration_hint_s: duration, size_bytes: 0,
+  })),
+  ...overrides,
+})
+
+test('playing a reply plays every segment of it, in order',async()=>{
+  const clip = reply('r1', [['r1-a', 2], ['r1-b', 3]])
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'r1-a')
+  element().finish()
+  await settle()
+  // The whole answer, not its opening sentence. Playing the row used to play the
+  // first file and stop there.
+  assert.equal(voice.getPlayback().clipId,'r1-b')
+  assert.equal(voice.clipGroupDeviceState(clip),'playing')
+  element().finish()
+  await settle()
+  assert.equal(voice.clipGroupDeviceState(clip),'played')
+  voice.stopAllPlayback()
+})
+
+test('a reply already speaking is not restarted by its own response fallback',async()=>{
+  const clip = reply('r2', [['r2-a', 2], ['r2-b', 3]])
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  // The live event usually starts the reply before the HTTP response lands, and
+  // the response calls this too. Restarting here would clear the segments the
+  // events queued and speak the opening again.
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'r2-a')
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'r2-b','the queued continuation must survive the fallback')
+  voice.stopAllPlayback()
+})
+
+test('playing a different reply takes the floor from the one speaking',async()=>{
+  const first = reply('r3', [['r3-a', 2], ['r3-b', 2]])
+  const second = reply('r4', [['r4-a', 2]])
+  await voice.playClipGroup(first, 'session-a')
+  await settle()
+  await voice.playClipGroup(second, 'session-a')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'r4-a')
+  element().finish()
+  await settle()
+  // The abandoned reply's own segments must not resume: its element was
+  // re-pointed, so nothing will ever fire `ended` for the segment they followed.
+  assert.equal(voice.getPlayback().playing,false)
+  assert.equal(voice.getPlayback().clipId,'r4-a')
+  voice.stopAllPlayback()
+})
+
+test('scrubbing past a segment boundary continues the reply from there',async()=>{
+  const clip = reply('r5', [['r5-a', 2], ['r5-b', 3], ['r5-c', 4]])
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  // Six seconds in is the third segment, one second into it. The operator scrubbed
+  // the reply, not a file, and has no way of knowing there was a boundary there.
+  element().currentTime = -1
+  voice.seekWithinGroup(clip, 6, 'session-a')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'r5-c')
+  // Deferred until the element has metadata: `currentTime` is not writable before
+  // that, and a silently dropped seek restarts the segment being scrubbed.
+  assert.equal(element().currentTime, -1)
+  element().emit('loadedmetadata')
+  assert.equal(element().currentTime, 1)
+  voice.stopAllPlayback()
+})
+
+test('an unfocused reply is held once, not once per segment',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-focus')
+  voice.enqueueAutoplay('seg-1','stream-seg','session-other')
+  voice.enqueueAutoplay('seg-2','stream-seg','session-other')
+  voice.enqueueAutoplay('seg-3','stream-seg','session-other')
+  // One reply waiting, not three clips. Held per segment, a three-sentence answer
+  // reported "3 clips waiting" and ate three of the five slots a session keeps.
+  assert.equal(voice.heldClipTotal(),1)
+  assert.deepEqual(voice.heldClipsFor('session-other')[0].partIds,['seg-1','seg-2','seg-3'])
+
+  voice.playHeldClips('session-other')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'seg-1')
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'seg-2','a held reply plays through, not just its opening')
+  voice.stopAllPlayback()
+})
+
+test('a reply that has finished plays again from its first segment',async()=>{
+  const clip = reply('r7', [['r7-a', 2], ['r7-b', 2]])
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  element().finish()
+  await settle()
+  element().finish()
+  await settle()
+  // The element keeps its clip id after it ends, so the "already in flight" guard
+  // has to be about *busy*, not about which clip is loaded - otherwise pressing
+  // play on a reply you just heard does nothing at all.
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'r7-a')
+  assert.equal(voice.getPlayback().playing,true)
+  voice.stopAllPlayback()
+})
+
+test('a reply heard before the daemon joined it still reads as played',async()=>{
+  voice.setAutoplayEnabled(true)
+  voice.setPlaybackFocus('session-a')
+  const clip = reply('r6', [['r6-a', 1], ['r6-b', 1]])
+  await voice.playClipGroup(clip, 'session-a')
+  await settle()
+  element().finish()
+  await settle()
+  element().finish()
+  await settle()
+  // The daemon replaces the segments with one joined clip whose id nothing here
+  // has ever seen. The reply was heard, and must not read as unplayed because of
+  // that.
+  const joined: VoiceClip = { ...clip, id: 'r6-joined', parts: undefined, duration_hint_s: 2 }
+  assert.equal(voice.clipGroupDeviceState(joined),'played')
   voice.stopAllPlayback()
 })

@@ -369,7 +369,7 @@ from .voice import (
     VoiceService,
     VoiceStore,
     approval_prompt,
-    clip_snapshot,
+    group_snapshot,
 )
 from .windows_firewall import (
     firewall_supported,
@@ -12858,14 +12858,17 @@ async def list_voice_clips(request: web.Request) -> web.Response:
     content_mode = request.query.get("kind") or None
     if content_mode is not None and content_mode not in {"summary", "verbatim"}:
         raise ValueError("kind must be summary or verbatim")
-    rows = await store.clips(
+    # Streams, not rows. A reply is cut into segments so its first sentence can
+    # play while the rest is still being synthesized; that is a synthesis detail,
+    # and listing it as three clips is the operator's problem, not their model.
+    groups = await store.clip_groups(
         session_id=session_id,
         agent_run_id=request.query.get("run") or None,
         message_anchor=request.query.get("anchor") or None,
         content_mode=content_mode,
         limit=int(request.query.get("limit") or 20),
     )
-    return json_response({"items": [clip_snapshot(row) for row in rows]})
+    return json_response({"items": [group_snapshot(parts) for parts in groups]})
 
 
 async def voice_clip_audio(request: web.Request) -> web.StreamResponse:
@@ -12882,9 +12885,11 @@ async def voice_clip_audio(request: web.Request) -> web.StreamResponse:
 
 async def delete_voice_clip(request: web.Request) -> web.Response:
     store: VoiceStore = request.app["voice_store"]
-    file_path = await store.delete_clip(request.match_info["clip_id"])
-    if file_path:
-        Path(file_path).unlink(missing_ok=True)
+    # Deleting a clip deletes its whole stream: half a reply is not something to
+    # keep, and the segments are only separate rows for latency's sake.
+    for file_path in await store.delete_clip(request.match_info["clip_id"]):
+        with suppress(OSError):
+            Path(file_path).unlink(missing_ok=True)
     return json_response({"ok": True})
 
 

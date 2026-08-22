@@ -5,12 +5,14 @@ import { SettingLink } from './SettingLink'
 import { sessionDisplayName } from './sessionNames'
 import type { Session, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import {
-  autoplayEnabled, beginRequestedStream, cancelRequestedStream, clipDeviceState, dismissHeldClips,
-  getPlayback, heldClipTotal, newVoiceStreamId, pausePlayback, playAllHeldClips, playClip,
-  playRequestedStreamFirst, seekTo, setAutoplayEnabled, subscribePlayback, unlockPlayback,
+  autoplayEnabled, beginRequestedStream, cancelRequestedStream, clipGroupDeviceState,
+  dismissHeldClips, getPlayback, heldClipTotal, newVoiceStreamId, pausePlayback,
+  playAllHeldClips, playClipGroup, resumePlayback, seekWithinGroup, setAutoplayEnabled,
+  subscribePlayback, unlockPlayback,
 } from './voice'
 import type { ClipDeviceState } from './voice'
 import type { VoiceBodyVariant } from './voiceDock'
+import { clipPartIds, clipParts, groupPosition, partSpans, spansDuration } from './voiceGroups'
 
 /**
  * Read aloud's operational home: the voice panel's third tab.
@@ -34,6 +36,10 @@ import type { VoiceBodyVariant } from './voiceDock'
  * - **The clip record is the join point.** One clip model, two views over it: this list is
  *   one, and the transcript's per-message markers are the other. Neither owns a clip; they
  *   read the same rows.
+ * - **A clip is a reply, never a segment.** Long replies are synthesized in pieces so the
+ *   first sentence can play while the rest is made, and this list shows one row per reply
+ *   that grows as its pieces land - text, duration and all. Listing the pieces separately
+ *   showed one answer as three clips, in reverse spoken order, each playing a third of it.
  * - **Which sessions participate is reported outside this tab**, by a mark on every sidebar
  *   row and workspace tab (the `voice` row field). This tab edits the mode for the session
  *   in focus, one at a time; the marks answer "which of them speak" for the whole fleet at
@@ -135,9 +141,11 @@ export function VoiceReadTab({
       const created = await api<VoiceClip>(
         'POST', `/api/sessions/${session.id}/voice/generate`, { stream_id: streamId })
       await load()
-      if (created?.id) {
-        await playRequestedStreamFirst(created.id, created.stream_id || streamId, session.id, 'agent')
-      }
+      // The response is the playback fallback for a `voice_clip_ready` that was
+      // lost or delayed; the live event usually starts the opening segment first
+      // and this dedupes against it. A reused clip arrives whole, with every
+      // segment it already had, and plays as one reply.
+      if (created?.id) await playClipGroup(created, session.id, 'agent')
     } catch (cause) {
       // The stream has to be cancelled explicitly: it was opened before the request, so
       // a failed generation would otherwise leave this device waiting to play a clip
@@ -179,10 +187,19 @@ export function VoiceReadTab({
   // is still playing and whichever session it belongs to. A clip older than the list's
   // window has no row to describe it, so the bar simply does not draw rather than
   // scrubbing something it cannot name.
-  const loaded = clips.find(clip => clip.id === playback.clipId) || null
-  // The live duration once the audio element knows it; the daemon's estimate until then,
-  // so the bar's range is right on the first frame instead of snapping when metadata lands.
-  const loadedDuration = playback.duration > 0 ? playback.duration : (loaded?.duration_hint_s || 0)
+  // Matched on the reply's *parts*, not its id: while a stream is unjoined the
+  // element is playing a segment, whose id is not the row's, and a bar that
+  // matched on the row id would vanish the moment a reply passed its first
+  // sentence.
+  const loaded = clips.find(clip =>
+    !!playback.clipId && clipPartIds(clip).includes(playback.clipId)) || null
+  // The reply's own timeline: every segment laid end to end, with the element's
+  // live duration standing in for the playing segment's estimate. The bar spans
+  // the whole reply, so a scrub crosses segment boundaries without the operator
+  // ever learning there were any.
+  const loadedSpans = loaded ? partSpans(loaded, playback.clipId, playback.duration) : []
+  const loadedDuration = spansDuration(loadedSpans)
+  const loadedPosition = groupPosition(loadedSpans, playback.clipId, playback.position) ?? 0
   return <div class="voice-read">
     <div class="voice-read-controls">
       {/* Layer 2, for the session in focus. It moved here from the pane bar: a control
@@ -256,15 +273,22 @@ export function VoiceReadTab({
         onClick={() => {
           unlockPlayback()
           if (playback.playing) { pausePlayback(); return }
-          void playClip(loaded.id, loaded.session_id).catch(() => setError('Playback failed.'))
+          // Paused mid-reply resumes where it stopped - a pause that resumes at
+          // the top is not a pause - while a reply that has finished plays again
+          // from its first segment.
+          if (clipGroupDeviceState(loaded) === 'playing') {
+            void resumePlayback().catch(() => setError('Playback failed.'))
+            return
+          }
+          void playClipGroup(loaded, loaded.session_id).catch(() => setError('Playback failed.'))
         }}
       >{playback.playing ? '⏸' : '▶'}</button>
       <input
         class="voice-read-seek" type="range" min="0" max={loadedDuration || 1} step="0.1"
-        value={playback.position} aria-label="Seek within the clip"
-        onInput={event => seekTo(Number(event.currentTarget.value))} />
+        value={loadedPosition} aria-label="Seek within the clip"
+        onInput={event => seekWithinGroup(loaded, Number(event.currentTarget.value), loaded.session_id)} />
       <span class="voice-read-now-time">
-        {formatSeconds(playback.position)}/{formatSeconds(loadedDuration)}
+        {formatSeconds(loadedPosition)}/{formatSeconds(loadedDuration)}
       </span>
       <span class="voice-read-now-text" title={loaded.text || ''}>{loaded.text || '…'}</span>
     </div>}
@@ -272,19 +296,26 @@ export function VoiceReadTab({
       {clips.length === 0
         ? <p class="voice-read-empty">No clips yet. A session set to <code>auto</code> makes one at the end of every reply; <code>on demand</code> makes one when you ask.</p>
         : clips.map(clip => {
-          const device = clipDeviceState(clip.id)
+          const device = clipGroupDeviceState(clip)
           const state = clipRowState(clip, device)
-          const playing = playback.clipId === clip.id && playback.playing
+          // Any of the reply's segments being out of the speakers is this reply
+          // playing, whichever sentence it has reached.
+          const playing = device === 'playing' && playback.playing
+          // Playable as soon as any of it exists, rather than only when the whole
+          // reply does: a reply still being spoken plays what has been made and
+          // continues into the rest as it lands, and a reply that failed part way
+          // still says everything it managed to say.
+          const playable = clipParts(clip).some(part => part.status === 'ready')
           return <div key={clip.id} role="listitem" class={`voice-read-clip ${state}`}>
             <button
               class="voice-read-play"
-              disabled={clip.status !== 'ready'}
+              disabled={!playable}
               aria-label={playing ? 'Pause this clip' : 'Play this clip'}
               title={clip.status === 'failed' ? (clip.error || 'generation failed') : playing ? 'Pause' : 'Play'}
               onClick={() => {
                 unlockPlayback()
                 if (playing) { pausePlayback(); return }
-                void playClip(clip.id, clip.session_id).catch(() => setError('Playback failed.'))
+                void playClipGroup(clip, clip.session_id).catch(() => setError('Playback failed.'))
               }}
             >{playing ? '⏸' : '▶'}</button>
             <span class="voice-read-kind" title={`Kind: ${clip.content_mode}`}>{clip.content_mode}</span>

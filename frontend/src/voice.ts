@@ -11,10 +11,21 @@
 // the device autoplay toggle plus one global, focus-driven rule decide what
 // actually comes out of this browser's speakers.
 
+import type { VoiceClip } from './types'
+// Explicit extension: the node test runner loads this module directly, and its
+// ESM resolver does not guess one.
+import { clipPartIds, partAtTime, partSpans } from './voiceGroups.ts'
+
 export type PlaybackOrigin = 'agent' | 'system'
 export type PlaybackState = { clipId: string | null; playing: boolean; position: number; duration: number; origin: PlaybackOrigin | null }
-/** An agent clip that was ready while its session was not the one being watched. */
-export type HeldClip = { clipId: string; streamId: string | null; at: number }
+/**
+ * A reply that was ready while its session was not the one being watched.
+ *
+ * One entry per *reply*, not per segment. Holding segments individually made a
+ * three-sentence answer read as "3 clips waiting" and consumed three of the five
+ * slots a session keeps, so a backlog of three replies silently lost its oldest.
+ */
+export type HeldClip = { clipId: string; streamId: string | null; at: number; partIds: string[] }
 
 const AUTOPLAY_KEY = 'mux:voice-autoplay'
 // How many held clips one session keeps. A session that has been talking to
@@ -91,6 +102,13 @@ function ensureAudio(): HTMLAudioElement {
     // mid-sentence is deliberately not marked: the TTS tab's whole job is to say
     // which of a backlog you actually got, and "started" is not that.
     if (currentClipId) remember(playedClips, currentClipId)
+    // A segment that ends with nothing else queued from its stream is the end of
+    // that reply. Recorded against the stream because the segment ids do not
+    // survive the daemon joining them into one file, and a reply the operator
+    // just heard must not read as unplayed the moment that happens.
+    if (currentStreamId && !queue.some(item => item.streamId === currentStreamId)) {
+      remember(playedStreams, currentStreamId)
+    }
     setState({ playing: false })
     const next = queue.shift()
     if (next) void playQueuedClip(next).catch(() => { /* autoplay chain stops on error */ })
@@ -129,6 +147,71 @@ export async function playClip(clipId: string, sessionId: string | null = null, 
   currentStreamId = null
   currentSessionId = sessionId
   await playClipAudio(clipId, origin)
+}
+
+/**
+ * Play a whole reply, from its beginning or from a point inside it.
+ *
+ * The unit every control in the UI addresses. A reply is one or more segment
+ * files; this plays the one covering `startAt` and queues the rest behind it, so
+ * pressing play on a row says the reply rather than its first sentence.
+ *
+ * Taking the floor is right here and only here: this is a person pressing play on
+ * a specific reply, so whatever was speaking is replaced. The queue is cleared
+ * rather than appended to, because the abandoned clip never fires `ended` (its
+ * element is re-pointed) and its queued siblings would otherwise resume after this
+ * reply's first segment.
+ *
+ * A reply still being spoken claims its stream, which is what lets the segments
+ * that have not been synthesized yet join the end of this playback instead of
+ * being dropped.
+ */
+export async function playClipGroup(
+  clip: VoiceClip,
+  sessionId: string | null = null,
+  origin: PlaybackOrigin = 'agent',
+  startAt = 0,
+): Promise<void> {
+  const spans = partSpans(clip, currentClipId, state.duration)
+  const at = partAtTime(spans, startAt)
+  if (!at) return
+  // Already in flight, so leave it alone. This is what makes the call safe as the
+  // fallback for a live event that may already have started the reply: the events
+  // arrive first in the normal case, and restarting here would clear the segments
+  // they queued and play the opening again. A reply that has *finished* is not in
+  // flight - the element keeps its clip id after it ends - so playing it again
+  // starts it from the top, which is what pressing play on it means.
+  const ids = spans.map(span => span.id)
+  if (startAt === 0 && (
+    (currentClipId !== null && ids.includes(currentClipId) && playbackBusy())
+    || queue.some(item => ids.includes(item.clipId))
+  )) return
+  const streamId = clip.stream_id || null
+  if (streamId) {
+    unsuppress(streamId)
+    if (clip.stream_open) requestedStreams.set(streamId, { sessionId, origin })
+  }
+  queue = spans.slice(at.index + 1).map(span => ({ clipId: span.id, streamId, sessionId, origin }))
+  currentStreamId = streamId
+  currentSessionId = sessionId
+  await playClipAudio(at.id, origin, at.offset)
+}
+
+/**
+ * Move within a reply, across its segment boundaries.
+ *
+ * The scrub bar spans the whole reply, so a target can land in a segment that is
+ * not the one playing. Landing in the current segment is a seek; landing in
+ * another one is playing that segment from an offset, with the segments after it
+ * re-queued so the reply continues to its end from wherever it was dropped.
+ */
+export function seekWithinGroup(clip: VoiceClip, seconds: number, sessionId: string | null = null): void {
+  const spans = partSpans(clip, currentClipId, state.duration)
+  const at = partAtTime(spans, seconds)
+  if (!at) return
+  if (at.id === currentClipId) { seekTo(at.offset); return }
+  void playClipGroup(clip, sessionId ?? currentSessionId, state.origin || 'agent', seconds)
+    .catch(() => { /* blocked until a gesture unlocks the element */ })
 }
 
 export function newVoiceStreamId():string{
@@ -221,12 +304,13 @@ async function playQueuedClip(item:QueueItem):Promise<void>{
   await playClipAudio(item.clipId,item.origin)
 }
 
-async function playClipAudio(clipId:string,origin:PlaybackOrigin):Promise<void>{
+async function playClipAudio(clipId:string,origin:PlaybackOrigin,startAt=0):Promise<void>{
   const audio = ensureAudio()
   // A real clip supersedes any still-pending silent unlock. Its media events are
   // public playback state even if the unlock promise settles afterwards.
   unlocking = false
   if (currentClipId === clipId && audio.src && !audio.ended) {
+    if (startAt > 0) audio.currentTime = startAt
     if (audio.paused) await audio.play()
     return
   }
@@ -234,12 +318,30 @@ async function playClipAudio(clipId:string,origin:PlaybackOrigin):Promise<void>{
   unlocked = true
   audio.src = clipAudioUrl(clipId)
   audio.muted = playbackDucked
-  state = { clipId, playing: false, position: 0, duration: 0, origin }
+  state = { clipId, playing: false, position: startAt, duration: 0, origin }
   notify()
+  // Deferred to metadata: `currentTime` is not writable on a source whose duration
+  // the element has not read yet, and a silently dropped seek restarts the segment
+  // the operator was scrubbing inside.
+  if (startAt > 0) {
+    const seek = () => {
+      audio.removeEventListener('loadedmetadata', seek)
+      if (currentClipId === clipId) audio.currentTime = startAt
+    }
+    audio.addEventListener('loadedmetadata', seek)
+  }
   await audio.play()
 }
 
 export function pausePlayback(): void { audioElement?.pause() }
+
+/** Resume the loaded clip where it was paused. */
+export function resumePlayback(): Promise<void> {
+  const audio = audioElement
+  if (!audio || !currentClipId) return Promise.resolve()
+  unlocking = false
+  return audio.play()
+}
 
 export function seekTo(seconds: number): void {
   if (!audioElement || !currentClipId) return
@@ -306,6 +408,7 @@ export function sessionPlaysHere(sessionId: string | null): boolean {
 // operator heard something in a tab that no longer exists.
 const CLIP_MEMORY = 400
 const playedClips = new Set<string>()
+const playedStreams = new Set<string>()
 const dismissedClips = new Set<string>()
 
 /** Where a clip stands on this device, over and above what the daemon says. */
@@ -318,9 +421,35 @@ function remember(set: Set<string>, clipId: string): void {
 
 export function clipDeviceState(clipId: string): ClipDeviceState {
   if (currentClipId === clipId) return 'playing'
-  for (const items of heldClips.values()) if (items.some(item => item.clipId === clipId)) return 'held'
+  for (const items of heldClips.values()) if (items.some(item => item.partIds.includes(clipId))) return 'held'
   if (playedClips.has(clipId)) return 'played'
   if (dismissedClips.has(clipId)) return 'dismissed'
+  return null
+}
+
+/**
+ * Where a whole reply stands on this device.
+ *
+ * Per part, because playback is per part while a stream is unjoined and the row is
+ * per reply: `playing` is true for whichever segment is out of the speakers, and
+ * `played` needs *all* of them - a reply whose first sentence has been heard is not
+ * a reply you have heard. The stream is consulted as well as the parts because the
+ * daemon replaces the segment ids with one joined clip once the reply is complete,
+ * and the marks recorded against the old ids must survive that.
+ */
+export function clipGroupDeviceState(clip: VoiceClip): ClipDeviceState {
+  const ids = clipPartIds(clip)
+  // Loaded *and* not finished. The element keeps its clip id after it ends - that
+  // is what makes "play that back from the middle" work - so a reply that had
+  // just been heard would otherwise sit on `playing` forever and never report
+  // that the operator actually got it.
+  if (currentClipId && ids.includes(currentClipId) && playbackBusy()) return 'playing'
+  for (const items of heldClips.values()) {
+    if (items.some(item => item.partIds.some(id => ids.includes(id)))) return 'held'
+  }
+  if (clip.stream_id && playedStreams.has(clip.stream_id)) return 'played'
+  if (ids.every(id => playedClips.has(id))) return 'played'
+  if (ids.some(id => dismissedClips.has(id))) return 'dismissed'
   return null
 }
 
@@ -338,8 +467,12 @@ export function heldClipSessions(): string[] {
 
 function holdClip(sessionId: string, clipId: string, streamId: string | null): void {
   const items = heldClips.get(sessionId) || []
-  if (items.some(item => item.clipId === clipId)) return
-  items.push({ clipId, streamId, at: Date.now() })
+  if (items.some(item => item.partIds.includes(clipId))) return
+  // A later segment of a reply already being held joins it. The operator is
+  // offered one reply to play, and playing it says the whole thing.
+  const stream = streamId ? items.find(item => item.streamId === streamId) : undefined
+  if (stream) { stream.partIds.push(clipId); heldClips.set(sessionId, items); notify(); return }
+  items.push({ clipId, streamId, at: Date.now(), partIds: [clipId] })
   while (items.length > HELD_PER_SESSION) items.shift()
   heldClips.set(sessionId, items)
   notify()
@@ -359,7 +492,10 @@ export function playHeldClips(sessionId: string): void {
   notify()
   const playable: QueueItem[] = items
     .filter(item => !(item.streamId && suppressedStreams.has(item.streamId)))
-    .map(item => ({ clipId: item.clipId, streamId: item.streamId, sessionId, origin: 'agent' as const }))
+    // Every segment of each held reply, in the order it was synthesized: the
+    // operator asked to hear the replies, not their opening sentences.
+    .flatMap(item => item.partIds.map(clipId =>
+      ({ clipId, streamId: item.streamId, sessionId, origin: 'agent' as const })))
   if (!playable.length) return
   if (playbackBusy()) { queue.push(...playable); return }
   const first = playable.shift() as QueueItem
@@ -376,7 +512,7 @@ export function dismissHeldClips(sessionId: string): void {
   // Recorded rather than forgotten, so the global list can say "you dismissed
   // this" instead of showing a durable clip with no explanation for why it is
   // no longer offered anywhere.
-  for (const item of items) remember(dismissedClips, item.clipId)
+  for (const item of items) for (const id of item.partIds) remember(dismissedClips, id)
   heldClips.delete(sessionId)
   notify()
 }
@@ -408,6 +544,15 @@ function suppress(streamId:string):void{
   while(suppressedStreams.size>SUPPRESSED_STREAM_MEMORY){
     suppressedStreams.delete(suppressedStreams.values().next().value as string)
   }
+}
+
+/**
+ * Lift a suppression, for the one case that is not "a late clip sneaking back in":
+ * the operator pressing play on a reply that was cut. Asking for it again is a
+ * newer decision than whatever silenced it.
+ */
+function unsuppress(streamId:string):void{
+  suppressedStreams.delete(streamId)
 }
 
 /**

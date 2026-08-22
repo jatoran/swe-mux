@@ -83,6 +83,6 @@ const SESSIONS = [
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  <ResourcesModal sessions={SESSIONS} projects={PROJECTS} onClose={() => {}} onAttached={() => {}} onConfigureUsage={() => {}} />,
+  <ResourcesModal sessions={SESSIONS} projects={PROJECTS} onClose={() => {}} onAttached={() => {}} />,
   document.querySelector('#root')!,
 )

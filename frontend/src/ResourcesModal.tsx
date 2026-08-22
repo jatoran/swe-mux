@@ -2,39 +2,40 @@ import { useRef, useState } from 'preact/hooks'
 import { useModalFocus } from './modalFocus'
 import { NetworkUsageView } from './NetworkUsageModal'
 import { StorageUsageView } from './StorageUsageModal'
-import { UsageTokensView } from './UsageDashboardView'
+import { FleetActivityView } from './FleetActivityView'
 import { ProcessFleetView } from './ProcessFleetView'
 import type { Preview } from './processFleet'
 import type { Project, Session } from './types'
 import { sessionDisplayName } from './sessionNames'
 
-// One dialog for everything metered.
+// One dialog for what the machine and the fleet are doing.
 //
-// Processes, bandwidth, disk, and tokens were four separate modals reached from four
-// separate app-menu rows, each with its own layer, focus trap, header, and close control —
-// four implementations of one shape, and four rows of a menu that was itself the thing
-// people found overwhelming. The question behind all four is the same: what is this
-// consuming right now, and is that a lot?
+// Processes, bandwidth, and disk were three separate modals reached from three separate
+// app-menu rows, each with its own layer, focus trap, header, and close control - three
+// implementations of one shape, in a menu that was itself the thing people found
+// overwhelming. The question behind them is the same: what is this consuming, and is that
+// a lot?
 //
-// Tokens is the odd one and belongs anyway. Three of these are machine resources and one is
-// money, but "how much am I burning" is asked about all four in the same breath, and the
-// alternative — a Resources dialog that pointedly excludes the most expensive resource — is
-// a taxonomy nobody asked for. The segments are named for the concrete thing each measures
-// (Processes / Network / Storage / Tokens) rather than leaning on the dialog title to
-// explain the grouping.
+// A fourth segment used to be **Tokens**, and it is now its own `Usage` dialog. It never
+// fit, and the way it did not fit was instructive: three quarters of what it held measured
+// no tokens and no money at all, and the quarter that did was three separate currencies
+// that must never be summed. Its behavioral half - runs, tool calls, compaction - is
+// **Fleet activity** here, where it belongs. Processes says what the fleet is running right
+// now; Fleet activity says what it has been doing. Both are live-ish readings of this host,
+// both are opened when something looks wrong, and neither is a bill.
 //
 // What is *not* here: the drawer's Processes tab. This dialog and that tab draw the same
 // `ProcessFleetView`, and the tab is not made redundant by it, because a modal covers the
 // terminal. "What is this session running" has to be readable beside the session, which is
 // the same reason the prompt Queue is a drawer tab and the Fleet Queue is a modal.
 
-export type ResourceSegment = 'processes' | 'network' | 'storage' | 'tokens'
+export type ResourceSegment = 'processes' | 'network' | 'storage' | 'fleet'
 
 const SEGMENTS: Array<{ id: ResourceSegment; label: string; title: string; heading: string }> = [
   { id: 'processes', label: 'Processes', title: 'Every session, listener, and process tree swe-mux can see', heading: 'PROCESS::FLEET' },
   { id: 'network', label: 'Network', title: 'Bandwidth for this daemon measurement window', heading: 'NETWORK::USAGE' },
   { id: 'storage', label: 'Storage', title: 'Disk swe-mux uses, by area and by project', heading: 'STORAGE::USAGE' },
-  { id: 'tokens', label: 'Tokens', title: 'Historical model spend, quota windows, tools, and context evidence', heading: 'USAGE::TELEMETRY' },
+  { id: 'fleet', label: 'Fleet activity', title: 'What the agents have been doing: runs, tools and skills, context compaction', heading: 'FLEET::ACTIVITY' },
 ]
 
 type Props = {
@@ -47,13 +48,11 @@ type Props = {
   projects: Project[]
   onClose: () => void
   onAttached: (preview: Preview, project: Project) => void
-  /** Tokens: the collector and its retention live in Settings. */
-  onConfigureUsage: () => void
 }
 
 export function ResourcesModal({
   initial = 'processes', initialSessionId = null, initialProjectId = null,
-  sessions, projects, onClose, onAttached, onConfigureUsage,
+  sessions, projects, onClose, onAttached,
 }: Props) {
   const [segment, setSegment] = useState<ResourceSegment>(initial)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialSessionId)
@@ -99,11 +98,11 @@ export function ResourcesModal({
           onClick={() => setSegment(item.id)}
         >{item.label}</button>)}
       </div>
-      {/* Each segment is unmounted when it is not selected, on purpose: three of the four
+      {/* Each segment is unmounted when it is not selected, on purpose: two of the four
           poll (Processes on the shared refcounted snapshot feed, Network every three
-          seconds), and a dialog that quietly held four live pollers open would cost more
-          than the four modals it replaced. Selection is cheap to re-enter; the polling is
-          not cheap to leave running. */}
+          seconds), and a dialog that quietly held live pollers open would cost more than
+          the modals it replaced. Selection is cheap to re-enter; the polling is not cheap
+          to leave running. */}
       {segment === 'processes' && <ProcessFleetView
         sessions={sessions}
         projects={projects}
@@ -118,7 +117,7 @@ export function ResourcesModal({
       />}
       {segment === 'network' && <NetworkUsageView />}
       {segment === 'storage' && <StorageUsageView />}
-      {segment === 'tokens' && <UsageTokensView onConfigure={onConfigureUsage} />}
+      {segment === 'fleet' && <FleetActivityView />}
     </section>
   </div>
 }

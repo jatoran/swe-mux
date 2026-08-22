@@ -41,7 +41,10 @@ import {
 } from './transcriptAudio'
 import type { MessageAudio } from './transcriptAudio'
 import type { Session, VoiceClip, VoiceContent } from './types'
-import { newVoiceStreamId, playClip, unlockPlayback } from './voice'
+import {
+  beginRequestedStream, cancelRequestedStream, newVoiceStreamId, playClipGroup, unlockPlayback,
+} from './voice'
+import { clipParts } from './voiceGroups'
 
 // The drawer's reader: what the focused session has said, in a column you can
 // scroll and copy from without touching the terminal.
@@ -549,7 +552,10 @@ export function TranscriptTab({ session, readAloud = false }: {
     TRANSCRIPT_AUDIO_KINDS.filter(kind => audioRequests.includes(`${messageId}:${kind}`))
   const playMessageClip = (clip: VoiceClip) => {
     unlockPlayback()
-    void playClip(clip.id, clip.session_id).catch(() => setError('Playback failed.'))
+    // The whole reply, not its opening segment: a long reply is stored in pieces
+    // until the daemon joins them, and playing the first piece alone read as the
+    // agent answering in a third of a sentence.
+    void playClipGroup(clip, clip.session_id).catch(() => setError('Playback failed.'))
   }
   /**
    * Ask for one reply's audio, in one kind.
@@ -565,21 +571,38 @@ export function TranscriptTab({ session, readAloud = false }: {
     if (audioRequests.includes(key)) return
     setAudioRequests(current => [...current, key])
     unlockPlayback()
+    // A per-message request is its own stream: it must not join, or cut, whatever a
+    // pane's automatic read-aloud happens to be speaking.
+    const streamId = newVoiceStreamId()
+    // Claimed before the request, so the reply's later segments are accepted as they
+    // are synthesized. Without the claim a long reply spoke only its opening segment
+    // - the response's - and silently dropped the rest.
+    beginRequestedStream(streamId, sessionId, 'agent')
     try {
       const clip = await api<VoiceClip>('POST', `/api/sessions/${sessionId}/voice/generate`, {
         message_id: message.message_id,
         content_mode: kind,
-        // A per-message request is its own stream: it must not join, or cut, whatever a
-        // pane's automatic read-aloud happens to be speaking.
-        stream_id: newVoiceStreamId(),
+        stream_id: streamId,
       })
       // Optimistic, and then corrected by the refetch the clip event triggers. Without
       // it the chip would sit on `generating` until an event that has already fired.
       if (clip?.id) {
         setClips(current => [clip, ...current.filter(item => item.id !== clip.id)])
-        if (clip.status === 'ready') playMessageClip(clip)
+        // A clip answered from the store has its own (finished) stream, so the one
+        // claimed for this request will never carry anything and is released.
+        if (clip.reused) cancelRequestedStream(streamId)
+        // Anything already made is played: a segmented reply is `synthesizing`
+        // until its last piece lands, and waiting for that is the silence the
+        // segmenting exists to remove.
+        if (clipParts(clip).some(part => part.status === 'ready')) playMessageClip(clip)
+      } else {
+        cancelRequestedStream(streamId)
       }
     } catch (cause) {
+      // The stream was opened before the request, so a failed generation would
+      // otherwise leave this device waiting for a clip that will never arrive and
+      // holding every later one behind it.
+      cancelRequestedStream(streamId)
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setAudioRequests(current => current.filter(item => item !== key))

@@ -5,10 +5,14 @@ import { expect, test } from 'playwright/test'
  *
  * Both surfaces here failed at exactly that, in the same way, for the same reason — a
  * boundary drawn with the same weight as the rows on either side of it is not a boundary.
- * The Actions tab stacks four collapsible catalogs in one scroller and separated them with
+ * The Actions tab stacks three collapsible catalogs in one scroller and separated them with
  * the same 1px hairline every row inside them already carries. Agent → Instructions pinned
  * a file's body directly under the memory list with a background change and nothing else,
  * which made an open file read as more list.
+ *
+ * The Actions separators now also carry a hue per section, which is the same problem one
+ * step on: the headers are sticky, so a boundary that is drawn correctly is still not on
+ * screen when the reader is halfway down a catalog.
  *
  * Nothing below the browser can check any of that: it is entirely computed style and box
  * geometry, and the components themselves are unchanged.
@@ -28,6 +32,11 @@ test('each Actions section is bounded by more than a row rule', async ({ page })
       headerBackground: style.backgroundImage,
       headerEdge: style.boxShadow,
       headerBottom: style.borderBottomWidth,
+      // Resolved, not declared: `--section-hue` is what the rules are written against, and a
+      // computed colour is the only thing that says whether two of them landed on the same
+      // one. `getPropertyValue` would answer `var(--green)` and prove nothing.
+      hue: getComputedStyle(section.querySelector<HTMLElement>('.actions-section-toggle>span')!).color,
+      spine: style.boxShadow,
     }
   }))
 
@@ -41,6 +50,15 @@ test('each Actions section is bounded by more than a row rule', async ({ page })
     expect(section.headerBackground, section.id).toContain('gradient')
     expect(section.headerEdge, section.id).toContain('inset')
   }
+
+  // One hue per section, and three that are actually different. The headers are sticky, so a
+  // reader mid-scroll sees a header without the boundary it belongs to; the hue is what
+  // answers "which of the three am I in" without reading the word. A scheme that silently
+  // collapsed - two sections pointed at one token, or a fourth added with no hue inheriting
+  // a neighbour's - is invisible in every other test, which is why this asserts distinctness
+  // rather than exact colours: the values are a theme's to choose, the spread is not.
+  expect(new Set(sections.map(item => item.hue)).size).toBe(3)
+  expect(new Set(sections.map(item => item.spine)).size).toBe(3)
 })
 
 test('the Actions tab names the session no more often than the pane heading does', async ({ page }) => {

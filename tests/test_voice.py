@@ -27,6 +27,7 @@ from swe_mux.server import (
 )
 from swe_mux.transcript_view import conversation_view, message_exchange
 from swe_mux.voice import (
+    SUPERSEDED_CLIP_TTL_SECONDS,
     VOICE_RULE_ID,
     VOICE_SCHEMA_VERSION,
     VoiceError,
@@ -35,6 +36,8 @@ from swe_mux.voice import (
     approval_prompt,
     clip_snapshot,
     estimate_duration_seconds,
+    group_snapshot,
+    group_state,
     latency_report,
     latency_stages,
     normalize_latency_sample,
@@ -42,6 +45,7 @@ from swe_mux.voice import (
     speechify,
     streaming_segments,
 )
+from swe_mux.voice_audio import join_wav_files, wav_profile
 
 
 # Real transcript records rather than stubbed slices. What voice speaks is now
@@ -215,6 +219,35 @@ def patch_engine(service: VoiceService, *, fail: str | None = None) -> list[str]
             raise VoiceError(fail)
         spoken.append(text)
         destination.write_bytes(b"ID3" + text.encode()[:64])
+
+    service._synthesize = synthesize  # type: ignore[method-assign]
+    return spoken
+
+
+def write_wav(path: Path, *, frames: int, rate: int = 24_000, channels: int = 1) -> None:
+    """A real, readable WAV. `frames` doubles as the marker for who wrote it."""
+    with wave.open(str(path), "wb") as sink:
+        sink.setnchannels(channels)
+        sink.setsampwidth(2)
+        sink.setframerate(rate)
+        sink.writeframes(b"\x00\x01" * frames * channels)
+
+
+def patch_wav_engine(service: VoiceService, *, fail_on: str | None = None) -> list[str]:
+    """Like `patch_engine`, but the audio is joinable.
+
+    The join path is only exercised by segments that are actually WAV, and a fake
+    engine writing three bytes of `ID3` silently makes every join decline - which
+    is a green test asserting nothing. Frame counts track the text length so a
+    joined file's duration can be checked against its sources.
+    """
+    spoken: list[str] = []
+
+    async def synthesize(text: str, destination: Path) -> None:
+        if fail_on and fail_on in text:
+            raise VoiceError("engine failed")
+        spoken.append(text)
+        write_wav(destination, frames=240 * max(1, len(text.split())))
 
     service._synthesize = synthesize  # type: ignore[method-assign]
     return spoken
@@ -875,7 +908,10 @@ async def test_an_open_speech_stream_appends_in_order_and_closes(tmp_path: Path)
     try:
         first = await service.speak("Opening sentence.", stream_id=stream, final=False)
         assert first["stream_open"] is True
-        assert first["segment_count"] == 0
+        # Unknown, not zero: the clip record says how many segments the producer
+        # promised, and an open stream has promised nothing yet. The *events* keep
+        # carrying 0 for "still open", which is what the browser's queue reads.
+        assert first["segment_count"] is None
         await service.speak(
             "Second sentence.", stream_id=stream, continue_stream=True, final=False
         )
@@ -1187,29 +1223,19 @@ async def test_store_prune_removes_oldest_ready_clips_beyond_cap(tmp_path: Path)
             audio = tmp_path / f"clip-{index}.mp3"
             audio.write_bytes(b"x" * 600)
             await store.add_clip(
-                {
-                    "id": f"clip-{index}",
-                    "session_id": "s1",
-                    "agent_run_id": "run-1",
-                    "created_at": base + index,
-                    "trigger": "auto",
-                    "content_mode": "summary",
-                    "engine": "edge",
-                    "voice": "en-AU-NatashaNeural",
-                    "text": "hello",
-                    "file_path": str(audio),
-                    "format": "mp3",
-                    "size_bytes": 600,
-                    "duration_hint_s": 1.0,
-                    "status": "ready",
-                    "error": None,
-                    "model": None,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cost_usd": None,
-                    "source_ts": base + index,
-                    "message_anchor": f"msg-{index}",
-                }
+                clip_row(
+                    f"clip-{index}",
+                    created_at=base + index,
+                    content_mode="summary",
+                    engine="edge",
+                    voice="en-AU-NatashaNeural",
+                    file_path=str(audio),
+                    format="mp3",
+                    size_bytes=600,
+                    duration_hint_s=1.0,
+                    source_ts=base + index,
+                    message_anchor=f"msg-{index}",
+                )
             )
         removed = await store.prune(1300)
         assert removed == [str(tmp_path / "clip-0.mp3")]
@@ -1501,6 +1527,10 @@ def clip_row(clip_id: str, **overrides: Any) -> dict[str, Any]:
         "cost_usd": None,
         "source_ts": None,
         "message_anchor": None,
+        "stream_id": None,
+        "segment_index": 0,
+        "segment_count": 1,
+        "superseded_at": None,
     }
     row.update(overrides)
     return row
@@ -1595,7 +1625,7 @@ async def test_naming_a_message_reuses_the_clip_that_already_speaks_it(
         # A different kind is a different clip: the summary and the verbatim
         # reading of one reply are both legitimate audio for that message.
         assert (
-            await service.store.anchored_clip(
+            await service.store.anchored_group(
                 agent_run_id="run-1", message_anchor=anchor, content_mode="summary"
             )
             is None
@@ -1694,13 +1724,15 @@ async def test_synthesis_interrupted_by_a_restart_is_retired_not_left_spinning(
         reopened.close()
 
 
-async def test_a_pre_anchor_database_gains_the_columns_and_keeps_its_clips(
+async def test_a_pre_stream_database_gains_the_columns_and_discards_its_clips(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "mux.db"
+    audio = tmp_path / "legacy.wav"
+    audio.write_bytes(b"x" * 3)
     legacy = sqlite3.connect(path)
     legacy.executescript(
-        """
+        f"""
         CREATE TABLE voice_clips (
             id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_run_id TEXT,
             created_at REAL NOT NULL, trigger TEXT NOT NULL, content_mode TEXT NOT NULL,
@@ -1713,7 +1745,7 @@ async def test_a_pre_anchor_database_gains_the_columns_and_keeps_its_clips(
         );
         INSERT INTO voice_clips VALUES(
             'legacy','s1','run-1',10.0,'auto','verbatim','sapi','system default',
-            'hello','','wav',3,1.0,'ready',NULL,NULL,0,0,NULL
+            'hello',{str(audio)!r},'wav',3,1.0,'ready',NULL,NULL,0,0,NULL
         );
         """
     )
@@ -1722,14 +1754,17 @@ async def test_a_pre_anchor_database_gains_the_columns_and_keeps_its_clips(
 
     store = VoiceStore(path)
     try:
-        row = await store.clip("legacy")
-        assert row is not None
-        # Backfilled to NULL, not to `created_at`: a clip made before the anchor
-        # existed has no source message, and claiming one would assert an ordering
-        # nothing recorded.
-        assert row["source_ts"] is None
-        assert row["message_anchor"] is None
-        assert row["status"] == "ready"
+        # Discarded, rows and audio both. A pre-stream row records no stream and no
+        # segment index, so the segments of one reply cannot be put back together:
+        # keeping them would list one reply as several clips, in reverse spoken
+        # order, permanently. Clips are a regenerable cache under a byte cap, so
+        # the migration starts clean rather than preserving an unfixable shape.
+        assert await store.clip("legacy") is None
+        assert not audio.exists()
+        # The columns are present and usable, which is what the discarded rows
+        # could not have been.
+        await store.add_clip(clip_row("fresh", stream_id="stream-1", segment_index=0))
+        assert (await store.clip("fresh")) is not None
         versions = sqlite3.connect(path)
         try:
             stored = versions.execute(
@@ -1740,3 +1775,411 @@ async def test_a_pre_anchor_database_gains_the_columns_and_keeps_its_clips(
         assert stored[0] == VOICE_SCHEMA_VERSION
     finally:
         store.close()
+
+
+# --------------------------------------------------------------- stream groups
+#
+# A reply is cut into segments so its first sentence can play while the rest is
+# still being synthesized. That is a latency device and nothing else: outside
+# synthesis, one reply is one clip. These tests hold that line at the store, at
+# the snapshot, and at the point where the segments become a single file.
+
+SEGMENTED_SPEECH = (
+    "First sentence is ready and contains " + "useful detail " * 18 + ". "
+    "Second sentence follows with " + "another detail " * 18 + ". "
+    "Third sentence closes with " + "final detail " * 18 + "."
+)
+
+
+async def segmented_service(
+    tmp_path: Path, *, wav: bool = False, fail_on: str | None = None
+) -> tuple[VoiceService, list[MuxEvent], list[str]]:
+    service, _events, emitted, _record = make_service(
+        tmp_path, content="summary", provider=ProviderStub(speech=SEGMENTED_SPEECH)
+    )
+    write_transcript(service, REPLY_EVENTS)
+    spoken = (
+        patch_wav_engine(service, fail_on=fail_on)
+        if wav
+        else patch_engine(service)
+    )
+    return service, emitted, spoken
+
+
+async def drain_segments(service: VoiceService) -> None:
+    while service._segment_tasks:
+        await asyncio.gather(*tuple(service._segment_tasks))
+
+
+async def test_a_segmented_reply_is_one_clip_in_the_list(tmp_path: Path) -> None:
+    service, _emitted, spoken = await segmented_service(tmp_path)
+    try:
+        await service.generate("s1", trigger="manual")
+        await drain_segments(service)
+        assert len(spoken) > 1, "the reply must actually have been segmented"
+        rows = await service.store.clips(session_id="s1", limit=50)
+        assert len(rows) == len(spoken), "the rows are still one per segment"
+        groups = await service.store.clip_groups(session_id="s1", limit=50)
+        # One reply, one clip. This is the whole point: three rows in the store,
+        # one entry in every list a person reads.
+        assert len(groups) == 1
+        clip = group_snapshot(groups[0])
+        assert clip["status"] == "ready"
+        assert clip["stream_open"] is False
+        assert [part["segment_index"] for part in clip["parts"]] == list(range(len(spoken)))
+        # In spoken order, not newest-first. A group listed by the row ordering
+        # would read its last sentence first.
+        assert clip["text"] == " ".join(spoken)
+        assert clip["id"] == clip["parts"][0]["id"]
+    finally:
+        service.store.close()
+
+
+async def test_a_group_reads_as_still_being_made_until_its_stream_closes() -> None:
+    opening = clip_row("a", stream_id="s", segment_index=0, segment_count=None)
+    # An open stream: every segment it holds is ready, and it is still not a
+    # finished clip, because the producer has not said how long it is.
+    assert group_state([opening]) == "synthesizing"
+    assert group_snapshot([opening])["stream_open"] is True
+    # Closed at two, holding one: the second is still coming.
+    opening["segment_count"] = 2
+    assert group_state([opening]) == "synthesizing"
+    second = clip_row("b", stream_id="s", segment_index=1, segment_count=None)
+    assert group_state([opening, second]) == "ready"
+    # A segment still in the engine keeps the whole clip in progress.
+    second["status"] = "synthesizing"
+    assert group_state([opening, second]) == "synthesizing"
+    # And a failure anywhere is the clip's verdict: the stream stops at a gap
+    # rather than speaking the reply out of order, so what exists is a prefix.
+    second["status"] = "failed"
+    second["error"] = "engine failed"
+    assert group_state([opening, second]) == "failed"
+    assert group_snapshot([opening, second])["error"] == "engine failed"
+
+
+async def test_group_snapshot_sums_what_the_segments_only_hold_a_share_of() -> None:
+    parts = [
+        clip_row(
+            "a", stream_id="s", segment_index=0, segment_count=2, text="First half.",
+            duration_hint_s=2.5, size_bytes=100, input_tokens=40, output_tokens=9,
+            cost_usd=0.0004,
+        ),
+        clip_row(
+            "b", stream_id="s", segment_index=1, text="Second half.",
+            duration_hint_s=1.5, size_bytes=60,
+        ),
+    ]
+    clip = group_snapshot(parts)
+    assert clip["duration_hint_s"] == 4.0
+    assert clip["size_bytes"] == 160
+    # The summary call is charged to the opening segment; the clip is what spent it.
+    assert clip["input_tokens"] == 40
+    assert clip["cost_usd"] == 0.0004
+    assert clip["text"] == "First half. Second half."
+    assert "file_path" not in clip
+    assert all("file_path" not in part for part in clip["parts"])
+
+
+async def test_replaying_a_message_returns_the_whole_reply_not_its_last_segment(
+    tmp_path: Path,
+) -> None:
+    service, _emitted, spoken = await segmented_service(tmp_path)
+    try:
+        first = await service.generate("s1", trigger="manual")
+        await drain_segments(service)
+        anchor = last_assistant_message(service)["message_id"]
+        made = len(spoken)
+        again = await service.generate("s1", trigger="manual", message_id=anchor)
+        assert again["reused"] is True
+        assert len(spoken) == made, "the reuse path must not synthesize anything"
+        # The defect this fixes: the reuse lookup answered with the newest ready
+        # row, which for a segmented reply is its *last* segment - so pressing play
+        # on a message replayed only its ending.
+        assert again["id"] == first["id"]
+        assert [part["segment_index"] for part in again["parts"]] == list(range(len(spoken)))
+        assert again["text"] == " ".join(spoken)
+    finally:
+        service.store.close()
+
+
+async def test_an_incomplete_stream_is_not_offered_for_reuse(tmp_path: Path) -> None:
+    store = VoiceStore(tmp_path / "mux.db")
+    try:
+        await store.add_clip(
+            clip_row(
+                "head", stream_id="s", segment_index=0, segment_count=2,
+                agent_run_id="run-1", message_anchor="msg-1",
+            )
+        )
+        # Reuse never synthesizes, so handing back a reply whose second half was
+        # never made would be handing back a reply that stays half-finished.
+        assert (
+            await store.anchored_group(
+                agent_run_id="run-1", message_anchor="msg-1", content_mode="verbatim"
+            )
+            is None
+        )
+        await store.add_clip(
+            clip_row(
+                "tail", stream_id="s", segment_index=1,
+                agent_run_id="run-1", message_anchor="msg-1",
+            )
+        )
+        found = await store.anchored_group(
+            agent_run_id="run-1", message_anchor="msg-1", content_mode="verbatim"
+        )
+        assert found is not None
+        assert [row["id"] for row in found] == ["head", "tail"]
+    finally:
+        store.close()
+
+
+async def test_a_completed_stream_is_joined_into_one_clip(tmp_path: Path) -> None:
+    service, emitted, spoken = await segmented_service(tmp_path, wav=True)
+    try:
+        await service.generate("s1", trigger="manual")
+        await drain_segments(service)
+        assert len(spoken) > 1
+        groups = await service.store.clip_groups(session_id="s1", limit=50)
+        assert len(groups) == 1
+        # One row now, not one row per segment: the segments were concatenated
+        # into a single file and retired.
+        assert len(groups[0]) == 1
+        joined = groups[0][0]
+        assert joined["status"] == "ready"
+        assert joined["text"] == " ".join(spoken)
+        path = Path(str(joined["file_path"]))
+        assert path.is_file()
+        with wave.open(str(path), "rb") as source:
+            joined_frames = source.getnframes()
+        assert joined_frames == sum(240 * len(text.split()) for text in spoken)
+        # Measured from the joined file rather than summed from rounded segment
+        # hints, so the transport's range matches the audio it scrubs.
+        assert joined["duration_hint_s"] == pytest.approx(joined_frames / 24_000, abs=0.1)
+        # The reply keeps its place in the list: joining is not a new clip
+        # arriving, and re-sorting it to the top when it finished being spoken
+        # would move a reply the operator was reading.
+        assert joined["segment_count"] == 1
+        assert [event.type for event in emitted].count("voice_clip_joined") == 1
+    finally:
+        service.store.close()
+
+
+async def test_joined_segments_stay_playable_until_they_are_swept(tmp_path: Path) -> None:
+    service, emitted, spoken = await segmented_service(tmp_path, wav=True)
+    try:
+        await service.generate("s1", trigger="manual")
+        await drain_segments(service)
+        rows = await service.store.clips(session_id="s1", limit=50)
+        assert len(rows) == 1, "the listing shows the joined clip alone"
+        # Exactly the ids a browser was told to play while the reply was being
+        # spoken, which is what makes this the real question rather than a
+        # database detail.
+        segment_ids = [
+            str(event.payload["clip_id"])
+            for event in emitted
+            if event.type == "voice_clip_ready"
+        ]
+        assert len(segment_ids) == len(spoken)
+        # Still fetchable, and their audio still on disk: a browser that queued
+        # these ids before the join is going to ask for them, and answering 404
+        # there cuts a reply off mid-sentence.
+        for clip_id in segment_ids:
+            fetched = await service.store.clip(clip_id)
+            assert fetched is not None
+            assert fetched["superseded_at"] is not None
+            assert Path(str(fetched["file_path"])).is_file()
+        # Retired for long enough that nothing can still be playing them.
+        aged = time.time() - SUPERSEDED_CLIP_TTL_SECONDS - 1
+        await service.store.supersede_clips(segment_ids, at=aged)
+        removed = await service.store.sweep_superseded(SUPERSEDED_CLIP_TTL_SECONDS)
+        assert len(removed) == len(spoken)
+        for file_path in removed:
+            Path(file_path).unlink(missing_ok=True)
+        assert await service.store.clip(segment_ids[0]) is None
+        # The joined clip is untouched by the sweep that removed its sources.
+        joined = await service.store.clip(str(rows[0]["id"]))
+        assert joined is not None
+        assert Path(str(joined["file_path"])).is_file()
+    finally:
+        service.store.close()
+
+
+async def test_a_failed_segment_leaves_the_reply_failed_and_unjoined(
+    tmp_path: Path,
+) -> None:
+    service, _emitted, spoken = await segmented_service(
+        tmp_path, wav=True, fail_on="Third sentence"
+    )
+    try:
+        await service.generate("s1", trigger="manual")
+        await drain_segments(service)
+        groups = await service.store.clip_groups(session_id="s1", limit=50)
+        clip = group_snapshot(groups[0])
+        # Not joined: the failure is part of what this clip says, and a joined
+        # file would present a truncated reply as a complete one.
+        assert clip["status"] == "failed"
+        assert len(clip["parts"]) == len(spoken) + 1
+        # The total is restated as what was actually emitted, so the clip settles
+        # instead of waiting forever for a segment nobody is making.
+        assert clip["segment_count"] == len(spoken) + 1
+        assert clip["text"].startswith(spoken[0])
+    finally:
+        service.store.close()
+
+
+async def test_pruning_evicts_whole_streams(tmp_path: Path) -> None:
+    store = VoiceStore(tmp_path / "mux.db")
+    try:
+        base = time.time()
+        streams = (("old", 0, base), ("old", 1, base + 1), ("new", 0, base + 2))
+        for stream, index, created in streams:
+            audio = tmp_path / f"{stream}-{index}.wav"
+            audio.write_bytes(b"x" * 600)
+            await store.add_clip(
+                clip_row(
+                    f"{stream}-{index}", stream_id=stream, segment_index=index,
+                    segment_count=2 if stream == "old" else 1,
+                    created_at=created, source_ts=created,
+                    file_path=str(audio), size_bytes=600,
+                )
+            )
+        # Over the cap by one segment. Evicting to the byte used to take the older
+        # stream's first segment and leave its second, which reads as a clip that
+        # opens mid-sentence and cannot be repaired.
+        removed = await store.prune(1300)
+        assert sorted(Path(item).name for item in removed) == ["old-0.wav", "old-1.wav"]
+        groups = await store.clip_groups(session_id="s1", limit=50)
+        assert [row["id"] for group in groups for row in group] == ["new-0"]
+    finally:
+        store.close()
+
+
+async def test_deleting_a_clip_deletes_its_whole_stream(tmp_path: Path) -> None:
+    store = VoiceStore(tmp_path / "mux.db")
+    try:
+        for index in range(3):
+            await store.add_clip(
+                clip_row(
+                    f"part-{index}", stream_id="s", segment_index=index,
+                    segment_count=3 if index == 0 else None,
+                    file_path=str(tmp_path / f"part-{index}.wav"),
+                )
+            )
+        removed = await store.delete_clip("part-1")
+        assert sorted(Path(item).name for item in removed) == [
+            "part-0.wav", "part-1.wav", "part-2.wav",
+        ]
+        assert await store.clips(session_id="s1", limit=50) == []
+    finally:
+        store.close()
+
+
+async def test_a_group_window_counts_streams_not_rows(tmp_path: Path) -> None:
+    store = VoiceStore(tmp_path / "mux.db")
+    try:
+        base = time.time()
+        for stream in range(3):
+            for index in range(3):
+                await store.add_clip(
+                    clip_row(
+                        f"s{stream}-{index}", stream_id=f"stream-{stream}",
+                        segment_index=index, segment_count=3 if index == 0 else None,
+                        created_at=base + stream * 10 + index,
+                        source_ts=base + stream * 10,
+                    )
+                )
+        # Two streams asked for, two whole streams returned. A LIMIT over rows
+        # would have returned two thirds of one reply and none of the other.
+        groups = await store.clip_groups(session_id="s1", limit=2)
+        assert [len(group) for group in groups] == [3, 3]
+        assert [group[0]["stream_id"] for group in groups] == ["stream-2", "stream-1"]
+        assert [row["segment_index"] for row in groups[0]] == [0, 1, 2]
+    finally:
+        store.close()
+
+
+async def test_cache_stats_counts_streams_not_segments(tmp_path: Path) -> None:
+    store = VoiceStore(tmp_path / "mux.db")
+    try:
+        for index in range(3):
+            await store.add_clip(
+                clip_row(
+                    f"part-{index}", stream_id="s", segment_index=index,
+                    segment_count=3 if index == 0 else None, size_bytes=100,
+                )
+            )
+        stats = await store.cache_stats()
+        # One clip to the operator, three hundred bytes to the disk.
+        assert stats == {"count": 1, "bytes": 300}
+    finally:
+        store.close()
+
+
+async def test_a_stream_abandoned_by_its_producer_stops_reading_as_unfinished(
+    tmp_path: Path,
+) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    patch_engine(service)
+    stream = "22222222-2222-4222-8222-222222222222"
+    try:
+        first = await service.speak("Opening sentence.", stream_id=stream, final=False)
+        groups = await service.store.clip_groups(limit=10)
+        assert group_state(groups[0]) == "synthesizing", "an open stream is still being made"
+        # The tab that was speaking went away without closing the stream. Opening
+        # any later stream expires it, and the clip it left has to settle at the
+        # length it reached: NULL would be a spinner nothing will ever resolve.
+        service._streams[stream].created_at -= 10_000
+        await service.speak("Something else entirely.", final=True)
+        settled = await service.store.clip(str(first["id"]))
+        assert settled is not None
+        assert settled["segment_count"] == 1
+        groups = await service.store.clip_groups(limit=10)
+        assert group_state([row for row in groups[-1]]) == "ready"
+    finally:
+        service.store.close()
+
+
+async def test_a_restart_settles_a_stream_that_was_still_open(tmp_path: Path) -> None:
+    path = tmp_path / "mux.db"
+    store = VoiceStore(path)
+    try:
+        # Exactly the shape a daemon dies in mid-turn: an opening row that never
+        # learned its total, and the segments that did arrive.
+        await store.add_clip(clip_row("open-0", stream_id="s", segment_index=0, segment_count=None))
+        await store.add_clip(clip_row("open-1", stream_id="s", segment_index=1))
+    finally:
+        store.close()
+    reopened = VoiceStore(path)
+    try:
+        # A stream is held open by a producer inside the daemon, so nothing can
+        # append to this one again. Its clip is as long as what it has.
+        assert group_state(await reopened.stream_parts("s")) == "ready"
+        head = await reopened.clip("open-0")
+        assert head is not None
+        assert head["segment_count"] == 2
+    finally:
+        reopened.close()
+
+
+def test_join_refuses_segments_that_do_not_share_an_audio_profile(tmp_path: Path) -> None:
+    first = tmp_path / "one.wav"
+    second = tmp_path / "two.wav"
+    destination = tmp_path / "joined.wav"
+    write_wav(first, frames=100)
+    write_wav(second, frames=50, rate=16_000)
+    # Concatenating these would play the second half at the wrong speed. Refusing
+    # keeps the segments, which play correctly one after the other.
+    assert join_wav_files([first, second], destination) is False
+    assert not destination.exists()
+    assert join_wav_files([], destination) is False
+    write_wav(second, frames=50)
+    assert join_wav_files([first, second], destination) is True
+    assert wav_profile(destination) == wav_profile(first)
+    with wave.open(str(destination), "rb") as source:
+        assert source.getnframes() == 150
+    # A source that is not readable audio at all is declined rather than half-copied.
+    broken = tmp_path / "broken.wav"
+    broken.write_bytes(b"ID3 not audio")
+    assert join_wav_files([first, broken], destination) is False
+

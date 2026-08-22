@@ -1,7 +1,7 @@
 // The two densest drawer tabs at a real drawer width, over a stubbed daemon.
 //
 // Both are surfaces whose whole job is *legibility of structure*, and structure is exactly
-// what no unit test can see. Actions stacks four independently collapsible catalogs in one
+// what no unit test can see. Actions stacks three independently collapsible catalogs in one
 // scroller, and its failure mode is that the boundary between two of them stops reading as
 // a boundary. Agent → Instructions stacks three disclosures over a file viewer, and its
 // failure mode is that the viewer stops reading as a separate region from the list above it.

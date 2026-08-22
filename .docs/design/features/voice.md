@@ -159,14 +159,44 @@ install-wide, so the tab edits them directly for the focused session.
 ### Storage and playback
 
 - Clips are app-owned files under `<data_dir>/voice/` plus one `voice_clips` SQLite row
-  (spoken text, engine/voice, trigger, tokens/cost for summaries, status, error, and the
-  message anchor below). The store
+  (spoken text, engine/voice, trigger, tokens/cost for summaries, status, error, the stream
+  identity below, and the message anchor below). The store
   confines every `sqlite3` call to one dedicated worker thread (WAL, `synchronous=NORMAL`),
   mirroring `HistoryIndex`, so nothing blocks the event loop. Public snapshots
-  (`clip_snapshot`) never expose daemon file paths. A byte-cap prune (`tts_cache_mb`) deletes
-  oldest ready clips; stale failed rows expire after a day.
+  (`clip_snapshot`, `group_snapshot`) never expose daemon file paths. A byte-cap prune
+  (`tts_cache_mb`) deletes the oldest streams whole; stale failed rows expire after a day.
+- **A clip is a reply; a row is a segment** (`stream_id`, `segment_index`, `segment_count`;
+  schema version 3).
+  Segmenting is a latency device and nothing else, so it stops at the store boundary: every
+  read a person sees is a *stream*, assembled by `VoiceStore.clip_groups` and rendered by
+  `group_snapshot` as one clip whose text is its segments' text in spoken order, whose
+  duration and bytes and tokens are their sums, and whose single `status` is their verdict.
+  `segment_count` is carried by the opening segment alone and is NULL until the producer
+  knows the total, which is what makes a live reply read as one clip being appended to
+  rather than a row appearing per sentence.
+  Grouping happens in SQL over stream keys rather than over a row window, because a `LIMIT`
+  on rows cuts a stream in half at the edge of the window and presents its tail as a clip
+  whose opening sentence is missing.
+  Eviction and deletion take whole streams for the same reason.
+  Ungroupable pre-schema-3 rows are **discarded** by the migration, audio included: they
+  record no stream and no index, so their segments cannot be reassembled, and keeping them
+  would list one reply as several clips in reverse spoken order permanently. Clips are a
+  regenerable cache under a byte cap, so starting clean costs a re-synthesis and nothing else.
+- **A completed stream is joined into one file** (`_join_stream`, `voice_audio.join_wav_files`).
+  The joined audio is stored as a **new** clip id, inheriting the opening segment's identity
+  and `created_at` (so a reply does not re-sort to the top of the list the moment it finishes
+  being spoken), and the segments are marked `superseded_at` rather than deleted: they leave
+  every listing at once, and their audio stays servable for `SUPERSEDED_CLIP_TTL_SECONDS`
+  because a browser that queued those ids before the join is still going to ask for them, and
+  answering 404 there cuts a reply off mid-sentence. Nothing is superseded until the joined
+  clip is stored, so there is no instant in which a reply has no live row.
+  The join declines - silently and without consequence - for a single-segment stream, an
+  incomplete or failed one (the failure is part of what that clip says, and a joined file
+  would present a truncated reply as a complete one), a missing segment file, or segments
+  whose audio profiles disagree. Declining keeps the segments, which play in order anyway.
+  `voice_clip_joined` tells clients to re-read; it never plays anything.
 - **A clip is a rendering of one assistant message, and it records which one**
-  (`source_ts`, `message_anchor`, both captured at generation time; schema version 2).
+  (`source_ts`, `message_anchor`, both captured at generation time).
   `content_mode` is the clip's *kind* - `summary` or `verbatim` - and is part of its identity
   for the same reason, since the two are both legitimate audio for the same reply.
   Three things depend on the anchor and on nothing else.
@@ -174,7 +204,10 @@ install-wide, so the tab edits them directly for the focused session.
   finished: a held backlog is synthesized in whatever order engine slots and summary calls free
   up, so synthesis order puts an hour-old update above the reply that just landed.
   A **per-message play button in the transcript** that finds existing audio instead of paying
-  for it twice (`VoiceStore.anchored_clip`, keyed on run + anchor + kind).
+  for it twice (`VoiceStore.anchored_group`, keyed on run + anchor + kind).
+  It answers with a *complete stream*: answering with the newest ready row returned a
+  segmented reply's last segment, so replaying a message spoke only its ending, and an
+  incomplete stream is not offered at all because the reuse path never synthesizes the rest.
   And a **join point**: one clip model, with the pane strip (local), the `tts` tab (global), and
   the transcript's markers as three views over the same rows, none of which owns a clip.
   `source_ts` is nullable and backfills to NULL rather than to `created_at` - a clip made before
@@ -238,12 +271,35 @@ install-wide, so the tab edits them directly for the focused session.
 - Every segmented response shares a stream ID across its clips.
   A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
   The response remains a fallback if that event was delayed or lost.
+  **Every path that asks for a reply claims its stream**, including the ones that used to
+  pass no `stream_id` at all (the pane's palette entry, the voice `read reply` query, the
+  transcript's per-message button): without a claim the daemon's later segments arrive on a
+  stream the tab never said it wanted and are dropped, so a long reply spoke its opening
+  sentence and stopped.
+- **The client's unit of playback is the reply** (`playClipGroup`, `voiceGroups.ts`).
+  A clip's parts are laid end to end into one timeline, so the transport reports the reply's
+  duration and position rather than the current segment's, and a scrub crosses a segment
+  boundary by playing the segment that covers the target from an offset and re-queueing the
+  ones after it. Playing a reply takes the floor and clears the queue - the abandoned clip's
+  element is re-pointed, so nothing will ever fire `ended` for its queued siblings - but it
+  is a no-op when that reply is already in flight, which is what keeps the HTTP-response
+  fallback from restarting a reply the live events already started.
+  A reply still open claims its stream when played, so segments not yet synthesized join the
+  end of it. The parts of one reply are also **held as one entry** (`HeldClip.partIds`): held
+  per segment, a three-sentence answer reported "3 clips waiting" and consumed three of the
+  five slots a session keeps. `played` is recorded against the stream as well as the parts,
+  because the join replaces the segment ids and a reply the operator heard must not read as
+  unplayed the moment that happens.
 - **An application-speech stream can stay open and be appended to** (`SpeechStream`,
   `VoiceService.speak(continue_stream=…, final=…)`, `close_speech_stream`).
   The Mux assistant produces its reply over several seconds, so the stream's length is unknown
-  while it runs: open segments carry `segment_count: 0` (unknown) until the closing one carries
-  the real total, and `voice_stream_closed` marks the end for the case where a stream finishes
-  with no final clip.
+  while it runs: open segments carry `segment_count: 0` (unknown) in their *events* until the
+  closing one carries the real total, and `voice_stream_closed` marks the end for the case
+  where a stream finishes with no final clip.
+  The clip *record* states the same fact as NULL rather than 0, and closing the stream writes
+  the number of segments actually emitted - including a failing one, which is a row and
+  carries the error - so a clip settles instead of waiting forever for segments nobody is
+  making.
   Ordering is the invariant the type exists to hold - exactly one worker task drains one FIFO
   per stream, so clip indices are monotonic however the appends arrive. Two appends synthesizing
   concurrently would emit out of order whenever the shorter finished first, and the browser plays
@@ -864,7 +920,12 @@ and never touches the daemon or an LLM.
   `final: false` leaves the stream open, which is what lets an assistant turn speak sentence by
   sentence; `voice_stream_closed` reports the end.
 - `GET  /api/sessions/{sid}/last-reply` — the newest assistant segment, cut at its tool boundary and identical to the Transcript tab's last agent message (no terminal OSC 52).
-- `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
+- `GET  /api/voice/clips` — one item per *stream*, newest reply first, each carrying its
+  segments as `parts` (in spoken order) plus the summed text, duration, bytes and tokens and
+  one rolled-up status. `limit` counts replies, not rows.
+- `GET  /api/voice/clips/{id}/audio` — one segment's audio, addressed by row id, including a
+  superseded segment until the sweep takes it.
+- `DELETE /api/voice/clips/{id}` — deletes the whole stream the clip belongs to.
 - `POST /api/remote/mobile-voice/enable` — configure/repair the Tailscale Serve HTTPS address.
 
 ## Config knobs (`config.py`)
@@ -885,13 +946,21 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 ## Key files
 
 - `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`,
-  `SpeechStream` and the open-stream worker, the decode profiles, and the latency report helpers.
+  `SpeechStream` and the open-stream worker, the stream-as-clip reads (`clip_groups`,
+  `anchored_group`, `group_state`, `group_snapshot`) and the join, the decode profiles, and
+  the latency report helpers.
+- `src/swe_mux/voice_audio.py` — WAV concatenation for a completed stream, and the audio
+  profile check that decides whether its segments can be joined at all.
 - `src/swe_mux/kokoro_tts.py` — the direct-onnxruntime Kokoro engine, the espeak-free G2P
   constraint, and the out-of-vocabulary repair ladder.
 - `src/swe_mux/voice_models.py` — the pinned, hash-verified Kokoro model download state machine.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
-- `frontend/src/voice.ts` — singleton playback, autoplay, barge-in, open-stream queueing.
+- `frontend/src/voice.ts` — singleton playback, autoplay, barge-in, open-stream queueing, and
+  the reply-level controls (`playClipGroup`, `seekWithinGroup`, `clipGroupDeviceState`).
+- `frontend/src/voiceGroups.ts` — a reply's segments as one timeline, as pure arithmetic:
+  spans, duration, position, and which segment covers a point on the scrub bar. Covered by
+  `frontend/test/voiceGroups.test.ts`.
 - `frontend/src/assistantSpeech.ts` — one speech stream per assistant turn (`assistant.md`).
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/voiceNavigation.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, canonical hierarchical indexes, and fleet speech projection.
 - `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
@@ -900,7 +969,7 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `frontend/src/voiceMode.ts` - the pure resolver every surface shares (`resolveVoiceMode`, `voiceModeLabel`): stored mode, else the global default, and `off` whenever the master switch is off. Dependency-free because the sidebar row's token engine imports it and must not pull in playback state.
 - `frontend/src/transcriptAudio.ts` - the reader's per-message markers as pure functions: the clip index keyed by `message_anchor`, the four marker states and which one plays, and the spend each kind states before it is pressed. Covered by `frontend/test/transcriptAudio.test.ts`.
 - `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `VoiceControl` (the one top-bar voice button: click opens the panel, ctrl+click or a hold toggles capture, colour means capture alone), and `VoiceDock` (the one voice surface: header with the panel's own microphone and the talk/chat/tts tabs, the dictation body, and the assistant and read-aloud slots).
-- `frontend/src/VoiceReadTab.tsx` - the `tts` tab, read aloud's only control surface: the focused session's participation and content mode, on-demand generation, the transport for the loaded clip, this device's autoplay, the gate/link split with the master switch's owner in Settings, and the global clip list with its arrival ordering and its daemon-state/device-state split.
+- `frontend/src/VoiceReadTab.tsx` - the `tts` tab, read aloud's only control surface: the focused session's participation and content mode, on-demand generation, the transport for the loaded reply (spanning its segments), this device's autoplay, the gate/link split with the master switch's owner in Settings, and the global clip list - one row per reply, with its arrival ordering and its daemon-state/device-state split.
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.

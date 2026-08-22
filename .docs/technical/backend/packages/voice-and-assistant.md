@@ -12,7 +12,12 @@ Completed-reply, manual, and application-text TTS streams with a coherent senten
 Open application-speech streams are `SpeechStream`, one worker per stream so clip indices stay monotonic, with a tighter opening clip because that clip *is* time-to-first-sound.
 Also one-shot summary and verbatim overrides, bounded Whisper STT with GPU-to-CPU fallback, temporary audio lifecycle, compatibility voice-submit idempotency, and one-use approval challenges bound to the current screen fingerprint.
 
+A clip is a *stream*, not a row.
+Rows are per segment because segments are how synthesis buys time-to-first-sound; `stream_id` plus `segment_index` is what puts them back together, and every read that a person sees goes through `clip_groups`/`group_snapshot` (one entry per reply, segments in spoken order, text and duration and bytes summed, one rolled-up status).
+Eviction and deletion are per stream for the same reason, since half a reply is not a thing to keep.
+
 Every clip is anchored to the assistant message it renders (`message_anchor`, `source_ts`), captured from the same `transcript_view` reduction the reader tab shows, and `VoiceStore` is what those two columns buy: arrival-ordered listing and a `(run, anchor, kind)` lookup that answers a repeat request from the store instead of a second summary call.
+That lookup returns a complete *stream* (`anchored_group`): answering with the newest ready row handed back a segmented reply's last segment, so replaying a message spoke only its ending.
 `generate(message_id=...)` speaks a *named* reply rather than the newest one, which is what the Transcript tab's per-message playback is; a message that is not an assistant reply in the readable window is a `VoiceError`, never a silent fall back.
 A clip's row is inserted `synthesizing` before the engine runs and updated by whichever path leaves synthesis, so a backlog is visible while it is being made and no path can leave a row claiming work that stopped.
 
@@ -23,6 +28,13 @@ The optional legacy SAPI recognizer deletes its bounded temporary WAV and text f
 Failures are typed `VoiceError` and never touch the PTY, history, or transcripts.
 
 **Not:** browser microphone permission, mounted-composer state, PTY ownership, or approval-state classification.
+
+## `voice_audio.py`
+
+WAV concatenation for a completed stream: the audio profile check that decides whether segments *can* be joined, and a chunked copy into a new file.
+Refusing (empty input, an unreadable segment, differing channels/sample width/sample rate/compression) is an ordinary outcome reported as `False`, not an error - the caller keeps the segments, which still play in order.
+
+**Not:** deciding *when* to join, touching rows, or writing over a source file (a browser mid-download holds one open, and on Windows it cannot be replaced at all).
 
 ## `kokoro_tts.py`
 

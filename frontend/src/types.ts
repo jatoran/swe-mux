@@ -227,13 +227,31 @@ export type VoiceContent = 'summary' | 'verbatim'
 
 export type VoiceMode = 'off' | 'on_demand' | 'auto'
 
+/** One synthesized segment of a clip. Several of these are still one clip. */
+export interface VoiceClipPart {
+  id:string; segment_index:number
+  status:'synthesizing'|'ready'|'failed'
+  duration_hint_s?:number|null; size_bytes:number; error?:string|null
+}
+
+/**
+ * One reply's audio.
+ *
+ * A clip is a *stream*, not a row: a reply is synthesized in segments so its first
+ * sentence can play while the rest is being made, and every field here describes
+ * the whole reply - the text is the segments' text joined, the duration is their
+ * sum, the status is their verdict. `parts` is what playback needs to get through
+ * a reply the daemon has not joined into one file yet.
+ */
 export interface VoiceClip {
   id:string; session_id:string; agent_run_id?:string|null; created_at:number
   trigger:'auto'|'manual'|'system'; content_mode:'summary'|'verbatim'; engine:string; voice:string
   text:string; format:string; size_bytes:number; duration_hint_s?:number|null
   /** The daemon's half of a clip's life. `held`, `played` and `dismissed` are NOT
    *  here: those are per-device facts (a clip played on the phone is unplayed on
-   *  the desktop), overlaid by `voice.ts` rather than stored on the row. */
+   *  the desktop), overlaid by `voice.ts` rather than stored on the row.
+   *  `synthesizing` covers a reply whose later segments are still coming, which is
+   *  what makes a live clip one row that grows rather than a row per sentence. */
   status:'synthesizing'|'ready'|'failed'; error?:string|null; model?:string|null; cost_usd?:number|null
   /** When the message this clip speaks *arrived*, epoch seconds — null for
    *  application speech and for clips made before the anchor existed. Ordering a
@@ -242,7 +260,13 @@ export interface VoiceClip {
   /** The `message_id` of the reply this clip renders, so the reader can find the
    *  audio for a message instead of generating it a second time. */
   message_anchor?:string|null
-  stream_id?:string; segment_count?:number
+  stream_id?:string|null
+  /** How many segments the producer said this reply has, null while it is still
+   *  being spoken. `stream_open` is the same fact stated for a reader. */
+  segment_count?:number|null; stream_open?:boolean
+  /** The segments this clip is stored in, in spoken order. Absent (or a single
+   *  entry) once the daemon has joined them into one file. */
+  parts?:VoiceClipPart[]
   /** Set by the daemon when an existing clip answered a per-message request. */
   reused?:boolean
 }
