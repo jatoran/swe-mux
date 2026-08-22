@@ -4143,6 +4143,58 @@ them; grant-gates has since landed, and nobody has checked whether they landed w
 - [ ] The tour and `ui.md` describe only chrome that exists.
 - [ ] Both handed-off findings are verified fixed, with a pointer to where.
 
+## Phase 17 - Subagent visibility: nested child rows and on-demand transcript panes (deferred)
+
+Recorded 2026-08-22 after evaluation; deferred, not scheduled.
+The goal is visibility into a live session's subagents: child rows nested under the session's
+sidebar row, and a read-only live transcript pane per subagent that closes without touching the
+subagent itself.
+
+The approach is settled by a measured constraint: there is no native way to attach a TUI to a
+specific subagent from outside its session (confirmed against Claude Code docs, changelog, and
+issue tracker 2026-08-22).
+`--resume` refuses sidechain ids; `claude attach` reaches only background jobs, which are
+separate sessions; agent-teams tmux panes are managed by the lead session and not externally
+attachable; workflow agents have only the in-session read-only drill-down.
+So a reader over the on-disk sidecar files is the only path, and the pane is a viewer, never a
+terminal.
+
+The system is **fully dormant until asked**.
+Nothing scans, captures identity, or parses while nobody is looking; the ambient signal remains
+the existing `⑂` standing-activity count badge.
+The trigger is a context action on the session row/tab ("View subagents"), which is also what
+makes the performance story trivial: cost is proportional to open viewers, not to fleet size.
+
+- [ ] Capability declaration first: a new nullable `HarnessDescriptor` field (working name
+  `subagent_visibility`) in the established None-is-a-declared-refusal idiom, published through
+  `public_harness_registry()` so the frontend gates the context action on it.
+  Claude declares it; codex/omp/opencode declare `None` with a deferred-with-evidence comment
+  (child rollouts via `parent_thread_id`, task events, `parent_id` session rows respectively);
+  pi declares `None` permanently (no task tool).
+  Coverage guards in the registry/adapter-matrix idiom force every present and future harness
+  to answer explicitly.
+- [ ] Two stateless endpoints, computed on demand from disk.
+  List: one directory read of `<root-native-id>/subagents/` plus its `agent-*.meta.json` files
+  (`agentType`, `description`, `toolUseId`, `spawnDepth` - verified present and live-growing
+  2026-08-22), with running/done inferred by matching `toolUseId` against the root transcript's
+  `tool_result` records.
+  Transcript: the existing claude-dialect parser with the `isSidechain` filter parameterized
+  rather than bypassed (the root-view drops stay), paged like the existing transcript route,
+  tolerating `type:"attachment"` records.
+- [ ] UI: child rows appear under the session's sidebar row once invoked; opening one creates a
+  pinned non-PTY pane leaf (`subagent:<session>:<agentId>`, the `queue:`/`changemap:` idiom in
+  `layout.ts` + `layouts.py` in lockstep), so closing is a pure layout edit by construction.
+- [ ] Open-pane refresh is debounced off the already-emitted `subagent_activity` events and
+  reads incrementally by byte offset (Windows freezes mtime on open files - tail by size).
+- [ ] Live session only: no durable index, no SQLite, no history integration; history keeps
+  dropping sidechain records exactly as today.
+- [ ] The load-bearing exclusions do not move: `reconcile.py`'s subagent-directory rejection
+  (root-session binding) and the subagent-hook exclusion from root turn-liveness each fixed a
+  real incident and stay intact beside the new read path.
+- [ ] Later kinds roll in per-kind behind the same capability answer: workflow-run agents
+  (separate per-agent files under the workflow transcript dir), background `--bg` jobs
+  (separate sessions, already attachable), then other harnesses.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
