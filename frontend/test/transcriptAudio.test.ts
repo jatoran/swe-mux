@@ -109,8 +109,15 @@ test('the reader plays an existing clip and never regenerates it', () => {
   assert.match(tab, /message_id: message\.message_id,/)
   assert.match(tab, /content_mode: kind,/)
   // Its own stream: a per-message request must not join, or cut, whatever a pane's
-  // automatic read-aloud happens to be speaking.
-  assert.match(tab, /stream_id: newVoiceStreamId\(\),/)
+  // automatic read-aloud happens to be speaking. Claimed before the request, or a
+  // reply long enough to be synthesized in segments speaks only its opening one -
+  // the segments after it arrive on a stream this tab never said it wanted.
+  assert.match(tab, /const streamId = newVoiceStreamId\(\)/)
+  assert.match(tab, /beginRequestedStream\(streamId, sessionId, 'agent'\)/)
+  assert.match(tab, /stream_id: streamId,/)
+  assert.match(tab, /cancelRequestedStream\(streamId\)/)
+  // And the whole reply plays, not the first file of it.
+  assert.match(tab, /playClipGroup\(clip, clip\.session_id\)/)
   // Replies only. A prompt is something the operator wrote.
   assert.match(tab, /audioRequested && message\.role === 'assistant'/)
   // A per-item surface carries no gate: off means the markers are simply not drawn,

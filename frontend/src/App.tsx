@@ -127,7 +127,7 @@ import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, playAllHeldClips, playClip, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playAllHeldClips, playClipGroup, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
@@ -2169,6 +2169,18 @@ export function App() {
           // reader's copy is stalest, and a reread is cheap and idempotent.
           if (event.type === 'turn_ended') window.dispatchEvent(new CustomEvent(TURN_ENDED_EVENT, { detail: { sessionId: event.session_id } }))
           if (event.type === 'transcript_message') window.dispatchEvent(new CustomEvent(TRANSCRIPT_CHANGED_EVENT, { detail: { sessionId: event.session_id } }))
+          // The daemon replaced a finished reply's segments with the single clip
+          // they were always one of. Nothing plays here; the lists refetch so the
+          // reply stops being addressed by ids that are on their way out.
+          if (!isReplay && event.type === 'voice_clip_joined') {
+            window.dispatchEvent(new CustomEvent('mux:voice-clip', { detail: {
+              sessionId: event.session_id,
+              clipId: String(event.payload?.clip_id || ''),
+              status: 'ready',
+              streamId: event.payload?.stream_id,
+              joined: true,
+            } }))
+          }
           if (event.type === 'voice_clip_ready' || event.type === 'voice_clip_failed') {
             const clipId = String(event.payload?.clip_id || '')
             window.dispatchEvent(new CustomEvent('mux:voice-clip', { detail: {
@@ -4582,10 +4594,19 @@ export function App() {
   />
   const speakLastReply = async (session: Session) => {
     unlockPlayback()
+    // Claimed before the request, so the segments of a reply too long for one clip
+    // are accepted as they are synthesized instead of being dropped on arrival.
+    const streamId = newVoiceStreamId()
+    beginRequestedStream(streamId, session.id, 'agent')
     try {
-      const clip = await api<VoiceClip>('POST', `/api/sessions/${session.id}/voice/generate`)
-      if (clip?.id) void playClip(clip.id, session.id).catch(() => {})
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+      const clip = await api<VoiceClip>(
+        'POST', `/api/sessions/${session.id}/voice/generate`, { stream_id: streamId })
+      if (clip?.id) void playClipGroup(clip, session.id).catch(() => {})
+      else cancelRequestedStream(streamId)
+    } catch (cause) {
+      cancelRequestedStream(streamId)
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   const commandSession = contextMenu?.session || active
@@ -5036,9 +5057,12 @@ export function App() {
       }
       if(!voiceStatus?.enabled)return{detail:'Read aloud is off. Enable it in Settings, Voice.',speech:'Read aloud is off. Enable it in Settings, Voice.'}
       unlockPlayback()
-      const body=query.mode==='current'?{}:{content_mode:query.mode as VoiceContent}
+      const streamId=newVoiceStreamId()
+      beginRequestedStream(streamId,session.id,'agent')
+      const body=query.mode==='current'?{stream_id:streamId}:{content_mode:query.mode as VoiceContent,stream_id:streamId}
       const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`,body)
-      await playClip(clip.id,session.id)
+        .catch(cause=>{cancelRequestedStream(streamId);throw cause})
+      await playClipGroup(clip,session.id)
       const mode=query.mode==='current'?(session.voice_content||voiceStatus.content):query.mode
       return{detail:`Reading ${sessionName(session)}'s last reply ${mode}.`,transcript:clip.text}
     }

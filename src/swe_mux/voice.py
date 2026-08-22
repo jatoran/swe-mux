@@ -51,6 +51,7 @@ from .sqlite_store import (
 )
 from .subprocess_flags import background_creation_flags
 from .transcript_view import SpokenExchange, final_exchange_record, message_exchange
+from .voice_audio import join_wav_files
 from .voice_models import ENGLISH_VOICES, KokoroModelStore
 
 
@@ -95,6 +96,13 @@ APPLICATION_FIRST_SEGMENT_CHARS = 140
 # whose tab went away mid-turn.
 SPEECH_STREAM_IDLE_SECONDS = 600.0
 SPEECH_STREAM_LIMIT = 32
+# How long a stream's segment clips stay servable after the joined clip has
+# replaced them in every listing. A browser that queued the segment ids before the
+# join is still going to ask for them, and answering 404 there would cut a reply
+# off mid-sentence, so the audio outlives its listing by long enough for any
+# queued playback to finish. Nothing refers to a segment id after that: a fresh
+# listing returns the joined clip.
+SUPERSEDED_CLIP_TTL_SECONDS = 600.0
 # Capture always resamples to this rate, and decoding runs from the raw PCM rather
 # than a file, so the utterance is never resampled twice and never touches the disk.
 STT_SAMPLE_RATE = 16_000
@@ -155,7 +163,7 @@ SUMMARY_PROMPT = (
     "the assistant in first person."
 )
 
-VOICE_SCHEMA_VERSION = 2
+VOICE_SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS voice_clips (
@@ -179,7 +187,11 @@ CREATE TABLE IF NOT EXISTS voice_clips (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd REAL,
     source_ts REAL,
-    message_anchor TEXT
+    message_anchor TEXT,
+    stream_id TEXT,
+    segment_index INTEGER NOT NULL DEFAULT 0,
+    segment_count INTEGER,
+    superseded_at REAL
 );
 """
 
@@ -192,7 +204,14 @@ CREATE INDEX IF NOT EXISTS idx_voice_clips_session ON voice_clips(session_id, cr
 CREATE INDEX IF NOT EXISTS idx_voice_clips_run ON voice_clips(agent_run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_clips_anchor
     ON voice_clips(agent_run_id, message_anchor, content_mode);
+CREATE INDEX IF NOT EXISTS idx_voice_clips_stream
+    ON voice_clips(stream_id, segment_index);
 """
+
+# What makes several rows one clip. A stream's segments share `stream_id`; a clip
+# that was never part of a stream is its own group under its own id, so one
+# expression covers both and no listing has to special-case the unstreamed case.
+GROUP_KEY = "COALESCE(stream_id, id)"
 
 # A clip's life on the daemon. `synthesizing` is written before the engine runs, so a
 # backlog the operator is waiting on is visible while it is being made rather than
@@ -337,6 +356,9 @@ class SpeechStream:
     source_ts: float | None = None
     message_anchor: str | None = None
     created_at: float = 0.0
+    # The stream's opening clip: the row that carries its total, and the row the
+    # joined clip is built from once the stream is complete.
+    head_clip_id: str | None = None
     pending: deque[str] = dataclass_field(default_factory=deque)
     next_index: int = 0
     total: int | None = None
@@ -572,20 +594,39 @@ class VoiceStore:
         }
 
     def _migrate(self) -> None:
-        """Add the message anchor to a database created before it existed.
+        """Bring a database created by an older schema up to the current columns.
 
         `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already
-        exists, so a column added to the schema above reaches a fresh install and
-        no other. Both are nullable and backfill to NULL, which is the truth: a
-        clip made before the anchor was captured has no anchor, and inventing one
-        from `created_at` would claim a source-message time nothing recorded -
-        exactly the ordering error the column exists to fix.
+        exists, so a column added to the schema definition reaches a fresh install
+        and no other. Every added column is nullable (or has a default) and
+        backfills accordingly, which is the truth: a clip made before the anchor
+        was captured has no anchor, and inventing one from `created_at` would claim
+        a source-message time nothing recorded - exactly the ordering error the
+        column exists to fix.
+
+        Schema 3 is the exception, and deliberately: gaining the stream columns
+        does not make a pre-3 row groupable. Its segments were written as
+        independent clips with no stream identity and no index, so they cannot be
+        reassembled into the reply they came from, and mixing them into a grouped
+        list shows one reply as three rows in reverse spoken order - the exact
+        defect the grouping exists to remove. They are a regenerable cache under a
+        byte cap, so the migration discards them (rows and audio both) rather than
+        carrying a permanently-wrong shape forever.
         """
         columns = self._columns("voice_clips")
         if columns and "source_ts" not in columns:
             self._db.execute("ALTER TABLE voice_clips ADD COLUMN source_ts REAL")
         if columns and "message_anchor" not in columns:
             self._db.execute("ALTER TABLE voice_clips ADD COLUMN message_anchor TEXT")
+        ungrouped = bool(columns) and "stream_id" not in columns
+        if ungrouped:
+            self._db.execute("ALTER TABLE voice_clips ADD COLUMN stream_id TEXT")
+            self._db.execute(
+                "ALTER TABLE voice_clips ADD COLUMN segment_index INTEGER NOT NULL DEFAULT 0"
+            )
+            self._db.execute("ALTER TABLE voice_clips ADD COLUMN segment_count INTEGER")
+            self._db.execute("ALTER TABLE voice_clips ADD COLUMN superseded_at REAL")
+            self._discard_ungrouped_clips()
         # No synthesis survives the process that started it: the engine runs in
         # this daemon, so a row still claiming `synthesizing` at connect belongs to
         # a run that died. Resolved here rather than left to age out, because a
@@ -595,6 +636,41 @@ class VoiceStore:
             "UPDATE voice_clips SET status='failed', error=COALESCE(error,?) "
             "WHERE status='synthesizing'",
             ("synthesis was interrupted by a daemon restart",),
+        )
+        # Same reasoning, for length rather than status: a stream is held open by a
+        # producer in this process, so one still claiming an unknown total at
+        # connect will never be appended to again. Its clip is as long as the
+        # segments it has, and left NULL it would read as a reply still being
+        # spoken - a spinner with nothing behind it - for the life of the install.
+        self._db.execute(
+            "UPDATE voice_clips SET segment_count=(SELECT COUNT(*) FROM voice_clips AS parts "
+            "WHERE parts.stream_id=voice_clips.stream_id) "
+            "WHERE stream_id IS NOT NULL AND segment_index=0 AND segment_count IS NULL"
+        )
+
+    def _discard_ungrouped_clips(self) -> None:
+        """Drop every clip written before streams were recorded, audio included.
+
+        Runs on the connect thread, once, as part of reaching schema 3. The files
+        are removed here rather than left to the orphan sweep so the cache is
+        actually reclaimed even if the sweep never runs (a daemon that starts and
+        stops without synthesizing anything never calls it).
+        """
+        rows = self._db.execute("SELECT id, file_path, size_bytes FROM voice_clips").fetchall()
+        if not rows:
+            return
+        removed_bytes = 0
+        for row in rows:
+            removed_bytes += int(row["size_bytes"] or 0)
+            path = str(row["file_path"] or "")
+            if path:
+                with suppress(OSError):
+                    Path(path).unlink(missing_ok=True)
+        self._db.execute("DELETE FROM voice_clips")
+        log.info(
+            "voice clips discarded for schema 3 (ungroupable, pre-stream) count=%d bytes=%d",
+            len(rows),
+            removed_bytes,
         )
 
     async def _run(self, fn: Callable[[], T]) -> T:
@@ -618,11 +694,13 @@ class VoiceStore:
                 "INSERT INTO voice_clips"
                 "(id,session_id,agent_run_id,created_at,trigger,content_mode,engine,voice,"
                 "text,file_path,format,size_bytes,duration_hint_s,status,error,model,"
-                "input_tokens,output_tokens,cost_usd,source_ts,message_anchor) VALUES("
+                "input_tokens,output_tokens,cost_usd,source_ts,message_anchor,"
+                "stream_id,segment_index,segment_count,superseded_at) VALUES("
                 ":id,:session_id,:agent_run_id,:created_at,:trigger,:content_mode,"
                 ":engine,:voice,:text,:file_path,:format,:size_bytes,:duration_hint_s,"
                 ":status,:error,:model,:input_tokens,:output_tokens,:cost_usd,"
-                ":source_ts,:message_anchor)",
+                ":source_ts,:message_anchor,:stream_id,:segment_index,:segment_count,"
+                ":superseded_at)",
                 row,
             )
             self._db.commit()
@@ -645,7 +723,8 @@ class VoiceStore:
                 "size_bytes=:size_bytes,duration_hint_s=:duration_hint_s,status=:status,"
                 "error=:error,model=:model,input_tokens=:input_tokens,"
                 "output_tokens=:output_tokens,cost_usd=:cost_usd,source_ts=:source_ts,"
-                "message_anchor=:message_anchor WHERE id=:id",
+                "message_anchor=:message_anchor,segment_count=:segment_count "
+                "WHERE id=:id",
                 row,
             )
             self._db.commit()
@@ -659,27 +738,13 @@ class VoiceStore:
 
         return await self._run(op)
 
-    async def clips(
-        self,
-        *,
-        session_id: str | None = None,
-        agent_run_id: str | None = None,
-        message_anchor: str | None = None,
-        content_mode: str | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Clips newest first, by the arrival of the message they speak.
-
-        Ordering is by source-message time, not synthesis time, and that is the
-        whole point of `source_ts`: a held backlog is synthesized in whatever
-        order engine slots and summary calls happen to free up, so a list ordered
-        by synthesis puts an hour-old reply above the one that landed while the
-        operator was reading. `created_at` is the fallback for a clip with no
-        source message (application speech, and every pre-migration row) and the
-        tie-break within one reply, where a stream's segments share one source
-        time and must stay in the order they will be spoken.
-        """
-        sql = "SELECT * FROM voice_clips"
+    @staticmethod
+    def _filters(
+        session_id: str | None,
+        agent_run_id: str | None,
+        message_anchor: str | None,
+        content_mode: str | None,
+    ) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
         if session_id:
@@ -694,8 +759,37 @@ class VoiceStore:
         if content_mode:
             clauses.append("content_mode=?")
             args.append(content_mode)
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
+        return clauses, args
+
+    async def clips(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_run_id: str | None = None,
+        message_anchor: str | None = None,
+        content_mode: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Individual clip rows, newest first, by the arrival of what they speak.
+
+        This is the row-level view - one row per synthesized segment. Callers that
+        present clips to a person want `clip_groups` instead, because a reply cut
+        into segments for latency is one clip to everybody outside this module.
+
+        Ordering is by source-message time, not synthesis time, and that is the
+        whole point of `source_ts`: a held backlog is synthesized in whatever
+        order engine slots and summary calls happen to free up, so a list ordered
+        by synthesis puts an hour-old reply above the one that landed while the
+        operator was reading. `created_at` is the fallback for a clip with no
+        source message (application speech).
+
+        Superseded segments are excluded everywhere: their audio is still served
+        so queued playback survives the join, but they are no longer part of any
+        answer to "what clips exist".
+        """
+        clauses, args = self._filters(session_id, agent_run_id, message_anchor, content_mode)
+        clauses.append("superseded_at IS NULL")
+        sql = "SELECT * FROM voice_clips WHERE " + " AND ".join(clauses)
         sql += " ORDER BY COALESCE(source_ts,created_at) DESC, created_at DESC LIMIT ?"
         args.append(max(1, min(limit, 200)))
 
@@ -704,44 +798,208 @@ class VoiceStore:
 
         return await self._run(op)
 
-    async def anchored_clip(
+    async def clip_groups(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_run_id: str | None = None,
+        message_anchor: str | None = None,
+        content_mode: str | None = None,
+        limit: int = 20,
+    ) -> list[list[dict[str, Any]]]:
+        """Streams newest first, each as its segments in the order they are spoken.
+
+        Two queries rather than one, because grouping a row window is wrong at its
+        edge: a `LIMIT 60` over rows can cut a stream in half and present its tail
+        as a clip whose opening sentence is missing. The first query picks the
+        newest `limit` *streams* under the caller's filters; the second fetches
+        every segment of exactly those streams. Streams are ordered by the arrival
+        of the message they speak (identical for every segment of one stream) and
+        segments within a stream by index, which is the order they are spoken -
+        the opposite of the row listing's newest-first.
+        """
+        clauses, args = self._filters(session_id, agent_run_id, message_anchor, content_mode)
+        clauses.append("superseded_at IS NULL")
+        where = " WHERE " + " AND ".join(clauses)
+        keys_sql = (
+            f"SELECT {GROUP_KEY} AS group_key, "
+            "MIN(COALESCE(source_ts,created_at)) AS arrived, MIN(created_at) AS started "
+            f"FROM voice_clips{where} GROUP BY group_key "
+            "ORDER BY arrived DESC, started DESC LIMIT ?"
+        )
+        key_args = [*args, max(1, min(limit, 200))]
+
+        def op() -> list[list[dict[str, Any]]]:
+            keys = [
+                str(row["group_key"])
+                for row in self._db.execute(keys_sql, key_args).fetchall()
+            ]
+            if not keys:
+                return []
+            placeholders = ",".join("?" for _ in keys)
+            rows = self._db.execute(
+                f"SELECT * FROM voice_clips WHERE superseded_at IS NULL "
+                f"AND {GROUP_KEY} IN ({placeholders}) "
+                "ORDER BY segment_index ASC, created_at ASC",
+                keys,
+            ).fetchall()
+            buckets: dict[str, list[dict[str, Any]]] = {key: [] for key in keys}
+            for row in rows:
+                item = dict(row)
+                buckets[str(item["stream_id"] or item["id"])].append(item)
+            return [buckets[key] for key in keys if buckets[key]]
+
+        return await self._run(op)
+
+    async def stream_parts(self, stream_id: str) -> list[dict[str, Any]]:
+        """Every live segment of one stream, in spoken order."""
+
+        def op() -> list[dict[str, Any]]:
+            return [
+                dict(row)
+                for row in self._db.execute(
+                    "SELECT * FROM voice_clips WHERE stream_id=? AND superseded_at IS NULL "
+                    "ORDER BY segment_index ASC, created_at ASC",
+                    (stream_id,),
+                ).fetchall()
+            ]
+
+        return await self._run(op)
+
+    async def set_segment_count(self, clip_id: str, count: int) -> None:
+        """Record on a stream's opening clip how many segments it turned out to have.
+
+        A stream's length is unknown while it runs - the assistant speaks a turn
+        sentence by sentence - so the opening row carries NULL until the producer
+        closes it. NULL is what makes a grouped clip read as still being made, so
+        writing the real count is what ends that state; a stream that dies without
+        it would show a spinner forever.
+        """
+
+        def op() -> None:
+            self._db.execute(
+                "UPDATE voice_clips SET segment_count=? WHERE id=?", (count, clip_id)
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def supersede_clips(self, clip_ids: Sequence[str], *, at: float) -> None:
+        """Retire segments that a joined clip now stands for, keeping their audio."""
+        ids = list(clip_ids)
+        if not ids:
+            return
+
+        def op() -> None:
+            placeholders = ",".join("?" for _ in ids)
+            self._db.execute(
+                f"UPDATE voice_clips SET superseded_at=? WHERE id IN ({placeholders})",
+                [at, *ids],
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def sweep_superseded(self, ttl_seconds: float) -> list[str]:
+        """Delete segments superseded longer ago than the TTL. Returns their files."""
+
+        def op() -> list[str]:
+            cutoff = time.time() - ttl_seconds
+            rows = self._db.execute(
+                "SELECT id, file_path FROM voice_clips "
+                "WHERE superseded_at IS NOT NULL AND superseded_at<?",
+                (cutoff,),
+            ).fetchall()
+            if not rows:
+                return []
+            self._db.execute(
+                "DELETE FROM voice_clips WHERE superseded_at IS NOT NULL AND superseded_at<?",
+                (cutoff,),
+            )
+            self._db.commit()
+            return [str(row["file_path"]) for row in rows if row["file_path"]]
+
+        return await self._run(op)
+
+    async def anchored_group(
         self, *, agent_run_id: str, message_anchor: str, content_mode: str
-    ) -> dict[str, Any] | None:
-        """The newest ready clip already speaking this message in this mode.
+    ) -> list[dict[str, Any]] | None:
+        """The newest complete stream already speaking this message in this mode.
 
         The dedup lookup behind per-message playback: automatic read-aloud and the
         reader's own play button produce the same audio for the same reply, so the
         second request is answered from the store rather than by spending a summary
         call and an engine slot on a duplicate.
+
+        A *stream*, not a clip, and complete rather than merely ready: answering
+        with the newest ready row returned the last segment of a chunked reply, so
+        replaying a reply spoke only its final sentences (fixed with schema 3). A
+        stream still missing segments is not offered for reuse either - it would
+        hand back a partial reply that never gains its tail, because the reuse path
+        does not synthesize.
         """
 
-        def op() -> dict[str, Any] | None:
-            row = self._db.execute(
-                "SELECT * FROM voice_clips WHERE agent_run_id=? AND message_anchor=? "
-                "AND content_mode=? AND status='ready' ORDER BY created_at DESC LIMIT 1",
-                (agent_run_id, message_anchor, content_mode),
-            ).fetchone()
-            return dict(row) if row else None
+        def op() -> list[dict[str, Any]] | None:
+            rows = [
+                dict(row)
+                for row in self._db.execute(
+                    "SELECT * FROM voice_clips WHERE agent_run_id=? AND message_anchor=? "
+                    "AND content_mode=? AND superseded_at IS NULL "
+                    "ORDER BY created_at DESC",
+                    (agent_run_id, message_anchor, content_mode),
+                ).fetchall()
+            ]
+            if not rows:
+                return None
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:  # newest stream first, since rows are newest first
+                buckets.setdefault(str(row["stream_id"] or row["id"]), []).append(row)
+            for parts in buckets.values():
+                parts.sort(key=lambda item: (int(item["segment_index"] or 0), item["created_at"]))
+                if group_state(parts) == "ready":
+                    return parts
+            return None
 
         return await self._run(op)
 
-    async def delete_clip(self, clip_id: str) -> str | None:
-        def op() -> str | None:
+    async def delete_clip(self, clip_id: str) -> list[str]:
+        """Delete a clip and everything that belongs to its stream.
+
+        Whole streams, because half a reply is not a thing anybody asked to keep:
+        deleting one segment of three leaves a clip that plays its middle third and
+        a group whose opening sentence is gone.
+        """
+
+        def op() -> list[str]:
             row = self._db.execute(
-                "SELECT file_path FROM voice_clips WHERE id=?", (clip_id,)
+                "SELECT stream_id FROM voice_clips WHERE id=?", (clip_id,)
             ).fetchone()
             if row is None:
-                return None
-            self._db.execute("DELETE FROM voice_clips WHERE id=?", (clip_id,))
+                return []
+            key = str(row["stream_id"] or clip_id)
+            rows = self._db.execute(
+                f"SELECT file_path FROM voice_clips WHERE {GROUP_KEY}=?", (key,)
+            ).fetchall()
+            self._db.execute(f"DELETE FROM voice_clips WHERE {GROUP_KEY}=?", (key,))
             self._db.commit()
-            return str(row["file_path"])
+            return [str(item["file_path"]) for item in rows if item["file_path"]]
 
         return await self._run(op)
 
     async def cache_stats(self) -> dict[str, int]:
+        """Clips as the operator counts them, bytes as the disk counts them.
+
+        The count is of streams, matching what the clip list shows - a reply cut
+        into four segments for latency is one clip there and must be one clip
+        here. The byte total is every ready row including superseded segments,
+        because those are still on the disk until the sweep takes them and a cache
+        readout that omits them would understate the cap it is measured against.
+        """
+
         def op() -> dict[str, int]:
             row = self._db.execute(
-                "SELECT COUNT(*) count, COALESCE(SUM(size_bytes),0) bytes FROM voice_clips "
+                f"SELECT COUNT(DISTINCT CASE WHEN superseded_at IS NULL THEN {GROUP_KEY} END) "
+                "count, COALESCE(SUM(size_bytes),0) bytes FROM voice_clips "
                 "WHERE status='ready'"
             ).fetchone()
             return {"count": int(row["count"]), "bytes": int(row["bytes"])}
@@ -757,8 +1015,14 @@ class VoiceStore:
         return await self._run(op)
 
     async def prune(self, max_bytes: int) -> list[str]:
-        """Drop stale failures and the oldest ready clips beyond the byte cap.
-        Returns file paths whose backing audio should be removed."""
+        """Drop stale failures and the oldest streams beyond the byte cap.
+
+        Eviction is by stream, oldest first, and takes every segment of the stream
+        it chooses. Evicting individual rows to the byte the cap allows used to
+        leave a reply holding its last two segments and not its first, which reads
+        in the list as a clip that opens mid-sentence and cannot be repaired.
+        Returns file paths whose backing audio should be removed.
+        """
 
         def op() -> list[str]:
             day_ago = time.time() - 24 * 3600
@@ -772,15 +1036,21 @@ class VoiceStore:
                 ).fetchone()[0]
             )
             if total > max_bytes:
-                for row in self._db.execute(
-                    "SELECT id, file_path, size_bytes FROM voice_clips "
-                    "WHERE status='ready' ORDER BY created_at ASC"
-                ).fetchall():
+                groups = self._db.execute(
+                    f"SELECT {GROUP_KEY} AS group_key, MIN(created_at) AS started, "
+                    "COALESCE(SUM(size_bytes),0) AS bytes FROM voice_clips "
+                    "WHERE status='ready' GROUP BY group_key ORDER BY started ASC"
+                ).fetchall()
+                for group in groups:
                     if total <= max_bytes:
                         break
-                    self._db.execute("DELETE FROM voice_clips WHERE id=?", (row["id"],))
-                    removed.append(str(row["file_path"]))
-                    total -= int(row["size_bytes"])
+                    key = str(group["group_key"])
+                    rows = self._db.execute(
+                        f"SELECT file_path FROM voice_clips WHERE {GROUP_KEY}=?", (key,)
+                    ).fetchall()
+                    self._db.execute(f"DELETE FROM voice_clips WHERE {GROUP_KEY}=?", (key,))
+                    removed.extend(str(row["file_path"]) for row in rows if row["file_path"])
+                    total -= int(group["bytes"])
             self._db.commit()
             return removed
 
@@ -803,6 +1073,96 @@ def clip_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     public = dict(row)
     public.pop("file_path", None)
     return public
+
+
+def ordered_parts(parts: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One stream's segments in the order they are spoken."""
+    return sorted(
+        parts, key=lambda row: (int(row.get("segment_index") or 0), float(row["created_at"]))
+    )
+
+
+def group_state(parts: Sequence[dict[str, Any]]) -> str:
+    """The one status a stream reports, from its segments and its expected length.
+
+    Three inputs, in priority order, because they answer different questions and
+    the wrong one on top misreports the clip:
+
+    - A failed segment makes the whole stream `failed`. The stream stops at a gap
+      rather than speaking the reply out of order, so what exists is a prefix, and
+      calling that `ready` would claim the reply is complete when its ending was
+      never made.
+    - A segment still synthesizing keeps it `synthesizing`.
+    - A stream whose length is unknown (`segment_count` NULL on the opening
+      segment, the state an open application-speech stream lives in) or which has
+      not yet reached that length is `synthesizing` too, even when every segment it
+      currently holds is ready. That is what makes a live clip read as one clip
+      being appended to, rather than flickering ready between sentences.
+    """
+    ordered = ordered_parts(parts)
+    if not ordered:
+        return "failed"
+    if any(row["status"] == "failed" for row in ordered):
+        return "failed"
+    if any(row["status"] == "synthesizing" for row in ordered):
+        return "synthesizing"
+    expected = ordered[0].get("segment_count")
+    if expected is None or len(ordered) < int(expected):
+        return "synthesizing"
+    return "ready"
+
+
+def group_snapshot(parts: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """One stream as the single clip every surface outside synthesis treats it as.
+
+    Built on the opening segment, because that is the row carrying the stream's
+    identity (its arrival time, its message anchor, the summary call's spend) and
+    the id every other surface already addresses the reply by. What the other
+    segments contribute is added to it: their text in spoken order, their duration,
+    their bytes.
+
+    `parts` is kept in the payload rather than hidden. Playback is still segment by
+    segment until the stream is joined, so the browser needs the ids and their
+    durations to play a reply straight through and to place a scrub position inside
+    it; and a stream still being appended to has no joined file to offer at all.
+    """
+    ordered = ordered_parts(parts)
+    head = clip_snapshot(ordered[0])
+    durations = [row["duration_hint_s"] for row in ordered if row["duration_hint_s"] is not None]
+    costs = [row["cost_usd"] for row in ordered if row["cost_usd"] is not None]
+    errors = [row["error"] for row in ordered if row["error"]]
+    expected = head.get("segment_count")
+    head.update(
+        {
+            "text": " ".join(str(row["text"]) for row in ordered if row["text"]),
+            "duration_hint_s": round(sum(float(value) for value in durations), 2)
+            if durations
+            else None,
+            "size_bytes": sum(int(row["size_bytes"] or 0) for row in ordered),
+            "input_tokens": sum(int(row["input_tokens"] or 0) for row in ordered),
+            "output_tokens": sum(int(row["output_tokens"] or 0) for row in ordered),
+            "cost_usd": round(sum(float(value) for value in costs), 6) if costs else None,
+            "status": group_state(ordered),
+            "error": errors[0] if errors else None,
+            # Not the number of segments that exist: the number the producer said
+            # there would be, which is NULL while the stream is open. The browser
+            # reads the difference as "more is coming".
+            "segment_count": expected,
+            "stream_open": expected is None,
+            "parts": [
+                {
+                    "id": str(row["id"]),
+                    "segment_index": int(row["segment_index"] or 0),
+                    "status": str(row["status"]),
+                    "duration_hint_s": row["duration_hint_s"],
+                    "size_bytes": int(row["size_bytes"] or 0),
+                    "error": row["error"],
+                }
+                for row in ordered
+            ],
+        }
+    )
+    return head
 
 
 class VoiceService:
@@ -1170,17 +1530,17 @@ class VoiceService:
             # clip anchored to its message the second request is a lookup rather than
             # another summary call and another engine slot.
             if reuse and message_id and record.agent_run_id:
-                existing = await self.store.anchored_clip(
+                existing = await self.store.anchored_group(
                     agent_run_id=record.agent_run_id,
                     message_anchor=message_id,
                     content_mode=selected_content,
                 )
                 if existing is not None:
-                    reused = clip_snapshot(existing)
+                    reused = group_snapshot(existing)
                     reused["reused"] = True
                     return reused
             row = self._new_clip_row(
-                session_id, trigger, record.agent_run_id, selected_content
+                session_id, trigger, record.agent_run_id, selected_content, stream_id=stream_id
             )
             await self.store.add_clip(row)
             try:
@@ -1217,19 +1577,26 @@ class VoiceService:
             segments = streaming_segments(spoken)
             if not segments:
                 raise VoiceError("nothing speakable remained after preprocessing")
+            # Known up front here, unlike application speech: the whole reply is in
+            # hand before the first segment is synthesized, so the opening row can
+            # state the total and the browser knows how much is still coming.
+            row["segment_count"] = len(segments)
             await self._synthesize_stream_segment(
                 row, segments[0], session_id=session_id, agent_run_id=record.agent_run_id,
                 trigger=trigger, stream_id=stream_id, index=0, count=len(segments),
             )
-            first = clip_snapshot(row)
-            first["stream_id"] = stream_id
-            first["segment_count"] = len(segments)
+            # The group as it stands: one ready segment of however many. `status`
+            # is `synthesizing` while the tail is outstanding, which is the truth
+            # about the clip - the caller plays the parts that are ready and the
+            # rest arrive on this stream.
+            first = group_snapshot([row])
             if len(segments) > 1:
                 self._start_segment_tail(
                     session_id=session_id, agent_run_id=record.agent_run_id,
                     trigger=trigger, content_mode=selected_content, model=row["model"],
                     stream_id=stream_id, segments=segments[1:], total=len(segments),
                     source_ts=row["source_ts"], message_anchor=row["message_anchor"],
+                    head_clip_id=row["id"],
                 )
             else:
                 await self._prune()
@@ -1284,8 +1651,16 @@ class VoiceService:
                 raise VoiceError("continuing a speech stream needs its stream_id")
             return self._append_stream(self._stream_id(stream_id), segments, final=final)
         stream_id = self._stream_id(stream_id)
-        stream = self._open_stream(stream_id)
-        row = self._new_clip_row("system", "system", None, "verbatim")
+        stream = await self._open_stream(stream_id)
+        row = self._new_clip_row(
+            "system", "system", None, "verbatim",
+            stream_id=stream_id, segment_index=0,
+            # NULL while the stream is open: an assistant turn does not know how
+            # many sentences it will speak until the model stops, and claiming a
+            # total here would settle the clip before its ending exists.
+            segment_count=len(segments) if final else None,
+        )
+        stream.head_clip_id = row["id"]
         await self.store.add_clip(row)
         # Reserved before the await so an append landing mid-synthesis queues
         # behind this text rather than in front of it. `opening` holds the
@@ -1305,11 +1680,7 @@ class VoiceService:
             self._forget_stream(stream)
             raise
         stream.opening = False
-        first = clip_snapshot(row)
-        first["stream_id"] = stream_id
-        first["segment_count"] = len(segments) if final else 0
-        first["segment_index"] = 0
-        first["stream_open"] = not final
+        first = group_snapshot([row])
         log.info(
             "voice system first segment ready clip=%s stream=%s characters=%d "
             "segments=%d open=%s",
@@ -1347,8 +1718,8 @@ class VoiceService:
 
     # ------------------------------------------------------- speech streams
 
-    def _open_stream(self, stream_id: str) -> SpeechStream:
-        self._expire_streams()
+    async def _open_stream(self, stream_id: str) -> SpeechStream:
+        await self._expire_streams()
         stream = SpeechStream(
             stream_id=stream_id,
             session_id="system",
@@ -1419,7 +1790,8 @@ class VoiceService:
             total = stream.total
             last = total is not None and index >= total - 1
             row = self._new_clip_row(
-                stream.session_id, stream.trigger, stream.agent_run_id, stream.content_mode
+                stream.session_id, stream.trigger, stream.agent_run_id, stream.content_mode,
+                stream_id=stream.stream_id, segment_index=index,
             )
             row["model"] = stream.model
             row["source_ts"] = stream.source_ts
@@ -1445,6 +1817,14 @@ class VoiceService:
         if self._streams.get(stream.stream_id) is not stream:
             return  # already finished
         self._forget_stream(stream)
+        if stream.head_clip_id:
+            # The count the opening row has been holding NULL for. Written even
+            # when the stream failed, and written as what was emitted rather than
+            # what was hoped for, so the clip settles instead of reading as still
+            # being made.
+            await self.store.set_segment_count(stream.head_clip_id, stream.next_index)
+            if not stream.failed:
+                await self._join_stream(stream.stream_id, stream.head_clip_id)
         await self.events.emit(
             "voice_stream_closed",
             session_id=stream.session_id,
@@ -1459,12 +1839,98 @@ class VoiceService:
         )
         await self._prune()
 
+    async def _join_stream(self, stream_id: str, head_clip_id: str) -> None:
+        """Collapse a completed stream's segments into the single clip they are.
+
+        Runs once, when nothing more can be appended. Everything about it is
+        arranged so that a browser mid-reply is unaffected:
+
+        - The joined audio is written under a **new clip id**, so no id a client
+          already holds changes what it plays. A queued segment keeps playing that
+          segment; a listing taken afterwards gets one clip.
+        - The segments are marked superseded rather than deleted. They vanish from
+          every listing immediately and their audio stays servable until the sweep,
+          which is what keeps a reply that was mid-playback from being cut off.
+        - Nothing is superseded unless the joined clip is already stored, so there
+          is no instant in which the reply has no live row.
+
+        Declining to join is normal and silent: a single-segment stream has nothing
+        to join, an incomplete or failed one must keep its segments (the failure is
+        part of what the clip says), and segments the joiner cannot read or whose
+        audio profiles disagree stay exactly as they are and still play in order.
+        """
+        parts = ordered_parts(await self.store.stream_parts(stream_id))
+        if len(parts) < 2:
+            return
+        if any(str(row["status"]) != "ready" for row in parts):
+            return
+        if any(str(row["format"]).lower() != "wav" for row in parts):
+            return
+        sources = [Path(str(row["file_path"])) for row in parts]
+        if not all(path.is_file() for path in sources):
+            log.info("voice join skipped stream=%s: a segment file is gone", stream_id)
+            return
+        head = next((row for row in parts if str(row["id"]) == head_clip_id), parts[0])
+        joined = self._new_clip_row(
+            str(head["session_id"]), str(head["trigger"]),
+            head["agent_run_id"], str(head["content_mode"]),
+            stream_id=stream_id, segment_index=0, segment_count=1,
+        )
+        # The joined clip *is* the reply, so it inherits everything that identifies
+        # it - including `created_at`, which is what keeps the list from re-sorting
+        # a reply to the top the moment it finishes being spoken.
+        joined["created_at"] = head["created_at"]
+        joined["engine"] = head["engine"]
+        joined["voice"] = head["voice"]
+        joined["model"] = head["model"]
+        joined["source_ts"] = head["source_ts"]
+        joined["message_anchor"] = head["message_anchor"]
+        joined["input_tokens"] = sum(int(row["input_tokens"] or 0) for row in parts)
+        joined["output_tokens"] = sum(int(row["output_tokens"] or 0) for row in parts)
+        costs = [row["cost_usd"] for row in parts if row["cost_usd"] is not None]
+        joined["cost_usd"] = round(sum(float(value) for value in costs), 6) if costs else None
+        joined["text"] = " ".join(str(row["text"]) for row in parts if row["text"])
+        destination = self.clip_directory / f"{joined['id']}.wav"
+        if not await asyncio.to_thread(join_wav_files, sources, destination):
+            return
+        joined["file_path"] = str(destination)
+        joined["status"] = "ready"
+        try:
+            joined["size_bytes"] = destination.stat().st_size
+        except OSError:
+            with suppress(OSError):
+                destination.unlink(missing_ok=True)
+            return
+        summed = sum(float(row["duration_hint_s"] or 0.0) for row in parts)
+        joined["duration_hint_s"] = wav_duration_seconds(destination) or round(summed, 2)
+        await self.store.add_clip(joined)
+        await self.store.supersede_clips([str(row["id"]) for row in parts], at=time.time())
+        await self.events.emit(
+            "voice_clip_joined",
+            session_id=str(head["session_id"]),
+            source="daemon",
+            clip_id=joined["id"],
+            stream_id=stream_id,
+            segment_count=len(parts),
+        )
+        log.info(
+            "voice stream joined stream=%s clip=%s segments=%d bytes=%d duration=%.1f",
+            stream_id, joined["id"], len(parts), joined["size_bytes"],
+            float(joined["duration_hint_s"] or 0.0),
+        )
+
     def _forget_stream(self, stream: SpeechStream) -> None:
         if self._streams.get(stream.stream_id) is stream:
             self._streams.pop(stream.stream_id, None)
 
-    def _expire_streams(self) -> None:
-        """Drop streams whose producer went away without closing them."""
+    async def _expire_streams(self) -> None:
+        """Drop streams whose producer went away without closing them.
+
+        An expired stream still has a clip, and that clip has to stop reading as
+        one still being spoken: its opening row is holding NULL for a total that
+        nobody is going to state now, so the count it actually reached is written
+        as it is dropped.
+        """
         cutoff = time.time() - SPEECH_STREAM_IDLE_SECONDS
         stale = [
             stream_id
@@ -1473,8 +1939,11 @@ class VoiceService:
             and not stream.opening
             and (stream.task is None or stream.task.done())
         ]
+        abandoned: list[SpeechStream] = []
         for stream_id in stale:
-            self._streams.pop(stream_id, None)
+            stream = self._streams.pop(stream_id, None)
+            if stream is not None:
+                abandoned.append(stream)
         if len(self._streams) > SPEECH_STREAM_LIMIT:
             # Only idle streams are evictable: dropping one mid-synthesis would
             # strand its worker emitting clips nothing will ever accept.
@@ -1489,6 +1958,10 @@ class VoiceService:
             for stream in idle[: len(self._streams) - SPEECH_STREAM_LIMIT]:
                 self._streams.pop(stream.stream_id, None)
                 stale.append(stream.stream_id)
+                abandoned.append(stream)
+        for stream in abandoned:
+            if stream.head_clip_id and stream.total is None:
+                await self.store.set_segment_count(stream.head_clip_id, stream.next_index)
         if stale:
             log.info("voice streams expired count=%d", len(stale))
 
@@ -1695,13 +2168,14 @@ class VoiceService:
         total: int,
         source_ts: float | None = None,
         message_anchor: str | None = None,
+        head_clip_id: str,
     ) -> None:
         task = asyncio.create_task(
             self._generate_segment_tail(
                 session_id=session_id, agent_run_id=agent_run_id, trigger=trigger,
                 content_mode=content_mode, model=model, stream_id=stream_id,
                 segments=segments, total=total, source_ts=source_ts,
-                message_anchor=message_anchor,
+                message_anchor=message_anchor, head_clip_id=head_clip_id,
             ),
             name=f"voice-segments-{stream_id}",
         )
@@ -1729,9 +2203,13 @@ class VoiceService:
         total: int,
         source_ts: float | None = None,
         message_anchor: str | None = None,
+        head_clip_id: str,
     ) -> None:
         for offset, segment in enumerate(segments, start=1):
-            row = self._new_clip_row(session_id, trigger, agent_run_id, content_mode)
+            row = self._new_clip_row(
+                session_id, trigger, agent_run_id, content_mode,
+                stream_id=stream_id, segment_index=offset,
+            )
             row["model"] = model
             # Every segment of one reply carries that reply's anchor: they are one
             # spoken message cut into clips, so a list ordered by source time keeps
@@ -1745,7 +2223,17 @@ class VoiceService:
                     trigger=trigger, stream_id=stream_id, index=offset, count=total,
                 )
             except VoiceError:
+                # The reply now ends where synthesis stopped. Restating the total as
+                # the number of segments that exist - the failed one included, since
+                # it is a row and carries the error - is what lets the clip settle on
+                # `failed` instead of waiting forever for segments no one is making.
+                await self.store.set_segment_count(head_clip_id, offset + 1)
+                log.warning(
+                    "voice stream truncated session=%s run=%s stream=%s emitted=%d of %d",
+                    session_id, agent_run_id, stream_id, offset, total,
+                )
                 return
+        await self._join_stream(stream_id, head_clip_id)
         await self._prune()
         log.info(
             "voice stream complete session=%s run=%s trigger=%s stream=%s segments=%d",
@@ -1753,7 +2241,15 @@ class VoiceService:
         )
 
     def _new_clip_row(
-        self, session_id: str, trigger: str, agent_run_id: str | None, content_mode: str
+        self,
+        session_id: str,
+        trigger: str,
+        agent_run_id: str | None,
+        content_mode: str,
+        *,
+        stream_id: str | None = None,
+        segment_index: int = 0,
+        segment_count: int | None = None,
     ) -> dict[str, Any]:
         return {
             "id": str(uuid.uuid4()),
@@ -1786,6 +2282,18 @@ class VoiceService:
             # name its message cannot be reused by the reader's play button either.
             "source_ts": None,
             "message_anchor": None,
+            # What makes this row part of a reply rather than a reply. Segments are
+            # a latency device; `stream_id` plus `segment_index` is what lets every
+            # surface put them back together in the order they are spoken.
+            # `segment_count` is carried by the opening segment alone, and is NULL
+            # until the producer knows the total - which for an assistant turn is
+            # only when the model stops.
+            "stream_id": stream_id,
+            "segment_index": segment_index,
+            "segment_count": segment_count,
+            # Set when a joined clip takes over for this segment: excluded from
+            # every listing from that moment, audio still served until the sweep.
+            "superseded_at": None,
         }
 
     async def _synthesize_clip(self, row: dict[str, Any], spoken: str) -> None:
@@ -2391,7 +2899,11 @@ class VoiceService:
         return path
 
     async def _prune(self) -> None:
-        removed = await self.store.prune(self.config.tts_cache_mb * 1024 * 1024)
+        # Superseded segments first: they are the cheapest bytes to reclaim and
+        # counting them against the cap would evict a live reply to keep audio
+        # nothing lists any more.
+        removed = await self.store.sweep_superseded(SUPERSEDED_CLIP_TTL_SECONDS)
+        removed += await self.store.prune(self.config.tts_cache_mb * 1024 * 1024)
         for file_path in removed:
             try:
                 await asyncio.to_thread(Path(file_path).unlink, True)
