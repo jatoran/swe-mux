@@ -53,10 +53,13 @@ def test_agent_pane_headers_omit_the_working_directory() -> None:
     assert "const remoteBoundary=session.runtime_boundary==='remote'" in source
     assert "const boundaryUnknown=session.runtime_boundary==='unknown'" in source
     assert "pane-bar ${agentSession?'agent-pane-bar':''}" in source
-    assert (
-        ".pane-bar.agent-pane-bar { grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }"
-        in css
-    )
+    # No per-variant grid template any more. The path is the item that comes and goes - an
+    # agent header omits it, and a touch header hides it for every backend - so one template
+    # of three tracks serves both: a two-item header puts the tools in the flexible track and
+    # leaves the trailing `auto` track at zero width. Counting children was never safe, since
+    # the count depends on pointer type as well as on backend.
+    assert ".pane-bar.agent-pane-bar {" not in css
+    assert ".pane-tools { justify-content:flex-end }" in css
 
 
 def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
@@ -65,7 +68,7 @@ def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
     State is already on the tab, the sidebar row, and the terminal being read; the name is the
     field those surfaces crop. The track is `fit-content()` rather than `auto` because an `auto`
     track takes its max-content size before the flexible track expands, so a sentence-length
-    generated title would take the cwd's space and squeeze the voice chips to their floor.
+    generated title would take the cwd's space and squeeze the pane tools to their floor.
     """
     root = Path(__file__).parents[1]
     source = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
@@ -81,7 +84,10 @@ def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
     # session. Deciding it inline here is what made the marker fire on all 17 live sessions.
     assert 'class="pane-fault"' in source
     assert "const paneFaults=sessionFaults(session)" in source
-    assert "grid-template-columns:fit-content(35%) minmax(50px,1fr) auto auto" in css
+    assert (
+        ".pane-bar { grid-auto-flow:column;"
+        "grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }" in css
+    )
     assert ".pane-title { min-width:0;overflow:hidden;text-overflow:ellipsis" in css
 
 
