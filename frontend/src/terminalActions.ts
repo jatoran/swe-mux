@@ -17,6 +17,45 @@ type TerminalWait = (delayMs: number) => Promise<void>
 
 export const TERMINAL_SUBMIT_SETTLE_MS = 180
 
+/**
+ * The awaiting sub-reasons that mean a dialog, not a composer, is under the cursor.
+ *
+ * Exactly `PROTECTED_AWAITING_REASONS` in `prompt_queue.py`, and deliberately the
+ * same three: text typed at an approval or a question *answers it*, so inserting
+ * there is not a misplaced draft but an unintended decision. `rate_limit` and
+ * `authentication` are waits rather than dialogs and keep their composer.
+ */
+export const DIALOG_AWAITING_REASONS = ['approval', 'question', 'elicitation'] as const
+
+/** What a session is showing, as much of it as an insert has to care about. */
+export type InsertTargetState = {
+  state?: string
+  awaiting_reason?: string | null
+  name?: string
+}
+
+/**
+ * Why an insert into this session must be refused, or `''` when it may proceed.
+ *
+ * A rail button, a prompt template, a clipboard entry, or a dictated draft all
+ * write into whatever the CLI happens to be showing. When that is an approval or
+ * a question, the write does not fill a composer - it answers the dialog, and the
+ * text is gone. The queue has refused this since it existed
+ * (`NON_OVERRIDABLE_REASONS`); nothing stopped the insert paths doing it.
+ */
+export function insertionRefusal(session: InsertTargetState | null | undefined): string {
+  if (!session || session.state !== 'awaiting') return ''
+  const reason = session.awaiting_reason || ''
+  if (!(DIALOG_AWAITING_REASONS as readonly string[]).includes(reason)) return ''
+  const showing = reason === 'approval'
+    ? 'is showing an approval request'
+    : reason === 'question'
+      ? 'is asking a question'
+      : 'is waiting for an answer'
+  const who = session.name ? `“${session.name}”` : 'This session'
+  return `${who} ${showing}, so the text was not inserted — it would answer the dialog instead of filling the composer. Draft kept.`
+}
+
 const waitForTerminal: TerminalWait = delayMs => new Promise(resolve => window.setTimeout(resolve, delayMs))
 
 /**

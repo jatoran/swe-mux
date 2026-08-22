@@ -9,12 +9,13 @@ test('the drawer exposes one Actions tab with three independently collapsible se
   const tabs = source('drawerTabs.ts')
   const drawer = source('UtilityDrawer.tsx')
   const actions = source('ActionsTab.tsx')
+  const modal = source('ActionEditorModal.tsx')
 
   assert.ok(tabs.includes("id: 'actions', label: 'Actions'"))
   assert.doesNotMatch(tabs, /id: 'commands'|id: 'prompts'/)
   assert.ok(drawer.includes("case 'actions':"))
   assert.doesNotMatch(drawer, /case 'commands':|case 'prompts':/)
-  for (const section of ['quick', 'skills', 'prompts']) {
+  for (const section of ['skills', 'prompts', 'clipboard']) {
     assert.ok(actions.includes(`id="${section}"`), `${section} must remain a first-class Actions section`)
   }
   assert.ok(actions.includes('showManage={false}'))
@@ -26,28 +27,26 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   const settings = source('Settings.tsx')
   const terminal = source('TerminalPane.tsx')
   const actions = source('ActionsTab.tsx')
-  const inline = source('RailInlineEditor.tsx')
+  const modal = source('ActionEditorModal.tsx')
 
   assert.ok(app.includes("id: 'actions.configure'"), 'command palette registry needs Configure Actions')
-  // It opens on the Project the operator was in: a Project's own actions and prompt
-  // templates are listable from no other scope, so defaulting to Global made the
-  // editor look emptier than the rail it was opened from.
+  // Project context is passed so detached projects can open directly and Global can offer
+  // a one-step detach for projects that still follow it.
   assert.ok(app.includes('<ActionEditorModal projectId='))
+  assert.ok(modal.includes("railProjectScopeKind(blob, projectId) === 'fork' ? projectId : ''"))
+  assert.ok(modal.includes('contextProjectId={projectId}'))
   assert.ok(app.includes("runNamedCommand('actions.configure')"), 'main menu must use the shared command')
-  // The in-place editor is reached from the overflow popover's header gear (the strip
-  // itself carries no gear - operator decision 2026-08-22: a standing gear chip spent
-  // rail width on chrome); the full modal stays one click away behind the editor's
-  // "All options…" control and Actions -> Configure, so a rail configured down to
-  // nothing still has a way back into configuration.
+  // Every row's drawer popover reaches the full modal directly, including empty rows.
   const strip = source('RailStrip.tsx')
   const popover = source('RailOverflowPopover.tsx')
   assert.ok(!strip.includes('class="rail-config"'), 'the strip must not draw its own gear')
   assert.ok(strip.includes('onConfigure={onConfigure}'), 'the row must hand Configure to its popover')
-  assert.ok(popover.includes('aria-label="Customize actions"'), 'the overflow popover must reach the editor')
-  assert.ok(terminal.includes('onConfigure={index===renderedRailRows.length-1?()=>setRailEditOpen(true):undefined}'))
-  assert.ok(terminal.includes('<RailInlineEditor'), 'the gear flips the rail area into RailInlineEditor')
-  assert.ok(inline.includes('onOpenFull'), 'the in-place editor must reach the full modal')
-  assert.ok(actions.includes('run: onConfigureActions'), 'Quick actions must expose Configure')
+  assert.ok(popover.includes('aria-label="Configure Actions"'), 'the overflow popover must reach the full modal')
+  assert.ok(terminal.includes('onConfigure={()=>onConfigureRail?.()}'))
+  assert.doesNotMatch(terminal, /RailInlineEditor|railEditOpen/)
+  assert.ok(source('RailEditor.tsx').includes('Detach {contextProjectName} to edit directly'))
+  assert.ok(actions.includes('onClick={onConfigureActions}'), 'Actions must expose Configure directly')
+  assert.doesNotMatch(actions, /id="quick"|Quick actions/)
   assert.doesNotMatch(settings, /RailEditor|commandrail:/)
 })
 
@@ -68,7 +67,7 @@ test('Prompts joins Clip and Skills as a rail picker, not as a fourth surface', 
   assert.ok(dropup.includes("runCommand") === false, 'the drop-up takes its exits as props, not as commands')
   assert.ok(terminal.includes("runCommand('drawer.actions.prompts')"), 'its sticky row lands on the drawer section')
   assert.ok(terminal.includes("runCommand('prompts.new')"), 'its second exit opens the library on a blank template')
-  assert.ok(actions.includes("'prompts', 'openActions'"), 'a shortcut to this drawer must not render inside it')
+  assert.doesNotMatch(actions, /resolveRailRows|drawer-command-row/, 'the drawer must not duplicate rail actions')
 })
 
 test('a new template opens the library already in create mode', () => {
@@ -84,7 +83,7 @@ test('a new template opens the library already in create mode', () => {
 test('the editor discloses progressively: layouts first, creation and catalog collapsed', () => {
   const editor = source('RailEditor.tsx')
   const styles = source('style.css')
-  const layouts = editor.indexOf('renderSurface(surface)')
+  const layouts = editor.indexOf("renderSurface('strip')")
   const addForm = editor.indexOf('<RailAddForm')
   const catalog = editor.indexOf('<details class="rail-catalog"')
 
@@ -96,6 +95,9 @@ test('the editor discloses progressively: layouts first, creation and catalog co
   // The catalog’s controls are labelled checkboxes, not the retired badge code.
   assert.ok(editor.includes('Where it appears'))
   assert.ok(editor.includes('Shown in these sessions'))
+  assert.ok(editor.includes('Button appearance'))
+  assert.ok(editor.includes('Visible label'))
+  assert.ok(editor.includes('<RailItemIcon'))
   assert.doesNotMatch(editor, /rail-where|rail-tags/)
   // One device at a time, defaulting to the device this browser is.
   assert.ok(editor.includes('useState<RailDevice>(() => currentProfile())'))
@@ -105,17 +107,15 @@ test('the editor discloses progressively: layouts first, creation and catalog co
   assert.ok(styles.includes('width:14px;height:14px'))
 })
 
-test('skills and prompt templates can be pinned into Actions in one tap', () => {
+test('skills and prompt templates have no separate pinning controls', () => {
   const actions = source('ActionsTab.tsx')
   const prompts = source('PromptsTab.tsx')
   const scope = source('railScope.ts')
 
-  assert.ok(actions.includes('togglePinSkill'), 'the Skills list must carry a pin toggle')
-  assert.ok(actions.includes('pin={promptPin}'), 'the embedded template list must carry a pin toggle')
-  assert.ok(prompts.includes('pin.toggle(item)'))
-  // Pinning goes through the scoped ops so a project-scoped source stays project state.
-  assert.ok(scope.includes('export function pinSkill'))
-  assert.ok(scope.includes('export function pinPrompt'))
+  assert.doesNotMatch(actions, /togglePin|pinnedSkill|pinnedPrompt|pin=/)
+  assert.doesNotMatch(prompts, /pin\.toggle|isPinned|>Pin</)
+  assert.doesNotMatch(scope, /export function pinSkill|export function pinPrompt/)
+  assert.ok(source('RailEditor.tsx').includes('Add skills and prompt templates here'))
 })
 
 test('the Action rail can open Actions without replacing the saved Project tab', () => {
@@ -172,7 +172,7 @@ test('the full library selects straight into an editable form and can widen past
   assert.doesNotMatch(library, /beginEdit|>Edit</)
   assert.ok(library.includes('all_projects=1'), 'the wide view is the library’s reason to exist')
   assert.ok(library.includes('prompt-scope-filter'))
-  // Widening must not leak into the pinning path, which reads the default listing.
+  // Widening must not leak into the embedded drawer listing.
   const prompts = source('PromptsTab.tsx')
   assert.doesNotMatch(prompts, /all_projects/)
   // A template is written back to its own Project, not to whichever is focused.

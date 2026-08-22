@@ -263,6 +263,40 @@ work, while a claim that changes owners must use the freshly registered viewport
 - Pointer-generated mouse reports and caret-steering keys (Codex, OMP, pi) are unicast regardless of broadcast membership.
   A pointer target belongs only to the pane in which it was chosen.
 
+## Inserting authored text
+
+Everything that pushes text a person wrote somewhere else into a composer - a prompt template, a skill or slash item, a custom text item, a clipboard entry, a dictated draft, a note or file selection, the branch seed - builds its bytes in one place (`frontend/src/composerInsertion.ts`, `src/swe_mux/composer_input.py::composer_insertion`) and, in the browser, performs them in one place (`injectText` in the pane).
+The two builders are kept in step by the harness registry rather than by matching constants, and `frontend/test/composerInsertion.test.ts` and `tests/test_composer_input.py` assert the same wire bytes on both sides.
+
+- **A paste wrapper does not protect the payload's first character.**
+  Measured 2026-08-22 against Codex v0.149.0 over a real pseudoterminal, with `PREVIOUSTEXT` sitting unsent in the composer: `ESC[200~A\rB\rC ESC[201~` lands as a three-line draft, while the same paste with one *leading* CR **submits the standing draft** and pastes the rest as a fresh one.
+  A leading LF is not a repair either - Codex drops it and concatenates the paste onto the draft.
+  Claude Code v2.1.240 keeps the draft on all three.
+  This is not theoretical: the live `Tree` prompt template begins with a newline, so pressing its button over a half-typed draft sent that draft to the model.
+- **So a leading newline run is lifted out of the paste** and sent ahead of it as the harness's own `composer_newline` key presses, which is exactly what an author who began a template with a newline meant - start below whatever is already there.
+  It is one PTY write, measured: Codex reads `ESC+CR` followed by a bracketed paste as "newline, then paste".
+  Interior newlines stay inside the paste, where both agents read them as content.
+- **Only a harness measured as needing it gets the lift.**
+  `HarnessDescriptor.paste_leading_newline_submits` is true for Codex and false everywhere else, and false is also the answer for a harness nobody has characterised - which keeps it on the bytes mux has always sent.
+- **The queue drops leading newlines instead of lifting them.**
+  A delivery has already passed the readiness gate, so the composer is empty by contract and a leading blank line separates nothing ahead of a body that is about to be submitted.
+  Dropping is also the defence that needs no per-harness measurement, so `delivery_payload` does it on every backend.
+  An insert lands on top of whatever someone was mid-way through typing, which is why the two differ.
+
+### An insert refuses a dialog
+
+An insert writes into whatever the CLI is showing.
+When that is an approval or a question, the text does not fill a composer - it *answers the dialog*, and is gone.
+`injectText` therefore refuses when the target session is `awaiting` with a sub-reason in `DIALOG_AWAITING_REASONS` (`frontend/src/terminalActions.ts`), which is exactly `PROTECTED_AWAITING_REASONS` in `prompt_queue.py`; the queue has refused this since it existed and nothing stopped the insert paths doing it.
+`rate_limit` and `authentication` are waits rather than dialogs and keep their composer, and an `awaiting` with no declared sub-reason is not treated as a dialog - absent evidence is not evidence of one.
+
+- **The refusal has to be visible, so the insert paths wait for it.**
+  A prompt rail button, the library modal, and the clipboard picker previously dispatched `mux:terminal-action` and walked away, reporting every insert as done including the ones that never happened.
+  They now go through `insertIntoTerminal`, which carries a request id and resolves on the pane's acknowledgement; `insertIntoFocusedSurface` takes an `onRefused` callback because its own return value is synchronous and a refusal would otherwise have nowhere to go.
+- **A keystroke paste is not an insert.**
+  Ctrl+V, the rail Paste button, the mobile paste handler, and the manual-paste fallback all reach `pasteIntoTerminal` directly, so they get the leading-newline repair but not the refusal: someone pasting with the pane in front of them may legitimately be answering the prompt they can see.
+  The refusal is for text pushed from elsewhere in the UI, where the operator may not be looking at the pane at all.
+
 ## Unsent composer text
 
 The daemon holds a write log, not a terminal cell grid, and no harness publishes what is in its
@@ -301,6 +335,11 @@ half-typed in it, from any device (`features/ui.md`).
   false *safe* named above, in the one estimate a gate can act on.
   The declared sequence is matched against the raw frame rather than the escape-stripped
   remainder, since Claude's is itself an escape sequence.
+- **The composer newline key is composed text, and has to be named to be seen as such.**
+  `HarnessDescriptor.composer_newline` (ESC+CR on both measured agents) counts as one character.
+  It is not a control sequence the escape stripper matches, so its bare CR used to survive the
+  strip and classify the whole write as a submit - the same false *empty*, and already live,
+  because the rail's Markdown divider and code-fence buttons have always sent exactly these bytes.
 - **Known imprecision, in the safe direction.**
   Keystrokes a slash menu consumed can leave the mark standing until the next submit;
   history recall (`↑`) puts text in the composer that this cannot see and is deliberately not

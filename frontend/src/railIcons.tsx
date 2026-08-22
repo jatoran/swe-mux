@@ -72,6 +72,43 @@ export const BranchIcon = () => <svg {...stroke}>
   <path d="M18 9a9 9 0 0 1-9 9" />
 </svg>
 
+/** A shallow drawer cabinet: the Action rail's permanent route to the complete row. */
+export const RailDrawerIcon = () => <svg {...stroke}>
+  <rect x="5" y="4" width="14" height="16" />
+  <line x1="5" y1="10" x2="19" y2="10" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="10.5" y1="7" x2="13.5" y2="7" />
+  <line x1="10.5" y1="12.5" x2="13.5" y2="12.5" />
+  <line x1="10.5" y1="17.5" x2="13.5" y2="17.5" />
+</svg>
+
+/** Compact sliders, used for Configure Actions inside the row popover. */
+export const RailSettingsIcon = () => <svg {...stroke}>
+  <line x1="4" y1="7" x2="20" y2="7" />
+  <circle cx="9" cy="7" r="2" fill="var(--panel2)" />
+  <line x1="4" y1="17" x2="20" y2="17" />
+  <circle cx="15" cy="17" r="2" fill="var(--panel2)" />
+</svg>
+
+/** The built-ins whose meaning has a rail-sized mark. The catalog and live rail both read
+ * this registry so an icon action never turns back into a text-only chip while configuring. */
+const RAIL_ITEM_ICON_COMPONENTS: Readonly<Record<string, () => VNode>> = {
+  attach: AttachIcon,
+  branch: BranchIcon,
+  copyInput: CopyInputIcon,
+  copyReply: CopyIcon,
+  paste: PasteIcon,
+}
+
+export function railItemHasIcon(id: string): boolean {
+  return !!RAIL_ITEM_ICON_COMPONENTS[id]
+}
+
+export function RailItemIcon({ id }: { id: string }) {
+  const Icon = RAIL_ITEM_ICON_COMPONENTS[id]
+  return Icon ? <Icon /> : null
+}
+
 // Drawer tabs. Each mark is chosen to be readable at 17px and to not collide with its
 // neighbours: the two navigators are the classic folder/document pair, and the two tabs that
 // are both a trace (Activity and Processes) are held apart by silhouette — an open squiggle

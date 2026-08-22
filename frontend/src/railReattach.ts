@@ -198,7 +198,7 @@ function unreproducedRows(global: RailConfig, fork: RailConfig, delta: RailProje
 }
 
 const DEVICE_WORD: Record<RailDevice, string> = { desktop: 'Desktop', mobile: 'Mobile' }
-const SURFACE_WORD: Record<RailSurface, string> = { strip: 'rail', panel: 'drawer' }
+const SURFACE_WORD: Record<RailSurface, string> = { strip: 'rail' }
 
 /** Read a project's fork and produce the delta that reproduces it, with whatever
  *  it cannot express named. Returns null when the project is not forked. */

@@ -5,7 +5,8 @@ import { holdSoftKeyboard } from './mobileKeyboard'
 import { RAIL_POPOVER_MAX_WIDTH_PX } from './railOverflow'
 import { railOverlayStyle, watchRailOverlayPlacement } from './railOverlayPlacement'
 
-// The rest of one rail row, as a wrap grid of the same real chips.
+import { RailSettingsIcon } from './railIcons'
+// One complete rail row, as a wrap grid of the same real chips.
 //
 // It is deliberately *not* a `RailDropup`. A drop-up is a picker: it lists things, you take
 // one, it closes. This is the rail itself, folded — the chips inside it are the production
@@ -39,17 +40,13 @@ function sameStyle(a: Record<string, string>, b: Record<string, string>): boolea
 }
 
 type Props = {
-  /** Accessible name for the panel; one row's worth of overflow. */
+  /** Accessible name for the panel; one complete row of actions. */
   label: string
-  /** The rail's trailing cluster, which the panel is placed against: its right edge is the
-   *  rail's trailing edge and its top is the `+N` chip's top. */
+  /** The fixed drawer cluster that supplies the panel's trailing-edge anchor. */
   anchor: HTMLElement | null
   onClose: () => void
-  /** Opens the in-place rail editor. Present here as well as on the row because a full
-   *  overflow is the surface that prompts the thought, and the row's own gear is a
-   *  different act from this panel's contents - it belongs in the chrome, beside the
-   *  close control, rather than as a chip among the ones you came here to press. */
-  onConfigure?: () => void
+  /** Opens the full Configure Actions modal. */
+  onConfigure: () => void
   children: ComponentChildren
 }
 
@@ -101,26 +98,21 @@ export function RailOverflowPopover({ label, anchor, onClose, onConfigure, child
     // A `group`, not a `dialog`. It is non-modal by design and its contents are the same
     // toolbar controls the row holds, so it belongs to the rail's `toolbar` rather than
     // interrupting it - and a dialog role would promise focus management this deliberately
-    // does not do. The `+N` chip carries `aria-expanded`, which is what names the pairing.
+    // does not do. The drawer control carries `aria-expanded`, which names the pairing.
     role="group"
     aria-label={label}
     onMouseDown={holdSoftKeyboard}
   >
-    <header>
-      <strong>More actions</strong>
-      {/* The one thing a reader cannot discover by trying: this panel does not close when
-          you use it. Said in words rather than implied, because every other popover on the
-          rail behaves the opposite way. */}
-      <span>stays open</span>
-      {onConfigure && <button
+    <button type="button" class="rail-overflow-close" aria-label="Close actions" title="Close" onClick={onClose}>×</button>
+    <div class="rail-overflow-grid">{children}</div>
+    <footer class="rail-overflow-actions">
+      <button
         type="button"
         class="rail-overflow-configure"
-        aria-label="Customize actions"
-        title="Customize this rail in place — drag, remove, add"
+        aria-label="Configure Actions"
+        title="Configure Actions"
         onClick={() => { onClose(); onConfigure() }}
-      >⚙</button>}
-      <button type="button" class="rail-overflow-close" aria-label="Close more actions" title="Close" onClick={onClose}>×</button>
-    </header>
-    <div class="rail-overflow-grid">{children}</div>
+      ><RailSettingsIcon /></button>
+    </footer>
   </div>
 }

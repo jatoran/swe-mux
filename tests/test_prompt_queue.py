@@ -19,17 +19,16 @@ from typing import Any
 
 import pytest
 
+from swe_mux.composer_input import BRACKETED_PASTE_END, BRACKETED_PASTE_START
 from swe_mux.prompt_queue import (
     ARGV_SEED_MAX_CHARS,
-    BRACKETED_PASTE_END,
-    BRACKETED_PASTE_START,
     LARGE_PASTE_BYTES,
     MAX_SUBMIT_DELAY_SECONDS,
     SUBMIT_SEQUENCE,
     PromptQueueService,
     PromptQueueStore,
     QueueError,
-    paste_payload,
+    delivery_payload,
     stage_seed_argv,
 )
 
@@ -180,7 +179,7 @@ async def test_edit_increments_revision_and_send_checks_it(harness: Harness) -> 
     # The revision the user last saw is the revision delivered.
     result = await harness.service.send_next(message["id"], revision=2)
     assert result["status"] == "sent"
-    assert paste_payload("v2") in [data for _, data in harness.writes]
+    assert delivery_payload("v2", "claude") in [data for _, data in harness.writes]
 
 
 @pytest.mark.asyncio
@@ -862,9 +861,32 @@ async def test_a_v1_database_migrates_in_place(tmp_path: Path) -> None:
 # -------------------------------------------------------------- seed staging
 
 
-def test_paste_payload_matches_the_browser_wrapper() -> None:
+def test_delivery_payload_matches_the_browser_wrapper() -> None:
     expected = f"{BRACKETED_PASTE_START}a\rb\rc\rd{BRACKETED_PASTE_END}"
-    assert paste_payload("a\r\nb\rc\nd") == expected
+    assert delivery_payload("a\r\nb\rc\nd", "claude") == expected
+
+
+def test_delivery_drops_leading_newlines_rather_than_pasting_them() -> None:
+    """A leading newline in a delivered body is noise at best and a submit at worst.
+
+    Delivery has already passed the readiness gate, so the composer is empty and
+    the blank line separates nothing. On Codex the same byte, at the head of a
+    bracketed paste, is read as Enter — which would send whatever draft the gate
+    let stand as its own turn. Dropping it is the answer that does not depend on
+    a per-harness measurement, so it is the same on every backend.
+    """
+    expected = f"{BRACKETED_PASTE_START}body{BRACKETED_PASTE_END}"
+    for backend in ("claude", "codex", "opencode", "pi", "omp", "shell"):
+        assert delivery_payload("\n\nbody", backend) == expected, backend
+        assert delivery_payload("\r\nbody", backend) == expected, backend
+
+
+def test_no_delivery_payload_starts_with_a_bare_newline() -> None:
+    for backend in ("claude", "codex", "opencode", "pi", "omp", "shell"):
+        payload = delivery_payload("\nfirst\nsecond", backend)
+        assert not payload.startswith(("\r", "\n")), backend
+        # Interior newlines are content and stay inside the paste.
+        assert payload == f"{BRACKETED_PASTE_START}first\rsecond{BRACKETED_PASTE_END}"
 
 
 def test_stage_seed_argv_inlines_short_bodies(tmp_path: Path) -> None:

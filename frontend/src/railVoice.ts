@@ -58,10 +58,7 @@ export function resolveRailVoiceEntries(
   context: { device: RailDevice; backend: RailBackend },
 ): RailVoiceEntry[] {
   const seen = new Set<string>()
-  const entries = [
-    ...resolveRailItems(config, 'strip', context),
-    ...resolveRailItems(config, 'panel', context),
-  ]
+  const entries = resolveRailItems(config, 'strip', context)
   const result: RailVoiceEntry[] = []
   for (const { item } of entries) {
     if (seen.has(item.id)) continue

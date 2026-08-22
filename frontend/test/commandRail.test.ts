@@ -1,46 +1,42 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig, itemDefaultSurface,
+  BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig,
   mergeRailCatalog, migratedRailItemId, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
-  railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
-  type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem,
+  railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
+  type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem, type RailSurface,
 } from '../src/commandRail.ts'
 import { composerClearSequence } from '../src/composerText.ts'
 import { AGENT_NEWLINE } from '../src/terminalKeys.ts'
 
 const CLAUDE: RailContext = { device: 'desktop', backend: 'claude' }
-const ids = (config: RailConfig, surface: 'strip' | 'panel', ctx: RailContext = CLAUDE): string[] =>
+const ids = (config: RailConfig, surface: RailSurface, ctx: RailContext = CLAUDE): string[] =>
   resolveRailRows(config, surface, ctx).flatMap(row => row.entries.map(entry => entry.item.id))
 
-test('the default layout seeds one row per surface, identical on both devices', () => {
+test('the default layout seeds one rail row, identical on both devices', () => {
   const config = defaultRailConfig()
   for (const device of ['desktop', 'mobile'] as const) {
     assert.equal(config.layouts[device].strip.length, 1)
-    assert.equal(config.layouts[device].panel.length, 1)
   }
   assert.deepEqual(config.layouts.desktop.strip[0].items, config.layouts.mobile.strip[0].items)
-  assert.deepEqual(config.layouts.desktop.panel[0].items, config.layouts.mobile.panel[0].items)
   // Identical contents, but separate rows with separate ids: the two devices are
   // never the same row, so editing one can never move the other.
   assert.notEqual(config.layouts.desktop.strip[0].id, config.layouts.mobile.strip[0].id)
 })
 
-test('default rail groups editing helpers after Down and ends with Attach', () => {
+test('default rail includes the complete built-in catalog and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
     'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'skills', 'prompts', 'actionsDrawer', 'kbdToggle',
     'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down',
     'markdownDivider', 'markdownCodeFence', 'copyInput', 'ctrlU', 'restoreInput',
-    'left', 'right', 'attach',
+    'left', 'right', 'home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'rewind', 'endSession', 'attach',
   ])
 })
 
-test('the panel seeds the long tail the strip has no room for', () => {
+test('every visible built-in has one default rail placement', () => {
   const config = defaultRailConfig()
-  assert.deepEqual(ids(config, 'panel'), ['home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'rewind', 'endSession'])
-  // Every built-in lands in exactly one surface.
   assert.deepEqual(
-    [...ids(config, 'strip'), ...ids(config, 'panel')].sort(),
+    ids(config, 'strip').sort(),
     BUILTIN_RAIL.filter(item => railItemVisible(item, 'claude')).map(item => item.id).sort(),
   )
 })
@@ -50,15 +46,13 @@ test('desktop and mobile layouts are edited independently', () => {
   config.layouts.mobile.strip[0].items = ['esc', 'enter']
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
-  assert.equal(ids(config, 'strip').length, 26)
+  assert.equal(ids(config, 'strip').length, BUILTIN_RAIL.filter(item => railItemVisible(item, 'claude')).length)
 })
 
 test('an item placed in no row is simply absent from that device', () => {
   const config = defaultRailConfig()
   config.layouts.mobile.strip[0].items = []
-  config.layouts.mobile.panel[0].items = []
   assert.deepEqual(resolveRailRows(config, 'strip', { device: 'mobile', backend: 'claude' }), [])
-  assert.deepEqual(resolveRailRows(config, 'panel', { device: 'mobile', backend: 'claude' }), [])
 })
 
 test('multiple rows render in order, and empty rows are dropped', () => {
@@ -100,13 +94,11 @@ test('agent-only built-ins stay out of shell sessions', () => {
   assert.equal(ids(config, 'strip', { device: 'mobile', backend: 'codex' }).includes('attach'), true)
 })
 
-test('end session ships in the panel for every backend, never on the strip', () => {
-  // It is the one destructive built-in, so it must not default next to the arrow keys.
+test('end session ships on the rail for every backend', () => {
   const config = defaultRailConfig()
   for (const backend of ['claude', 'codex', 'shell'] as const) {
     const ctx = { device: 'mobile', backend } as const
-    assert.equal(ids(config, 'strip', ctx).includes('endSession'), false)
-    assert.equal(ids(config, 'panel', ctx).includes('endSession'), true)
+    assert.equal(ids(config, 'strip', ctx).includes('endSession'), true)
   }
 })
 
@@ -137,12 +129,12 @@ test('a newly shipped built-in is placed, not merely catalogued', () => {
   // append would leave every existing user unable to find a new command.
   const saved = defaultRailConfig()
   saved.items = saved.items.filter(item => item.id !== 'rewind')
-  saved.layouts.desktop.panel[0].items = saved.layouts.desktop.panel[0].items.filter(id => id !== 'rewind')
-  saved.layouts.mobile.panel[0].items = saved.layouts.mobile.panel[0].items.filter(id => id !== 'rewind')
+  saved.layouts.desktop.strip[0].items = saved.layouts.desktop.strip[0].items.filter(id => id !== 'rewind')
+  saved.layouts.mobile.strip[0].items = saved.layouts.mobile.strip[0].items.filter(id => id !== 'rewind')
   const config = normalizeRailConfig(saved)
   assert.equal(config.items.some(item => item.id === 'rewind'), true)
   for (const device of ['desktop', 'mobile'] as const) {
-    assert.equal(config.layouts[device].panel.some(row => row.items.includes('rewind')), true)
+    assert.equal(config.layouts[device].strip.some(row => row.items.includes('rewind')), true)
   }
 })
 
@@ -208,15 +200,37 @@ test('normalization drops dangling references and unknown custom types', () => {
       { id: 'custom:evil', type: 'action', action: 'endSession', label: 'boom' },
     ],
     layouts: {
-      desktop: { strip: [{ id: 'r1', items: ['esc', 'ghost', 'custom:evil', 'custom:skill:commit'] }], panel: [] },
+      desktop: { strip: [{ id: 'r1', items: ['esc', 'ghost', 'custom:evil', 'custom:skill:commit'] }] },
       mobile: {},
     },
   })
   assert.equal(config.items.some(item => item.id === 'custom:evil'), false)
   assert.deepEqual(config.layouts.desktop.strip[0].items.slice(0, 2), ['esc', 'custom:skill:commit'])
-  // Every surface keeps a row so there is always somewhere to drop.
-  assert.equal(config.layouts.desktop.panel.length, 1)
+  // Every device keeps a row so there is always somewhere to drop.
   assert.equal(config.layouts.mobile.strip.length, 1)
+})
+
+test('v2 panel entries become ordinary rail entries without duplicates', () => {
+  const config = normalizeRailConfig({
+    items: [
+      { id: 'esc', type: 'key', label: 'Esc' },
+      { id: 'pin:skill:commit', type: 'skill', label: 'commit', text: 'commit' },
+    ],
+    layouts: {
+      desktop: {
+        strip: [{ id: 'main', items: ['esc'] }],
+        panel: [{ id: 'old-panel', items: ['esc', 'pin:skill:commit'] }],
+      },
+      mobile: {
+        strip: [{ id: 'main-mobile', items: [] }],
+        panel: [{ id: 'old-panel-mobile', items: ['pin:skill:commit'] }],
+      },
+    },
+  })
+  assert.deepEqual(config.layouts.desktop.strip[0].items.slice(0, 2), ['esc', 'pin:skill:commit'])
+  assert.equal(config.layouts.desktop.strip[0].items.filter(id => id === 'esc').length, 1)
+  assert.equal(config.layouts.mobile.strip[0].items.includes('pin:skill:commit'), true)
+  assert.equal(config.items.find(item => item.id === 'pin:skill:commit')?.type, 'skill')
 })
 
 test('built-in behaviour is re-adopted over a saved catalog entry', () => {
@@ -230,6 +244,30 @@ test('built-in behaviour is re-adopted over a saved catalog entry', () => {
   assert.equal(ctrlC?.label, '^C')
 })
 
+test('built-in presentation and session visibility survive behavior re-adoption', () => {
+  const config = normalizeRailConfig({
+    items: [{
+      id: 'copyInput', type: 'text', label: 'hijacked', text: 'unsafe',
+      display: 'icon-label', displayLabel: 'Composer', backends: ['codex'],
+    }],
+    layouts: { desktop: { strip: [{ id: 'r1', items: ['copyInput'] }] } },
+  })
+  const item = config.items.find(entry => entry.id === 'copyInput')!
+  assert.equal(item.type, 'action')
+  assert.equal(item.action, 'copyInput')
+  assert.equal('text' in item, false)
+  assert.equal(item.display, 'icon-label')
+  assert.equal(item.displayLabel, 'Composer')
+  assert.deepEqual(item.backends, ['codex'])
+})
+
+test('display helpers fall back safely when an item has no registered icon', () => {
+  const item: RailItem = { id: 'custom:text:x', type: 'text', label: 'Original', display: 'icon', displayLabel: 'Visible' }
+  assert.equal(railItemDisplayLabel(item), 'Visible')
+  assert.equal(railItemDisplayMode(item, false), 'label')
+  assert.equal(railItemDisplayMode({ ...item, display: 'icon-label' }, true), 'icon-label')
+})
+
 test('mergeRailCatalog reports which built-ins it had to add', () => {
   const { items, addedBuiltins } = mergeRailCatalog([{ id: 'esc', type: 'key', label: 'Esc' }])
   assert.equal(items.length, BUILTIN_RAIL.length)
@@ -239,7 +277,7 @@ test('mergeRailCatalog reports which built-ins it had to add', () => {
 
 // --- migration from the pre-layout format ----------------------------------
 
-test('a pre-layout save becomes four rows that render exactly as it did', () => {
+test('a pre-layout save becomes one rail row per device without losing visible entries', () => {
   const legacy: LegacyRailItem[] = [
     { id: 'esc', type: 'key', label: 'Esc', placement: 'strip' },
     { id: 'enter', type: 'key', label: '⏎', placement: 'strip', platforms: ['mobile'] },
@@ -254,20 +292,18 @@ test('a pre-layout save becomes four rows that render exactly as it did', () => 
   // The desktop/mobile split expressed by `platforms` becomes row membership.
   assert.equal(desktopStrip.includes('enter'), false)
   assert.equal(mobileStrip.includes('enter'), true)
-  // 'both' lands in each surface rather than needing a placement concept.
+  // Every formerly visible placement becomes one rail occurrence.
   assert.equal(desktopStrip.includes('rewind'), true)
-  assert.equal(ids(config, 'panel').includes('rewind'), true)
-  // An entry that predates `placement` and says "off" meant "not on the strip", so
-  // it keeps rendering in the panel exactly as it did before the upgrade.
-  assert.equal(ids(config, 'panel').includes('custom:skill:commit:0'), true)
-  assert.equal(desktopStrip.includes('custom:skill:commit:0'), false)
-  // An explicit placement plus "off" was a genuine hide, and stays placed nowhere —
+  assert.equal(desktopStrip.filter(id => id === 'rewind').length, 1)
+  assert.equal(desktopStrip.includes('endSession'), true)
+  // An entry that predates `placement` and says "off" meant panel-only, so it
+  // remains visible as a normal rail entry.
+  assert.equal(desktopStrip.includes('custom:skill:commit:0'), true)
+  // An explicit placement plus "off" was a genuine hide, and stays placed nowhere,
   // which is the only way to be hidden now.
   assert.equal(config.items.some(item => item.id === 'custom:text:hidden:0'), true)
   for (const device of ['desktop', 'mobile'] as const) {
-    for (const surface of ['strip', 'panel'] as const) {
-      assert.equal(config.layouts[device][surface][0].items.includes('custom:text:hidden:0'), false)
-    }
+    assert.equal(config.layouts[device].strip[0].items.includes('custom:text:hidden:0'), false)
   }
   // No item carries a legacy position field into the new catalog.
   for (const item of config.items) {
@@ -280,12 +316,11 @@ test('a pre-layout save becomes four rows that render exactly as it did', () => 
 test('an untouched pre-layout save migrates to the shipped default', () => {
   const migrated = migrateLegacyRail(BUILTIN_RAIL.map(item => ({
     ...item,
-    placement: itemDefaultSurface(item) === 'panel' ? 'drawer' : 'strip',
+    placement: 'strip',
   })) as LegacyRailItem[])
   const fresh = defaultRailConfig()
   for (const device of ['desktop', 'mobile'] as const) {
     assert.deepEqual(migrated.layouts[device].strip[0].items, fresh.layouts[device].strip[0].items)
-    assert.deepEqual(migrated.layouts[device].panel[0].items, fresh.layouts[device].panel[0].items)
   }
 })
 
@@ -295,8 +330,7 @@ test('a save that predates placement reads "off" as "not on the strip"', () => {
   assert.deepEqual(adoptLegacyPlacement({ enabled: undefined }), { enabled: undefined, placement: 'strip' })
   assert.deepEqual(adoptLegacyPlacement({ enabled: undefined }, 'drawer'), { enabled: undefined, placement: 'drawer' })
   const migrated = migrateLegacyRail([{ id: 'home', type: 'key', label: 'Home', enabled: false }])
-  assert.equal(ids(migrated, 'panel').includes('home'), true)
-  assert.equal(ids(migrated, 'strip').includes('home'), false)
+  assert.equal(ids(migrated, 'strip').includes('home'), true)
 })
 
 test('the editing-helper catalog migration still reorders old saved rails once', () => {
@@ -337,11 +371,11 @@ test('clearing a project override reverts it to the global config', () => {
   assert.deepEqual(ids(railConfigFromBlob(cleared, 'proj-a'), 'strip'), ids(defaultRailConfig(), 'strip'))
 })
 
-test('a project delta overlays the global config on the render path', () => {
-  // The overlay semantics live in railScope.test.ts; this pins the storage
+test('a v2 project panel delta migrates into the project rail', () => {
+  // The overlay semantics live in railScope.test.ts; this fixes the storage
   // shape: `mode: 'delta'` in a project slot resolves as global-plus-additions
   // wherever `railConfigFromBlob` is the reader (panes, drawer, voice).
-  const blob: RailBlob = {
+  const blob = {
     projects: {
       'proj-a': {
         mode: 'delta',
@@ -349,13 +383,12 @@ test('a project delta overlays the global config on the render path', () => {
         layouts: { desktop: { panel: [{ id: 'proj-row', label: 'Project', items: ['proj:skill:ship'] }] } },
       },
     },
-  }
+  } as unknown as RailBlob
   const effective = railConfigFromBlob(blob, 'proj-a')
-  assert.deepEqual(ids(effective, 'panel'), [...ids(defaultRailConfig(), 'panel'), 'proj:skill:ship'])
-  assert.deepEqual(ids(effective, 'strip'), ids(defaultRailConfig(), 'strip'))
+  assert.deepEqual(ids(effective, 'strip'), [...ids(defaultRailConfig(), 'strip'), 'proj:skill:ship'])
   // Global and other projects never see the addition.
-  assert.equal(ids(railConfigFromBlob(blob), 'panel').includes('proj:skill:ship'), false)
-  assert.equal(ids(railConfigFromBlob(blob, 'proj-b'), 'panel').includes('proj:skill:ship'), false)
+  assert.equal(ids(railConfigFromBlob(blob), 'strip').includes('proj:skill:ship'), false)
+  assert.equal(ids(railConfigFromBlob(blob, 'proj-b'), 'strip').includes('proj:skill:ship'), false)
 })
 
 test('a pre-layout blob is migrated per scope, by shape rather than by version', () => {
@@ -368,7 +401,7 @@ test('a pre-layout blob is migrated per scope, by shape rather than by version',
   assert.equal(ids(railConfigFromBlob(blob), 'strip')[0], 'esc')
   assert.equal(ids(railConfigFromBlob(blob, 'proj-a'), 'strip')[0], 'paste')
   const upgraded = writeRailConfigBlob(blob, defaultRailConfig())
-  assert.equal(upgraded.version, 2)
+  assert.equal(upgraded.version, 3)
   assert.equal(ids(railConfigFromBlob(upgraded, 'proj-a'), 'strip')[0], 'paste')
 })
 

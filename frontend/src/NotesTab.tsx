@@ -378,7 +378,6 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     <div class="notes-subtabs-row">
       <OverflowRail
         className="notes-subtabs"
-        itemLabel="notes"
         wrapperClassName="notes-subtabs-rail"
         activeKey={selectedTabId||''}
         touchDrag

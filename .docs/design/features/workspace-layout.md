@@ -146,7 +146,8 @@ PaneLeaf = terminal | note | preview | history | queue
   not have to be recomputed against `--ui-scale`, the tab height, or a configured
   `--session-dot`.
 - A tab strip that outgrows its pane scrolls sideways without exposing a scrollbar.
-  A soft edge fade and chevron appear only on sides with hidden content, occupy no layout space, and click-scroll to the next useful tab boundary.
+  A soft arrow glow appears only on sides with hidden content, occupies no layout space, and accepts no input.
+  Wheel, trackpad, touch, keyboard, and focus reveal move the rail.
   Plain wheel input translates to horizontal movement because the strip only overflows on that axis.
   Trackpad swipes, touch panning, and events already carrying horizontal intent remain native rather than being applied twice.
   Selection and keyboard focus reveal the target tab automatically, including a newly launched tab and an already-selected tab in a pane that just received workspace focus.

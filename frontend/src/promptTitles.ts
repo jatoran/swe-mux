@@ -1,9 +1,9 @@
 // Live titles for the prompt buttons that do not carry a name of their own.
 //
 // A `prompt` Action item stores the template's `scope:id` key and nothing else,
-// so a button pinned without a typed label has no title until the library is
-// read (`railItemLabel`). The surfaces that draw those buttons — the rail strip,
-// Quick actions, both editors — render synchronously from the Action config and
+// so a button configured without a typed label has no title until the library is
+// read (`railItemLabel`). The surfaces that draw those buttons - the rail,
+// its row popover, and both editors - render synchronously from the Action config and
 // have no business each opening their own request for the same list.
 //
 // So this is one lazily-filled cache, keyed by Project scope, shared by all of

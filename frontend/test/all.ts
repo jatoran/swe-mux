@@ -1,5 +1,7 @@
 import './terminalKeys.test.ts'
 import './terminalActions.test.ts'
+import './composerInsertion.test.ts'
+import './insertionRefusal.test.ts'
 import './pendingInput.test.ts'
 import './pendingSession.test.ts'
 import './terminalProtocol.test.ts'

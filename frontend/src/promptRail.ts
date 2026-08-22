@@ -14,7 +14,7 @@
 //    opens Prompt templates in the Actions drawer with the template preselected and its fields
 //    expanded, which is the surface that already knows how to fill them.
 //
-// Both hosts (the strip in TerminalPane, the Quick actions grid in Actions) route through
+// Both hosts (the rail in TerminalPane and the Prompt templates list in Actions) route through
 // here, and both insert over the `mux:terminal-action` bus so the pane stays the
 // single owner of terminal writes.
 
@@ -23,6 +23,7 @@
 import { api } from './api.ts'
 import type { RailItem } from './commandRail'
 import type { PromptTemplate } from './promptTemplates'
+import { insertIntoTerminal } from './terminalActions.ts'
 
 /** Asks the app to open Prompt templates in Actions (variable filling). */
 export const PROMPT_RAIL_EVENT = 'mux:open-prompt-template'
@@ -137,10 +138,11 @@ export async function activatePromptRailItem(
   if (!template) return { status: 'error', message: `“${item.label}” points at a prompt template that is no longer available.` }
   return activatePromptTemplate(template, {
     projectId: ctx.projectId,
-    insert: text => {
-      window.dispatchEvent(new CustomEvent('mux:terminal-action', {
-        detail: { sessionId: ctx.sessionId, action: 'insertText', text },
-      }))
-    },
+    // `insertIntoTerminal` rather than a bare dispatch: it carries a request id and
+    // waits for the pane's acknowledgement, which is what turns a refusal - an
+    // unmounted pane, or a session showing an approval dialog - into the `error`
+    // status a button can render. A fire-and-forget dispatch reported every insert
+    // as done, including the ones that never happened.
+    insert: text => insertIntoTerminal(ctx.sessionId, text, false),
   })
 }

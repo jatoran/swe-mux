@@ -82,7 +82,12 @@ from .behavioral_consumers import ADAPTIVE_TITLE_RULE_ID, BehavioralConsumerServ
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
-from .composer_input import DEFAULT_CLEAR_KEYS, note_composer_write
+from .composer_input import (
+    DEFAULT_CLEAR_KEYS,
+    DEFAULT_NEWLINE_KEYS,
+    composer_insertion,
+    note_composer_write,
+)
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore, parse_device_report
@@ -108,6 +113,7 @@ from .harness import (
     agent_harnesses,
     assigns_conversation_id,
     branch_strategy,
+    composer_insertion_rules,
     delivers_prompts_through_pty,
     descriptor,
     detect_installations_with_versions,
@@ -266,7 +272,6 @@ from .prompt_queue import (
     PromptQueueService,
     PromptQueueStore,
     QueueError,
-    paste_payload,
     stage_seed_argv,
 )
 from .provider_accounts import (
@@ -7223,7 +7228,12 @@ async def _stage_spawn_text(app: web.Application, session: Any, text: str) -> No
             session.record.state,
             STAGE_READY_TIMEOUT_SECONDS,
         )
-    _record_operator_input(app["events"], session, paste_payload(text), source="spawn_stage")
+    _record_operator_input(
+        app["events"],
+        session,
+        _composer_insertion(session.record.backend, text),
+        source="spawn_stage",
+    )
     await app["events"].emit(
         "spawn_text_staged",
         session_id=session.record.id,
@@ -9071,6 +9081,17 @@ async def _record_branch_lineage(
         log.warning("branch of %s could not record its lineage edge: %s", conversation, exc)
 
 
+def _composer_insertion(backend: object, text: str) -> str:
+    """The bytes that leave ``text`` unsent in this backend's composer.
+
+    One resolver for every daemon-side path that stages text rather than typing
+    it, so a harness quirk is declared once in the registry instead of being
+    re-derived per call site.
+    """
+    newline_keys, lift = composer_insertion_rules(backend)
+    return composer_insertion(text, newline_keys=newline_keys, lift_leading_newline=lift)
+
+
 def _note_composer_write(events: EventBus, session: Any, data: str | bytes, source: str) -> None:
     """Track what one operator write left sitting in the composer.
 
@@ -9092,7 +9113,8 @@ def _note_composer_write(events: EventBus, session: Any, data: str | bytes, sour
     # unregistered backend keeps the historical Ctrl+U.
     harness = HARNESSES.get(session.record.backend)
     clear_keys = harness.composer_clear_keys if harness else DEFAULT_CLEAR_KEYS
-    change = note_composer_write(composer, text, time.time(), clear_keys)
+    newline_keys = harness.composer_newline if harness else DEFAULT_NEWLINE_KEYS
+    change = note_composer_write(composer, text, time.time(), clear_keys, newline_keys)
     if change is None:
         return
     ledger = getattr(session, "state_transitions", None)
@@ -11669,7 +11691,12 @@ async def voice_submit(request: web.Request) -> web.Response:
         # delivery bytes instead: bracketed paste with newlines as CR, then a
         # separate Enter after the same settle delay. Single-line prompts keep the
         # one-write path they have always used.
-        _record_operator_input(request.app["events"], session, paste_payload(text), source="voice")
+        _record_operator_input(
+            request.app["events"],
+            session,
+            _composer_insertion(session.record.backend, text),
+            source="voice",
+        )
         await asyncio.sleep(SUBMIT_DELAY_SECONDS)
         if session.record.state in {"exited", "crashed"}:
             return json_response({"error": "the agent session ended during delivery"}, 409)
