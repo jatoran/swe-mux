@@ -21,10 +21,14 @@ const writes:{url:string;body:unknown}[]=[]
 Object.assign(globalThis,{__writes:writes})
 
 // `?blocked=1` serves an unapproved gate from the *first* read, which is the state the
-// strip has to open itself for. Reaching it by editing the command instead would mean
+// strip has to open itself for. `?unconfigured=1` serves a repository that has no
+// verification command at all, which is the state it must NOT open itself for. Both have
+// to arrive on the first read: reaching either by editing the command instead would mean
 // the reader had already toggled the strip open by hand, so the default could never be
 // observed - and the default is the whole claim.
-const blocked=new URLSearchParams(location.search).has('blocked')
+const parameters=new URLSearchParams(location.search)
+const blocked=parameters.has('blocked')
+const unconfigured=parameters.has('unconfigured')
 
 globalThis.fetch=async(input,init)=>{
   const url=String(input)
@@ -51,6 +55,16 @@ globalThis.fetch=async(input,init)=>{
         script_name:'.worktree-verify',script_present:true,plan:null,
       })
     }
+    // A repository that never set the queue up: no script at the convention's path, no
+    // config key, and therefore nothing to approve. `config_status:'ready'` is deliberate
+    // — the config file is perfectly writable, there is simply no command in it.
+    if(unconfigured)return response({
+      configured:false,source:'',display:'',digest:'',
+      approved:false,previously_approved:false,approved_source:'',current_source:'',
+      config_command:'',config_revision:'r1',config_status:'ready',
+      config_path:'D:\\PROJECTS\\swe-mux\\.swe-mux\\config.toml',
+      script_name:'.worktree-verify',script_present:false,plan:null,
+    })
     return response({
       configured:true,source:'convention',display:'.worktree-verify',digest:'d1',
       approved:!blocked,previously_approved:true,approved_source:'#!/usr/bin/env bash\nexit 0\n',

@@ -470,8 +470,13 @@ A fact that is true of the Project is drawn N times if it lives on a row, and th
 
 **The strip stays a strip, so the tab still reads as a map.**
 It is one summary line - the gate's standing, and what the queue is doing right now, including a running gate's step - with everything else behind a disclosure.
-It **opens itself when landing is blocked**, which is exactly two states (the install stop is off, or the bytes a land would run are not approved) and in both the act that clears it is inside; a surface that cannot work must not render as merely quiet (`setting-links.md`).
-An explicit collapse wins after that and nothing re-opens under the reader, which stays honest because the summary line goes on stating the block while closed.
+It **opens itself when a land is stuck on a human**, which is three states - the install stop is off, a verification command exists but its bytes are not approved, or a worktree's own copy of the gate refused a land - and in all three the act that clears it is inside; a surface that cannot work must not render as merely quiet (`setting-links.md`).
+**A repository with no verification command at all is deliberately not one of them** (operator decision 2026-08-22).
+It used to be, on the reading that nothing can land there so the surface must announce itself.
+But that reading fires on the resting state of every repository that never opted into the land queue, and unfolding a landing panel over the map on each of them reports an emergency that does not exist.
+Nothing is stuck: the queue was never set up.
+The rule is about a surface someone is *trying to use*, which is why the half-finished case - bytes written, nobody has read them - still opens.
+An explicit collapse wins after either default and nothing re-opens under the reader, which stays honest because the summary line goes on stating the gate's standing in warn tone while closed, and the setup is one click behind it.
 
 **A bounced request stops speaking for the queue once its branch gets another answer.**
 The summary line picks the most interesting row, and a handed-back or refused request is terminal *and* unresolved, so it outranks a quiet queue.

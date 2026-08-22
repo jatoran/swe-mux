@@ -311,7 +311,7 @@ test('a quiet queue still states both halves rather than going blank', () => {
   assert.equal(summary.gate, 'verification approved · .worktree-verify')
   assert.equal(summary.gateTone, 'ok')
   assert.equal(summary.queue, 'nothing queued')
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
 })
 
 test('a running gate reaches the summary line, with what is behind it', () => {
@@ -325,32 +325,47 @@ test('a running gate reaches the summary line, with what is behind it', () => {
   assert.equal(summary.queue, 'worktree-alpha · verifying · step 3 of 7 · mypy · 3m 10s · 1 behind')
   assert.equal(summary.tone, 'busy')
   // The strip does not open itself for a healthy run: nothing needs a human.
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
 })
 
-test('the two things that block every land are what open the strip', () => {
-  // Exactly two, and both have their remedy inside the strip. A surface that cannot work
-  // must not render as merely quiet (`setting-links.md`).
+test('a land that is stuck on a human opens the strip', () => {
+  // Both have their remedy inside the strip. A surface that cannot work must not render
+  // as merely quiet (`setting-links.md`).
   const stopped = landingSummary(queueOf({ installed_enabled: false, requests: [] }), gateOf({}))
-  assert.equal(stopped.blocked, true)
+  assert.equal(stopped.opensByDefault, true)
   assert.equal(stopped.tone, 'warn')
   assert.match(stopped.queue, /switched off/)
 
   const unapproved = landingSummary(queueOf({ requests: [] }), gateOf({ approved: false }))
-  assert.equal(unapproved.blocked, true)
+  assert.equal(unapproved.opensByDefault, true)
   assert.equal(unapproved.gate, 'verification not approved')
   assert.equal(unapproved.gateTone, 'warn')
-
-  const absent = landingSummary(queueOf({ requests: [] }), gateOf({ configured: false }))
-  assert.equal(absent.blocked, true)
-  assert.equal(absent.gate, 'no verification command')
 })
 
-test('an unread gate is not a blocked one', () => {
-  // `null` is "the daemon has not answered yet". Treating it as blocked would flash the
-  // strip open on every mount, which is a worse lie than saying nothing.
+test('a repository with no verification command keeps the strip folded', () => {
+  // Operator decision 2026-08-22. It used to open, on the reading that nothing can land
+  // here so the surface must announce itself. But that reading fires on the resting state
+  // of every repository that never opted into the land queue, and unfolding a landing
+  // panel over the map on each of them reports an emergency that does not exist. Nothing
+  // is stuck: the queue was never set up. The one line still says so, in warn tone, and
+  // the setup is one click behind it.
+  const absent = landingSummary(queueOf({ requests: [] }), gateOf({ configured: false }))
+  assert.equal(absent.opensByDefault, false)
+  assert.equal(absent.gate, 'no verification command')
+  assert.equal(absent.gateTone, 'warn')
+  assert.equal(absent.tone, 'warn')
+
+  // Still true of a repository that *is* set up but whose bytes nobody has read: that one
+  // is a person half-way through the setup, not a person who never started it.
+  const written = landingSummary(queueOf({ requests: [] }), gateOf({ approved: false }))
+  assert.equal(written.opensByDefault, true)
+})
+
+test('an unread gate does not open the strip either', () => {
+  // `null` is "the daemon has not answered yet". Opening on it would flash the strip open
+  // on every mount, which is a worse lie than saying nothing.
   const summary = landingSummary(queueOf({ requests: [] }), null)
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
   assert.equal(summary.gate, 'verification unread')
   assert.equal(summary.gateTone, 'idle')
 })
@@ -371,7 +386,7 @@ test('a handback surfaces only once nothing is queued behind it', () => {
   assert.equal(handed.queue, 'worktree-alpha · returned to agent')
   assert.equal(handed.tone, 'warn')
   // A handback is not a *block*: the gate is fine and the queue would run the next one.
-  assert.equal(handed.blocked, false)
+  assert.equal(handed.opensByDefault, false)
 
   const busy = landingSummary(queueOf({
     requests: [
@@ -404,7 +419,7 @@ test('a handback is superseded the moment a later request for its branch lands',
   }), gateOf({}), now)
   assert.equal(summary.queue, 'nothing queued · 1 landed recently')
   assert.equal(summary.tone, 'idle')
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
 })
 
 test('supersession needs a *later* request, and needs it on the same branch', () => {
@@ -477,7 +492,7 @@ test('an idle strip counts what recently landed, as a floor and never as a total
 
 test('a summary with no queue read at all still renders', () => {
   const summary = landingSummary(null, null)
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
   assert.equal(summary.queue, 'nothing queued')
 })
 
@@ -579,7 +594,7 @@ test('a land going round the gate says so on the summary line while it runs', ()
   )
   assert.equal(summary.tone, 'busy')
   // Skipping the gate is not a *block*: nothing needs a human, and the strip stays shut.
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
 })
 
 // -- verify-only rows ---------------------------------------------------------
@@ -598,7 +613,7 @@ test('a verify-only row is named as one, before the states it shares with a land
   }), gateOf({}))
   assert.equal(summary.queue, 'worktree-alpha · verify only · verifying · step 2 · ruff · 9s')
   assert.equal(summary.tone, 'busy')
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
 })
 
 test('an ordinary land is not labelled, for the same reason a full gate is not', () => {
@@ -697,7 +712,7 @@ test('a land refused on a worktree copy names that checkout, and opens the strip
   // to say the other thing beside it, and open itself.
   assert.equal(summary.gate, 'verification approved · .worktree-verify · 1 worktree awaiting approval')
   assert.equal(summary.gateTone, 'warn')
-  assert.equal(summary.blocked, true)
+  assert.equal(summary.opensByDefault, true)
 })
 
 test('the Project root is never offered as a blocked worktree', () => {
@@ -708,7 +723,7 @@ test('the Project root is never offered as a blocked worktree', () => {
     gateOf({ approved: false }), 1_800_000_000, 'D:/repo',
   )
   assert.deepEqual(summary.blockedWorktrees, [])
-  assert.equal(summary.blocked, true)
+  assert.equal(summary.opensByDefault, true)
 })
 
 test('a refusal that has been answered stops blocking anything', () => {
@@ -722,7 +737,7 @@ test('a refusal that has been answered stops blocking anything', () => {
     ],
   }), gateOf({}), 1_800_000_000, 'D:/repo')
   assert.deepEqual(summary.blockedWorktrees, [])
-  assert.equal(summary.blocked, false)
+  assert.equal(summary.opensByDefault, false)
 })
 
 test('only an approvable refusal is offered, and only once per checkout', () => {

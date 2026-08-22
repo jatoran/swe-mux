@@ -183,3 +183,24 @@ test('a blocked gate opens the strip by itself, and a deliberate collapse still 
   await expect(page.locator('.git-landing-facts em')).toHaveText('verification not approved')
   await expect(page.locator('.git-landing-facts em')).toHaveClass(/warn/)
 })
+
+test('a repository that never set up verification opens on its map, not on the strip', async ({ page }) => {
+  // Operator decision 2026-08-22. This used to open too, on the reading that nothing can
+  // land here so the surface must announce itself. But that fires on the resting state of
+  // every repository that never opted into the land queue, and unfolding a landing panel
+  // over the map on each of them reports an emergency that does not exist. Nothing is
+  // stuck: the queue was never set up. The one line still says so, in warn tone.
+  await page.setViewportSize({ width: 420, height: 900 })
+  await page.goto('/git-land-harness.html?unconfigured=1')
+  await expect(page.locator('.git-landing-summary')).toBeVisible()
+  await expect(page.locator('.git-landing-summary')).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('.git-landing-body')).toHaveCount(0)
+  await expect(page.locator('.git-landing-facts em')).toHaveText('no verification command')
+  await expect(page.locator('.git-landing-facts em')).toHaveClass(/warn/)
+
+  // Folded, never removed: the setup is one click behind the same summary line, which is
+  // what keeps "stays quiet" from becoming "cannot be found".
+  await page.locator('.git-landing-summary').click()
+  await expect(page.locator('.git-landing-body')).toHaveCount(1)
+  await expect(page.locator('.git-land-setup-prompt')).toHaveCount(1)
+})

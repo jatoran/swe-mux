@@ -652,15 +652,24 @@ export type LandingSummary = {
   queue: string
   tone: 'ok' | 'warn' | 'busy' | 'idle'
   /**
-   * Nothing on this tab can land until a human acts here.
+   * Something a human started here is stuck, so the strip unfolds itself.
    *
-   * Three causes now, and all three have their remedy inside the landing strip: the
-   * install-wide sweep is off, the bytes a land would run are not approved, or a
-   * *worktree's own* copy of the gate refused a land and is waiting to be approved. It
-   * is what opens the strip by default, because a surface that cannot work must not
-   * render as merely quiet (`setting-links.md`).
+   * A surface that cannot work must not render as merely quiet (`setting-links.md`), and
+   * three causes qualify, each with its remedy inside the strip: the install-wide sweep
+   * was switched off, a verification command exists but its bytes are not approved, or a
+   * *worktree's own* copy of the gate refused a land and is waiting to be approved.
+   *
+   * **A repository with no verification command at all is deliberately not one of them**
+   * (operator decision 2026-08-22). Nothing is stuck there - the land queue was never set
+   * up, which is the resting state of every repository that will never use it, so
+   * unfolding a landing panel over the map on each of them reports an emergency that does
+   * not exist. The rule that a broken surface must announce itself is about a surface
+   * someone is *trying to use*; the closed summary still says "no verification command" in
+   * warn tone, and the setup lives one click behind it. That distinction is why this is
+   * not simply "can this tab land anything": for an unconfigured repository the answer to
+   * that is still no.
    */
-  blocked: boolean
+  opensByDefault: boolean
   /** Checkouts whose own gate copy refused a land and can be approved from the strip. */
   blockedWorktrees: { worktreeRoot: string; branch: string }[]
 }
@@ -685,10 +694,14 @@ export function landingSummary(
   projectRoot: string = '',
 ): LandingSummary {
   const installStopped = queue !== null && !queue.installedEnabled
-  const gateBlocked = gate !== null && (!gate.configured || !gate.approved)
+  // Configured but unapproved, specifically. `!configured` is the never-set-up repository,
+  // which is a resting state rather than a stuck one, and is what keeps the strip folded
+  // there (see `opensByDefault`). Unapproved bytes mean somebody wrote a gate and the queue
+  // is waiting on a human to read it, which is the case this default exists for.
+  const gateAwaitingApproval = gate !== null && gate.configured && !gate.approved
   const blockedWorktrees = blockedVerifyWorktrees(queue?.requests || [], projectRoot)
     .slice(0, MAX_BLOCKED_GATES)
-  const blocked = installStopped || gateBlocked || blockedWorktrees.length > 0
+  const opensByDefault = installStopped || gateAwaitingApproval || blockedWorktrees.length > 0
   // A blocked *worktree* copy is stated on the closed strip too, and it has to be:
   // this is exactly the case where the Project-resolved gate reads "approved" and a
   // land is nevertheless refused for an unapproved command, which is unreadable
@@ -753,5 +766,5 @@ export function landingSummary(
     queueText = landed > 0 ? `nothing queued · ${landed} landed recently` : 'nothing queued'
     tone = gateTone === 'warn' ? 'warn' : 'idle'
   }
-  return { gate: gateText, gateTone, queue: queueText, tone, blocked, blockedWorktrees }
+  return { gate: gateText, gateTone, queue: queueText, tone, opensByDefault, blockedWorktrees }
 }

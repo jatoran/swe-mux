@@ -40,10 +40,12 @@ import type { Project } from './types'
 //    recorded plan, and editor; who besides the operator may start a land; the queue in
 //    the order the pipeline will reach it; and what finished.
 //
-// The strip opens itself when the gate **blocks**, because a surface that cannot work
-// must not render as merely quiet (`setting-links.md`), and stays closed otherwise so
-// the tab still opens on a map. An explicit toggle wins over that for the rest of the
-// visit; nothing re-collapses under the reader.
+// The strip opens itself when something a human started here is **stuck**, because a
+// surface that cannot work must not render as merely quiet (`setting-links.md`), and
+// stays closed otherwise so the tab still opens on a map. A repository with no
+// verification command at all is deliberately *not* stuck - the queue was never set up
+// there - so it stays folded and says so on its one line. An explicit toggle wins over
+// either default for the rest of the visit; nothing re-collapses under the reader.
 //
 // Read-mostly like the rest of the Git tab. The writes are a *request*'s cancellation,
 // the Project's own `[worktree] verify_command`, and approving the exact bytes that will
@@ -95,10 +97,12 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   const history = landHistoryOrder(queue?.requests || [])
   const shown = error || localError
   const summary = landingSummary(queue, gate, undefined, project?.root || '')
-  // Blocked means the tab cannot land anything: the install stop is off, or the bytes a
-  // land would run are not approved. That is the setting-links "inert surface" case, and
-  // the act that clears it is inside this strip - so it opens itself.
-  const isOpen = open ?? summary.blocked
+  // Something a human started here is stuck - the install stop is off, written gate bytes
+  // are unapproved, or a worktree's own copy refused a land. That is the setting-links
+  // "inert surface" case, and the act that clears it is inside this strip, so it opens
+  // itself. A repository that simply has no verification command is not that case and
+  // stays folded; the summary line says so where it stands (`gitLand.ts`).
+  const isOpen = open ?? summary.opensByDefault
 
   return <section class="git-landing" aria-label="Landing">
     <button class={`git-landing-summary ${summary.tone}`} aria-expanded={isOpen}

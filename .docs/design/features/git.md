@@ -260,7 +260,7 @@ uncommitted work together.
   A worktree **row** owns the act: its Land button, its live land state including what a running verification gate reports about itself, a Cancel, and what stopped it last time.
   A compact **strip at the head of the map** owns everything Project-wide: the verification command with its approval and editor, who besides the operator may start a land, and the queue in run order with its history.
   Nothing Project-wide is drawn on a row - a fact true of the Project drawn on a row is drawn once per worktree, which is what the verification block did under each of eight expansions before it moved up.
-  The strip is one summary line with the rest behind a disclosure, so the tab still opens on a map; it opens itself only when landing is actually blocked.
+  The strip is one summary line with the rest behind a disclosure, so the tab still opens on a map; it opens itself only when a land is stuck on a human, and never merely because this repository has no verification command (`land-queue.md`).
 - The retired Land segment keeps its palette command and voice phrases, migrated onto Map (`RETIRED_DRAWER_SEGMENTS`), and so does a stored selection and a `drawer.git.land` keybinding.
 - The three readings are drawn **in the pane's heading row**, inline with the Project scope, rather than as a full-width strip under a heading.
   Git is the one tab whose heading is always exactly its selected segment's label, so the row above the control was the control's own selected chip spelled out, costing a line of a panel people keep narrow.
