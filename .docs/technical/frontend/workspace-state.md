@@ -68,7 +68,7 @@ The workspace's remaining width is therefore identical whether the rail or the d
 Both `.utility-drawer.docked` and `.drawer-resizer` address that column with negative grid lines, which silently retarget if the open template's column count changes.
 
 `OverflowRail` wraps workspace and utility tablists without taking over their ARIA roles or drag targets.
-It owns endpoint detection, non-layout-consuming fade chevrons, wheel translation, boundary-aware paging, and selected or focused tab reveal.
+It owns endpoint detection, passive non-layout-consuming arrow glows, wheel translation, and selected or focused tab reveal.
 Selection changes and pane-focus changes are separate reveal triggers because moving focus to an already-active pane tab does not change the selected child ID.
 The underlying tablist remains the native horizontal touch and trackpad scroller, and the controls do not render when the content fits.
 

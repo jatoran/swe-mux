@@ -36,14 +36,13 @@ import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsMan
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
-import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
+import { railItemDisplayLabel, railItemDisplayMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { activatePromptRailItem, railItemLabel } from './promptRail'
 import { usePromptTitles } from './promptTitles'
-import { AttachIcon, BranchIcon, CopyIcon, CopyInputIcon, PasteIcon, SendIcon } from './railIcons'
+import { railItemHasIcon, RailItemIcon, SendIcon } from './railIcons'
 import { RailStrip } from './RailStrip'
-import { RailInlineEditor } from './RailInlineEditor'
 import { MOBILE_QUERY, currentProfile, loadRailConfig } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
@@ -469,10 +468,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
-  // The gear flips the rail area into the in-place editor (RailInlineEditor):
-  // reorder, remove, and add happen where the rail is used, on the real device
-  // and backend. The full Configure Actions modal stays behind "All options…".
-  const [railEditOpen,setRailEditOpen]=useState(false)
   // Ending a session is a two-click confirm, and App owns both the armed id and the
   // window that disarms it (`requestKill`). The rail button mirrors that broadcast
   // rather than running a second timer of its own, so its label can never disagree
@@ -779,12 +774,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(clipboardStatusTimerRef.current!==null)window.clearTimeout(clipboardStatusTimerRef.current)
   }, [])
 
-  // A drop-up holds a direct reference to the rail button it hangs from, so
-  // anything that unmounts that button has to take it down: switching the pane to
-  // another session, and opening the in-place rail editor, which replaces the
-  // whole rail. Left alone it would float over the new content, anchored to a node
-  // that is no longer in the document.
-  useEffect(() => { setDropup(null) }, [session.id, railEditOpen])
+  // A drop-up holds a direct reference to its trigger, so a session switch closes it before
+  // the old rail unmounts and leaves the overlay anchored to a detached node.
+  useEffect(() => { setDropup(null) }, [session.id])
 
   useEffect(() => {
     const openFind = (event: Event) => {
@@ -3454,16 +3446,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // trigger is the affordance, so it has to be able to undo itself.
   const toggleDropup=(kind:RailDropupState['kind'],anchor:HTMLElement)=>
     setDropup(current=>current?.kind===kind?null:{kind,anchor})
+  const actionPresentation=(item:RailItem,fallback=item.label)=>{
+    const hasIcon=railItemHasIcon(item.id)
+    const mode=railItemDisplayMode(item,hasIcon)
+    const label=railItemDisplayLabel(item,fallback)
+    return {
+      className:mode==='icon'?'rail-icon':mode==='icon-label'?'rail-icon rail-icon-label':undefined,
+      content:mode==='label'?label:mode==='icon'?<RailItemIcon id={item.id}/>:<><RailItemIcon id={item.id}/><span class="rail-icon-label-text">{label}</span></>,
+    }
+  }
   const renderRailItem=({item,key}:RailEntry)=>{
     switch(item.id){
-      case 'attach':return acceptsTerminalAttachments(session)?<button key={key} class="rail-icon" disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
-      case 'relaunch':return isTask?<button key={key} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
-      // Attach / Copy reply / Branch / Paste are icon-only: their marks are conventional enough to read
-      // without a word, and dropping four rail-widths of text is what keeps the terminal keys
-      // reachable without scrolling. Copy resume deliberately keeps its label — a copy glyph
-      // alone cannot distinguish it from Copy reply, and the two sit side by side.
-      case 'copyReply':return isTask?null:<button key={key} class="rail-icon" disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
-      case 'copyResume':return isTask?null:<button key={key} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${resolvesTranscriptByCwd(session.backend)?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
+      case 'attach':{const view=actionPresentation(item);return acceptsTerminalAttachments(session)?<button key={key} class={view.className} disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}>{view.content}</button>:null}
+      case 'relaunch':{const view=actionPresentation(item);return isTask?<button key={key} class={`term-relaunch ${view.className||''}`.trim()} title="Relaunch this task terminal - stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>{view.content}</button>:null}
+      case 'copyReply':{const view=actionPresentation(item);return isTask?null:<button key={key} class={view.className} disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>{view.content}</button>}
+      case 'copyResume':{const view=actionPresentation(item);return isTask?null:<button key={key} class={view.className} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${resolvesTranscriptByCwd(session.backend)?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>{view.content}</button>}
       case 'branch':{
         if(!onBranch)return null
         // Reads the daemon's declared strategy rather than restating which harnesses
@@ -3472,7 +3469,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // minted is branchable immediately; the rest wait for a discovered id.
         const branchable=supportsBranch(session.backend)
         const ready=branchable&&(assignsConversationId(session.backend)||(!!session.native_session_id&&session.native_session_id!==session.id))
-        return <button key={key} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet — branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}><BranchIcon/></button>
+        const view=actionPresentation(item);return <button key={key} class={view.className} disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet - branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}>{view.content}</button>
       }
       case 'approveOnce':{
         // Enabled only while this session is actually showing an approval. The
@@ -3480,39 +3477,40 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // gate is a readability affordance rather than the guard: a button that
         // is always clickable and usually 409s teaches nothing.
         const showing=session.state==='awaiting'&&session.awaiting_reason==='approval'
-        return <button key={key} class="rail-approve" disabled={!showing||approveBusy} aria-label="Approve the pending request" title={showing?'Approve the request this session is showing':'Available while this session is waiting for an approval'} onClick={()=>void approveOnce()}>{approveBusy?'…':'Approve'}</button>
+        const view=actionPresentation(item);return <button key={key} class={`rail-approve ${view.className||''}`.trim()} disabled={!showing||approveBusy} aria-label="Approve the pending request" title={showing?'Approve the request this session is showing':'Available while this session is waiting for an approval'} onClick={()=>void approveOnce()}>{approveBusy?'…':view.content}</button>
       }
-      case 'paste':return <button key={key} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
+      case 'paste':{const view=actionPresentation(item);return <button key={key} class={view.className} aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}>{view.content}</button>}
       // The two pickers open a drop-up of the most recent/relevant few rather than
       // the drawer section outright. The section is still one tap away, from the
       // sticky row inside the drop-up, so nothing became less reachable.
-      case 'clipboardHistory':return <button key={key} class={dropup?.kind==='clipboard'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='clipboard'} title="Recent clipboard — tap an entry to insert it here" onClick={event=>toggleDropup('clipboard',event.currentTarget as HTMLElement)}>Clip</button>
+      case 'clipboardHistory':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='clipboard'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='clipboard'} title="Recent clipboard - tap an entry to insert it here" onClick={event=>toggleDropup('clipboard',event.currentTarget as HTMLElement)}>{view.content}</button>}
       // `agentOnly` already keeps this off shells, where the endpoint 409s.
-      case 'skills':return <button key={key} class={dropup?.kind==='skills'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='skills'} title={item.title||'Insert one of this session’s skills'} onClick={event=>toggleDropup('skills',event.currentTarget as HTMLElement)}>Skills</button>
+      case 'skills':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='skills'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='skills'} title={item.title||'Insert one of this session’s skills'} onClick={event=>toggleDropup('skills',event.currentTarget as HTMLElement)}>{view.content}</button>}
       // Every template, not only the pinned ones. Pinning still exists and still
       // gives a template its own button; this is the route to the rest of them.
-      case 'prompts':return <button key={key} class={dropup?.kind==='prompts'?'rail-dropup-open-trigger':undefined} aria-expanded={dropup?.kind==='prompts'} title={item.title||'Insert one of your prompt templates'} onClick={event=>toggleDropup('prompts',event.currentTarget as HTMLElement)}>Prompts</button>
+      case 'prompts':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='prompts'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='prompts'} title={item.title||'Insert one of your prompt templates'} onClick={event=>toggleDropup('prompts',event.currentTarget as HTMLElement)}>{view.content}</button>}
       case 'copyInput':{
         // Disabled rather than absent on an unmeasured harness: a button that is
         // simply missing reads as "not built", while one that says why reads as
         // "not here yet", which is the true answer.
         const readable=composerIsReadable(session.backend)
-        return <button key={key} class="rail-icon" disabled={!readable} aria-label="Copy composer text" title={readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>void copyComposerInput()}><CopyInputIcon/></button>
+        const view=actionPresentation(item);return <button key={key} class={view.className} disabled={!readable} aria-label="Copy composer text" title={readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>void copyComposerInput()}>{view.content}</button>
       }
-      case 'actionsDrawer':return <button key={key} title={item.title} onClick={()=>runCommand('drawer.peekActions')}>Actions</button>
+      case 'actionsDrawer':{const view=actionPresentation(item);return <button key={key} class={view.className} title={item.title} onClick={()=>runCommand('drawer.peekActions')}>{view.content}</button>}
       case 'endSession':{
         // Ended sessions keep the button: the same command removes their row from the
         // sidebar, which is the only remaining thing left to do with them.
         const ended=session.state==='exited'||session.state==='crashed'
         const verb=ended?'Remove':'End session'
-        return <button key={key} class={`rail-danger ${killArmed?'confirming':''}`} aria-label={killArmed?`Confirm ${verb.toLowerCase()}`:verb} title={killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'} onClick={()=>runCommand('session.kill')}>{killArmed?'Confirm ✓':verb}</button>
+        const view=actionPresentation(item,ended?'Remove':item.label);return <button key={key} class={`rail-danger ${killArmed?'confirming ':''}${view.className||''}`.trim()} aria-label={killArmed?`Confirm ${verb.toLowerCase()}`:verb} title={killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'} onClick={()=>runCommand('session.kill')}>{killArmed?'Confirm ✓':view.content}</button>
       }
-      case 'kbdToggle':return <button key={key} class={`term-key kbd-toggle mode-${mobileInputModeState} ${mobileDraftText?'has-draft':''}`} aria-label={`Mobile input mode: ${mobileInputModeState}. Tap for ${nextInputMode}.`} title={mobileInputModeTitle} onClick={cycleMobileInputMode}>{mobileInputModeIcon}</button>
+      case 'kbdToggle':return <button key={key} class={`term-key kbd-toggle mode-${mobileInputModeState} ${mobileDraftText?'has-draft':''}`} aria-label={`Mobile input mode: ${mobileInputModeState}. Tap for ${nextInputMode}.`} title={mobileInputModeTitle} onClick={cycleMobileInputMode}>{railItemDisplayLabel(item,mobileInputModeIcon)}</button>
     }
     if(item.type==='key'){
       const sequence=item.bytes||''
-      if(isRepeatableRailKey(item.id))return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={sequence} label={item.label} title={item.title||item.label} className={item.className||'term-key'}/>
-      return <button key={key} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
+      const label=railItemDisplayLabel(item)
+      if(isRepeatableRailKey(item.id))return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={sequence} label={label} title={item.title||label} className={item.className||'term-key'}/>
+      return <button key={key} class={item.className||'term-key'} title={item.title||label} onClick={()=>sendKey(sequence)}>{label}</button>
     }
     if(item.type==='action')return null
     // Prompt templates resolve over the network at click time (see promptRail.ts), so
@@ -3520,9 +3518,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // `rail-text` on the four configured types and on none of the built-ins: their labels are
     // whatever the user named the thing, so they size to their own text, while the built-in
     // wording is fixed and its even widths are the row's rhythm (see style.css).
-    if(item.type==='prompt')return <button key={key} class={`rail-text ${item.className||''}`.trim()} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{railItemLabel(item,promptTitles)}</button>
+    if(item.type==='prompt')return <button key={key} class={`rail-text ${item.className||''}`.trim()} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{railItemDisplayLabel(item,railItemLabel(item,promptTitles))}</button>
     const payload=railPayload(item,session.backend as RailBackend)
-    return <button key={key} class={`rail-text ${item.className||''}`.trim()} title={item.title||payload} onClick={()=>{void injectText(payload,item.submit).catch(cause=>reportError(cause instanceof Error?cause.message:String(cause)))}}>{item.label}</button>
+    return <button key={key} class={`rail-text ${item.className||''}`.trim()} title={item.title||payload} onClick={()=>{void injectText(payload,item.submit).catch(cause=>reportError(cause instanceof Error?cause.message:String(cause)))}}>{railItemDisplayLabel(item)}</button>
   }
   // Rows are rendered first and *then* filtered on what actually produced a button.
   // Backend filtering alone is not enough: the mutually exclusive built-ins
@@ -3561,7 +3559,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}{railEditOpen?<div class="terminal-action-rail rail-editing"><RailInlineEditor projectId={session.project_id} backend={session.backend} onOpenFull={onConfigureRail?()=>{setRailEditOpen(false);onConfigureRail()}:undefined} onClose={()=>setRailEditOpen(false)}/></div>:<div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`More actions, row ${index+1}`:'More actions'} status={index===renderedRailRows.length-1?clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:''):undefined} onConfigure={index===renderedRailRows.length-1?()=>setRailEditOpen(true):undefined}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}<div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} status={index===renderedRailRows.length-1?clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:''):undefined} onConfigure={()=>onConfigureRail?.()}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }

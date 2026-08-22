@@ -5,7 +5,7 @@ import {
   addRailCatalogItem, addRailRow, copyRailSurface, deleteRailCatalogItem, dropIndexForPoint,
   duplicateRailEntry, insertRailItem, moveRailEntry, moveRailRow, railEntryId, railPlacementCounts,
   removeRailEntry, removeRailRow, sameRailRef, setRailRowLabel, toggleRailPlacement,
-  updateRailCatalogItem, type RailChipRect,
+  updateRailCatalogItem, updateRailItemPresentation, type RailChipRect,
 } from '../src/railLayout.ts'
 
 /** A small, predictable config: two strip rows on desktop, one on mobile. */
@@ -179,6 +179,21 @@ test('built-ins are app-owned: they cannot be deleted or edited, only unplaced',
     mobile: { strip: 0, panel: 0 },
   })
   assert.equal(unplaced.items.some(item => item.id === 'esc'), true)
+})
+
+test('every item can change presentation without exposing built-in behavior fields', () => {
+  const config = fixture()
+  const presented = updateRailItemPresentation(config, 'copyInput', { display: 'icon-label', displayLabel: 'Composer' })
+  const item = presented.items.find(entry => entry.id === 'copyInput')!
+  assert.equal(item.display, 'icon-label')
+  assert.equal(item.displayLabel, 'Composer')
+  assert.equal(item.type, 'action')
+  assert.equal(updateRailCatalogItem(presented, 'copyInput', { action: 'endSession' }), presented)
+
+  const reset = updateRailItemPresentation(presented, 'copyInput', { display: 'auto', displayLabel: '  ' })
+  const resetItem = reset.items.find(entry => entry.id === 'copyInput')!
+  assert.equal(resetItem.display, undefined)
+  assert.equal(resetItem.displayLabel, undefined)
 })
 
 test('a custom command keeps its id when its fields are edited', () => {

@@ -1,7 +1,7 @@
 // Scope-aware editing over the Action configuration blob.
 //
-// The editors (the Configure Actions modal and the in-place rail editor) work on
-// the *effective* config a project actually renders — global layout, or global
+// The Configure Actions modal works on the *effective* config a project actually renders:
+// global layout, or global
 // plus a project delta, or a detached fork. Every generic layout edit is applied
 // to that effective config with the ordinary pure ops from `railLayout.ts`, and
 // this module routes the result back to the scope that owns each piece:

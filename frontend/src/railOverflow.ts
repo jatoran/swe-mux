@@ -1,5 +1,3 @@
-export type RailScrollDirection = -1 | 1
-
 export interface RailScrollMetrics {
   scrollLeft: number
   scrollWidth: number
@@ -11,8 +9,7 @@ export interface RailOverflowState {
   right: boolean
 }
 
-export const RAIL_EDGE_WIDTH_PX = 28
-export const RAIL_PAGE_OVERLAP_PX = 44
+export const RAIL_EDGE_WIDTH_PX = 18
 const RAIL_EDGE_TOLERANCE_PX = 1
 
 /**
@@ -28,62 +25,6 @@ export const RAIL_PAN_SLOP_PX = 6
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value))
-}
-
-// ---------------------------------------------------------------------------
-// Pinned rail + overflow popover
-// ---------------------------------------------------------------------------
-
-/**
- * Subpixel slack when deciding whether one more chip fits.
- *
- * Widths come from `getBoundingClientRect`, so a row whose chips sum to exactly its width
- * routinely measures a few hundredths over it at fractional device pixel ratios. Without
- * the slack the last chip on a perfectly-fitting row drops into the popover, and the `+N`
- * chip appears on a rail that visibly has room — which is the one thing this split is
- * supposed to never do.
- */
-export const RAIL_FIT_TOLERANCE_PX = 0.5
-
-export interface RailFitMetrics {
-  /** Rendered width of every chip on the row, in configured order. */
-  widths: readonly number[]
-  /** The flex gap between two chips. */
-  gap: number
-  /** Room the row has for chips, with padding and pinned furniture already taken out. */
-  available: number
-  /** Width of the fixed-width `+N` chip. */
-  overflowWidth: number
-}
-
-/**
- * How many leading chips stay on the row; everything after goes to that row's popover.
- *
- * A row that fits keeps every chip and is told so by getting the full count back, which is
- * what lets the caller draw no `+N` at all — a fully-fitting row must look exactly as it did
- * before this split existed, down to not reserving the chip's width "just in case".
- *
- * Once something *has* to be hidden the `+N` chip is certain, so its width is spent before
- * the first chip is placed rather than discovered at the end. That is also why the count can
- * legitimately be zero: on a rail narrower than its first chip, the popover holds everything
- * and the row holds one fixed-width control that always fits.
- */
-export function railFitCount({ widths, gap, available, overflowWidth }: RailFitMetrics): number {
-  if (!widths.length) return 0
-  let total = 0
-  for (let index = 0; index < widths.length; index += 1) total += widths[index] + (index ? gap : 0)
-  if (total <= available + RAIL_FIT_TOLERANCE_PX) return widths.length
-
-  const room = available - overflowWidth - gap
-  let used = 0
-  let count = 0
-  for (const width of widths) {
-    const next = used + width + (count ? gap : 0)
-    if (next > room + RAIL_FIT_TOLERANCE_PX) break
-    used = next
-    count += 1
-  }
-  return count
 }
 
 /** Widest the overflow popover's wrap grid may grow on a desktop, before the view clamp. */
@@ -133,10 +74,8 @@ export interface RailOverlayBox { left: number; bottom: number; width: number; m
  * soft keyboard wrong in the same way. Only the desktop width cap differs, because one lays
  * out a wrap grid and the other a list.
  *
- * The anchor for the overflow popover is the rail's trailing *cluster* rather than the `+N`
- * chip inside it: the panel's right edge then lands on the rail's trailing edge on every row,
- * whatever that row is carrying. Aligning to the chip left the panel a gear-width short of
- * the edge on the one row that carries a gear, which is two placements for one control.
+ * The overflow popover anchors to the rail's fixed drawer cluster, so its right edge lands
+ * on the same trailing edge for every row.
  *
  * Not `anchoredPopoverStyle`: that one is the account/resource popovers' rule and knows
  * nothing about the rail, the keyboard, or a phone's width budget.
@@ -211,34 +150,7 @@ export function railOverflowState(metrics: RailScrollMetrics): RailOverflowState
   }
 }
 
-/**
- * Page the rail while preserving one item-width of context, then settle on an
- * item boundary. Item offsets are normalized to the strip's leading padding.
- */
-export function railPageTarget(
-  metrics: RailScrollMetrics,
-  itemOffsets: readonly number[],
-  direction: RailScrollDirection,
-): number {
-  const maximum = Math.max(0, metrics.scrollWidth - metrics.clientWidth)
-  if (!maximum) return 0
-
-  const distance = Math.max(24, metrics.clientWidth - RAIL_PAGE_OVERLAP_PX)
-  const rawTarget = clamp(metrics.scrollLeft + direction * distance, 0, maximum)
-  if (rawTarget === 0 || rawTarget === maximum) return rawTarget
-
-  if (direction > 0) {
-    const boundary = itemOffsets.find(offset => offset >= rawTarget)
-    return clamp(boundary ?? maximum, 0, maximum)
-  }
-
-  for (let index = itemOffsets.length - 1; index >= 0; index -= 1) {
-    if (itemOffsets[index] <= rawTarget) return clamp(itemOffsets[index], 0, maximum)
-  }
-  return 0
-}
-
-/** Keep a focused item clear of the overlay controls. */
+/** Keep a focused item clear of the passive edge glows. */
 export function railFocusTarget(
   metrics: RailScrollMetrics,
   itemStart: number,

@@ -880,8 +880,8 @@ Its rules, and what each one is defending:
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
   Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
 - Action layout is not a Settings section.
-  **Configure Actions** opens as a standalone modal from the main menu, command palette, the in-place rail editor's "All options…", or the Quick actions section in the Actions drawer.
-  This surface owns the shared catalog, custom action creation, and all four Desktop/Mobile Rail/Drawer placements; the rail gear itself opens the lighter in-place editor.
+  **Configure Actions** opens as a standalone modal from the main menu, command palette, every rail-row popover, or the Quick actions section in the Actions drawer.
+  This surface owns the shared catalog, action appearance, custom action creation, and all four Desktop/Mobile Rail/Drawer placements.
 - Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
@@ -1565,26 +1565,26 @@ Its rules, and what each one is defending:
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
-  The strip itself carries no customize gear (operator decision 2026-08-22): a standing gear chip spent rail width on chrome and read as one more action, so the in-place editor is reached from the overflow popover's header, and the full editor stays one press away in Actions → Configure.
-- **A row that does not fit answers overflow twice: it scrolls end to end, and it collapses the remainder into a trailing `+N` chip** (operator decision 2026-08-22: scroll OR overlay, reader's choice).
-  Every chip renders in the scroller, which keeps the pan, chevrons, wheel translation, and click suppression it always had; the `+N` chip counts what lies beyond the unscrolled viewport, which is exactly the set its popover shows, so the two affordances always agree.
-  Each row is counted independently and gets its own popover, in row order, holding only that row's remainder.
-  An empty remainder draws no `+N` chip at all, so a rail that fits looks exactly as it did before either affordance existed.
-  The `+N` chip is fixed-width by construction and sits with the readout in fixed furniture outside the scroller, so the one control that exists to absorb overflow can neither overflow nor pan away, and the count follows the row's width live.
-- **The `+N` chip rides the row's trailing cluster**, rather than trailing the last pinned chip.
-  The split leaves up to a chip's width of slack, so following the chips put the control at a different offset on every rail and on every resize; the cluster takes that slack and pushes its contents right, which gives it one place on every row however that row is populated.
-  Its panel is placed against the *cluster*, whose right edge is the rail's trailing edge by construction.
-  The status readout sits to the chip's left and is the only thing in the cluster that shrinks.
-- **The popover is the rest of the row, not a picker, so a selection does not close it.**
+  The strip itself carries no customize gear.
+  Every row instead keeps one fixed drawer control outside its scroller, including empty rows and rows whose buttons all fit.
+- **Every row answers overflow twice: it scrolls end to end, and its permanent drawer opens the complete row.**
+  Every configured chip remains in the scroller for direct pan, wheel, touch-drag, and focus reveal.
+  Passive left and right glow wedges appear only while content exists in that direction.
+  The wedges consume no layout space, accept no input, and align to the same row-relative edges across stacked rails.
+  The drawer control uses the rail's ordinary neutral button treatment with a slightly heavier outline and drawer mark.
+  Its small bottom-right count is the row's total action count, not an overflow calculation, so it remains stable across resizing.
+  The fixed trailing cluster gives the drawer one position on every row and anchors the panel to the rail's trailing edge.
+- **The popover is the complete row, not a picker, so a selection does not close it.**
   It is a wrap grid of the same real chips with their real handlers, which is what makes the two-click End session confirm complete in place and a repeat-tap arrow key repeat where it is.
-  Dismissal is always deliberate: an outside press, Escape, or the panel's own close control, and the header says `stays open` because every other popover on the rail behaves the opposite way.
-  It is capped in width and in height (half the viewport), right-aligned to its chip, and grows upward — so on a phone it hugs the rail's edge and adds rows rather than blanketing the composer.
-  It also offers the in-place rail editor from its header, beside the close control: a full overflow is the surface that prompts "this rail needs configuring", and the gear behind the panel is a reach away.
-  It is chrome rather than a chip in the grid, where it would read as one more thing to press into the terminal, and it closes the panel as it hands over — the editor replaces the whole rail area, so a panel left standing would float over a surface that no longer exists.
+  Dismissal is always deliberate: an outside press, Escape, or the small absolutely positioned close control at the panel's top-right corner.
+  The panel has no heading bar and no `stays open` copy.
+  It is capped in width and height, right-aligned to the drawer cluster, and grows upward.
+  A Configure Actions icon sits in the bottom-right footer on every row's panel and opens the full modal directly.
+  The panel closes during that handoff.
 - **Every command-rail overlay is glass: the popover and each of the drop-ups.**
   Panel, chips, and rows are translucent over a backdrop blur, with borders and text at full opacity.
   Two measured opacities rather than one, because one could not serve both masters (proven live 2026-08-22: any single value that kept labels readable over a white buffer read as a solid panel over the dark terminals the app actually runs on).
-  `--rail-glass-field` is the panel field - the surface between and behind the text-bearing pieces - pinned at or below 50% because it is what makes the glass visibly glass; `--rail-glass` is every surface a label sits on (grid chips, drop-up rows, sticky bars, the popover header), and those composite over the field so text sits on both layers together.
+  `--rail-glass-field` is the panel field - the surface between and behind the text-bearing pieces - pinned at or below 50% because it is what makes the glass visibly glass; `--rail-glass` is every surface a label sits on (grid chips, drop-up rows, sticky bars, the popover footer), and those composite over the field so text sits on both layers together.
   The floors, asserted from the real compositing math and from composited pixels (`test/railGlassContrast.test.ts`, `test/renderer/rail-overflow.spec.ts`): the shipped default/dark/light palettes keep a hard 4.5:1 through the glass on both extremes, every theme keeps the 3:1 large-text floor, and both layers are held under 95% so a later "fix" cannot buy contrast by quietly going opaque.
   Universal 4.5:1 is deliberately not asserted - holding it forced the opacity that deleted the feature.
   A browser without `backdrop-filter` falls back to near-solid, because unblurred glass is a flat wash of whatever pixel happens to be behind each letter — neither the look nor a contrast anyone can reason about.
@@ -1603,7 +1603,7 @@ Its rules, and what each one is defending:
   The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
 - Configured chips — a skill, a slash command, a prompt template, a literal — **size to their own label** with symmetric padding, and their `min-width` is a floor for a short one rather than a width every one of them is stretched to.
   The rail's shared 74px minimum stays right for the built-in labelled buttons, whose wording is fixed and whose even widths are the row's rhythm; it was wrong for a label the user chose, and it padded a five-character skill out to the width of `Copy resume`.
-  The gear flips the rail area into the in-place editor rather than opening the modal; the modal stays one click behind its "All options…" control.
+  The row popover's Configure Actions control opens the full modal directly.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
   It keeps its 44px tap height and its accessible name; only the width fell.
@@ -1703,24 +1703,25 @@ Its rules, and what each one is defending:
   What a delta cannot express is named on the plan with the global value that wins: a renamed shared row, a reordered set of shared rows, a project row interleaved between them, and an action whose definition the fork edited.
   A row that survives none of that is redone with every id floated, which always reproduces it at the cost of no longer tracking global changes to that row.
   It is user-invoked and never automatic: a fork is somebody's arrangement, and a migration that happens to you is one you could not review first.
-- **In-place rail editing** (`RailInlineEditor.tsx`) is the primary customization path: the rail gear flips the rail area into an editor showing the same rows as wrapping chips — real device, real backend, real scope — with drag to reorder, × to remove, and a per-row `+` opening a searchable picker over the catalog.
-  Most rail edits are one reorder or one removal, and those should never cost a modal that also explains scopes and catalogs.
-  Items another backend would hide render dimmed rather than hidden, because this is the one surface meant to answer "why is this button not on my shell rail".
-  The picker excludes project-owned actions for shared rows (the ownership rule), and "New action…" plus "All options…" hand off to the full modal.
-- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) opens from the main menu, command palette, the in-place editor's "All options…", and the Configure control in Quick actions rather than living inside Settings.
+- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) is the only rail editor.
+  It opens from the main menu, command palette, every row popover, and the Configure control in Quick actions rather than replacing the live rail inline or living inside Settings.
   It discloses progressively: one device's Rail and Drawer layouts first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below them, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
   The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
   A dismissible first-open callout carries the three-line orientation (Rail vs Drawer, per-device layouts, the catalog) instead of a standing paragraph.
   A "Preview as" backend selector dims what a session of that type would not show, making the backend filter visible before a session surprises anyone.
-  It **opens on the Project the operator was standing in**, not on Global.
-  Global is a superset in rows but a subset in reach - a Project's own actions and its own prompt templates are listable from no other scope - so defaulting to Global made the editor look emptier than the rail it was opened beside.
+  It opens on **Global** unless the current Project already has a detached fork.
+  A detached current Project opens directly because Global cannot edit that fork.
+  While Global is selected, the toolbar offers to detach the current Project and switches into that new fork immediately.
   At Global scope it names which Projects hold something of their own, and whether each is a fork or additions, because project-held items are otherwise invisible from the default view and "all actions" reads as though the fleet had none of them.
 - Four affordances are what keep two independent device layouts manageable, and none of them is a shared row.
   Adding a custom action places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone; in a project scope the add form offers "this project only" (the default there) or "all projects".
-  The catalog's placement controls are four **labelled checkboxes** — Desktop rail, Desktop drawer, Mobile rail, Mobile drawer — inside an expandable per-action panel, with a plain-words summary ("Desktop rail + drawer · Mobile drawer") on the collapsed row; they replaced the abbreviated `Dr/Dp/Mr/Mp` badge code, which was a legend the user had to learn before the surface said anything.
+  The catalog's placement controls are four **labelled checkboxes** - Desktop rail, Desktop drawer, Mobile rail, Mobile drawer - inside an expandable per-action panel, with a plain-words summary ("Desktop rail + drawer · Mobile drawer") on the collapsed row.
+  Every action row also expands into Button appearance controls for its visible label and, where an icon exists, Automatic, Icon only, Label only, or Icon + label display.
+  Built-in behavior remains app-owned while its presentation and backend visibility remain configurable.
+  Catalog and layout previews use the same icon registry and display resolution as the live rail, so an icon action such as Copy input does not turn into a text-only configuration chip.
   A per-surface "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
   Dragging a catalog row into a layout places it exactly.
-- Chips drag within a row, between rows, and between surfaces, on mouse and on touch, through the shared controller (`railDrag.ts`) both editors mount.
+- Chips drag within a row, between rows, and between surfaces, on mouse and on touch, through the shared controller (`railDrag.ts`) mounted by the modal editor.
   Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the modal instead of dragging.
   The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.
   Pointer capture is taken on the editor root, not on the chip: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
@@ -1728,8 +1729,9 @@ Its rules, and what each one is defending:
   That exclusion is what makes it a fixed point: re-measuring after the preview moves the chip gives the same answer, so a chip hovering over its own new home does not oscillate.
   The hit test is two-dimensional because the editor wraps a row's chips over several visual lines; a horizontal-only comparison would put every drop on the second line into the middle of the first.
 - Keyboard placement is the equivalent path and the only one available without a pointer: arrows move a focused chip along its row and between rows, Delete unplaces it, and focus follows the chip so a run of presses keeps moving the same one.
-- The expanded catalog panel also holds the per-action backend checkboxes under their harness display names ("Shown in these sessions"), custom-action editing (label, payload, submit-on-insert), and delete.
-  The catalog head stays a name-first grid: the action name owns the elastic column and wraps rather than truncating, with the type/payload preview beneath it and the placement summary on the right; phones drop the summary under the name.
+- The expanded catalog panel also holds per-action appearance, backend checkboxes under their harness display names ("Shown in these sessions"), custom-action editing (label, payload, submit-on-insert), and delete.
+  The catalog head previews the live button presentation in the elastic column, with the type or payload summary beneath it and placement on the right.
+  Phones drop the placement summary under the preview.
 - The **Actions** tab is session-scoped and contains three independently collapsible sections that start expanded: **Quick actions**, **Skills**, and **Prompt templates**.
   Disclosure state is device-local and persists independently from the Action layout.
   Quick actions renders the `panel` surface of *this device's* layout, so its grouping and order are independent of the other device class.
@@ -1747,9 +1749,9 @@ Its rules, and what each one is defending:
   With no terminal focused, Quick actions and Skills explain what target is missing while Prompt templates remain browsable.
   Keys inject raw bytes on the normal input path.
   The built-in newline uses `ESC+CR`, the legacy sequence both Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
-  The Action rail never wraps: a row that does not fit collapses its remainder into a trailing `+N` chip and a popover, above.
-  It keeps the shared overflow scroller underneath that split rather than dropping it, because that component owns the touch-drag pan's click suppression, the soft-keyboard hold, wheel translation, and focus reveal — behaviours the `+N` chip needs as much as any other chip, and a pixel of measurement error still wants somewhere to go.
-  With the split in place the strip does not actually scroll, so the endpoint chevrons never appear; they remain correct on the drawer, workspace, and Notes rails, which do scroll.
+  The Action rail never wraps.
+  Every row keeps all chips in the shared overflow scroller and offers the complete list through its permanent drawer control.
+  Passive endpoint glow wedges indicate more content without becoming another interaction target.
   Voice controls are not here.
   They are in the pane header (`voice.md`) because the rail is chrome the user reads across and they kept being the thing pushed out of it.
 - The Skills section lists **the skills that the focused agent session's CLI can actually see** (`GET /sessions/{id}/skills`, `interfaces.md`).
@@ -2371,8 +2373,8 @@ Its rules, and what each one is defending:
   The former `mux.drawer.projects.v1` and `mux.drawer.tab.v1` values migrate into the v2 presentation map only after valid new serializations succeed.
   Parsing repairs malformed branches, duplicate or missing tabs, duplicate node IDs, invalid ratios, stale selections, and excess depth without losing registered tabs.
 - Desktop renders every saved stack simultaneously, with one selected body per stack and one independently scrolling rail.
-  An overflowing pane rail hides its scrollbar and exposes endpoint-aware fade chevrons only where more tabs exist.
-  The chevrons overlay the rail instead of reserving space, click-scroll by tab boundaries, and preserve wheel, trackpad, touch, keyboard, and drag-reorder behavior.
+  An overflowing pane rail hides its scrollbar and exposes endpoint-aware glow wedges only where more tabs exist.
+  The wedges overlay the rail without reserving space or accepting input; wheel, trackpad, touch, keyboard, focus reveal, and drag-reorder remain the scrolling paths.
   The focused utility tab identifies the focused drawer pane for reopen, cycling, mobile selection, and geometry commands without taking terminal input ownership or changing Project workspace focus.
   Session-scoped bodies follow the focused session, Project-scoped bodies follow the active Project, and app-scoped bodies remain independent.
   Every body shows its current scope because several scoped bodies can be visible at once.

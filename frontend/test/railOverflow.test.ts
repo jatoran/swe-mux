@@ -2,11 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
-  railFitCount,
   railFocusTarget,
   railOverflowState,
   railOverlayBox,
-  railPageTarget,
   railPopoverClosingCommand,
   RAIL_DROPUP_MAX_WIDTH_PX,
   RAIL_POPOVER_MAX_WIDTH_PX,
@@ -15,37 +13,23 @@ import {
 /** The whole window is visible: no soft keyboard, no pinch-zoom. */
 const wholeWindow = (width: number, height: number) => ({ left: 0, top: 0, width, height })
 
-test('rail edge controls appear only in directions with hidden content', () => {
+test('rail edge indicators appear only in directions with hidden content', () => {
   assert.deepEqual(railOverflowState({ scrollLeft: 0, scrollWidth: 300, clientWidth: 300 }), { left: false, right: false })
   assert.deepEqual(railOverflowState({ scrollLeft: 0, scrollWidth: 900, clientWidth: 300 }), { left: false, right: true })
   assert.deepEqual(railOverflowState({ scrollLeft: 240, scrollWidth: 900, clientWidth: 300 }), { left: true, right: true })
   assert.deepEqual(railOverflowState({ scrollLeft: 600, scrollWidth: 900, clientWidth: 300 }), { left: true, right: false })
 })
 
-test('rail edge tolerance prevents controls flickering at endpoints', () => {
+test('rail edge tolerance prevents indicators flickering at endpoints', () => {
   assert.deepEqual(railOverflowState({ scrollLeft: 0.75, scrollWidth: 900, clientWidth: 300 }), { left: false, right: true })
   assert.deepEqual(railOverflowState({ scrollLeft: 599.5, scrollWidth: 900, clientWidth: 300 }), { left: true, right: false })
   assert.deepEqual(railOverflowState({ scrollLeft: -8, scrollWidth: 900, clientWidth: 300 }), { left: false, right: true })
 })
 
-test('rail paging preserves context and settles on item boundaries', () => {
-  const offsets = [0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600]
-  assert.equal(railPageTarget({ scrollLeft: 0, scrollWidth: 900, clientWidth: 300 }, offsets, 1), 300)
-  assert.equal(railPageTarget({ scrollLeft: 300, scrollWidth: 900, clientWidth: 300 }, offsets, 1), 600)
-  assert.equal(railPageTarget({ scrollLeft: 600, scrollWidth: 900, clientWidth: 300 }, offsets, -1), 300)
-  assert.equal(railPageTarget({ scrollLeft: 300, scrollWidth: 900, clientWidth: 300 }, offsets, -1), 0)
-})
-
-test('rail paging settles on uneven tab boundaries', () => {
-  const offsets = [0, 90, 235, 410, 585, 760]
-  assert.equal(railPageTarget({ scrollLeft: 0, scrollWidth: 940, clientWidth: 300 }, offsets, 1), 410)
-  assert.equal(railPageTarget({ scrollLeft: 410, scrollWidth: 940, clientWidth: 300 }, offsets, -1), 90)
-})
-
-test('focused items are moved clear of both overlay controls', () => {
+test('focused items are moved clear of both passive edge indicators', () => {
   const metrics = { scrollLeft: 200, scrollWidth: 900, clientWidth: 300 }
-  assert.equal(railFocusTarget(metrics, 210, 260), 182)
-  assert.equal(railFocusTarget(metrics, 460, 520), 248)
+  assert.equal(railFocusTarget(metrics, 210, 260), 192)
+  assert.equal(railFocusTarget(metrics, 460, 520), 238)
   assert.equal(railFocusTarget(metrics, 300, 360), 200)
 })
 
@@ -107,37 +91,8 @@ test('jump-to-latest does not request terminal input focus', () => {
   assert.doesNotMatch(rendererHarness, /chip-then-keyboard/)
 })
 
-test('a row that fits keeps every chip and reserves nothing for an overflow chip', () => {
-  // Six 60px chips with 5px gaps is 385. The `+N` chip's width is passed but must not be
-  // spent: a rail that fits has to look exactly like a rail from before the split existed.
-  const widths = [60, 60, 60, 60, 60, 60]
-  assert.equal(railFitCount({ widths, gap: 5, available: 385, overflowWidth: 42 }), 6)
-  assert.equal(railFitCount({ widths, gap: 5, available: 400, overflowWidth: 42 }), 6)
-})
-
-test('subpixel measurement does not push the last chip of a full row into the popover', () => {
-  // Real widths come from getBoundingClientRect at fractional device pixel ratios, so an
-  // exactly-fitting row routinely measures a few hundredths over its container.
-  const widths = [60.2, 60.2, 60.2]
-  assert.equal(railFitCount({ widths, gap: 5, available: 190.4, overflowWidth: 42 }), 3)
-})
-
-test('once anything overflows the `+N` chip is paid for before the first chip is placed', () => {
-  const widths = [60, 60, 60, 60, 60, 60]
-  // At 300 the row has 253 left once the chip and its gap are taken; four chips need 255,
-  // so the fourth goes to the popover even though it would have fitted the bare 300.
-  assert.equal(railFitCount({ widths, gap: 5, available: 300, overflowWidth: 42 }), 3)
-  assert.equal(railFitCount({ widths, gap: 5, available: 320, overflowWidth: 42 }), 4)
-})
-
-test('a rail narrower than its first chip pins nothing and shows only the overflow chip', () => {
-  assert.equal(railFitCount({ widths: [120, 120], gap: 5, available: 90, overflowWidth: 42 }), 0)
-  assert.equal(railFitCount({ widths: [], gap: 5, available: 400, overflowWidth: 42 }), 0)
-})
-
 test('the overflow popover opens upward, on the rail\'s trailing edge, inside the viewport', () => {
-  // The rect is the trailing *cluster*, not the `+N` chip inside it, so the panel lands on
-  // the rail's edge whatever that row is carrying.
+  // The rect is the fixed drawer cluster, so the panel lands on the rail's trailing edge.
   const box = railOverlayBox({ left: 1040, right: 1150, top: 860 }, wholeWindow(1400, 900), RAIL_POPOVER_MAX_WIDTH_PX)
   assert.equal(box.width, RAIL_POPOVER_MAX_WIDTH_PX)
   // Right edge on the cluster's right edge: 1150 - 520.
@@ -225,55 +180,41 @@ function declarations(styles: string, pattern: RegExp): string {
   return rule[1]
 }
 
-test('the overflow chip is fixed-width, so the control that absorbs overflow cannot overflow', () => {
+test('the permanent drawer control is fixed-width and carries the full row count', () => {
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
   const rule = declarations(styles, /\.terminal-action-rail button\.rail-more\{([^}]*)\}/)
   assert.match(rule, /min-width:var\(--rail-more-width\)/)
   assert.match(rule, /width:var\(--rail-more-width\)/)
-  // No reservation in the split any more: the chip lives outside the scroller, so the
-  // scroller's own clientWidth already excludes it and a reserved width would count it
-  // twice (RailStrip.tsx passes overflowWidth: 0).
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(strip, /overflowWidth: 0/)
+  assert.match(strip, /<RailDrawerIcon \/><span class="rail-more-count">\{chips\.length\}<\/span>/)
+  assert.doesNotMatch(strip, /railFitCount|rail-row-measure/)
 })
 
-test('the measured copy of a row is unpaintable, untouchable, and outside the scroller', () => {
+test('scroll indicators are passive glow wedges, not buttons', () => {
+  const rail = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
-  const rule = declarations(styles, /\.rail-row-measure\{([^}]*)\}/)
-  assert.match(rule, /visibility:hidden/)
-  assert.match(rule, /pointer-events:none/)
-  // Without this an absolutely-positioned flex container shrink-fits, and the widths it
-  // reports are the squeezed ones rather than the ones the chips would really render at.
-  assert.match(rule, /width:max-content/)
-  // A measure row *inside* the strip would count toward its scrollWidth and report
-  // permanent overflow to the component drawing the edge chevrons.
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(strip, /class="terminal-action-scroll rail-row-measure"[\s\S]*?<OverflowRail/)
+  assert.match(rail, /<span class="overflow-rail-edge overflow-rail-left" aria-hidden="true" \/>/)
+  assert.match(rail, /<span class="overflow-rail-edge overflow-rail-right" aria-hidden="true" \/>/)
+  assert.doesNotMatch(rail, /class="overflow-rail-edge[^\n]*onClick/)
+  assert.match(declarations(styles, /\.overflow-rail-edge\{([^}]*)\}/), /pointer-events:none/)
 })
 
-test('the strip carries no gear: Configure lives in the popover, not on a rail row', () => {
-  // Operator decision 2026-08-22: a standing gear chip on the strip spent rail width on
-  // chrome and read as one more action. The in-place editor is reached from the overflow
-  // popover's header (and the full editor from Actions -> Configure); the strip renders
-  // only chips, the readout, and the `+N` chip.
+test('every row has one drawer route to its complete list and full configuration', () => {
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
   assert.doesNotMatch(strip, /class="rail-config"/)
-  // The popover still receives the handler, or the gear would be gone everywhere.
+  assert.match(strip, /class=\{`rail-more/)
   assert.match(strip, /onConfigure=\{onConfigure\}/)
+  assert.match(strip, /\{chips\.map\(chip => cloneElement\(chip\)\)\}/)
 })
 
 test('the row scrolls end to end while the trailing cluster stays pinned outside it', () => {
-  // Operator decision 2026-08-22: scroll OR overlay, reader's choice. Every chip renders
-  // inside the scroller, and the cluster (readout + `+N`) is the row's fixed furniture
-  // beside it - never inside it, where a pan would carry it away.
+  // Every chip remains in the scroller, while the readout and drawer stay fixed beside it.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
   const scroller = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('</OverflowRail>'))
   assert.match(scroller, /\{chips\}/)
   assert.ok(!scroller.includes('rail-row-trailing'), 'the cluster must sit outside the scroller')
   const cluster = strip.slice(strip.indexOf('class="rail-row-trailing"'))
-  // Order inside the cluster is load-bearing: the readout is the only shrinking thing, so
-  // it goes first and the `+N` chip holds the trailing edge.
-  assert.ok(cluster.indexOf('aria-live="polite"') < cluster.indexOf('ref={moreRef}'))
+  assert.ok(cluster.indexOf('aria-live="polite"') < cluster.indexOf('class={`rail-more'))
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
   const rule = declarations(styles, /\.rail-row>\.rail-row-trailing\{([^}]*)\}/)
   // Fixed furniture beside a flex:1 scroller: the cluster must never grow into the space
@@ -284,27 +225,25 @@ test('the row scrolls end to end while the trailing cluster stays pinned outside
 
 test('the panel is placed against the trailing cluster, so it lands on the rail\'s edge', () => {
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  // Anchoring to the `+N` chip instead would leave the panel a gear-width short of the edge
-  // on the one row that carries a gear, which is two placements for one control.
   assert.match(strip, /anchor=\{trailingRef\.current\}/)
 })
 
-test('the popover offers the rail editor, and closes as it hands over', () => {
+test('the borderless popover footer opens the full configuration modal', () => {
   const popover = readFileSync(new URL('../src/RailOverflowPopover.tsx', import.meta.url), 'utf8')
   assert.match(popover, /class="rail-overflow-configure"/)
-  // The editor replaces the whole rail area, so a panel left floating over it would be
-  // pointing at a surface that no longer exists.
   assert.match(popover, /onClick=\{\(\) => \{ onClose\(\); onConfigure\(\) \}\}/)
-  // Chrome in the header, beside the close control - not a chip in the grid, where it would
-  // read as one more thing to press into the terminal.
-  const grid = popover.slice(popover.indexOf('rail-overflow-grid'))
-  assert.doesNotMatch(grid, /rail-overflow-configure/)
+  assert.doesNotMatch(popover, /<header|More actions|stays open/)
+  assert.match(popover, /<footer class="rail-overflow-actions">/)
+  assert.match(popover, /class="rail-overflow-close"/)
 })
 
 test('the terminal rail keeps the scroller that owns its touch-drag click suppression', () => {
-  // The split means a row no longer overflows, but the pan's suppression is what settles
-  // whether a swipe that began on a chip activated it - including the `+N` chip, whose tap
-  // opens a panel over whatever the finger is above.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(strip, /<OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard>/)
+  assert.match(strip, /<OverflowRail className="terminal-action-scroll" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard>/)
+})
+
+test('command rail edge wedges use one row-relative trailing alignment', () => {
+  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  assert.match(styles, /\.terminal-action-rows>\.rail-row>\.overflow-rail\{[^}]*position:static[^}]*overflow:visible/)
+  assert.match(styles, /\.terminal-action-rows>\.rail-row \.overflow-rail-right\{right:calc\(var\(--rail-more-width\) \+ var\(--rail-pad-x\) \+ 1px\)\}/)
 })

@@ -6,10 +6,8 @@ import { pointerDragOwnsPointer } from './pointerDragClaim'
 import {
   railFocusTarget,
   railOverflowState,
-  railPageTarget,
   RAIL_PAN_SLOP_PX,
   type RailOverflowState,
-  type RailScrollDirection,
 } from './railOverflow'
 
 type OverflowRailStripProps = Omit<JSX.HTMLAttributes<HTMLDivElement>, 'class' | 'className' | 'ref' | 'onWheel' | 'onFocusCapture'> & {
@@ -19,7 +17,6 @@ type OverflowRailStripProps = Omit<JSX.HTMLAttributes<HTMLDivElement>, 'class' |
 interface OverflowRailProps {
   children: ComponentChildren
   className: string
-  itemLabel: string
   wrapperClassName?: string
   activeKey?: string
   focusKey?: string
@@ -54,12 +51,6 @@ function metrics(strip: HTMLDivElement) {
   }
 }
 
-function itemOffsets(strip: HTMLDivElement): number[] {
-  const items = Array.from(strip.children) as HTMLElement[]
-  const leading = items[0]?.offsetLeft ?? 0
-  return items.map(item => item.offsetLeft - leading)
-}
-
 function reducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
@@ -79,7 +70,6 @@ function revealItem(strip: HTMLDivElement, item: HTMLElement): void {
 export function OverflowRail({
   children,
   className,
-  itemLabel,
   wrapperClassName = '',
   activeKey,
   focusKey,
@@ -155,15 +145,6 @@ export function OverflowRail({
     return scheduleSelectedReveal()
   }, [focusKey])
 
-  const page = (direction: RailScrollDirection) => {
-    const strip = stripRef.current
-    if (!strip) return
-    strip.scrollTo({
-      left: railPageTarget(metrics(strip), itemOffsets(strip), direction),
-      behavior: reducedMotion() ? 'auto' : 'smooth',
-    })
-  }
-
   const finishTouchDrag = (wrapper: HTMLDivElement, pointerId: number, cancelled: boolean) => {
     const state = touchDragRef.current
     if (!state || state.pointerId !== pointerId) return
@@ -228,7 +209,7 @@ export function OverflowRail({
       event.stopPropagation()
     }}
   >
-    {overflow.left && <button class="overflow-rail-edge overflow-rail-left" type="button" aria-label={`Scroll ${itemLabel} left`} title={`More ${itemLabel} to the left`} onClick={() => page(-1)}>‹</button>}
+    {overflow.left && <span class="overflow-rail-edge overflow-rail-left" aria-hidden="true" />}
     <div
       {...stripProps}
       class={`overflow-rail-strip ${className}`}
@@ -247,13 +228,13 @@ export function OverflowRail({
         revealItem(strip, item)
       }}
     >{children}</div>
-    {overflow.right && <button class="overflow-rail-edge overflow-rail-right" type="button" aria-label={`Scroll ${itemLabel} right`} title={`More ${itemLabel} to the right`} onClick={() => page(1)}>›</button>}
+    {overflow.right && <span class="overflow-rail-edge overflow-rail-right" aria-hidden="true" />}
   </div>
 }
 
 /** Command-rail specialization of the shared overflow treatment. */
 export function RailScroller({ children }: Pick<OverflowRailProps, 'children'>) {
-  return <OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain={1.75} preserveSoftKeyboard>
+  return <OverflowRail className="terminal-action-scroll" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain={1.75} preserveSoftKeyboard>
     {children}
   </OverflowRail>
 }

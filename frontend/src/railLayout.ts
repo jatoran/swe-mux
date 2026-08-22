@@ -246,6 +246,26 @@ export function updateRailCatalogItem(config: RailConfig, itemId: string, patch:
   return next
 }
 
+/** Update presentation fields on any catalog item without opening built-in behavior to edits. */
+export function updateRailItemPresentation(
+  config: RailConfig,
+  itemId: string,
+  patch: Pick<RailItem, 'display' | 'displayLabel'>,
+): RailConfig {
+  const index = config.items.findIndex(item => item.id === itemId)
+  if (index < 0) return config
+  const next = cloneConfig(config)
+  const item = next.items[index]
+  next.items[index] = {
+    ...item,
+    ...(patch.display && patch.display !== 'auto' ? { display: patch.display } : {}),
+    ...(patch.displayLabel?.trim() ? { displayLabel: patch.displayLabel.trim() } : {}),
+  }
+  if (!patch.display || patch.display === 'auto') delete next.items[index].display
+  if (!patch.displayLabel?.trim()) delete next.items[index].displayLabel
+  return next
+}
+
 // ---------------------------------------------------------------------------
 // Hit testing
 // ---------------------------------------------------------------------------

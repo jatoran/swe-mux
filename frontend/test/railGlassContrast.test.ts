@@ -15,7 +15,7 @@ import test from 'node:test'
 //     text-bearing pieces). It is what makes the glass visibly glass, so it is pinned LOW:
 //     at most 50%.
 //   * `--rail-glass` is every surface a label sits on - grid chips, drop-up rows, sticky
-//     bars, the popover header - and those composite over the field, so text sits on the
+//     bars, and the popover footer - and those composite over the field, so text sits on the
 //     two layers together.
 // The floors, from the composited result: default/dark/light keep a hard 4.5:1 over both
 // extremes, and every theme in the file keeps the 3:1 large-text floor. Universal 4.5:1
@@ -95,7 +95,7 @@ test('the glass is structurally glass: low field, text-bearing layers, blur on b
   // Every surface a label sits on carries the text-bearing mix - nothing readable sits on
   // the bare field.
   assert.match(CSS, /\.rail-overflow-grid>button\{background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)\}/)
-  assert.match(CSS, /\.rail-overflow-popover>header\{[^}]*background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)/)
+  assert.match(CSS, /\.rail-overflow-actions\{[^}]*background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)/)
   assert.match(CSS, /\.rail-dropup-open\{[^}]*background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)/)
   assert.match(CSS, /\.rail-dropup-row\{[^}]*background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)/)
 })

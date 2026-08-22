@@ -9,6 +9,7 @@ test('the drawer exposes one Actions tab with three independently collapsible se
   const tabs = source('drawerTabs.ts')
   const drawer = source('UtilityDrawer.tsx')
   const actions = source('ActionsTab.tsx')
+  const modal = source('ActionEditorModal.tsx')
 
   assert.ok(tabs.includes("id: 'actions', label: 'Actions'"))
   assert.doesNotMatch(tabs, /id: 'commands'|id: 'prompts'/)
@@ -26,27 +27,24 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   const settings = source('Settings.tsx')
   const terminal = source('TerminalPane.tsx')
   const actions = source('ActionsTab.tsx')
-  const inline = source('RailInlineEditor.tsx')
+  const modal = source('ActionEditorModal.tsx')
 
   assert.ok(app.includes("id: 'actions.configure'"), 'command palette registry needs Configure Actions')
-  // It opens on the Project the operator was in: a Project's own actions and prompt
-  // templates are listable from no other scope, so defaulting to Global made the
-  // editor look emptier than the rail it was opened from.
+  // Project context is passed so detached projects can open directly and Global can offer
+  // a one-step detach for projects that still follow it.
   assert.ok(app.includes('<ActionEditorModal projectId='))
+  assert.ok(modal.includes("railProjectScopeKind(blob, projectId) === 'fork' ? projectId : ''"))
+  assert.ok(modal.includes('contextProjectId={projectId}'))
   assert.ok(app.includes("runNamedCommand('actions.configure')"), 'main menu must use the shared command')
-  // The in-place editor is reached from the overflow popover's header gear (the strip
-  // itself carries no gear - operator decision 2026-08-22: a standing gear chip spent
-  // rail width on chrome); the full modal stays one click away behind the editor's
-  // "All options…" control and Actions -> Configure, so a rail configured down to
-  // nothing still has a way back into configuration.
+  // Every row's drawer popover reaches the full modal directly, including empty rows.
   const strip = source('RailStrip.tsx')
   const popover = source('RailOverflowPopover.tsx')
   assert.ok(!strip.includes('class="rail-config"'), 'the strip must not draw its own gear')
   assert.ok(strip.includes('onConfigure={onConfigure}'), 'the row must hand Configure to its popover')
-  assert.ok(popover.includes('aria-label="Customize actions"'), 'the overflow popover must reach the editor')
-  assert.ok(terminal.includes('onConfigure={index===renderedRailRows.length-1?()=>setRailEditOpen(true):undefined}'))
-  assert.ok(terminal.includes('<RailInlineEditor'), 'the gear flips the rail area into RailInlineEditor')
-  assert.ok(inline.includes('onOpenFull'), 'the in-place editor must reach the full modal')
+  assert.ok(popover.includes('aria-label="Configure Actions"'), 'the overflow popover must reach the full modal')
+  assert.ok(terminal.includes('onConfigure={()=>onConfigureRail?.()}'))
+  assert.doesNotMatch(terminal, /RailInlineEditor|railEditOpen/)
+  assert.ok(source('RailEditor.tsx').includes('Detach {contextProjectName} to edit directly'))
   assert.ok(actions.includes('run: onConfigureActions'), 'Quick actions must expose Configure')
   assert.doesNotMatch(settings, /RailEditor|commandrail:/)
 })
@@ -96,6 +94,9 @@ test('the editor discloses progressively: layouts first, creation and catalog co
   // The catalog’s controls are labelled checkboxes, not the retired badge code.
   assert.ok(editor.includes('Where it appears'))
   assert.ok(editor.includes('Shown in these sessions'))
+  assert.ok(editor.includes('Button appearance'))
+  assert.ok(editor.includes('Visible label'))
+  assert.ok(editor.includes('<RailItemIcon'))
   assert.doesNotMatch(editor, /rail-where|rail-tags/)
   // One device at a time, defaulting to the device this browser is.
   assert.ok(editor.includes('useState<RailDevice>(() => currentProfile())'))

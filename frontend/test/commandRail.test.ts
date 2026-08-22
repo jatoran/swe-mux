@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig, itemDefaultSurface,
   mergeRailCatalog, migratedRailItemId, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
-  railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
+  railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
   type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem,
 } from '../src/commandRail.ts'
 import { composerClearSequence } from '../src/composerText.ts'
@@ -228,6 +228,30 @@ test('built-in behaviour is re-adopted over a saved catalog entry', () => {
   assert.equal(ctrlC?.type, 'key')
   assert.equal(ctrlC?.bytes, '\x03')
   assert.equal(ctrlC?.label, '^C')
+})
+
+test('built-in presentation and session visibility survive behavior re-adoption', () => {
+  const config = normalizeRailConfig({
+    items: [{
+      id: 'copyInput', type: 'text', label: 'hijacked', text: 'unsafe',
+      display: 'icon-label', displayLabel: 'Composer', backends: ['codex'],
+    }],
+    layouts: { desktop: { strip: [{ id: 'r1', items: ['copyInput'] }] } },
+  })
+  const item = config.items.find(entry => entry.id === 'copyInput')!
+  assert.equal(item.type, 'action')
+  assert.equal(item.action, 'copyInput')
+  assert.equal('text' in item, false)
+  assert.equal(item.display, 'icon-label')
+  assert.equal(item.displayLabel, 'Composer')
+  assert.deepEqual(item.backends, ['codex'])
+})
+
+test('display helpers fall back safely when an item has no registered icon', () => {
+  const item: RailItem = { id: 'custom:text:x', type: 'text', label: 'Original', display: 'icon', displayLabel: 'Visible' }
+  assert.equal(railItemDisplayLabel(item), 'Visible')
+  assert.equal(railItemDisplayMode(item, false), 'label')
+  assert.equal(railItemDisplayMode({ ...item, display: 'icon-label' }, true), 'icon-label')
 })
 
 test('mergeRailCatalog reports which built-ins it had to add', () => {

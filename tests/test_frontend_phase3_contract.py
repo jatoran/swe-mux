@@ -377,7 +377,7 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     workspace_at = app.index("<div class={`workspace")
     assert workspace_at < app.index('<header class="app-topbar">', workspace_at)
     assert 'class="top-workspace-tabs"' not in app
-    assert 'className="stack-tabs" itemLabel="workspace tabs"' in app
+    assert 'className="stack-tabs" wrapperClassName="stack-tabs-rail"' in app
     assert "role:'tablist','aria-label':'Workspace tabs'" in app
     assert "node.children.map(child=>" in app
     assert "mux.sidebar.width.v1" in app

@@ -47,6 +47,7 @@ export const RAIL_SURFACES: readonly RailSurface[] = ['strip', 'panel']
 // 'prompt'→ insert a prompt-library template, resolved from the server by key at
 //           click time so the button always injects the template's current text
 export type RailItemType = 'key' | 'action' | 'text' | 'slash' | 'skill' | 'prompt'
+export type RailItemDisplay = 'auto' | 'icon' | 'label' | 'icon-label'
 
 /** Injection types a user may author. 'action' is app-owned and never custom. */
 export const CUSTOM_RAIL_TYPES: readonly RailItemType[] = ['key', 'text', 'slash', 'skill', 'prompt']
@@ -56,6 +57,10 @@ export interface RailItem {
   id: string
   type: RailItemType
   label: string
+  /** Presentation only. `auto` uses an available built-in icon and otherwise the label. */
+  display?: RailItemDisplay
+  /** Optional visible label override. The command's identity and payload stay unchanged. */
+  displayLabel?: string
   title?: string
   /** 'key' items: the raw sequence written to the pty. */
   bytes?: string
@@ -236,6 +241,19 @@ export const BUILTIN_RAIL: RailItem[] = [
 
 const BUILTIN_BY_ID = new Map(BUILTIN_RAIL.map(item => [item.id, item]))
 
+const RAIL_ITEM_DISPLAYS: readonly RailItemDisplay[] = ['auto', 'icon', 'label', 'icon-label']
+
+export function railItemDisplayLabel(item: RailItem, fallback = item.label): string {
+  return item.displayLabel?.trim() || fallback
+}
+
+/** Resolve a requested presentation against whether this item actually has a registered icon. */
+export function railItemDisplayMode(item: RailItem, hasIcon: boolean): Exclude<RailItemDisplay, 'auto'> {
+  if (!hasIcon) return 'label'
+  if (item.display === 'label' || item.display === 'icon-label') return item.display
+  return 'icon'
+}
+
 /**
  * Where a stored Action id lands now.
  *
@@ -313,6 +331,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  *  verbatim; unknown-typed and duplicate entries are dropped. */
 export function mergeRailCatalog(saved: unknown): { items: RailItem[]; addedBuiltins: RailItem[] } {
   const entries = Array.isArray(saved) ? saved : []
+  const knownBackends = new Set(allRailBackends())
   const seen = new Set<string>()
   const items: RailItem[] = []
   for (const raw of entries) {
@@ -322,7 +341,25 @@ export function mergeRailCatalog(saved: unknown): { items: RailItem[]; addedBuil
     const id = migratedRailItemId(raw.id)
     if (seen.has(id)) continue
     const builtin = BUILTIN_BY_ID.get(id)
-    if (builtin) { seen.add(id); items.push({ ...builtin }); continue }
+    if (builtin) {
+      seen.add(id)
+      const display = RAIL_ITEM_DISPLAYS.includes(raw.display as RailItemDisplay)
+        ? raw.display as RailItemDisplay
+        : undefined
+      const displayLabel = typeof raw.displayLabel === 'string' && raw.displayLabel.trim()
+        ? raw.displayLabel.trim()
+        : undefined
+      const backends = Array.isArray(raw.backends)
+        ? raw.backends.filter((backend): backend is RailBackend => typeof backend === 'string' && knownBackends.has(backend))
+        : undefined
+      items.push({
+        ...builtin,
+        ...(display ? { display } : {}),
+        ...(displayLabel ? { displayLabel } : {}),
+        ...(backends?.length ? { backends } : {}),
+      })
+      continue
+    }
     // Custom items may only be safe injection types, never 'action'. They are never
     // migrated: the retirement table covers built-ins, whose behaviour this module owns.
     const entry = raw as unknown as RailItem
@@ -454,7 +491,14 @@ export function mergeLegacyRail(saved: LegacyRailItem[] | undefined | null): Leg
     seen.add(id)
     const builtin = BUILTIN_BY_ID.get(id)
     if (builtin) {
-      out.push({ ...legacyBuiltin(builtin), ...adoptLegacyPlacement(entry), platforms: entry.platforms, backends: entry.backends })
+      out.push({
+        ...legacyBuiltin(builtin),
+        ...adoptLegacyPlacement(entry),
+        platforms: entry.platforms,
+        backends: entry.backends,
+        display: entry.display,
+        displayLabel: entry.displayLabel,
+      })
     } else if (CUSTOM_RAIL_TYPES.includes(entry.type)) {
       out.push({ ...entry, ...adoptLegacyPlacement(entry, 'drawer') })
     }

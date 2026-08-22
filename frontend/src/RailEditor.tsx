@@ -3,17 +3,19 @@ import type { JSX } from 'preact'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
 import {
-  allRailBackends, defaultRailConfig, isBuiltinRailId, railItemVisible, railPayload,
+  allRailBackends, defaultRailConfig, isBuiltinRailId, railItemDisplayLabel, railItemDisplayMode,
+  railItemVisible, railPayload,
   railProjectScopeKind, railRowKey,
   RAIL_DEVICES, RAIL_SURFACES,
   type RailBackend, type RailBlob, type RailConfig, type RailDevice, type RailItem,
-  type RailItemType, type RailRow, type RailSurface,
+  type RailItemDisplay, type RailItemType, type RailRow, type RailSurface,
 } from './commandRail'
 import {
   addRailRow, copyRailSurface, moveRailEntry, moveRailRow, railPlacementCounts,
-  removeRailEntry, removeRailRow, setRailRowLabel, updateRailCatalogItem,
+  removeRailEntry, removeRailRow, setRailRowLabel, updateRailCatalogItem, updateRailItemPresentation,
   type RailDropTarget, type RailRef,
 } from './railLayout'
+import { railItemHasIcon, RailItemIcon } from './railIcons'
 import { beginRailDrag, railRefKey, type RailDragHost, type RailDragPreview, type RailDragSource } from './railDrag'
 import {
   addProjectRailRow, addScopedRailItem, applyScopedRail, detachProjectRail,
@@ -67,17 +69,11 @@ function introSeen(): boolean {
   try { return localStorage.getItem(INTRO_KEY) === '1' } catch { return true }
 }
 
-export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}) {
+export function RailEditor({ initialScope = '', contextProjectId }: { initialScope?: string; contextProjectId?: string } = {}) {
   const backends = allRailBackends()
   const rootRef = useRef<HTMLElement>(null)
   // '' = the shared global config; a project id shows that project's effective
   // layout (shared rows + project additions, or its fork).
-  //
-  // It opens on the Project the operator was in when they asked to configure, not
-  // on Global. Global is a superset in rows but a *subset* in what it can reach —
-  // a Project's own actions and prompt templates are only listable from its own
-  // scope — so defaulting to Global made the surface look like it had less in it
-  // than the rail the operator was standing next to.
   const [scope, setScope] = useState(initialScope)
   const [projects, setProjects] = useState<Project[]>([])
   const [resolved, setResolved] = useState<ResolvedRail>(() => loadResolvedRail())
@@ -114,7 +110,7 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
   // global alone. The confinement is structural rather than a warning, because a
   // Project template pinned to the shared layout is a button that inserts nothing
   // in every other Project (`prompt-library.md`) — which is also why this editor
-  // *opens* on the Project the operator came from rather than on Global.
+  // opens on a detached Project only when the operator came from one.
   useEffect(() => {
     void fetchPromptTemplates(scope || undefined).then(setPrompts).catch(() => setPrompts([]))
   }, [scope])
@@ -160,6 +156,10 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
   const shown = drag.config || resolved.config
   const kind = scope ? resolved.kind : 'global'
   const projectName = scope ? (projects.find(project => project.id === scope)?.name || 'this project') : ''
+  const contextProjectName = contextProjectId
+    ? projects.find(project => project.id === contextProjectId)?.name || 'Current project'
+    : ''
+  const contextProjectKind = contextProjectId ? railProjectScopeKind(currentRailBlob(), contextProjectId) : 'global'
   /** Projects that hold something of their own. Recomputed with the resolution so
    *  it follows an edit that creates or empties an override. */
   const scopedProjects = useMemo(() => {
@@ -180,6 +180,15 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
   const promptTitleOf = (item: RailItem): string =>
     (item.promptKey ? findPromptTemplate(prompts, item.promptKey)?.title : '') || item.label
   const chipLabel = (item: RailItem): string => railItemLabel(item, prompts)
+  const renderItemPreview = (item: RailItem, fallback = chipLabel(item)) => {
+    const hasIcon = railItemHasIcon(item.id)
+    const mode = railItemDisplayMode(item, hasIcon)
+    const label = railItemDisplayLabel(item, fallback)
+    return <span class={`rail-item-preview mode-${mode}`}>
+      {(mode === 'icon' || mode === 'icon-label') && <RailItemIcon id={item.id} />}
+      {(mode === 'label' || mode === 'icon-label') && <span>{label}</span>}
+    </span>
+  }
 
   const itemMeta = (item: RailItem): string => {
     const builtin = isBuiltinRailId(item.id)
@@ -280,7 +289,7 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
       onPointerDown={event => startDrag(event, { kind: 'chip', ref }, label)}
       onKeyDown={event => onChipKey(event, ref)}
     >
-      <span class="rail-chip-label">{label}</span>
+      <span class="rail-chip-label">{item ? renderItemPreview(item, label) : label}</span>
       {/* Hiding is the subtractive half of a splice, and it is a *separate* control
           from × on purpose: × on a shared row still means what the origin tag says
           it means — gone for everybody. */}
@@ -316,7 +325,7 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
       class="rail-chip ghost"
       title={`${label} — hidden in ${projectName}. The shared row still has it for every other project.`}
     >
-      <span class="rail-chip-label">{label}</span>
+      <span class="rail-chip-label">{item ? renderItemPreview(item, label) : label}</span>
       <button
         type="button"
         class="rail-chip-hide"
@@ -401,13 +410,32 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
         onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpandedItem(expanded ? null : item.id) } }}
       >
         <div class="rail-id">
-          <span class="rail-name">{chipLabel(item) || item.id}{projectItem && <i class="rail-origin project" title={`Only ${projectName} has this action`}>this project</i>}</span>
+          <span class="rail-name">{renderItemPreview(item, chipLabel(item) || item.id)}{projectItem && <i class="rail-origin project" title={`Only ${projectName} has this action`}>this project</i>}</span>
           <small class="rail-meta" title={meta}>{meta}</small>
         </div>
         <small class={`rail-placement-summary${placed ? '' : ' off'}`}>{placementSummary(item.id)}</small>
         <span class="rail-expand" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
       </div>
       {expanded && <div class="rail-catalog-detail">
+        <fieldset class="rail-detail-group rail-detail-appearance">
+          <legend>Button appearance</legend>
+          {railItemHasIcon(item.id) && <label>Display<Dropdown
+            value={item.display || 'auto'}
+            onChange={value => commitConfig(updateRailItemPresentation(resolved.config, item.id, { display: value as RailItemDisplay, displayLabel: item.displayLabel }))}
+            options={[
+              { value: 'auto', label: 'Automatic (icon)' },
+              { value: 'icon', label: 'Icon only' },
+              { value: 'label', label: 'Label only' },
+              { value: 'icon-label', label: 'Icon + label' },
+            ]}
+          /></label>}
+          <label>Visible label<input
+            value={item.displayLabel || ''}
+            placeholder={chipLabel(item)}
+            onInput={event => commitConfig(updateRailItemPresentation(resolved.config, item.id, { display: item.display, displayLabel: event.currentTarget.value }))}
+          /></label>
+          <div class="rail-appearance-preview"><span>Preview</span>{renderItemPreview(item)}</div>
+        </fieldset>
         <fieldset class="rail-detail-group">
           <legend>Where it appears</legend>
           {RAIL_DEVICES.map(name => RAIL_SURFACES.map(surface => {
@@ -498,6 +526,16 @@ export function RailEditor({ initialScope = '' }: { initialScope?: string } = {}
         ...backends.map(backend => ({ value: backend, label: backend === 'shell' ? 'Shell' : harnessDisplayName(backend) })),
       ]}/></label>
       <span class="rail-toolbar-gap" />
+      {!scope && contextProjectId && contextProjectKind !== 'fork' && <button
+        type="button"
+        title={`Create a detached copy for ${contextProjectName} and switch to it. Later global edits will not affect that copy.`}
+        onClick={() => {
+          commitBlob(detachProjectRail(currentRailBlob(), contextProjectId))
+          setScope(contextProjectId)
+          setExpandedItem(null)
+          setNote(`${contextProjectName} now has a detached copy of the layout.`)
+        }}
+      >Detach {contextProjectName} to edit directly</button>}
       {scope && kind === 'fork' && <button
         type="button"
         title="Work out how much of this detached copy the shared layout can carry, and reattach it so global edits reach this project again."

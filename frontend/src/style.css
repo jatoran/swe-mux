@@ -2175,7 +2175,7 @@ body {
    through near-black is invisible). `--rail-glass-field` is the panel FIELD - the surface
    between and behind the text-bearing pieces - and it is what makes the glass visibly
    glass, so the test asserts it LOW (<=50%). `--rail-glass` is every surface a label sits
-   on (grid chips, drop-up rows, sticky bars, the popover header); those composite over the
+   on (grid chips, drop-up rows, sticky bars, the popover footer); those composite over the
    field, so text effectively sits on ~85% of theme surface while the field ghosts the
    terminal through at 45%. The floors `test/railGlassContrast.test.ts` pins from the real
    compositing math: default/dark/light keep a hard 4.5:1 on both extremes, and every theme
@@ -2198,24 +2198,14 @@ body {
    Overflow belongs only to the inner strip so Send never moves with its siblings. */
 .terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:var(--rail-row-h);display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
-/* The rail's configured rows, stacked. Each splits independently, so a row that does not
-   fit gets its own `+N` chip and its own popover holding only its remainder. The rail's
-   grid track is `auto`, so adding a row grows the rail and shrinks the terminal by exactly
-   one row height - a layout change, never a measured-then-adjusted one. */
+/* Configured rows stack without wrapping. Each keeps a fixed drawer route to its complete
+   button list, while the strip itself remains horizontally scrollable. */
 .terminal-action-rows{grid-row:1;grid-column:1;min-width:0;display:flex;flex-direction:column}
-/* One `.rail-row` per configured row: the visible strip, its hidden measuring twin, and the
-   popover the twin's measurements decide the contents of (`RailStrip.tsx`). */
+/* One `.rail-row` per configured row: a scrolling strip plus fixed trailing furniture. */
 .terminal-action-rows>.rail-row{position:relative;min-width:0;display:flex;min-height:var(--rail-row-h)}
-.terminal-action-rows>.rail-row>.overflow-rail{flex:1 1 auto;min-width:0;display:flex}
+.terminal-action-rows>.rail-row>.overflow-rail{position:static;flex:1 1 auto;min-width:0;display:flex;overflow:visible}
 .terminal-action-rows>.rail-row>.overflow-rail>.terminal-action-scroll{flex:1 1 auto}
 .terminal-action-rows>.rail-row+.rail-row{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
-/* The measuring twin. `visibility:hidden` is doing three jobs at once - unpainted,
-   unfocusable, and still a real layout box to read widths off - and `width:max-content`
-   stops an absolutely-positioned flex container from shrink-fitting the chips it is
-   supposed to be measuring at their natural size. It is a sibling of the scroller and not
-   a child of it because an absolutely-positioned child still counts toward `scrollWidth`,
-   which would report permanent overflow to the very component drawing the edge chevrons. */
-.rail-row-measure{position:absolute;left:0;top:0;width:max-content;visibility:hidden;pointer-events:none}
 .overflow-rail{position:relative;min-width:0;overflow:hidden}
 .overflow-rail-strip{scrollbar-width:none}
 .overflow-rail-strip::-webkit-scrollbar{display:none}
@@ -2224,20 +2214,11 @@ body {
 .terminal-action-scroll{width:100%;height:100%;min-width:0;display:flex;align-items:center;gap:var(--rail-gap);padding:var(--rail-pad-y) var(--rail-pad-x);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .terminal-action-scroll::-webkit-scrollbar{display:none}
 .terminal-action-scroll>*{flex:0 0 auto}
-/* The trailing cluster: the status readout, the `+N` chip, and the gear, in that order,
-   pushed hard against the rail's trailing edge by taking the row's slack. That is what
-   gives the `+N` chip one place on every row however the row is populated - trailing it
-   behind the last pinned chip put it wherever the split happened to stop.
-   Only the gear is reserved out of the fit budget (`data-rail-fixed`), and the chip is
-   reserved separately by the split itself; the readout takes what is left and ellipsises,
-   so a chip never moves because a transient "Copied" appeared beside it.
-   The cluster sits OUTSIDE the scroller as the row's fixed furniture (2026-08-22): the
-   chips pan underneath it while the `+N` chip and readout hold the trailing edge, so the
-   row is scrollable end to end AND the popover remains the see-it-all alternative. `flex:0`
-   with `max-width` on the readout, because inside a flex row beside a `flex:1` scroller the
-   cluster must never grow into the space the chips scroll through. */
+/* The trailing cluster stays outside the scroller. Its drawer control is present on every
+   row, including empty and non-overflowing rows, so complete-list access and configuration
+   never depend on the current width. */
 .rail-row>.rail-row-trailing{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:var(--rail-gap);padding-right:var(--rail-pad-x)}
-.rail-row>.rail-row-trailing>span{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-row>.rail-row-trailing>span{max-width:34vw;padding-right:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* An arrow rather than the word: the end-cap is the one control on the rail with a fixed
    place, so it can be recognised by shape, and the width it gives back goes to the scrolling
    keys beside it. Narrower, but still a thumb target - the height is what makes it tappable,
@@ -2273,8 +2254,6 @@ body {
 .mobile-terminal-draft>footer{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:6px 7px;border-top:1px solid var(--line)}
 .mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 .mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
-/* No `margin-left:auto` any more: the trailing cluster owns the alignment now, and an auto
-   margin inside it would push the gear away from the `+N` chip it is supposed to sit beside. */
 /* A rail picker's drop-up. Positioned by `anchoredPopoverStyle` (the same math the
    account and resource popovers use), which sets left/bottom/width and a max-height
    against the space above the trigger.
@@ -2308,7 +2287,7 @@ body {
 .rail-dropup-empty,.rail-dropup-note{margin:0;padding:9px 8px;color:var(--muted);font:9px/1.5 'Cascadia Mono',Consolas,monospace}
 .rail-dropup-note{border-top:1px solid var(--line)}
 .terminal-action-rail .rail-dropup-open-trigger{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green)}
-/* The overflow popover: the rest of one rail row, as a wrap grid of the same real chips.
+/* The overflow popover: one complete rail row, as a wrap grid of the same real chips.
    Glass rather than a solid panel, because it stands over live output the operator is
    usually still reading around; `--rail-glass` (`:root`, above) is the one opacity every
    rail overlay is mixed at. Borders and text are never mixed.
@@ -2316,17 +2295,12 @@ body {
    drop-up opened from inside this panel renders over it instead of behind it.
    Width, placement, and the keyboard are `railOverlayPlacement.ts`, not CSS: a phone's half
    -screen cap and the visual viewport are both measurements. */
-.rail-overflow-popover{position:fixed;z-index:95;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
-.rail-overflow-popover>header{display:flex;align-items:center;gap:8px;min-height:26px;padding:0 4px 0 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent);font:9px 'Cascadia Mono',Consolas,monospace}
-.rail-overflow-popover>header strong{color:var(--text);letter-spacing:.06em;text-transform:uppercase}
-/* Scoped through `.terminal-action-rail` only to beat that selector's own `span` rule, which
-   is later in the sheet and would otherwise repaint this hint in the status readout's muted
-   grey - on glass, which is exactly where a muted grey stops being readable. */
-.terminal-action-rail .rail-overflow-popover>header span{max-width:none;margin:0 auto 0 0;color:var(--green);letter-spacing:.04em}
-.rail-overflow-popover .rail-overflow-close,
-.rail-overflow-popover .rail-overflow-configure{flex:none;width:24px;height:24px;min-width:0;padding:0;border:0;background:transparent;color:var(--text);font-size:15px;line-height:1;cursor:pointer}
-.rail-overflow-popover .rail-overflow-configure{font-size:13px}
-@media(hover:hover){.rail-overflow-popover>header button:hover{color:var(--green)}}
+.rail-overflow-popover{position:fixed;z-index:95;display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
+.rail-overflow-popover .rail-overflow-close{position:absolute;z-index:2;top:2px;right:2px;width:18px;height:18px;min-width:0;padding:0;border:0;background:color-mix(in srgb,var(--panel2) 68%,transparent);color:var(--muted);font:13px/1 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.rail-overflow-actions{display:flex;justify-content:flex-end;padding:3px 4px;border-top:1px solid color-mix(in srgb,var(--line) 62%,transparent);background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent)}
+.rail-overflow-popover .rail-overflow-configure{width:26px;height:24px;min-width:0;display:grid;place-items:center;padding:0;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.rail-overflow-popover .rail-overflow-configure svg{width:15px;height:15px}
+@media(hover:hover){.rail-overflow-popover .rail-overflow-close:hover,.rail-overflow-popover .rail-overflow-configure:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}}
 .rail-overflow-grid{min-height:0;display:flex;flex-wrap:wrap;align-content:flex-start;gap:var(--rail-gap);padding:var(--rail-pad-y) var(--rail-pad-x);overflow-y:auto;overscroll-behavior:contain}
 .rail-overflow-grid>*{flex:0 0 auto}
 /* Specificity has to beat `.terminal-action-rail button`, which is later in the sheet. The
@@ -2351,8 +2325,8 @@ body {
 .commandrail-settings .rail-scope-note{margin:2px 0 0;color:var(--muted);font-size:9px}
 /* Origin tags: which scope owns a row or an action, shown only in project scope.
    Green marks project-owned; shared stays neutral. */
-.commandrail-settings .rail-origin,.rail-inline-editor .rail-origin{flex:none;padding:1px 5px;border:1px solid var(--line);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;font-style:normal;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-.commandrail-settings .rail-origin.project,.rail-inline-editor .rail-origin.project{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
+.commandrail-settings .rail-origin{flex:none;padding:1px 5px;border:1px solid var(--line);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;font-style:normal;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.commandrail-settings .rail-origin.project{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
 /* --- layout editor -------------------------------------------------------
    One device at a time (the toolbar switch picks it; it defaults to the device
    this browser is). The device holds the two surfaces (Rail, Drawer), each
@@ -2375,29 +2349,32 @@ body {
 /* The drop target. It keeps a floor height so an emptied row stays aimable, and
    `touch-action:pan-y` lets a finger scroll the settings pane off a chip while a
    held press still becomes a drag (see the hold activation in railDrag.ts).
-   Chip rules are shared with the in-place rail editor, which renders the same
-   chips inside a terminal pane. */
+   Each chip is also its drag handle. */
 .commandrail-settings .rail-chips{min-height:calc(30px*var(--ui-scale));display:flex;flex-wrap:wrap;align-content:flex-start;gap:3px;padding:3px;background:var(--panel)}
-.commandrail-settings .rail-chip,.rail-inline-editor .rail-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:0 2px 0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;line-height:calc(24px*var(--ui-scale));cursor:grab;user-select:none;touch-action:pan-y}
-.commandrail-settings .rail-chip:focus-visible,.rail-inline-editor .rail-chip:focus-visible{outline:1px solid var(--blue);outline-offset:-2px}
-.commandrail-settings .rail-chip.dragging,.rail-inline-editor .rail-chip.dragging{opacity:.32}
-.commandrail-settings .rail-chip.missing,.rail-inline-editor .rail-chip.missing{border-style:dashed;color:var(--muted)}
+.commandrail-settings .rail-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:0 2px 0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;line-height:calc(24px*var(--ui-scale));cursor:grab;user-select:none;touch-action:pan-y}
+.commandrail-settings .rail-chip:focus-visible{outline:1px solid var(--blue);outline-offset:-2px}
+.commandrail-settings .rail-chip.dragging{opacity:.32}
+.commandrail-settings .rail-chip.missing{border-style:dashed;color:var(--muted)}
 /* Dimmed by the backend: still configurable here, just not shown to that session type. */
-.commandrail-settings .rail-chip.filtered,.rail-inline-editor .rail-chip.filtered{opacity:.42}
+.commandrail-settings .rail-chip.filtered{opacity:.42}
 /* This project's own placement inside a shared row (a splice). Marked in the same
    green the "this project" origin tags use, because it is the same fact. */
-.commandrail-settings .rail-chip.project-owned,.rail-inline-editor .rail-chip.project-owned{border-color:color-mix(in srgb,var(--green) 55%,var(--line))}
+.commandrail-settings .rail-chip.project-owned{border-color:color-mix(in srgb,var(--green) 55%,var(--line))}
 /* A button this project hides, drawn where the shared row still holds it. Dashed
    and faint so it reads as a slot rather than as a button, and not draggable —
    there is nothing to move, only something to restore. */
-.commandrail-settings .rail-chip.ghost,.rail-inline-editor .rail-chip.ghost{border-style:dashed;opacity:.5;color:var(--muted);cursor:default}
-.commandrail-settings .rail-chip.ghost .rail-chip-label,.rail-inline-editor .rail-chip.ghost .rail-chip-label{text-decoration:line-through}
-.commandrail-settings .rail-chip-hide,.rail-inline-editor .rail-chip-hide{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
-@media(hover:hover){.commandrail-settings .rail-chip-hide:hover,.rail-inline-editor .rail-chip-hide:hover{color:var(--green)}}
-.commandrail-settings .rail-chip-label,.rail-inline-editor .rail-chip-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.commandrail-settings .rail-chip-remove,.rail-inline-editor .rail-chip-remove{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:11px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
-@media(hover:hover){.commandrail-settings .rail-chip-remove:hover,.rail-inline-editor .rail-chip-remove:hover{color:var(--red,#f07178)}}
-.commandrail-settings .rail-chips-empty,.rail-inline-editor .rail-chips-empty{align-self:center;padding:0 6px;color:var(--muted);font-size:9px;pointer-events:none}
+.commandrail-settings .rail-chip.ghost{border-style:dashed;opacity:.5;color:var(--muted);cursor:default}
+.commandrail-settings .rail-chip.ghost .rail-chip-label{text-decoration:line-through}
+.commandrail-settings .rail-chip-hide{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.commandrail-settings .rail-chip-hide:hover{color:var(--green)}}
+.commandrail-settings .rail-chip-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commandrail-settings .rail-item-preview{display:inline-flex;min-width:0;align-items:center;gap:5px;vertical-align:middle}
+.commandrail-settings .rail-item-preview>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commandrail-settings .rail-item-preview>svg{flex:none;width:14px;height:14px;stroke:currentColor;stroke-width:1.8;fill:none}
+.commandrail-settings .rail-chip .rail-item-preview>svg{width:12px;height:12px}
+.commandrail-settings .rail-chip-remove{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:11px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.commandrail-settings .rail-chip-remove:hover{color:var(--red,#f07178)}}
+.commandrail-settings .rail-chips-empty{align-self:center;padding:0 6px;color:var(--muted);font-size:9px;pointer-events:none}
 /* --- catalog -------------------------------------------------------------
    The collapsed index of everything placeable: name, what it injects, and a
    plain-words placement summary. Expanding a row exposes the actual controls -
@@ -2424,6 +2401,11 @@ body {
 .commandrail-settings .rail-detail-group{min-width:0;margin:0;padding:0;border:0;display:flex;flex-direction:column;gap:3px}
 .commandrail-settings .rail-detail-group legend{margin:0 0 2px;padding:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.05em}
 .commandrail-settings .rail-detail-group label.check{display:flex;flex-direction:row;align-items:center;gap:6px;margin:0;padding:0;color:var(--text);font-size:9px;grid-template-columns:none}
+.commandrail-settings .rail-detail-appearance{min-width:calc(145px*var(--ui-scale))}
+.commandrail-settings .rail-detail-appearance>label{display:flex;flex-direction:column;align-items:stretch;gap:2px;margin:0;padding:0;color:var(--text);font-size:9px;grid-template-columns:none}
+.commandrail-settings .rail-detail-appearance input,.commandrail-settings .rail-detail-appearance .dropdown-trigger{min-width:calc(145px*var(--ui-scale))}
+.commandrail-settings .rail-appearance-preview{display:flex;align-items:center;gap:7px;min-height:calc(26px*var(--ui-scale));margin-top:3px;padding:3px 6px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
+.commandrail-settings .rail-appearance-preview>span:first-child{margin-right:auto;color:var(--muted);font-size:8px;text-transform:uppercase}
 .commandrail-settings .rail-detail-edit label{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;font-size:9px;grid-template-columns:none}
 .commandrail-settings .rail-detail-edit input:not([type="checkbox"]){min-width:calc(120px*var(--ui-scale))}
 .commandrail-settings .rail-detail-edit button.rail-del{align-self:flex-start;margin-top:2px;height:calc(22px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;font-size:9px;cursor:pointer}
@@ -2455,41 +2437,14 @@ body {
   .commandrail-settings .rail-id{grid-area:1/1}
   .commandrail-settings .rail-expand{grid-area:1/2}
   .commandrail-settings .rail-placement-summary{grid-area:2/1/2/3;text-align:left;white-space:normal}
-  .commandrail-settings .rail-chip,.rail-inline-editor .rail-chip{line-height:calc(32px*var(--ui-scale))}
-  .commandrail-settings .rail-chip-remove,.rail-inline-editor .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
-  .commandrail-settings .rail-chip-hide,.rail-inline-editor .rail-chip-hide{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
+  .commandrail-settings .rail-chip{line-height:calc(32px*var(--ui-scale))}
+  .commandrail-settings .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
+  .commandrail-settings .rail-chip-hide{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
   .commandrail-settings .rail-row-head button,.commandrail-settings .rail-surface-head button,.commandrail-settings .rail-toolbar>button{height:calc(30px*var(--ui-scale))}
   .commandrail-settings .rail-add-form input:not([type="checkbox"]),.commandrail-settings .rail-add-form select,.commandrail-settings .rail-add-form .dropdown-trigger{min-width:0;width:100%}
   .commandrail-settings .rail-add-form label{flex:1 1 140px}
   .commandrail-settings .rail-detail-group label.check{min-height:calc(30px*var(--ui-scale))}
 }
-/* --- in-place rail editor (RailInlineEditor, inside a terminal pane) --------
-   The gear flips the rail area into this block. It owns its own vertical scroll
-   with a hard ceiling so a tall picker shrinks the terminal only so far, and
-   its rows wrap instead of scrolling: edit mode is for seeing everything. */
-.terminal-action-rail.rail-editing{display:block}
-.rail-inline-editor{display:flex;flex-direction:column;gap:5px;max-height:min(46dvh,340px);overflow-y:auto;padding:6px 8px;background:var(--panel)}
-.rail-inline-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
-.rail-inline-head strong{color:var(--text);font-size:10px}
-.rail-inline-head .rail-scope-note{flex:1 1 auto;min-width:0;margin:0;color:var(--muted);font-size:9px}
-.terminal-action-rail .rail-inline-head button{min-width:0;height:calc(24px*var(--ui-scale));padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:9px;cursor:pointer}
-.terminal-action-rail .rail-inline-head button.primary{border-color:var(--green);color:var(--green)}
-.rail-inline-row{display:flex;align-items:stretch;gap:4px}
-.rail-inline-row>.rail-origin{align-self:center}
-.rail-inline-row .rail-chips{flex:1 1 auto;min-width:0;min-height:calc(32px*var(--ui-scale));display:flex;flex-wrap:wrap;align-content:flex-start;gap:3px;padding:3px;background:var(--panel2);border:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
-.terminal-action-rail button.rail-inline-add{flex:none;min-width:30px;height:auto;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:12px;cursor:pointer}
-.terminal-action-rail button.rail-inline-add:hover{border-color:var(--accent);color:var(--text)}
-.rail-inline-picker{border:1px solid var(--line);background:var(--panel2)}
-.rail-inline-picker-head{display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid var(--line)}
-.rail-inline-picker-head input{flex:1 1 auto;min-width:0;min-height:calc(24px*var(--ui-scale));padding:0 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace}
-.terminal-action-rail .rail-inline-picker-head button{min-width:0;height:calc(24px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;color:var(--text);font-size:9px;cursor:pointer}
-.rail-inline-picker-list{max-height:190px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:3px;padding:5px 6px}
-.terminal-action-rail .rail-inline-picker-list button{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0;height:auto;padding:4px 6px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:9px;text-align:left;cursor:pointer}
-.terminal-action-rail .rail-inline-picker-list button:hover{border-color:var(--accent)}
-.terminal-action-rail .rail-inline-picker-list button.filtered{opacity:.5}
-.rail-inline-picker-list button small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
-.rail-inline-picker-list .rail-add-note{grid-column:1/-1;margin:0;padding:4px;color:var(--muted);font-size:9px}
-.rail-inline-hint{margin:0;color:var(--muted);font-size:8px}
 /* --- pin toggles (Skills and Prompt templates in the Actions tab) ----------- */
 .actions-tab button.skill-pin{flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:calc(24px*var(--ui-scale));padding:2px 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 .actions-tab button.skill-pin.on{border-color:var(--green);color:var(--green)}
@@ -2511,31 +2466,32 @@ body {
 .prompt-inline-editor .prompt-draft-fields{padding:9px}
 .prompt-inline-editor .prompt-draft-actions{padding:0 9px 9px}
 .terminal-action-rail button{min-width:calc(74px*var(--ui-scale));height:var(--rail-chip-h);border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
-/* The overflow chip. Fixed width by construction so the one control that exists to absorb
-   overflow can never be the thing that overflows, and so the split can reserve its width
-   before it is mounted - `--rail-more-width` is read by `RailStrip.tsx` for exactly that. */
-.terminal-action-rail button.rail-more{min-width:var(--rail-more-width);width:var(--rail-more-width);padding:0;border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green);font-weight:700}
-.terminal-action-rail button.rail-more.rail-more-open{border-color:var(--green);background:color-mix(in srgb,var(--green) 12%,var(--panel2))}
+/* Permanent drawer control. Its icon is deliberately a little heavier than the surrounding
+   line icons, while its count stays subordinate in the bottom-right corner. */
+.terminal-action-rail button.rail-more{position:relative;min-width:var(--rail-more-width);width:var(--rail-more-width);padding:0;border-width:1.5px;border-color:var(--line);color:var(--text);font-weight:700}
+.terminal-action-rail button.rail-more>svg{width:17px;height:17px;stroke-width:2.25}
+.terminal-action-rail button.rail-more .rail-more-count{position:absolute;right:2px;bottom:1px;max-width:none;color:var(--muted);font:700 7px/1 'Cascadia Mono',Consolas,monospace}
+.terminal-action-rail button.rail-more.rail-more-open{border-color:color-mix(in srgb,var(--text) 58%,var(--line));background:color-mix(in srgb,var(--text) 8%,var(--panel2))}
 /* Hover styling is gated to real pointers: touch browsers keep :hover on the last
    tapped element until something else is tapped, which made a rail button look
    permanently selected. Touch feedback is the one-shot pulse below instead, added
    as a class on click (never pointerdown — the rail scrolls, so a finger landing on
    a button may be a drag) and cleared on animationend (see TerminalPane). */
 @media(hover:hover){.terminal-action-rail button:hover:not(:disabled){border-color:var(--green);color:var(--green)}}
-.overflow-rail-edge{position:absolute;z-index:29;top:0;bottom:0;width:28px;height:100%;padding:0;border:0;border-radius:0;color:color-mix(in srgb,var(--text) 76%,var(--muted));font:16px/1 'Cascadia Mono',Consolas,monospace;cursor:pointer;transition:color .12s ease}
-.overflow-rail-left{left:0;padding-right:8px;background:linear-gradient(to right,var(--overflow-rail-bg,var(--panel)) 28%,color-mix(in srgb,var(--overflow-rail-bg,var(--panel)) 90%,transparent) 62%,transparent)}
-.overflow-rail-right{right:0;padding-left:8px;background:linear-gradient(to left,var(--overflow-rail-bg,var(--panel)) 28%,color-mix(in srgb,var(--overflow-rail-bg,var(--panel)) 90%,transparent) 62%,transparent)}
-@media(hover:hover){.overflow-rail-edge:hover{color:var(--overflow-rail-accent,var(--green))}.overflow-rail-left:hover{background:linear-gradient(to right,var(--overflow-rail-bg,var(--panel)) 28%,color-mix(in srgb,var(--overflow-rail-accent,var(--green)) 11%,var(--overflow-rail-bg,var(--panel))) 62%,transparent)}.overflow-rail-right:hover{background:linear-gradient(to left,var(--overflow-rail-bg,var(--panel)) 28%,color-mix(in srgb,var(--overflow-rail-accent,var(--green)) 11%,var(--overflow-rail-bg,var(--panel))) 62%,transparent)}}
-.overflow-rail-edge:active{color:var(--overflow-rail-accent,var(--green))}
-.overflow-rail-edge:focus-visible{outline-offset:-3px}
-.terminal-action-rail button.overflow-rail-edge{min-width:28px;height:100%;font-size:16px}
+.overflow-rail-edge{position:absolute;z-index:29;top:0;bottom:0;width:18px;pointer-events:none}
+.overflow-rail-edge::before{content:'';position:absolute;top:50%;width:12px;height:20px;transform:translateY(-50%);border-radius:50%;background:color-mix(in srgb,var(--text) 9%,transparent);filter:blur(6px)}
+.overflow-rail-edge::after{content:'';position:absolute;top:50%;transform:translateY(-50%);width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--text) 82%,transparent))}
+.overflow-rail-left{left:0}.overflow-rail-left::before{left:-5px}.overflow-rail-left::after{left:3px;border-right:5px solid color-mix(in srgb,var(--text) 82%,var(--muted))}
+.overflow-rail-right{right:0}.overflow-rail-right::before{right:-5px}.overflow-rail-right::after{right:3px;border-left:5px solid color-mix(in srgb,var(--text) 82%,var(--muted))}
+.terminal-action-rows>.rail-row .overflow-rail-left{left:var(--rail-pad-x)}
+.terminal-action-rows>.rail-row .overflow-rail-right{right:calc(var(--rail-more-width) + var(--rail-pad-x) + 1px)}
 .terminal-action-rail button.rail-pulse:not(:disabled){animation:rail-pulse .34s ease-out}
 @keyframes rail-pulse{
   0%{border-color:var(--green);color:var(--green);background:color-mix(in srgb,var(--green) 26%,var(--panel2));box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)}
   70%{border-color:var(--green);color:var(--green);box-shadow:0 0 0 4px transparent}
   100%{box-shadow:0 0 0 0 transparent}
 }
-@media(prefers-reduced-motion:reduce){.terminal-action-rail button.rail-pulse:not(:disabled){animation-duration:.12s}.overflow-rail-edge{transition:none}}
+@media(prefers-reduced-motion:reduce){.terminal-action-rail button.rail-pulse:not(:disabled){animation-duration:.12s}}
 /* End session: destructive, so it reads red on hover instead of the rail's green,
    and fills in once armed — the armed state is the only thing distinguishing a
    click that focuses the confirm from the click that actually kills the pty. */
@@ -5014,3 +4970,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .cold-pane-banner strong{font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:9px}
 .cold-pane-banner span{color:var(--muted)}
 .cold-pane-banner .cold-pane-empty{color:var(--muted);font-style:italic}
+.terminal-action-rail .rail-icon-label{width:auto;min-width:30px;padding:0 var(--rail-text-pad);gap:5px}
+.terminal-action-rail .rail-icon-label .rail-icon-label-text{max-width:150px;margin:0;color:inherit;font:inherit}
+.terminal-action-rail .rail-icon-label svg{flex:none}
