@@ -4068,13 +4068,32 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .actions-tab-toolbar{display:flex;justify-content:flex-end;padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--line)}
 .actions-tab-toolbar>button{min-height:calc(28px*var(--ui-scale));padding:3px 9px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 @media(hover:hover){.actions-tab-toolbar>button:hover{border-color:var(--accent)}}
-.actions-section+.actions-section{border-top:2px solid var(--line)}
-.actions-section-header{position:sticky;top:0;z-index:5;display:flex;align-items:stretch;min-height:34px;background:linear-gradient(var(--bg),var(--bg));box-shadow:inset 3px 0 color-mix(in srgb,var(--muted) 60%,transparent);border-bottom:1px solid var(--line)}
+/* One hue per section, because this tab is three catalogs stacked in a single scroller and
+   the headers that separate them are sticky - so a reader mid-scroll sees a header without
+   seeing the boundary it belongs to, and "which of the three am I in" was answerable only by
+   reading the word. Carried on a variable rather than written three times: the rules below
+   are one set, and a fourth section added without a hue falls back to the muted spine it has
+   now instead of inheriting a neighbour's colour.
+   Green / blue / amber is the widest spread this palette has that avoids `--red`, which is
+   the one token in it that means something. Amber is safe here for the same reason: this tab
+   has no warn or error vocabulary of its own for a 3px spine to be confused with. A
+   single-hue theme (game-boy, virtual-boy) collapses all three, which is inherent to those
+   themes - the spine, the rule between sections, and the caret all still draw. */
+.actions-section{--section-hue:var(--muted)}
+.actions-section-skills{--section-hue:var(--green)}
+.actions-section-prompts{--section-hue:var(--blue)}
+.actions-section-clipboard{--section-hue:var(--amber)}
+.actions-section+.actions-section{border-top:2px solid color-mix(in srgb,var(--section-hue) 38%,var(--line))}
+/* The tint stays a *gradient* rather than becoming a colour: this header is sticky, and the
+   flat `background` it replaces is what keeps content from showing through as it scrolls
+   under. It is deliberately weak - 7% - so the hue reads as an edge marking rather than as a
+   coloured band, and so the uppercase title above it keeps its contrast. */
+.actions-section-header{position:sticky;top:0;z-index:5;display:flex;align-items:stretch;min-height:34px;background:linear-gradient(color-mix(in srgb,var(--section-hue) 7%,var(--bg)),color-mix(in srgb,var(--section-hue) 7%,var(--bg)));box-shadow:inset 3px 0 color-mix(in srgb,var(--section-hue) 78%,transparent);border-bottom:1px solid var(--line)}
 .actions-section:not(.expanded)>.actions-section-header{border-bottom-color:transparent}
 .actions-section.expanded>.actions-section-header>.actions-section-toggle>strong{color:var(--text)}
 .actions-section:not(.expanded)>.actions-section-header>.actions-section-toggle>strong{color:var(--muted)}
 .actions-section-body{background:var(--panel)}
-.actions-section-toggle{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-areas:'caret title' 'caret detail';align-items:center;gap:0 4px;padding:5px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.actions-section-toggle>span{grid-area:caret;color:var(--muted)}.actions-section-toggle>strong{grid-area:title;font-size:9px;text-transform:uppercase;letter-spacing:.06em}.actions-section-toggle>small{grid-area:detail;color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions-section-action{flex:none;margin:5px 7px 5px 0;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}.actions-section-action:hover,.actions-section-action:focus-visible{border-color:var(--accent);color:var(--text)}.actions-section-body{min-width:0;padding-bottom:4px}.actions-section-body>.drawer-skills{border-top:0}.actions-section-body .drawer-skill-list,.actions-section-body>.clipboard-entries{overflow:visible}.actions-section-prompts .drawer-status{padding-left:9px}.actions-section-prompts .clipboard-entry-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:2px;padding:8px 9px}.actions-section-prompts .clipboard-entry-body>span,.actions-section-prompts .clipboard-entry-body>small{grid-area:auto}.actions-section-prompts .prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
+.actions-section-toggle{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-areas:'caret title' 'caret detail';align-items:center;gap:0 4px;padding:5px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.actions-section-toggle>span{grid-area:caret;color:color-mix(in srgb,var(--section-hue) 62%,var(--muted))}.actions-section-toggle>strong{grid-area:title;font-size:9px;text-transform:uppercase;letter-spacing:.06em}.actions-section-toggle>small{grid-area:detail;color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions-section-action{flex:none;margin:5px 7px 5px 0;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}.actions-section-action:hover,.actions-section-action:focus-visible{border-color:var(--accent);color:var(--text)}.actions-section-body{min-width:0;padding-bottom:4px}.actions-section-body>.drawer-skills{border-top:0}.actions-section-body .drawer-skill-list,.actions-section-body>.clipboard-entries{overflow:visible}.actions-section-prompts .drawer-status{padding-left:9px}.actions-section-prompts .clipboard-entry-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:2px;padding:8px 9px}.actions-section-prompts .clipboard-entry-body>span,.actions-section-prompts .clipboard-entry-body>small{grid-area:auto}.actions-section-prompts .prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
 .agent-environment{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .agent-environment-header{flex:0 0 auto;min-height:28px;padding:4px 7px 4px calc(var(--drawer-panel-title-width) + 13px);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--panel2)}
 .agent-environment-header>div{min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}

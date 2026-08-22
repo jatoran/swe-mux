@@ -2329,11 +2329,29 @@ Its rules, and what each one is defending:
 - **The Actions tab's three sections are separated by their headers, not by a line between
   them.** A 1px rule between sections is the same rule every row *inside* a section already
   carries, so the boundary read as one more row. Each header is a full-bleed bar with its own
-  darker ground and a leading edge, and a rule above it twice the weight of any row rule; the
-  bodies sit on the panel ground beneath, so a header reads as a lid over its section. The
-  edge is deliberately muted rather than accent: every green edge in this app means *this one
-  is active* — the selected Project, the active pane tab, the live segment — and three
-  permanent green bars on three permanent headers would spend that meaning on decoration.
+  ground and a leading edge, and a rule above it twice the weight of any row rule; the
+  bodies sit on the panel ground beneath, so a header reads as a lid over its section.
+- **Each of the three carries its own hue** — Skills green, Prompt templates blue, Clipboard
+  amber — on the header's leading edge, a 7% tint of its ground, the rule above it, and its
+  caret (operator decision 2026-08-22).
+  The separators above were the right fix for a boundary drawn too faintly, but they solve
+  the wrong half of the problem on a *sticky* header: a reader halfway down a catalog sees a
+  header with no boundary on screen at all, and "which of the three am I in" was answerable
+  only by reading the word.
+  This supersedes the earlier rule that the edge stay muted rather than accent. That rule was
+  about **sameness**, not about green: every green edge in this app means *this one is
+  active* (the selected Project, the active pane tab, the live segment), and three identical
+  green bars on three permanent headers would have read as three active things and spent that
+  meaning on decoration. Three *different* hues cannot be read that way, because activity is
+  never encoded here as a set of unlike colours — and one of the three has to be green, since
+  green, blue, and amber is the widest spread this palette offers once `--red` is excluded as
+  the one token in it that already means something.
+  Amber is safe for the same reason: this tab has no warn or error vocabulary of its own for a
+  3px spine to be confused with.
+  The hue is carried on a `--section-hue` variable rather than written three times, so a
+  fourth section added without one falls back to the muted spine instead of inheriting a
+  neighbour's colour, and a single-hue theme (game-boy, virtual-boy) collapses all three —
+  inherent to those themes, and the spine, the rule, and the caret all still draw.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed

@@ -16,10 +16,12 @@ test('first open orients once, then leads with one device’s layouts', async ({
   await callout.getByRole('button', { name: 'Got it' }).click()
   await expect(callout).toHaveCount(0)
 
-  // One device at a time; both surfaces of that device render their rows.
+  // One device at a time, and that device has exactly one surface: the rail. Pinning was
+  // removed along with quick actions, so a second `.rail-surface` here would mean a surface
+  // came back without this editor being told what to call it (`SURFACE_LABEL`).
   const switchGroup = page.getByRole('group', { name: 'Device layout to edit' })
   await expect(switchGroup.getByRole('button', { name: 'Desktop' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.locator('.rail-surface')).toHaveCount(2)
+  await expect(page.locator('.rail-surface')).toHaveCount(1)
   const railChips = page.locator('.rail-surface').first().locator('.rail-chip-label')
   await expect(railChips.filter({ hasText: /^Esc$/ })).toHaveCount(1)
 
@@ -60,8 +62,19 @@ test('preview-as dims what that session type would not show', async ({ page }) =
   await page.goto('/action-editor-harness.html?seen=1')
   await expect(page.locator('.rail-chip.filtered')).toHaveCount(0)
   await chooseDropdown(page, page.locator('.rail-preview-as .dropdown-trigger'), 'shell')
-  // Attach is agent-only, so a shell preview dims it without removing it.
-  await expect(page.locator('.rail-chip.filtered', { hasText: 'Attach' })).toHaveCount(1)
+  // Approve and Skills are `agentOnly` and both are on the default desktop rail, so a shell
+  // preview dims them **without removing them** — the editor is showing you a layout you are
+  // still editing, and a chip that vanished could not be dragged, moved, or deleted.
+  // Named items rather than a bare count: a count alone passes just as well when the
+  // dimmer marks the wrong chips, which is the failure worth catching.
+  const dimmed = page.locator('.rail-chip.filtered')
+  await expect(dimmed.filter({ hasText: 'Approve' })).toHaveCount(1)
+  await expect(dimmed.filter({ hasText: 'Skills' })).toHaveCount(1)
+  // Still present in the layout, and still carrying why they are dimmed.
+  await expect(page.locator('.rail-chip', { hasText: 'Approve' })).toHaveCount(1)
+  await expect(dimmed.filter({ hasText: 'Approve' })).toHaveAttribute('title', /Hidden in shell sessions\./)
+  // A shell rail is not an empty rail: the terminal keys are visible to every backend.
+  await expect(dimmed.filter({ hasText: /^Esc$/ })).toHaveCount(0)
   await chooseDropdown(page, page.locator('.rail-preview-as .dropdown-trigger'), '')
   await expect(page.locator('.rail-chip.filtered')).toHaveCount(0)
 })
