@@ -2157,22 +2157,22 @@ body {
    deliberate content of the choice rather than an oversight - the setting exists to trade
    reach for rail height, and it is opt-in on the device it applies to. */
 /* How opaque every command-rail overlay is: the overflow popover, and each of the drop-ups.
-   One number rather than one per surface, and a *measured* one rather than a taste one -
-   `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every
-   theme in this file, and requires it to stay under 95% so a later contrast fix cannot pass
-   by quietly going opaque.
-   80% is a deliberate operator trade (2026-08-22): 90% was the exact floor at which NO theme
-   lost 4.5:1 over a worst-case buffer, and at 90% the glass read as a solid panel. At 80%
-   the shipped default/dark/light palettes still clear a hard 4.5:1 on both extremes (the
-   test asserts it), and every theme holds at least 3.3:1 - above the 3:1 large-text floor
-   the test now pins for all of them. The handful that dip under 4.5 are the novelty
-   palettes (virtual-boy, game-boy, commodore-64) over a solid white buffer, the same
-   palettes that sit nearest the line on the opaque rail. */
-:root{--rail-glass:80%}
+   TWO numbers since 2026-08-22, because one could not serve both masters (measured live: a
+   single opacity high enough to keep labels readable over a white buffer read as a solid
+   panel over the dark terminals this app actually runs on - 20% of near-black leaking
+   through near-black is invisible). `--rail-glass-field` is the panel FIELD - the surface
+   between and behind the text-bearing pieces - and it is what makes the glass visibly
+   glass, so the test asserts it LOW (<=50%). `--rail-glass` is every surface a label sits
+   on (grid chips, drop-up rows, sticky bars, the popover header); those composite over the
+   field, so text effectively sits on ~85% of theme surface while the field ghosts the
+   terminal through at 45%. The floors `test/railGlassContrast.test.ts` pins from the real
+   compositing math: default/dark/light keep a hard 4.5:1 on both extremes, and every theme
+   in this file keeps the 3:1 large-text floor. */
+:root{--rail-glass:72%;--rail-glass-field:45%}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
   /* With no blur behind it the glass is a flat wash of whatever pixel happens to be under
      each letter, which is neither the look nor a contrast anyone can reason about. */
-  :root{--rail-glass:98%}
+  :root{--rail-glass:98%;--rail-glass-field:98%}
 }
 :root{--rail-gap:5px;--rail-pad-y:3px;--rail-pad-x:7px;--rail-chip-h:calc(27px*var(--ui-scale));--rail-chip-pad:6px;--rail-text-pad:8px;--rail-row-h:34px;--rail-more-width:42px}
 :root[data-rail-density="compact"]{--rail-gap:4px;--rail-pad-y:2px;--rail-pad-x:6px;--rail-chip-h:calc(24px*var(--ui-scale));--rail-chip-pad:5px;--rail-text-pad:7px;--rail-row-h:29px;--rail-more-width:38px}
@@ -2265,7 +2265,7 @@ body {
    `--rail-dropup-row` are the whole contract, so the height can be tuned without
    touching either drop-up's markup, and rows are a fixed height so the cap actually
    means five of them rather than "five short ones or two long ones". */
-.rail-dropup{--rail-dropup-rows:5;--rail-dropup-row:36px;position:fixed;z-index:96;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
+.rail-dropup{--rail-dropup-rows:5;--rail-dropup-row:36px;position:fixed;z-index:96;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
 .rail-dropup-open{position:sticky;top:0;z-index:1;width:100%;min-height:28px;padding:0 8px;border:0;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent);color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;text-align:left;letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
 .rail-dropup-open:hover,.rail-dropup-open:focus-visible{background:color-mix(in srgb,var(--green) 12%,var(--panel2))}
 /* Two exits share the sticky bar rather than each taking one of the five list rows. */
@@ -2273,10 +2273,11 @@ body {
 .rail-dropup-sticky>.rail-dropup-open{flex:1 1 0;min-width:0;border-bottom:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-dropup-sticky>.rail-dropup-open+.rail-dropup-open{flex:0 0 auto;border-left:1px solid var(--line)}
 .rail-dropup-list{max-height:calc(var(--rail-dropup-rows) * var(--rail-dropup-row));overflow-y:auto;overscroll-behavior:contain}
-.rail-dropup-row{box-sizing:border-box;width:100%;height:var(--rail-dropup-row);display:grid;align-content:center;gap:1px;padding:0 8px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);background:transparent;color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
-/* Glass, like the panel under it: an opaque plate under the pointer is the one place the
+.rail-dropup-row{box-sizing:border-box;width:100%;height:var(--rail-dropup-row);display:grid;align-content:center;gap:1px;padding:0 8px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
+/* Rows carry the text-bearing mix standing (labels never sit on the bare field), and the
+   hover strengthens it without going opaque: an opaque plate under the pointer is the one place the
    frosting visibly breaks, and it breaks exactly where the eye is. */
-.rail-dropup-row:hover,.rail-dropup-row:focus-visible{background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent)}
+.rail-dropup-row:hover,.rail-dropup-row:focus-visible{background:color-mix(in srgb,var(--panel2) 92%,transparent)}
 .rail-dropup-row:disabled{opacity:.45;cursor:not-allowed}
 .rail-dropup-row.shadowed{opacity:.6}
 /* Both lines are single-line and ellipsized: a drop-up row that wrapped would break
@@ -2297,8 +2298,8 @@ body {
    drop-up opened from inside this panel renders over it instead of behind it.
    Width, placement, and the keyboard are `railOverlayPlacement.ts`, not CSS: a phone's half
    -screen cap and the visual viewport are both measurements. */
-.rail-overflow-popover{position:fixed;z-index:95;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
-.rail-overflow-popover>header{display:flex;align-items:center;gap:8px;min-height:26px;padding:0 4px 0 9px;border-bottom:1px solid var(--line);font:9px 'Cascadia Mono',Consolas,monospace}
+.rail-overflow-popover{position:fixed;z-index:95;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
+.rail-overflow-popover>header{display:flex;align-items:center;gap:8px;min-height:26px;padding:0 4px 0 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent);font:9px 'Cascadia Mono',Consolas,monospace}
 .rail-overflow-popover>header strong{color:var(--text);letter-spacing:.06em;text-transform:uppercase}
 /* Scoped through `.terminal-action-rail` only to beat that selector's own `span` rule, which
    is later in the sheet and would otherwise repaint this hint in the status readout's muted
