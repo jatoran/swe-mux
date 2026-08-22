@@ -26,7 +26,11 @@
   own successor run rather than corruption.
 - `SessionRecord.agent_loaded_at`: the start of the current Claude or Codex process generation.
   It is set at direct agent spawn or shell-to-agent promotion, survives conversation rollover and daemon adoption, and clears on demotion.
-  Agent Environment and skill drift compare current file mtimes with this field rather than with `agent_run_started_at`.
+  Skill drift compares current file mtimes with this field rather than with `agent_run_started_at`.
+- `SessionRecord.agent_env_baseline`: per-source content digests of the agent configuration that process generation loaded, captured once alongside `agent_loaded_at` and cleared with it.
+  Agent Environment reports configuration drift by comparing against it, so a file rewritten with content that changes nothing the tab reports is not drift.
+  Empty means no snapshot exists for this generation, which the tab must show as untracked rather than as "nothing changed" (`design/features/agent-environment.md`).
+  It rides the mirrored record, so a session-preserving daemon restart keeps tracking rather than resetting it.
 - `SessionRecord.observation_stale_since`: volatile. Set when the followed transcript is
   provably no longer this PTY's conversation and no successor could be corroborated; it
   revokes the transcript's authority over hooks and hard-blocks delivery.

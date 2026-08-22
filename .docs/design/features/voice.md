@@ -778,7 +778,7 @@ into mobile-voice setup instead.
   Each request opens its own stream, so playing a message never joins or cuts whatever a pane's automatic read-aloud happens to be speaking.
   Markers are drawn for **replies only** (a prompt is something the operator wrote) and only while read aloud is on: this is a per-item surface repeated once per reply, so it carries no gate of its own and the one gate for the master switch lives in the `tts` tab (`setting-links.md`).
 - **Nothing drawn inside the workspace paints over the voice dock.**
-  The dock's anchor sits at `z-index: 30` - above the pane stack's focus ring (25) and above the overflow rails' scroll arrows (29), which are `position:absolute` inside a rail that establishes no stacking context and therefore used to draw on top of the panel while the tab strip underneath it sat correctly beneath.
+  The dock's anchor sits at `z-index: 30` - above the pane stack's focus ring (25) and above the overflow rails' passive edge glows (29), which are `position:absolute` inside a rail that establishes no stacking context and therefore used to draw on top of the panel while the tab strip underneath it sat correctly beneath.
   The ceiling is unchanged in spirit: context menus (35+) and every overlay (80+) still cover it, because a dialog the dock paints over is a dialog whose own header swallows taps.
   The command palette moved with it, from 25 to 82: at 25 it was under those same rail arrows, and it is a modal overlay rather than a workspace decoration.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.

@@ -5,16 +5,14 @@ import {
   addRailCatalogItem, addRailRow, copyRailSurface, deleteRailCatalogItem, dropIndexForPoint,
   duplicateRailEntry, insertRailItem, moveRailEntry, moveRailRow, railEntryId, railPlacementCounts,
   removeRailEntry, removeRailRow, sameRailRef, setRailRowLabel, toggleRailPlacement,
-  updateRailCatalogItem, type RailChipRect,
+  updateRailCatalogItem, updateRailItemPresentation, type RailChipRect,
 } from '../src/railLayout.ts'
 
 /** A small, predictable config: two strip rows on desktop, one on mobile. */
 function fixture(): RailConfig {
   const config = defaultRailConfig()
   config.layouts.desktop.strip = [{ id: 'd1', items: ['esc', 'enter', 'tab'] }, { id: 'd2', items: ['up', 'down'] }]
-  config.layouts.desktop.panel = [{ id: 'dp', items: ['home'] }]
   config.layouts.mobile.strip = [{ id: 'm1', items: ['esc'] }]
-  config.layouts.mobile.panel = [{ id: 'mp', items: [] }]
   return config
 }
 
@@ -26,7 +24,7 @@ test('every operation returns a new config and leaves the input untouched', () =
   const snapshot = JSON.stringify(before)
   removeRailEntry(before, { device: 'desktop', surface: 'strip', rowId: 'd1', index: 0 })
   insertRailItem(before, 'left', { device: 'desktop', surface: 'strip', rowId: 'd1', index: 0 })
-  addRailRow(before, 'mobile', 'panel')
+  addRailRow(before, 'mobile', 'strip')
   toggleRailPlacement(before, 'left', 'mobile', 'strip')
   assert.equal(JSON.stringify(before), snapshot)
 })
@@ -47,7 +45,7 @@ test('moving to the end of its own row appends rather than overshooting', () => 
   assert.deepEqual(strip(next)[0], ['enter', 'tab', 'esc'])
 })
 
-test('a chip moves between rows, between surfaces, and between devices', () => {
+test('a chip moves between rows and devices', () => {
   let config = moveRailEntry(fixture(),
     { device: 'desktop', surface: 'strip', rowId: 'd1', index: 1 },
     { device: 'desktop', surface: 'strip', rowId: 'd2', index: 0 })
@@ -55,14 +53,9 @@ test('a chip moves between rows, between surfaces, and between devices', () => {
 
   config = moveRailEntry(config,
     { device: 'desktop', surface: 'strip', rowId: 'd2', index: 0 },
-    { device: 'desktop', surface: 'panel', rowId: 'dp', index: 0 })
-  assert.deepEqual(config.layouts.desktop.panel[0].items, ['enter', 'home'])
-
-  config = moveRailEntry(config,
-    { device: 'desktop', surface: 'panel', rowId: 'dp', index: 0 },
     { device: 'mobile', surface: 'strip', rowId: 'm1', index: 1 })
   assert.deepEqual(strip(config, 'mobile'), [['esc', 'enter']])
-  assert.deepEqual(config.layouts.desktop.panel[0].items, ['home'])
+  assert.deepEqual(strip(config), [['esc', 'tab'], ['up', 'down']])
 })
 
 test('an out-of-range drop index appends instead of dropping the item', () => {
@@ -78,15 +71,15 @@ test('a chip can be duplicated, and duplicates resolve as separate buttons', () 
   assert.equal(new Set(entries.map(entry => entry.key)).size, entries.length)
 })
 
-test('placement counts see every copy on every surface', () => {
+test('placement counts see every copy on each device', () => {
   const config = duplicateRailEntry(fixture(), { device: 'desktop', surface: 'strip', rowId: 'd1', index: 0 })
   assert.deepEqual(railPlacementCounts(config, 'esc'), {
-    desktop: { strip: 2, panel: 0 },
-    mobile: { strip: 1, panel: 0 },
+    desktop: { strip: 2 },
+    mobile: { strip: 1 },
   })
   assert.deepEqual(railPlacementCounts(config, 'rewind'), {
-    desktop: { strip: 0, panel: 0 },
-    mobile: { strip: 0, panel: 0 },
+    desktop: { strip: 0 },
+    mobile: { strip: 0 },
   })
 })
 
@@ -118,15 +111,15 @@ test('rows can be added, labelled, reordered, and removed', () => {
   assert.equal(config.layouts.mobile.strip.length, 1)
 })
 
-test('removing the only row of a surface empties it instead', () => {
-  // A surface with no rows would have nowhere to drop and nowhere for a newly
+test('removing the only row empties it instead', () => {
+  // A rail with no rows would have nowhere to drop and nowhere for a newly
   // shipped built-in to land.
   const config = removeRailRow(fixture(), 'mobile', 'strip', 'm1')
   assert.equal(config.layouts.mobile.strip.length, 1)
   assert.deepEqual(config.layouts.mobile.strip[0].items, [])
 })
 
-test('copying a surface is a one-shot with fresh row ids', () => {
+test('copying a rail layout is a one-shot with fresh row ids', () => {
   const config = copyRailSurface(fixture(), 'desktop', 'mobile', 'strip')
   assert.deepEqual(strip(config, 'mobile'), [['esc', 'enter', 'tab'], ['up', 'down']])
   // Distinct row ids, so a later edit to one device cannot address the other's row.
@@ -137,18 +130,17 @@ test('copying a surface is a one-shot with fresh row ids', () => {
   assert.deepEqual(strip(edited, 'mobile')[0], ['esc', 'enter', 'tab'])
 })
 
-test('copying only touches the named surface, and never a device onto itself', () => {
+test('copying never copies a device onto itself', () => {
   const config = copyRailSurface(fixture(), 'desktop', 'mobile', 'strip')
-  assert.deepEqual(config.layouts.mobile.panel[0].items, [])
   assert.equal(copyRailSurface(config, 'mobile', 'mobile', 'strip'), config)
 })
 
 test('adding a command places it on both devices', () => {
-  const config = addRailCatalogItem(fixture(), { id: 'custom:skill:ship', type: 'skill', label: 'ship', text: 'ship', defaultSurface: 'panel' })
+  const config = addRailCatalogItem(fixture(), { id: 'custom:skill:ship', type: 'skill', label: 'ship', text: 'ship' })
   assert.equal(config.items.some(item => item.id === 'custom:skill:ship'), true)
   assert.deepEqual(railPlacementCounts(config, 'custom:skill:ship'), {
-    desktop: { strip: 0, panel: 1 },
-    mobile: { strip: 0, panel: 1 },
+    desktop: { strip: 1 },
+    mobile: { strip: 1 },
   })
 })
 
@@ -158,14 +150,14 @@ test('adding a duplicate id is refused rather than shadowing the original', () =
 })
 
 test('deleting a custom command takes every button pointing at it', () => {
-  let config = addRailCatalogItem(fixture(), { id: 'custom:text:hi', type: 'text', label: 'hi', text: 'hi', defaultSurface: 'strip' })
+  let config = addRailCatalogItem(fixture(), { id: 'custom:text:hi', type: 'text', label: 'hi', text: 'hi' })
   config = duplicateRailEntry(config, { device: 'desktop', surface: 'strip', rowId: 'd2', index: 2 })
   assert.equal(railPlacementCounts(config, 'custom:text:hi').desktop.strip, 2)
   config = deleteRailCatalogItem(config, 'custom:text:hi')
   assert.equal(config.items.some(item => item.id === 'custom:text:hi'), false)
   assert.deepEqual(railPlacementCounts(config, 'custom:text:hi'), {
-    desktop: { strip: 0, panel: 0 },
-    mobile: { strip: 0, panel: 0 },
+    desktop: { strip: 0 },
+    mobile: { strip: 0 },
   })
 })
 
@@ -175,10 +167,25 @@ test('built-ins are app-owned: they cannot be deleted or edited, only unplaced',
   assert.equal(updateRailCatalogItem(config, 'esc', { label: 'nope' }), config)
   const unplaced = toggleRailPlacement(toggleRailPlacement(config, 'esc', 'desktop', 'strip'), 'esc', 'mobile', 'strip')
   assert.deepEqual(railPlacementCounts(unplaced, 'esc'), {
-    desktop: { strip: 0, panel: 0 },
-    mobile: { strip: 0, panel: 0 },
+    desktop: { strip: 0 },
+    mobile: { strip: 0 },
   })
   assert.equal(unplaced.items.some(item => item.id === 'esc'), true)
+})
+
+test('every item can change presentation without exposing built-in behavior fields', () => {
+  const config = fixture()
+  const presented = updateRailItemPresentation(config, 'copyInput', { display: 'icon-label', displayLabel: 'Composer' })
+  const item = presented.items.find(entry => entry.id === 'copyInput')!
+  assert.equal(item.display, 'icon-label')
+  assert.equal(item.displayLabel, 'Composer')
+  assert.equal(item.type, 'action')
+  assert.equal(updateRailCatalogItem(presented, 'copyInput', { action: 'endSession' }), presented)
+
+  const reset = updateRailItemPresentation(presented, 'copyInput', { display: 'auto', displayLabel: '  ' })
+  const resetItem = reset.items.find(entry => entry.id === 'copyInput')!
+  assert.equal(resetItem.display, undefined)
+  assert.equal(resetItem.displayLabel, undefined)
 })
 
 test('a custom command keeps its id when its fields are edited', () => {

@@ -10,6 +10,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Literal, TypeGuard
 
+from .composer_input import DEFAULT_NEWLINE_KEYS
 from .host_platform import IS_WINDOWS
 
 StateSource = Literal["hook", "transcript", "pty", "cli_state"]
@@ -488,6 +489,34 @@ class HarnessDescriptor:
     # it, and `composer_input.py` decides from it whether a write emptied the
     # composer. A browser-side copy is what this field exists to prevent.
     composer_clear_keys: str
+    # The key sequence that puts a newline *into* this CLI's composer instead of
+    # submitting it.
+    #
+    # xterm.js encodes Enter as CR and speaks neither the kitty keyboard protocol
+    # nor modifyOtherKeys, so Shift+Enter and Ctrl+Enter can never reach an agent:
+    # both arrive as a plain submit. ESC+CR (Alt+Enter) is the one legacy sequence
+    # both measured agents read as "insert a newline" - Codex reports alt+enter
+    # bound to `editor.insert_newline`, and Claude keeps the draft on a second
+    # line. omp, pi, and opencode carry the same value because that is the blanket
+    # constant the browser sent them before this field existed; only claude and
+    # codex are measured, and a later measurement changes one row here rather than
+    # anything downstream.
+    composer_newline: str
+    # Whether this CLI reads a bracketed paste whose *first* character is a
+    # newline as Enter, submitting whatever the composer already held.
+    #
+    # Measured 2026-08-22 against Codex v0.149.0 over a real pseudoterminal, with
+    # `PREVIOUSTEXT` sitting unsent in the composer. A paste carrying interior
+    # newlines is content on both agents; a paste that *begins* with one submits
+    # the draft on Codex and is content on Claude Code v2.1.240. A leading LF is
+    # worse than useless on Codex besides - it is dropped, and the pasted text is
+    # concatenated onto the standing draft.
+    #
+    # True means the insertion builder must lift a leading newline run out of the
+    # paste and send it as `composer_newline` key presses first
+    # (`composer_input.composer_insertion`). False is also the answer for a
+    # harness nobody has measured: it keeps the bytes mux has always sent.
+    paste_leading_newline_submits: bool
 
     native_hooks: bool
     transcript: str | None
@@ -512,6 +541,8 @@ class HarnessDescriptor:
             raise ValueError(f"harness {self.name} must declare a skill invocation prefix")
         if not self.composer_clear_keys:
             raise ValueError(f"harness {self.name} must declare a composer clear sequence")
+        if not self.composer_newline:
+            raise ValueError(f"harness {self.name} must declare a composer newline sequence")
         if bool(self.spawn_id_argv) != self.assigns_conversation_id:
             # The two say the same thing from opposite ends. A harness that dictates
             # its conversation id has argv that carries it, and a harness with such
@@ -917,6 +948,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=3,
         composer_clear_keys="",
+        composer_newline="\x1b\r",
+        paste_leading_newline_submits=False,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1022,6 +1055,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         suppresses_late_color_response=True,
         touch_scroll_rows_per_report=1,
         composer_clear_keys="",
+        composer_newline="\x1b\r",
+        paste_leading_newline_submits=True,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1112,6 +1147,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
         composer_clear_keys="",
+        composer_newline="\x1b\r",
+        paste_leading_newline_submits=False,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1207,6 +1244,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
         composer_clear_keys="",
+        composer_newline="\x1b\r",
+        paste_leading_newline_submits=False,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1320,6 +1359,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
         composer_clear_keys="",
+        composer_newline="\x1b\r",
+        paste_leading_newline_submits=False,
         native_hooks=True,
         # Semantic records, read from the store rather than tailed from a file.
         # This is the automation-evidence label, not a claim that a byte-offset
@@ -1677,6 +1718,20 @@ def suppresses_late_color_response(name: object) -> bool:
         and name in HARNESSES
         and HARNESSES[name].suppresses_late_color_response
     )
+
+
+def composer_insertion_rules(name: object) -> tuple[str, bool]:
+    """``(newline keys, lift a leading newline out of the paste)`` for a backend.
+
+    The pair every path that writes operator text into a composer needs, resolved
+    once so the daemon and the browser cannot disagree about what a byte does. An
+    unregistered backend — a shell — keeps the defaults, which is the historical
+    ESC+CR and no lifting.
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return DEFAULT_NEWLINE_KEYS, False
+    harness = HARNESSES[name]
+    return harness.composer_newline, harness.paste_leading_newline_submits
 
 
 def branch_strategy(name: object) -> BranchStrategy | None:
@@ -2136,6 +2191,8 @@ def public_harness_registry(
                 "reserved_launch_args": list(harness.reserved_launch_args),
                 "skill_invocation_prefix": harness.skill_invocation_prefix,
                 "composer_clear_keys": harness.composer_clear_keys,
+                "composer_newline": harness.composer_newline,
+                "paste_leading_newline_submits": harness.paste_leading_newline_submits,
                 "capabilities": {
                     "observed": harness.level >= HarnessLevel.observed,
                     "transcript": bool(harness.transcript),

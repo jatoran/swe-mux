@@ -1,16 +1,16 @@
 import { expect, test, type Page } from 'playwright/test'
 
 /**
- * The pinned rail and its overflow popover, against real geometry and real compositing.
+ * The pinned rail drawer and its complete-row popover, against real geometry and compositing.
  *
  * Every property here is decided outside any one module and is invisible to a unit test:
- * the split is a measurement of live chips, the `+N` chip's width is a CSS variable, the
+ * the drawer's width is a CSS variable, the passive edge glows follow real overflow, the
  * popover's glass is the browser's own `backdrop-filter` over whatever the terminal is
  * showing, and "a drop-up opened from inside the panel does not dismiss it" is a race
  * between two independent `window` listeners.
  *
- * The failures this exists to catch are all quiet ones: a `+N` chip on a rail that visibly
- * has room, a chip silently lost between the row and the panel, a panel that closes on the
+ * The failures this exists to catch are all quiet ones: a drawer that shifts between rows,
+ * a chip silently lost between the row and the panel, a panel that closes on the
  * first of a two-click confirm, and a glass that reads fine over a dark buffer and turns to
  * grey-on-grey the moment someone opens a white diff.
  */
@@ -18,9 +18,6 @@ import { expect, test, type Page } from 'playwright/test'
 const MORE = '.rail-more'
 const PANEL = '.rail-overflow-popover'
 const GRID = '.rail-overflow-grid'
-// Scoped through `.overflow-rail`, which the hidden measuring twin is deliberately outside
-// of: it carries the same `.terminal-action-scroll` class (that is how its chips measure at
-// the width they would really render at), so an unscoped selector counts every chip twice.
 const STRIP = '.overflow-rail .terminal-action-scroll'
 const ROW_CHIPS = `${STRIP} > [data-key]`
 const DROPUP = '.rail-dropup'
@@ -40,11 +37,6 @@ async function open(page: Page) {
   await expect.poll(async () => page.locator(PANEL).evaluate(el => (el as HTMLElement).style.left)).not.toBe('')
 }
 
-/** Every chip in the harness, however it is currently split. */
-async function total(page: Page): Promise<number> {
-  return page.locator('.rail-row-measure > *').count()
-}
-
 /** Open a drop-up from a chip inside the panel, and wait for it to be placed. Placement and
  *  the drop-up's own Escape listener are installed by the same effect, so a spec that acted
  *  on `toBeVisible` alone would press Escape into a panel not yet listening for it. */
@@ -54,24 +46,19 @@ async function openDropup(page: Page) {
   await expect.poll(async () => page.locator(DROPUP).evaluate(el => (el as HTMLElement).style.left)).not.toBe('')
 }
 
-test('every chip renders in the row, and the `+N` count is exactly what needs a scroll', async ({ page }) => {
-  // Scroll OR overlay, reader's choice (2026-08-22): the row holds every chip and pans,
-  // while the panel shows the ones beyond the unscrolled viewport. Nothing is sliced away.
+test('the drawer count and popover both cover the complete row', async ({ page }) => {
   const inRow = await page.locator(ROW_CHIPS).count()
-  expect(inRow).toBe(await total(page))
-  const label = await page.locator(MORE).textContent()
-  const hidden = Number((label || '').replace('+', ''))
-  expect(hidden).toBeGreaterThan(0)
-  expect(hidden).toBeLessThan(inRow)
+  expect(inRow).toBeGreaterThan(0)
+  await expect(page.locator('.rail-more-count')).toHaveText(String(inRow))
 
   await open(page)
-  expect(await page.locator(`${GRID} > *`).count()).toBe(hidden)
+  expect(await page.locator(`${GRID} > *`).count()).toBe(inRow)
+  await expect(page.locator(`${GRID} > [data-key="learn"]`)).toHaveCount(1)
+  await expect(page.locator(`${GRID} > [data-key="endSession"]`)).toHaveCount(1)
 })
 
-test('the row genuinely scrolls when the `+N` chip is up, and the chip never pans away', async ({ page }) => {
+test('the row scrolls while the drawer never pans away', async ({ page }) => {
   const strip = page.locator(STRIP)
-  // The `+N` chip exists exactly because the row overflows - and the row now answers that
-  // overflow twice: it scrolls, and it offers the panel.
   const scrolls = await strip.evaluate(el => el.scrollWidth - el.clientWidth)
   expect(scrolls).toBeGreaterThan(1)
   // The chip is fixed furniture outside the scroller: panning the chips moves none of it.
@@ -108,28 +95,31 @@ test('the overflow chip sits on the row\'s trailing edge at every width', async 
   }
 })
 
-test('a row with room for everything shows no `+N` chip at all', async ({ page }) => {
+test('a row with room for everything keeps its permanent drawer route', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 420 })
-  await expect(page.locator(MORE)).toHaveCount(0)
-  expect(await page.locator(ROW_CHIPS).count()).toBe(await total(page))
-  // The strip is then indistinguishable from the pre-split rail.
+  await expect(page.locator(MORE)).toBeVisible()
+  await expect(page.locator('.rail-more-count')).toHaveText(String(await page.locator(ROW_CHIPS).count()))
   const scrolls = await page.locator(STRIP).evaluate(el => el.scrollWidth - el.clientWidth)
   expect(scrolls).toBeLessThanOrEqual(1)
 })
 
-test('the `+N` count follows the width live', async ({ page }) => {
-  // Read in one evaluate rather than as count-then-read: the chip disappears the moment
-  // the row grows enough, and a `textContent()` issued against a locator that resolved a
-  // frame earlier auto-waits for an element that is never coming back.
-  const count = async () => page.evaluate(() => {
-    const chip = document.querySelector('.rail-more')
-    return chip ? Number((chip.textContent || '').replace('+', '')) : 0
-  })
+test('right glow wedges align across rows even when the bottom row has status text', async ({ page }) => {
+  await page.goto('/rail-overflow-harness.html?rows=2')
+  await expect(page.locator('.rail-row')).toHaveCount(2)
+  await expect(page.locator('.terminal-action-rows .overflow-rail-right')).toHaveCount(2)
+  const rightEdges = await page.locator('.terminal-action-rows .overflow-rail-right').evaluateAll(edges =>
+    edges.map(edge => Math.round(edge.getBoundingClientRect().right)),
+  )
+  expect(new Set(rightEdges).size).toBe(1)
+})
+
+test('the drawer count is the stable full-row count at every width', async ({ page }) => {
+  const count = async () => Number(await page.locator('.rail-more-count').textContent())
   const narrow = await count()
   await page.setViewportSize({ width: 900, height: 420 })
-  await expect.poll(count).toBeLessThan(narrow)
+  await expect.poll(count).toBe(narrow)
   await page.setViewportSize({ width: 420, height: 420 })
-  await expect.poll(count).toBeGreaterThan(narrow)
+  await expect.poll(count).toBe(narrow)
 })
 
 test('the panel opens upward and lands on the rail\'s trailing edge, inside the viewport', async ({ page }) => {
@@ -139,8 +129,7 @@ test('the panel opens upward and lands on the rail\'s trailing edge, inside the 
     page.locator(MORE).boundingBox(),
     page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
   ])
-  // The rail's trailing edge, which is the `+N` chip's right edge now that the strip
-  // carries no gear.
+  // The panel and permanent drawer share the rail's trailing edge.
   expect(Math.abs((box!.x + box!.width) - (more!.x + more!.width))).toBeLessThanOrEqual(1)
   expect(box!.y + box!.height).toBeLessThanOrEqual(more!.y + 1)
   expect(box!.y).toBeGreaterThanOrEqual(0)
@@ -208,11 +197,11 @@ test('a drop-up opened from inside the panel renders over it and leaves it stand
   await expect(page.locator(PANEL)).toHaveCount(0)
 })
 
-test('the panel offers the rail editor from its header and closes as it hands over', async ({ page }) => {
+test('the panel offers full configuration from its footer and closes as it hands over', async ({ page }) => {
   await open(page)
-  // Chrome beside the close control, not a chip in the grid: pressing it configures the
-  // rail rather than writing something into the terminal.
+  await expect(page.locator(`${PANEL} > header`)).toHaveCount(0)
   await expect(page.locator(`${GRID} .rail-overflow-configure`)).toHaveCount(0)
+  await expect(page.locator('.rail-overflow-actions .rail-overflow-configure')).toBeVisible()
   await page.click('.rail-overflow-configure')
   expect(await page.evaluate(() => window.railOverflowFires)).toEqual(['configure'])
   // The editor replaces the whole rail area, so a panel left standing would float over a
@@ -362,7 +351,7 @@ test.describe('on a phone', () => {
 
 test('a configured text chip sizes to its label instead of to a fixed target width', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 420 })
-  await expect(page.locator(MORE)).toHaveCount(0)
+  await expect(page.locator(MORE)).toBeVisible()
   const [short, long] = await Promise.all([
     page.locator(`${STRIP} > [data-key="learn"]`).boundingBox(),
     page.locator(`${STRIP} > [data-key="commit-and-push"]`).boundingBox(),

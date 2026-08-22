@@ -22,8 +22,8 @@ they do not modify portable files.
 A listing may be widened past the focused Project (`all_projects=1`), which adds the Project
 libraries of every registered Project whose own scope admits them.
 That is a management read and is opt-in for a structural reason: the default listing is also
-what an Action layout resolves a pin against, so widening it by default would let a global
-layout pin a Project template.
+what command-rail prompt items resolve against, so widening it by default would let a global
+layout reference a Project template.
 Every returned template names its owning Project, and a write is routed at that owner rather
 than at whichever Project is focused.
 Widening does not widen conflicts either: a conflict is two templates the *focused* listing
@@ -32,7 +32,7 @@ Two unfocused Projects holding copies of one file are not ambiguous, and are not
 
 ## Browser flow
 
-The Actions drawer contains a Prompt templates section for browsing, inserting, and authoring templates beside Quick actions and Skills.
+The Actions drawer contains a Prompt templates section for browsing, inserting, and authoring templates beside Skills and Clipboard.
 Each row shows a bounded two-line excerpt of the body so templates remain distinguishable at a glance.
 The section is expanded by default, remembers its disclosure state on the device, and its Manage button opens the full responsive library.
 The command palette, main menu, and that Manage button all open that same library.
@@ -46,25 +46,28 @@ Placeholder fields are derived from the body being typed, before any save, so a 
 Saving stays explicit rather than automatic, because the revision contract means a write can be refused and an autosaving field would have nowhere to report that without discarding what was typed.
 The drawer is dismissed by Escape, by a back gesture, and by a tap outside, none of which it can intercept the way a modal's close button can, so an open draft is mirrored on the device and restored when the editor reopens; a mirror whose revision no longer matches the file is dropped rather than replayed over someone else's save.
 The whole library is also one tap from any terminal, through the rail's **Prompts** drop-up (`ui.md`), which lists what the focused session's scope admits in favourites-then-recency order and inserts without submitting.
-That is the surface for the templates nobody pinned; pinning remains the way to give one template its own dedicated button.
+Dedicated template buttons are added and arranged in Configure command rail.
 Its second exit opens this library already on a blank template, because a picker of existing templates is where "I want one for this" is most often realised.
 
-A template can also be pinned to the Action rail or Quick actions (`ui.md`).
+A template can also be added as a dedicated command-rail action (`ui.md`).
 A `prompt` action item stores only the template's `scope:id` key and resolves the body from the library at click time, so editing a template updates every button that points at it and a button can never inject a stale copy.
-Its **name** is a pointer on the same terms: a button pinned without a typed label carries `autoLabel` and renders the template's live title, so renaming a template renames its buttons, while a label somebody typed is never overridden.
+Its **name** is a pointer on the same terms: a button added without a typed label carries `autoLabel` and renders the template's live title, so renaming a template renames its buttons, while a label somebody typed is never overridden.
 The label stored beside the flag is the fallback for before the library has been read and for a template that has gone; the dangling case is reported when the button is pressed, where there is room to name it.
 A template with no `{{variables}}` inserts directly and never submits.
 A template with variables opens the Actions drawer with Prompt templates expanded and the template preselected, because there is nothing valid to inject until its fields are filled.
 A key that no longer resolves, because the template was deleted or a Project scope was switched off, names the offending button instead of failing silently.
-Scope confinement is structural: listing with no project returns global templates only, so a global Action layout cannot pin a Project template.
+Scope confinement is structural: listing with no project returns global templates only, so a global Action layout cannot reference a Project template.
 The Action editor keeps that confinement rather than warning about it, and answers the reachability problem the other way round - it opens on the Project the operator was standing in, whose listing is global plus that Project's own, and says in place why the Global scope lists fewer.
 Each row in its template picker names the library it is in, so the two scopes are never told apart by title alone.
 Search covers title, tags, and body and filters by the focused backend.
 A template can be favorited, copied, edited, or filled through its `{{variable}}` fields with a read-only preview.
 Successful local creates, edits, deletes, favorites, and uses invalidate every open prompt list.
 The Actions drawer refreshes in place even while the full library is open over it.
-Insert dispatches `insertText` to the focused xterm, which uses paste semantics.
+Insert requests `insertText` from the focused pane and waits for its acknowledgement, which uses paste semantics (`features/terminal-input.md` — "Inserting authored text").
 It never adds a newline, Enter, submit, or execute action.
+A body that *begins* with a newline is the shape that made this dangerous: sent as the first character of a bracketed paste it is read as Enter by Codex, so the live `Tree` template submitted whatever the operator had half-typed before its own text arrived (measured 2026-08-22 against v0.149.0).
+The builder lifts that leading run into the harness's own newline key ahead of the paste, so the template does what its author meant and the standing draft survives.
+Insert also refuses outright when the target session is showing an approval or a question, because there the text answers the dialog rather than filling a composer — and the refusal reaches the button, which is why insertion waits for an acknowledgement instead of dispatching and walking away.
 Editor changes use explicit Save/Discard and an in-app close confirmation.
 
 Insert routing is **terminals-only** for prompts. Everything else that injects text (clipboard

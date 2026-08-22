@@ -611,7 +611,7 @@ def test_the_resolver_returns_the_winning_layers_raw_configuration(
         encoding="utf-8",
     )
 
-    configs = resolve_mcp_servers(backend="claude", cwd=cwd, args=[], loaded_at=2_000.0)
+    configs = resolve_mcp_servers(backend="claude", cwd=cwd, args=[])
 
     # The later layer wins, matching the `shadowed` state the row shows - the two
     # answers come from one walk precisely so they cannot disagree.
@@ -621,4 +621,4 @@ def test_the_resolver_returns_the_winning_layers_raw_configuration(
 
 def test_the_resolver_refuses_a_shell_session(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
-        resolve_mcp_servers(backend="shell", cwd=tmp_path, args=[], loaded_at=1.0)
+        resolve_mcp_servers(backend="shell", cwd=tmp_path, args=[])

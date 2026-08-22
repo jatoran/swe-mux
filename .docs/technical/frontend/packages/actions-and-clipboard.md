@@ -6,7 +6,7 @@ Design: `../../../design/features/ui.md`, `../../../design/features/prompt-libra
 ## Actions system
 
 `commandRail.ts`, `railScope.ts`, `railLayout.ts`, `railDrag.ts`, `railReattach.ts`, `RailEditor.tsx`,
-`RailInlineEditor.tsx`, `ActionEditorModal.tsx`, `ActionsTab.tsx`, `PromptsTab.tsx`,
+`ActionEditorModal.tsx`, `ActionsTab.tsx`, `PromptsTab.tsx`,
 `PromptTemplateEditor.tsx`, `promptRail.ts`, `promptTitles.ts`,
 `railKeyRepeat.ts`, `RailRepeatKey.tsx`, `railVoice.ts`
 
@@ -15,8 +15,9 @@ Rendering stays with the hosts: `TerminalPane.tsx` for the Action rail, `Actions
 
 ### `commandRail.ts` - catalog and layout model
 
-The browser-free model for the shared Action catalog, normalization, layout resolution, the storage blob, and one-way migration from the pre-layout format.
-It keeps identity and behavior apart from placement, with independent Desktop and Mobile layouts, and retains the `strip`/`panel` storage keys for compatibility.
+The browser-free model for the shared Action catalog, normalization, layout resolution, the storage blob, and one-way migration from older formats.
+It keeps identity and behavior apart from placement, with independent Desktop and Mobile rail layouts.
+The v3 normalized shape contains only `strip`; v2 `panel` rows are accepted as migration input, appended to the last rail row, and deduplicated against existing rail placements.
 
 `RETIRED_RAIL_IDS`/`migratedRailItemId` is its durability table, the rail's counterpart to `drawerLayout.ts`'s `migratedTabTarget` and `keybindings.py`'s `_COMMAND_MIGRATIONS`.
 A saved layout is device-local, per-Project, and arbitrarily old, and rows are normalized against the live catalog, so a retired id with no entry there is silently dropped from whichever row the operator dragged it into.
@@ -39,7 +40,7 @@ The resolution therefore reports per-row *ownership* (`projectPlacements`, `hidd
 `resolveRail` returns the effective config plus ownership sets.
 `applyScopedRail` splits an edited effective config back to the scopes that own each row and item: shared rows to global, project rows/items and project placements to the delta, everything to a fork.
 Its `unresolveSharedRow` is the split: entries `isProjectRailPlacement` calls the project's become splices anchored on whatever they were left sitting behind, hidden occurrences are written back into the definition at the indices they held there, and hides self-prune to the ones that actually applied.
-The dedicated ops cover what a diff cannot route - creation, ownership-constrained placement, hiding, and one-tap pinning: `addProjectRailRow`, `addScopedRailItem`, `toggleScopedPlacement`, `removeScopedRailItem`, `hideScopedRailEntry`, `unhideScopedRailEntry`, `detachProjectRail`, and `pinSkill`/`pinPrompt` with their `pinned*Item` matchers.
+The dedicated ops cover what a diff cannot route: creation, ownership-constrained placement, hiding, and detachment through `addProjectRailRow`, `addScopedRailItem`, `toggleScopedPlacement`, `removeScopedRailItem`, `hideScopedRailEntry`, `unhideScopedRailEntry`, and `detachProjectRail`.
 
 **The invariant it enforces: a shared row's *definition* never contains a project-owned item.**
 Only the resolved projection does, so every other project renders that row exactly as written.
@@ -54,15 +55,19 @@ Nothing calls it on its own - it is reached only from the fork scope's "Reattach
 
 ### The rest of the layer
 
-- `railLayout.ts` is the editing algebra for placing, moving, rowing, copying a surface, catalog add and delete, and two-dimensional drop indexing.
-- `railDrag.ts` is the DOM drag controller both editors mount: the `data-rail-row`/`data-reorder-id` contract, committed-config preview recompute, and root pointer capture.
-  Its `canDrop` gate is unset by both editors now that a delta can express a project action in a shared row; it stays because refusing-as-off-every-row is the drag's own vocabulary, not the scope rule that needed it.
-- `ActionEditorModal.tsx` owns the standalone Configure Actions surface and passes the focused Project as the scope it opens on.
-- `RailEditor.tsx` renders it progressively: one device's layouts first (defaulting to `currentProfile()`, with a Desktop/Mobile switch at every width), collapsed custom-action creation, then the collapsed filterable catalog whose rows expand into labelled placement and backend checkboxes plus custom-item editing, with the dismissible first-open callout and the Preview-as backend dimmer.
+- `railLayout.ts` is the editing algebra for placing, moving, rowing, copying a device rail, catalog add and delete, and two-dimensional drop indexing.
+- `railDrag.ts` is the DOM drag controller the modal editor mounts: the `data-rail-row`/`data-reorder-id` contract, committed-config preview recompute, and root pointer capture.
+  Its `canDrop` gate is unset now that a delta can express a project action in a shared row; it stays because refusing-as-off-every-row is the drag's own vocabulary, not the scope rule that needed it.
+- `ActionEditorModal.tsx` owns the standalone Configure Actions surface.
+  It opens on Global unless the focused Project is already detached, and passes the focused Project separately so Global can offer a one-step detach-and-edit action.
+- `RailEditor.tsx` renders one device's rail layout first, collapsed custom-action creation next, then the collapsed filterable catalog.
+  Every catalog row expands into placement, appearance, backend visibility, and any custom behavior fields.
+  Appearance uses the live icon registry and supports a visible-label override plus Automatic, Icon only, Label only, and Icon + label modes where an icon exists.
+  Built-in behavior fields remain locked while built-in presentation and backend visibility persist through catalog normalization.
   In a project scope its chips carry the hide control and the ghost chips for what is hidden; in a fork scope its toolbar carries the reattach plan.
-- `RailInlineEditor.tsx` is the in-place rail editor the pane gear opens: the same chips, drag, keyboard moves, scoped commits, hide control and ghost chips rendered inside the terminal pane's rail area, with a per-row picker and hand-offs to the modal.
-- `ActionsTab.tsx` renders the unified Actions drawer with device-local disclosure state for Quick actions, discovered Skills, and Prompt templates.
-  Quick actions is the current device's configured `panel` surface and may intentionally repeat a skill or template also visible in the complete sections; the Skills and template rows carry the one-tap Pin toggles that call the `railScope.ts` pin ops.
+- `ActionsTab.tsx` renders the unified Actions drawer with device-local disclosure state for discovered Skills, Prompt templates, and Clipboard.
+  A compact Configure command rail button above the sections opens the standalone editor.
+  Skills and template rows insert or edit; they do not create a second pinning state.
 
 ### Arrow-key repeat
 
@@ -74,14 +79,14 @@ It is its own module because the rail's pointer capture retargets moves away fro
 
 ### Voice adaptation
 
-`railVoice.ts` is the pure allowlisting adapter from entries placed on the focused session's current-device Action rail or Drawer layout to acknowledged terminal action requests.
+`railVoice.ts` is the pure allowlisting adapter from entries placed on the focused session's current-device Action rail to acknowledged terminal action requests.
 It admits explicitly voiced safe keys and Paste, and non-submitting configured agent skills and slash commands.
 It requires explicit aliases before a configured command may submit, and admits no prompt, literal-text, destructive, or UI-only entry.
 
 ## Prompt templates
 
 `promptRail.ts` holds the pure half of the rail's prompt items: key splitting, template lookup, `railItemLabel` (live title for an `autoLabel` button, stored label otherwise), and `activatePromptTemplate`, which both hosts call with their own `insert` - the pane's handle inside `TerminalPane`, the `mux:terminal-action` bus from the drawer.
-`fetchPromptTemplates` deliberately never widens past one scope: it is the read a pin resolves against, and confining it is what stops a global layout pinning a Project template (`prompt-library.md`).
+`fetchPromptTemplates` deliberately never widens past one scope: it is the read a configured prompt action resolves against, and confining it is what stops a global layout referencing a Project template (`prompt-library.md`).
 `promptTitles.ts` is the one lazily filled, scope-keyed cache those live titles come from, deduped while in flight and invalidated by any local library write; every reader gates it on whether the rows it is about to draw contain an auto-labelled prompt button, so a rail without one fetches nothing.
 A failed read caches "nothing known" rather than staying uncached, because the completion event would otherwise re-trigger the read that just failed.
 

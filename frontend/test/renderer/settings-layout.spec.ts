@@ -150,10 +150,13 @@ test('narrow: the soft keyboard shortens the panel instead of hiding its footer'
   // *layout* viewport, which `interactive-widget=resizes-visual` deliberately keeps at full
   // height while the keyboard is up (see `updateAppHeight` in `App.tsx`). So the footer -
   // where Save lives - sat under the keyboard, unreachable by scrolling, because scrolling
-  // moves the middle row and not the fixed one below it.
+  // moves the middle row and not the fixed one below it. It is a fixed panel like the drawer
+  // and the sidebar overlay, and it takes the same treatment they do.
   //
   // The keyboard is simulated the way the app publishes it, because that is the whole
-  // contract: a class on the root and a length. Playwright cannot raise a real one.
+  // contract: `--keyboard-inset` and `--visual-offset` on the root, from which the stylesheet
+  // derives `--keyboard-cover`. Playwright cannot raise a real one. The rules are ungated by
+  // `.soft-keyboard-open`, so the lengths alone are what has to be enough.
   await page.setViewportSize(PHONE)
   await page.goto('/settings-harness.html')
   await page.waitForSelector('.settings-panel>footer button', { state: 'attached' })
@@ -164,7 +167,7 @@ test('narrow: the soft keyboard shortens the panel instead of hiding its footer'
 
   const after = await page.evaluate(inset => {
     document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`)
-    document.documentElement.classList.add('soft-keyboard-open')
+    document.documentElement.style.setProperty('--visual-offset', '0px')
     const footer = document.querySelector<HTMLElement>('.settings-panel>footer')!
     const save = [...footer.querySelectorAll('button')].pop()!
     return {

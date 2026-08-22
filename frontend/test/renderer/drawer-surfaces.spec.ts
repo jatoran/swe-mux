@@ -31,7 +31,7 @@ test('each Actions section is bounded by more than a row rule', async ({ page })
     }
   }))
 
-  expect(sections.map(item => item.id)).toEqual(['quick', 'skills', 'prompts', 'clipboard'])
+  expect(sections.map(item => item.id)).toEqual(['skills', 'prompts', 'clipboard'])
   // The first section needs no rule above it — the pane heading is there. Every later one
   // is separated by a rule thicker than any row rule inside a section.
   expect(sections[0].borderTop).toBe(0)

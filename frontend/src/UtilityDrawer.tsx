@@ -559,7 +559,6 @@ export function UtilityDrawer(props: Props) {
 
   const renderRail = (stack: DrawerStack, selected: DrawerTabId, projection = false) => <OverflowRail
     className="drawer-tabs"
-    itemLabel="panel tabs"
     wrapperClassName={`drawer-tabs-rail drawer-pane-rail ${props.tabDisplay === 'title' ? 'title-mode' : 'icon-mode'}`}
     activeKey={selected}
     focusKey={focusedTab === selected ? selected : undefined}

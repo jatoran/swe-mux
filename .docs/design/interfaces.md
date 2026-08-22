@@ -1180,6 +1180,10 @@ interface AgentEnvironmentInventory {
   backend: 'claude' | 'codex'
   cwd: string
   generated_at: number
+  // Whether `changed_after_start` is answerable. 'unavailable' means no
+  // load-time snapshot exists for this CLI generation, so every source reads
+  // unchanged because nothing is known - not because nothing moved.
+  config_baseline: 'captured' | 'unavailable'
   runtime: {
     executable: string
     version: string | null
@@ -1196,6 +1200,8 @@ interface AgentEnvironmentInventory {
     format: string
     status: string
     mtime: number | null
+    // Content differs from the load-time baseline. Always false when
+    // config_baseline is 'unavailable'.
     changed_after_start: boolean
   }>
   sections: Array<{

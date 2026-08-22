@@ -38,11 +38,11 @@ test('a dangling prompt item is described as dangling, not as blank', () => {
   assert.equal(promptItemSummary({ ...item, promptKey: undefined }, []), 'no template attached')
 })
 
-// A pinned button with no name of its own follows the template's name. The stored
-// label is a snapshot taken at pin time, and a snapshot of a name is exactly the
+// A configured button with no name of its own follows the template's name. The stored
+// label is a snapshot taken when it was added, and a snapshot of a name is exactly the
 // copy a `prompt` item exists to avoid — the body is a pointer, so the name is too.
 test('an auto-labelled prompt button renders the template’s live title', () => {
-  const auto: RailItem = { id: 'pin:prompt:abc', type: 'prompt', label: 'Ship it', autoLabel: true, promptKey: 'global:abc' }
+  const auto: RailItem = { id: 'custom:prompt:abc', type: 'prompt', label: 'Ship it', autoLabel: true, promptKey: 'global:abc' }
   const renamed = [template({ title: 'Ship it properly' })]
   assert.equal(railItemLabel(auto, renamed), 'Ship it properly')
   // Until the library is read, and if the template is gone, the stored copy stands:

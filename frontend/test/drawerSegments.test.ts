@@ -50,7 +50,7 @@ test('a segmented tab has at least two segments, and a section-only tab has none
   // so a mode switch between "the thing I want to send" and "the other thing I want to
   // send" would buy nothing and cost a click.
   assert.equal(hasDrawerSegments('actions'), false)
-  assert.equal(drawerSegmentsFor('actions', 'section').length, 4)
+  assert.deepEqual(drawerSegmentsFor('actions', 'section').map(section => section.id), ['skills', 'prompts', 'clipboard'])
 })
 
 test('unavailable segments drop out and the selection falls back to one that works', () => {

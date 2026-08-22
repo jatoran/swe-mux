@@ -52,6 +52,7 @@ function Harness() {
   const [dropup, setDropup] = useState<HTMLElement | null>(null)
   const [armed, setArmed] = useState(false)
   const clip = useRef<HTMLButtonElement>(null)
+  const multipleRows = new URLSearchParams(location.search).has('rows')
   window.setBuffer = setBufferColour
   window.fireCommand = command => window.dispatchEvent(new CustomEvent('mux:command', { detail: command }))
   window.openKeyboard = inset => {
@@ -93,6 +94,12 @@ function Harness() {
       onClick={() => { fire(armed ? 'endSession:confirm' : 'endSession:arm'); setArmed(value => !value) }}
     >{armed ? 'Confirm ✓' : 'End session'}</button>,
   ]
+  const secondRow = TEXT.concat(['inspect', 'deploy', 'history']).map(label => <button
+    key={`second-${label}`}
+    class="rail-text"
+    data-key={`second-${label}`}
+    onClick={() => fire(`second-${label}`)}
+  >{label}</button>)
 
   return <div class="terminal-surface" style="position:fixed;inset:0;display:grid;grid-template-rows:minmax(0,1fr) auto">
     <div class="terminal-host" id="buffer" style={`background:${buffer}`} />
@@ -100,10 +107,16 @@ function Harness() {
       <div class="terminal-action-rows">
         <RailStrip
           chips={chips}
-          label="More actions"
-          status=""
+          label="Actions"
+          status={multipleRows ? undefined : ''}
           onConfigure={() => { window.railOverflowFires.push('configure') }}
         />
+        {multipleRows && <RailStrip
+          chips={secondRow}
+          label="Actions, row 2"
+          status="Copied"
+          onConfigure={() => { window.railOverflowFires.push('configure') }}
+        />}
       </div>
     </div>
     {dropup && <RailDropup

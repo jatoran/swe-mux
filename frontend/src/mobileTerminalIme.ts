@@ -1,5 +1,4 @@
-import { isAgentBackend } from './harnessRegistry.ts'
-import { AGENT_NEWLINE } from './terminalKeys.ts'
+import { composerNewline, isAgentBackend } from './harnessRegistry.ts'
 
 export const TERMINAL_DELETE = '\x7f'
 
@@ -10,7 +9,7 @@ export function mobileEnterNeedsPinnedSend(backend:string):boolean {
 /** The mobile IME's Enter action. Agent composers get a newline; ordinary
  *  shells retain the terminal's submit byte. */
 export function mobileEnterPayload(backend:string):string {
-  return mobileEnterNeedsPinnedSend(backend)?AGENT_NEWLINE:'\r'
+  return mobileEnterNeedsPinnedSend(backend)?composerNewline(backend):'\r'
 }
 
 /**

@@ -12,6 +12,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import mcp_tools
+from swe_mux.agent_environment import capture_config_baseline
 from swe_mux.agent_environment import clear_cache as clear_environment_cache
 from swe_mux.agent_skills import clear_cache
 from swe_mux.models import SessionRecord
@@ -253,6 +254,41 @@ async def test_agent_environment_keeps_the_cli_generation_across_conversation_ro
 
     assert payload["runtime"]["loaded_at"] == 1_000.0
     assert payload["runtime"]["run_started_at"] == 2_000.0
+
+
+async def test_agent_environment_serves_the_session_drift_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint's whole contribution to drift: hand over the record's snapshot.
+
+    Without one the tab must say the question is untracked rather than answer
+    it, which is what a session adopted from before baselines existed gets.
+    """
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    home.mkdir()
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    config = home / "config.toml"
+    config.write_text('model = "gpt"\n', encoding="utf-8")
+    baseline = capture_config_baseline(backend="codex", cwd=cwd, args=[])
+
+    untracked = build(record(cwd=str(cwd)))
+    async with TestClient(TestServer(untracked)) as client:
+        blind = await (await client.get("/api/sessions/sess-1/agent-environment")).json()
+
+    config.write_text('model = "gpt-5"\n', encoding="utf-8")
+    clear_environment_cache()
+    tracked = build(record(cwd=str(cwd), agent_env_baseline=baseline))
+    async with TestClient(TestServer(tracked)) as client:
+        watched = await (await client.get("/api/sessions/sess-1/agent-environment")).json()
+
+    assert blind["config_baseline"] == "unavailable"
+    assert not any(source["changed_after_start"] for source in blind["sources"])
+    assert watched["config_baseline"] == "captured"
+    assert [
+        source["label"] for source in watched["sources"] if source["changed_after_start"]
+    ] == ["~/.codex/config.toml"]
 
 
 # ---------------------------------------------------------------------------

@@ -15,25 +15,23 @@ Design: `../../../design/features/workspace-layout.md`, `../../../design/feature
 
 `RailScroller.tsx` (exporting `OverflowRail`), `railOverflow.ts`, `wheelScroll.ts`
 
-Shared endpoint detection, overlay fade chevrons, tab-boundary paging, wheel translation, and separate selection/focus reveal triggers for workspace tabs, utility tabs, and the terminal Action rail.
+Shared endpoint detection, passive arrow glows, wheel translation, and separate selection/focus reveal triggers for workspace tabs, utility tabs, and the terminal Action rail.
 Callers retain tablist semantics and drag targets.
 Native touch and trackpad scrolling remains the default; keyboard-translated Action rails opt into explicit pointer scrolling plus IME-focus preservation, so the first focused drag cannot be lost to visual-viewport arbitration.
 The pan begins on any child, with no button excluded: `railOverflow.ts` exports `RAIL_PAN_SLOP_PX` as the one travel threshold both the pan and `railKeyRepeat.ts` decide on, and the click a real drag suppresses is what settles whether the button it started on activated.
+Edge glows are `aria-hidden` spans with `pointer-events:none`; they indicate hidden content but never page or capture input.
 
 ## Pinned rail and overflow popover
 
-`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, plus `railFitCount` / `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
+`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, plus `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
 
-`RailStrip.tsx` is one Action rail row: it measures every chip, splits the row into what fits and a trailing `+N` chip, and hands the remainder to a popover scoped to that row.
-It wraps `OverflowRail` rather than replacing it — a split row does not overflow, but that component still owns the touch-drag click suppression, `holdSoftKeyboard`, wheel translation, and focus reveal, and a pixel of measurement error wants somewhere to go.
-The measurement is a **hidden twin**: a `visibility:hidden`, `pointer-events:none`, `width:max-content` copy of the full chip list, cloned (`cloneElement`) so one vnode never occupies two places in the tree.
-The twin exists because the alternative — render everything for a frame, measure, collapse — flashes on every re-measure, and re-measures here are frequent: a chip's own label changes under it (End session arms to `Confirm ✓`, an auto-labelled prompt resolves its title).
-It is a *sibling* of the scroller and not a child, because an absolutely-positioned child still counts toward `scrollWidth` and would report permanent overflow to the component drawing the edge chevrons.
-`railFitCount` is the pure split, and its two edges are the ones a reviewer should check: a row that fits returns its full count and reserves nothing (so a fitting row is byte-identical to the pre-split rail), and once anything overflows the `+N` chip's width is spent before the first chip is placed (so the count can legitimately be zero).
-The chip's width is fixed in CSS as `--rail-more-width` and read back from the same variable, so the reservation and the chip cannot disagree.
-Only elements marked `data-rail-fixed` are reserved out of the budget - the gear, never the status readout, which shrinks and ellipsises instead so a transient `Copied` cannot move every chip beside it.
-The `+N` chip is reserved separately by the split itself and lives *in* the trailing cluster rather than after the last pinned chip, which is what gives it one place on every row: the cluster is `flex:1 1 auto` with `justify-content:flex-end`, so it absorbs the slack the split leaves and everything in it sits on the rail's trailing edge.
-`RailStrip` also owns the gear now, because the gear rides that cluster; `TerminalPane` passes `status` and `onConfigure` and owns only what pressing it does.
+`RailStrip.tsx` is one Action rail row.
+Every configured chip remains in `OverflowRail`; no measurement twin or fit split exists.
+A fixed-width drawer control lives in trailing furniture outside the scroller on every row, including empty and non-overflowing rows.
+The drawer's small count is `chips.length`, so it describes the complete row and does not change with viewport width.
+Opening it clones the complete chip list into `RailOverflowPopover` as a wrapping grid.
+The same trailing cluster anchors the panel, giving all rows one trailing-edge placement.
+Command-rail glow wedges are positioned relative to `.rail-row`, not each scroller's width, so stacked rows align even when one row also carries status text.
 
 `railOverlayPlacement.ts` is the DOM half of placing **every** command-rail overlay - the popover and each drop-up - and exists for two soft-keyboard bugs that presented as one.
 `railOverlayView()` reads the *visual* viewport, because `interactive-widget=resizes-visual` keeps the layout viewport at full height and every bound drawn against `innerHeight` therefore describes a rectangle running behind the keyboard.
@@ -45,6 +43,8 @@ Portalling the overlays to the body would fix the same thing and take the rail's
 It returns the panel's bottom *edge* rather than a CSS inset, which is what makes the containing-block conversion checkable rather than implied.
 
 `RailOverflowPopover.tsx` is the panel, and it is deliberately not a `RailDropup`: a drop-up is a picker that closes on selection, this is the rail folded, and a rail does not close when you press a key on it.
+The panel has no header.
+Its close control is an absolutely positioned top-right overlay, and its bottom-right footer control closes the panel before opening the full Configure Actions modal.
 Three consequences are behaviours rather than details, and all three are covered by `test/renderer/rail-overflow.spec.ts`:
 a drop-up opened from a chip inside it is outside its DOM, so the pointer that opens one is exempted from outside-dismissal;
 Escape reaches both listeners on `window`, where `stopPropagation` stops neither and this one is registered first, so the panel stands aside while any `.rail-dropup` exists;

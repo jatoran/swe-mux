@@ -147,6 +147,32 @@ export function softKeyboardInset(layoutHeight:number, visualHeight:number):numb
   return inset >= SOFT_KEYBOARD_MIN_INSET_PX ? inset : 0
 }
 
+/**
+ * How far the browser has scrolled the visual viewport down inside the layout viewport.
+ *
+ * The keyboard's height and the keyboard's *position on screen* are two different questions,
+ * and only the first one `softKeyboardInset` answers. Chrome puts a focused field above the
+ * keys by scrolling something, and in this app there is only one thing it can scroll: `html`
+ * and `body` are `overflow:hidden` and the panels are `position:fixed`, so it moves the visual
+ * viewport itself and reports where it landed as `visualViewport.offsetTop`.
+ *
+ * That matters to every surface that *shortens* for the keyboard. Such a surface is laid out
+ * from the top of the layout viewport and ends `inset` pixels above its bottom, while the
+ * operator is looking at the band `[offsetTop, offsetTop + visualHeight]` - so the last
+ * `offsetTop` pixels of what they can see are below the surface and show whatever is behind
+ * it. Subtracting this from the inset is what puts a shortened surface's bottom edge back on
+ * the keyboard's top edge.
+ *
+ * Clamped to the inset because it can never legitimately exceed one: with no keyboard there is
+ * nothing to scroll for, and a larger value would grow a surface past full height rather than
+ * shortening it. Nothing here is a fallback for a missing `visualViewport` - a browser without
+ * one never scrolls this way either, so zero is the correct answer rather than a guess.
+ */
+export function softKeyboardVisualOffset(offsetTop:number, inset:number):number {
+  if(!Number.isFinite(offsetTop)||!Number.isFinite(inset)||inset<=0)return 0
+  return Math.min(Math.max(Math.round(offsetTop),0),inset)
+}
+
 /** Published whenever the keyboard's inset changes, carrying the new inset in pixels. */
 export const SOFT_KEYBOARD_EVENT = 'mux:soft-keyboard'
 

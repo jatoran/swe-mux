@@ -42,6 +42,12 @@ Accuracy, measured against what the keys actually do in Claude Code and Codex:
   operator who reached for `Ctrl+U` left the estimate reading "empty" over a
   standing draft — the false *safe* this docstring warns about, in the one place
   that can act on it.
+- The harness's composer-newline key (``HarnessDescriptor.composer_newline``,
+  ESC+CR on both measured agents) counts as one composed character. It has to be
+  named explicitly because it is not a control sequence the escape stripper
+  matches, so its bare CR used to survive and classify the whole write as a
+  submit — a false *empty* over a standing draft, fired by the rail's own
+  Markdown divider and code-fence buttons.
 - Backspace and delete decrement it, which is what stops "typed a word, thought
   better of it" from leaving a flag standing until the next turn.
 - Cursor keys, function keys, and mode toggles (`shift+tab`) move nothing into
@@ -56,8 +62,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_PASTE_START = "\x1b[200~"
-_PASTE_END = "\x1b[201~"
+BRACKETED_PASTE_START = "\x1b[200~"
+BRACKETED_PASTE_END = "\x1b[201~"
+_PASTE_START = BRACKETED_PASTE_START
+_PASTE_END = BRACKETED_PASTE_END
 # Operating-system commands (titles, hyperlinks) carry arbitrary text that is
 # addressed to the terminal, never to the composer.
 _OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
@@ -75,6 +83,10 @@ _CLEAR_KEYS = ("\x03",)
 # shells mux drives implement and which every consumer assumed before the harness
 # registry began declaring the answer.
 DEFAULT_CLEAR_KEYS = "\x15"
+# What a harness inserts a newline with when the caller does not say. ESC+CR
+# (Alt+Enter), which is what the browser sent every agent before
+# ``HarnessDescriptor.composer_newline`` existed.
+DEFAULT_NEWLINE_KEYS = "\x1b\r"
 _SUBMIT_KEYS = ("\r", "\n")
 
 
@@ -155,6 +167,7 @@ def classify_composer_write(
     data: str,
     in_paste: bool = False,
     clear_keys: str = DEFAULT_CLEAR_KEYS,
+    newline_keys: str = DEFAULT_NEWLINE_KEYS,
 ) -> ComposerWrite:
     """Classify one write to the PTY, without touching any session state.
 
@@ -164,10 +177,24 @@ def classify_composer_write(
     Code, so counting it as a clear reported an empty composer while three lines
     of a four-line draft were still standing. That is a false "empty", which is
     the direction this module's own docstring names as the dangerous one.
+
+    ``newline_keys`` is the harness's declared composer newline
+    (``HarnessDescriptor.composer_newline``) and is counted as one composed
+    character each. It has to be recognised explicitly: ESC+CR is not a control
+    sequence ``_ESCAPE`` matches, so the bare CR survived the strip and every
+    such write classified as a **submit**. That is the same false "empty" — and
+    it was already live, because the rail's Markdown divider and code-fence
+    buttons have always sent exactly these bytes.
     """
     if not data:
         return ComposerWrite("none", in_paste=in_paste)
     remainder, pasted, in_paste = _split_pastes(data, in_paste)
+    # Before the escape strip and before the submit test, for both reasons above.
+    composed_newlines = 0
+    if newline_keys:
+        composed_newlines = remainder.count(newline_keys)
+        if composed_newlines:
+            remainder = remainder.replace(newline_keys, "")
     remainder = _ESCAPE.sub("", _OSC.sub("", remainder))
     if any(key in remainder for key in _SUBMIT_KEYS):
         return ComposerWrite("submit", in_paste=in_paste)
@@ -178,7 +205,7 @@ def classify_composer_write(
     # out of ``remainder`` — matching there would never fire.
     if clear_keys and clear_keys in data:
         return ComposerWrite("clear", in_paste=in_paste)
-    typed = pasted + _composable_length(remainder)
+    typed = pasted + composed_newlines + _composable_length(remainder)
     erased = sum(remainder.count(key) for key in _ERASE_KEYS)
     if not typed and not erased:
         return ComposerWrite("none", in_paste=in_paste)
@@ -190,6 +217,7 @@ def note_composer_write(
     data: str,
     now: float,
     clear_keys: str = DEFAULT_CLEAR_KEYS,
+    newline_keys: str = DEFAULT_NEWLINE_KEYS,
 ) -> str | None:
     """Apply one write to ``state``.
 
@@ -199,7 +227,7 @@ def note_composer_write(
     which is what keeps this off the event bus and out of the ledger on a fast
     typist's every character.
     """
-    write = classify_composer_write(data, state.in_paste, clear_keys)
+    write = classify_composer_write(data, state.in_paste, clear_keys, newline_keys)
     state.in_paste = write.in_paste
     if write.kind == "none":
         return None
@@ -212,6 +240,49 @@ def note_composer_write(
         return None
     state.since = now if state.pending else 0.0
     return "pending" if state.pending else "cleared"
+
+
+def composer_insertion(
+    text: str,
+    *,
+    newline_keys: str = DEFAULT_NEWLINE_KEYS,
+    lift_leading_newline: bool = False,
+) -> str:
+    """The PTY bytes that put ``text`` into a composer without submitting it.
+
+    The body travels as a bracketed paste with newlines as CR, which is what
+    xterm writes for a real paste and what every agent TUI mux drives reads as
+    content rather than as a run of submits.
+
+    ``lift_leading_newline`` is the harness's
+    ``paste_leading_newline_submits`` verdict, and it exists because the paste
+    wrapper does not protect the *first* character. Measured 2026-08-22 against
+    Codex v0.149.0 over a real pseudoterminal: a paste carrying interior
+    newlines lands as a three-line draft, while the same paste with one leading
+    CR **submits whatever the composer already held** and then pastes the rest.
+    The live "Tree" prompt template begins with a newline, so pressing its button
+    over a half-typed draft sent that draft to the model. A leading LF is not a
+    repair - Codex drops it, concatenating the paste onto the standing draft.
+
+    So the leading newline run is lifted out of the paste and sent as
+    ``newline_keys`` presses ahead of it, which is exactly what the author of a
+    template beginning with a newline meant: start below what is already there.
+    One write, not two: measured as a single `ESC+CR` + bracketed paste, Codex
+    keeps the draft and opens the paste on line two.
+
+    Everything else is unchanged, which is what keeps an unmeasured harness on
+    the bytes mux has always sent it.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lifted = ""
+    if lift_leading_newline and newline_keys:
+        body = normalized.lstrip("\n")
+        lifted = newline_keys * (len(normalized) - len(body))
+        normalized = body
+    if not normalized:
+        return lifted
+    pasted = normalized.replace("\n", "\r")
+    return f"{lifted}{BRACKETED_PASTE_START}{pasted}{BRACKETED_PASTE_END}"
 
 
 def clear_composer(state: ComposerState) -> bool:

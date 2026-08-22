@@ -36,7 +36,26 @@ In particular, configured MCP servers are not reported as connected, documented 
 
 The response includes the retained launch executable, model and selected CLI options, current trusted working directory, current source metadata, and the CLI process-generation load time.
 Configuration source paths are represented by opaque IDs and stable human labels.
-`changed_after_start` compares a source mtime with the time the current CLI generation loaded, including a shell-to-agent promotion but not a conversation rollover inside the same process.
+
+## Configuration drift
+
+`changed_after_start` compares source *content* against a baseline captured when the current CLI generation loaded, which includes a shell-to-agent promotion but not a conversation rollover inside the same process.
+The daemon captures that baseline once per generation (`capture_config_baseline`, stored on `SessionRecord.agent_env_baseline`) and hands it back to every scan.
+The baseline digests what each source contributes to this inventory - the rows derived from it, plus its parse status - rather than its bytes, so bookkeeping the inventory never reads cannot register as drift and no enumerated key allowlist has to be kept in step with the readers.
+A plugin manifest is read but is never listed as its own source, because feeding its `hooks` and `mcpServers` keys to the walks that read every source would invent rows the CLI does not load; its content reaches the baseline as extra material attributed to the source that declares the plugin.
+
+It was an mtime comparison until 2026-08-22, and that reported drift on essentially every live session within seconds of it starting.
+Three sources churn without their meaning changing: `~/.claude.json` is Claude's own state file and is rewritten continuously with conversation history, startup counts and costs; swe-mux rewrote its `--mcp-config` and hook-settings files with identical bytes on every adapter construction, so every daemon restart retroactively marked every older session; and Codex persists trust decisions into `~/.codex/config.toml`, so creating one worktree marked every live Codex session.
+Because items inherit their source's answer, one such file painted whole sections - measured on one five-day-old session: MCP 2/2, plugins 4/4, policies 5/6.
+The adapter now writes those two generated files only when the content differs (`_write_config_if_changed`), which keeps their mtimes stable for anything else reading them.
+
+`config_baseline` on the response says whether the question is answerable at all: `captured`, or `unavailable` when no snapshot exists for this generation - a session adopted from before baselines existed, or recovered cold.
+`unavailable` reports no source as changed, and the UI must show that as untracked rather than as "nothing changed", because the two are not the same claim.
+A source the baseline does not name is also left unmarked.
+Source IDs are path digests, so a session whose working directory moved after launch resolves different project-scoped paths than the baseline covers; reporting those as drift would recreate the false alarm this replaced, while user-scoped layers keep their IDs and stay tracked.
+
+Skills keep their own mtime comparison (`added_after_start`, and the `restart_required` state derived from it).
+Skill files are user-authored and do not churn, so the cheap test is the right one there; the measured false-positive rate was zero.
 
 ## Discovery and safety
 

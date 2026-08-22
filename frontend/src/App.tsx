@@ -16,7 +16,7 @@ import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
-import { pastePayload } from './noteSelection'
+import { composerInsertion } from './composerInsertion'
 import { QueuePane } from './QueuePane'
 import { ChangeMapPane } from './ChangeMapPane'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
@@ -142,7 +142,7 @@ import {
   forgetJoinAttempts, joinSessions, joinableSessionIds, recordJoinFailure, unjoinedSessionIds,
   type JoinAttempts,
 } from './sessionJoin'
-import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
+import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { ApprovalMode, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
@@ -166,7 +166,7 @@ import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalView
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
-import { insertIntoTerminal, requestTerminalAction } from './terminalActions.ts'
+import { insertIntoTerminal, insertionRefusal, requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -184,7 +184,8 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
+import { RESERVE_INTENT_WINDOW_MS, reservedKeyboardPx } from './keyboardReserve'
+import { SOFT_KEYBOARD_EVENT, deepActiveElement, dismissSoftKeyboard, lastSoftKeyboardInset, raisesSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset, softKeyboardVisualOffset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
@@ -1909,7 +1910,19 @@ export function App() {
 
   useEffect(() => {
     const viewport = window.visualViewport
+    const root = document.documentElement
     let lastInset = -1
+    let pendingTimer: number | null = null
+    // Retire a predicted reservation. Called both when a real keyboard shows up (the
+    // measurement supersedes the guess) and when the guess turns out to be wrong - a focus
+    // that never raises a keyboard, or one the operator moves away from. Holding a prediction
+    // past either is how `keyboardReserve.ts` once left a pane rendering on half a screen
+    // with nothing covering the other half.
+    const clearPending = () => {
+      if (pendingTimer !== null) { window.clearTimeout(pendingTimer); pendingTimer = null }
+      root.style.removeProperty('--keyboard-pending')
+      root.classList.remove('soft-keyboard-pending')
+    }
     // The shell is the *layout* viewport, which `interactive-widget=resizes-visual` keeps at
     // full height while the keyboard is up. Sizing it from `visualViewport` instead is what
     // used to shrink every terminal when the keyboard opened — and shrinking an
@@ -1918,13 +1931,21 @@ export function App() {
     const updateAppHeight = () => {
       const layout = Math.round(window.innerHeight)
       const inset = softKeyboardInset(layout, Math.round(viewport?.height ?? layout))
-      const root = document.documentElement
       root.style.setProperty('--app-height', `${layout}px`)
       root.style.setProperty('--keyboard-inset', `${inset}px`)
+      // Where the browser has scrolled the visual viewport to, which is a separate fact from
+      // how tall the keyboard is and is what `--keyboard-cover` subtracts. See
+      // `softKeyboardVisualOffset` and the `--keyboard-cover` block in `style.css`.
+      root.style.setProperty('--visual-offset', `${softKeyboardVisualOffset(viewport?.offsetTop ?? 0, inset)}px`)
       // A class as well as the length, so the slide can be scoped to the keyboard being up.
       // A `translateY(0)` still makes an element a containing block for its `position:fixed`
       // descendants, which would silently re-anchor the drawer and sidebar overlays.
       root.classList.toggle('soft-keyboard-open', inset > 0)
+      // A measured keyboard outranks a predicted one, and dropping the prediction here rather
+      // than leaving it shadowed by the class is what makes the *close* correct too: dismissing
+      // the keyboard with the field still focused returns the inset to zero, and a prediction
+      // still armed would take over again and hold half the screen back with nothing on it.
+      if (inset > 0) clearPending()
       // Panes need this as state, not only as a length: a terminal shows a peek-at-the-top
       // control while the keyboard covers part of it. Published on change only, because the
       // keyboard fires resizes throughout its open animation.
@@ -1938,17 +1959,49 @@ export function App() {
       }
       setViewportWidth(window.innerWidth)
     }
+    // Give the keyboard its space before it arrives, rather than compensating once it has.
+    //
+    // The browser scrolls the visual viewport because the field it just focused is under the
+    // keys at the moment they appear. A panel that has already shortened puts that field above
+    // them, so there is nothing to scroll and `--visual-offset` stays zero - which is why this
+    // is the fix and the offset arithmetic is the backstop for when the prediction is wrong,
+    // absent (no keyboard measured on this device yet), or beaten by a rotation.
+    //
+    // Focus is the earliest honest signal a keyboard is coming, and the *only* one: Android
+    // announces nothing else. `RESERVE_INTENT_WINDOW_MS` is how long that signal is trusted,
+    // shared with the terminal's own reservation because it is the same bet on the same
+    // animation. Nothing arms on a device that types with a real keyboard.
+    const armPending = () => {
+      if (!hasSoftKeyboard() || root.classList.contains('soft-keyboard-open')) return
+      if (!raisesSoftKeyboard(deepActiveElement(document))) return
+      const predicted = reservedKeyboardPx(lastSoftKeyboardInset(), Math.round(window.innerHeight))
+      if (predicted <= 0) return
+      if (pendingTimer !== null) window.clearTimeout(pendingTimer)
+      root.style.setProperty('--keyboard-pending', `${predicted}px`)
+      root.classList.add('soft-keyboard-pending')
+      pendingTimer = window.setTimeout(clearPending, RESERVE_INTENT_WINDOW_MS)
+    }
+    // `focusout` runs before the incoming element takes focus, so this reads "nothing is
+    // focused" even for a move between two fields - and that is fine, because the `focusin`
+    // that follows re-arms in the same task and nothing is painted in between.
+    const onFocusOut = () => { if (!raisesSoftKeyboard(deepActiveElement(document))) clearPending() }
     updateAppHeight()
     window.addEventListener('resize', updateAppHeight)
+    window.addEventListener('focusin', armPending)
+    window.addEventListener('focusout', onFocusOut)
     viewport?.addEventListener('resize', updateAppHeight)
     viewport?.addEventListener('scroll', updateAppHeight)
     return () => {
       window.removeEventListener('resize', updateAppHeight)
+      window.removeEventListener('focusin', armPending)
+      window.removeEventListener('focusout', onFocusOut)
       viewport?.removeEventListener('resize', updateAppHeight)
       viewport?.removeEventListener('scroll', updateAppHeight)
-      document.documentElement.style.removeProperty('--app-height')
-      document.documentElement.style.removeProperty('--keyboard-inset')
-      document.documentElement.classList.remove('soft-keyboard-open')
+      clearPending()
+      root.style.removeProperty('--app-height')
+      root.style.removeProperty('--keyboard-inset')
+      root.style.removeProperty('--visual-offset')
+      root.classList.remove('soft-keyboard-open')
     }
   }, [])
 
@@ -4244,7 +4297,11 @@ export function App() {
     const sid = target.session.id
     try {
       if (!target.submit) {
-        await api('POST',`/api/sessions/${sid}/input`,{data:pastePayload(message)})
+        // Filling a composer is an insert, not a delivery, so it does not pass the
+        // queue's readiness gate — and therefore has to refuse a dialog itself.
+        const refusal=insertionRefusal(target.session)
+        if(refusal)return{status:'error',error:refusal}
+        await api('POST',`/api/sessions/${sid}/input`,{data:composerInsertion(message,target.session.backend)})
         await selectSession(target.session)
         return { status: 'done' }
       }
@@ -6055,7 +6112,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><OverflowRail className="stack-tabs" itemLabel="workspace tabs" wrapperClassName="stack-tabs-rail" activeKey={activeChild.id} focusKey={focusedPane?activeChild.id:undefined} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Workspace tabs'}}>
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={activeChild.id} focusKey={focusedPane?activeChild.id:undefined} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Workspace tabs'}}>
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
@@ -6247,7 +6304,7 @@ export function App() {
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
-    return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
+    return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
       <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
@@ -6550,7 +6607,7 @@ export function App() {
   // With no new-tab button left in the rail, an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
-    {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" itemLabel="Project tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
+    {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
       {mobileProjection.tabs.map(mobileTab)}
     </OverflowRail>}
     <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
@@ -6986,14 +7043,14 @@ export function App() {
         defaultWidth={DRAWER_DEFAULT_WIDTH}
         onWidth={width=>persistDrawerWidth(width,drawerWidthLimit)}
         onInsert={text=>{
-          const target=insertIntoFocusedSurface(text,activeId)
+          const target=insertIntoFocusedSurface(text,activeId,{onRefused:setError})
           if(target==='none')setError('Focus a terminal or note before inserting text.')
           return target
         }}
         // A prompt template is written for an agent to read: routing one into whichever
         // note or file pane happened to be focused last edits that document instead.
         onInsertPrompt={text=>{
-          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true})
+          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true,onRefused:setError})
           if(target==='none')setError('Focus an agent session before inserting a prompt.')
           return target
         }}
@@ -7486,7 +7543,7 @@ export function App() {
         under the dialog closes it instead of leaving it aimed at a pane that is gone. */}
     {(()=>{const target=branchPickerId?sessions.find(item=>item.id===branchPickerId):null
       return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
-    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
+    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>{const sid=promptTargetId||activeId;if(sid)void insertIntoTerminal(sid,text,false).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))}}/>}
 
     {resourcesOpen&&<ResourcesModal
       initial={resourcesOpen}

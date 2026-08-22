@@ -104,6 +104,14 @@ export interface HarnessDescriptor {
    *  daemon payloads; a missing value defaults to Ctrl+U, which is what mux sent
    *  before the field existed. */
   composer_clear_keys?: string
+  /** The key sequence that puts a newline into this CLI's composer instead of
+   *  submitting it. Absent from older daemon payloads; a missing value defaults
+   *  to ESC+CR, which is what mux sent every agent before the field existed. */
+  composer_newline?: string
+  /** Whether this CLI reads a bracketed paste whose FIRST character is a newline
+   *  as Enter. Absent means "not declared", which is read as false - the bytes
+   *  mux has always sent. */
+  paste_leading_newline_submits?: boolean
   capabilities: HarnessCapabilities
 }
 
@@ -290,6 +298,31 @@ export const skillInvocationPrefix = (name: string | undefined): string =>
  */
 export const composerClearKeys = (name: string | undefined): string =>
   harnessDescriptor(name)?.composer_clear_keys || ''
+/**
+ * What mux sends to insert a composer newline when the daemon declares nothing.
+ *
+ * xterm encodes Enter as CR and speaks neither the kitty keyboard protocol nor
+ * modifyOtherKeys, so Shift+Enter and Ctrl+Enter can never reach an agent as
+ * anything but a submit. ESC+CR (Alt+Enter) is the one legacy sequence both
+ * measured agents read as a newline, and it is the right fallback because it is
+ * the constant the browser hardcoded for every agent before the field existed.
+ */
+export const DEFAULT_COMPOSER_NEWLINE = '\x1b\r'
+
+/** The key sequence that inserts a newline into this CLI's composer. */
+export const composerNewline = (name: string | undefined): string =>
+  harnessDescriptor(name)?.composer_newline || DEFAULT_COMPOSER_NEWLINE
+
+/**
+ * Whether a bracketed paste beginning with a newline submits this CLI's composer.
+ *
+ * A measured per-CLI defect, never inferred: true on Codex v0.149.0, false on
+ * Claude Code v2.1.240, and false for anything unmeasured - which is also what
+ * keeps an unmeasured harness on the bytes it has always been sent.
+ */
+export const pasteLeadingNewlineSubmits = (name: string | undefined): boolean =>
+  harnessDescriptor(name)?.paste_leading_newline_submits === true
+
 export const harnessDisplayName = (name: string): string => harnessDescriptor(name)?.display_name || name
 // Every registered harness, ignoring enablement. Kept for the display/history
 // surfaces and for `allHarnessesIncludingDisabled`; the launcher accessors below

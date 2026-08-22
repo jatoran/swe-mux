@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from swe_mux.agent_environment import clear_cache, discover_agent_environment
+from swe_mux.agent_environment import (
+    capture_config_baseline,
+    clear_cache,
+    discover_agent_environment,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +36,7 @@ def _discover(
     args: list[str] | None = None,
     loaded_at: float = 2_000.0,
     run_started_at: float | None = None,
+    baseline: dict[str, str] | None = None,
     refresh: bool = False,
 ) -> dict:
     return discover_agent_environment(
@@ -42,8 +47,17 @@ def _discover(
         model=None,
         loaded_at=loaded_at,
         run_started_at=run_started_at if run_started_at is not None else loaded_at + 100,
+        baseline=baseline,
         refresh=refresh,
     )
+
+
+def _baseline(backend: str, cwd: Path, *, args: list[str] | None = None) -> dict[str, str]:
+    return capture_config_baseline(backend=backend, cwd=cwd, args=args or [])
+
+
+def _changed(payload: dict) -> set[str]:
+    return {source["label"] for source in payload["sources"] if source["changed_after_start"]}
 
 
 def test_codex_inventory_separates_scope_origin_and_state(
@@ -363,7 +377,7 @@ def test_hooks_group_by_event_and_mark_the_ones_swe_mux_installs(
     assert facts["notify-send"] == {"Runs": "notify-send (arguments withheld)"}
 
 
-def test_source_and_skill_drift_are_relative_to_cli_process_start(
+def test_source_drift_reports_content_and_skill_drift_stays_relative_to_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "codex-home"
@@ -373,20 +387,160 @@ def test_source_and_skill_drift_are_relative_to_cli_process_start(
     monkeypatch.setenv("CODEX_HOME", str(home))
     config = home / "config.toml"
     config.write_text('model = "gpt"\n', encoding="utf-8")
+    baseline = _baseline("codex", cwd)
+    config.write_text('model = "gpt-5"\n', encoding="utf-8")
     os.utime(config, (3_000.0, 3_000.0))
     skill = home / "skills" / "late" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("---\nname: late\ndescription: late skill\n---\n", encoding="utf-8")
     os.utime(skill, (3_000.0, 3_000.0))
 
-    payload = _discover("codex", cwd, loaded_at=2_000.0)
+    payload = _discover("codex", cwd, loaded_at=2_000.0, baseline=baseline)
 
-    source = next(item for item in payload["sources"] if item["label"] == "~/.codex/config.toml")
     skill_item = _section(payload, "skills")["items"][0]
-    assert source["changed_after_start"] is True
+    assert _changed(payload) == {"~/.codex/config.toml"}
+    assert payload["config_baseline"] == "captured"
+    # Skills are still dated against the CLI generation: their files are
+    # user-authored and do not churn the way a CLI's own state file does.
     assert skill_item["state"] == "restart_required"
     assert payload["runtime"]["loaded_at"] == 2_000.0
     assert payload["runtime"]["run_started_at"] == 2_100.0
+
+
+def test_rewriting_a_source_with_identical_content_is_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole reason this stopped being an mtime comparison.
+
+    swe-mux rewrites its own generated config on every daemon start and Claude
+    rewrites `~/.claude.json` continuously; both used to mark every live session
+    as drifted within seconds of starting.
+    """
+    home = tmp_path / "codex-home"
+    cwd = tmp_path / "repo"
+    home.mkdir()
+    cwd.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+    config.write_text('model = "gpt"\napproval_policy = "on-request"\n', encoding="utf-8")
+    baseline = _baseline("codex", cwd)
+
+    os.utime(config, (9_000.0, 9_000.0))
+    untouched = _discover("codex", cwd, baseline=baseline, refresh=True)
+    # Re-serialized with the keys in the other order: same configuration, so
+    # the same answer.
+    config.write_text('approval_policy = "on-request"\nmodel = "gpt"\n', encoding="utf-8")
+    reordered = _discover("codex", cwd, baseline=baseline, refresh=True)
+
+    assert _changed(untouched) == set()
+    assert _changed(reordered) == set()
+
+
+def test_unread_bookkeeping_in_a_source_is_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`~/.claude.json` is Claude's state file, and this is why it was so loud."""
+    home = tmp_path / "claude-home"
+    user_home = tmp_path / "user"
+    cwd = tmp_path / "repo"
+    for path in (home, user_home, cwd):
+        path.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: user_home))
+    state = user_home / ".claude.json"
+    state.write_text(json.dumps({"numStartups": 4, "mcpServers": {"api": {"url": ""}}}), "utf-8")
+    baseline = _baseline("claude", cwd)
+
+    state.write_text(
+        json.dumps({"numStartups": 5, "lastCost": 1.25, "mcpServers": {"api": {"url": ""}}}),
+        encoding="utf-8",
+    )
+    quiet = _discover("claude", cwd, baseline=baseline, refresh=True)
+    state.write_text(
+        json.dumps({"numStartups": 6, "mcpServers": {"api": {"url": "https://elsewhere/mcp"}}}),
+        encoding="utf-8",
+    )
+    real = _discover("claude", cwd, baseline=baseline, refresh=True)
+
+    assert _changed(quiet) == set()
+    assert _changed(real) == {"~/.claude.json"}
+    changed_rows = [
+        item["name"] for item in _section(real, "mcp")["items"] if item["changed_after_start"]
+    ]
+    assert changed_rows == ["api"]
+
+
+def test_drift_is_untracked_without_a_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No snapshot means no answer, and saying so beats claiming nothing moved."""
+    home = tmp_path / "codex-home"
+    cwd = tmp_path / "repo"
+    home.mkdir()
+    cwd.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    (home / "config.toml").write_text('model = "gpt"\n', encoding="utf-8")
+    os.utime(home / "config.toml", (9_000.0, 9_000.0))
+
+    payload = _discover("codex", cwd, loaded_at=2_000.0)
+
+    assert payload["config_baseline"] == "unavailable"
+    assert _changed(payload) == set()
+
+
+def test_a_source_the_baseline_never_saw_is_not_reported_as_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Source ids are path digests, so a moved working directory resolves new ones.
+
+    Calling those "changed since load" would recreate the false alarm the
+    baseline replaced, on every session whose agent changed directory.
+    """
+    home = tmp_path / "codex-home"
+    first = tmp_path / "repo"
+    second = tmp_path / "other"
+    home.mkdir()
+    (first / ".codex").mkdir(parents=True)
+    (second / ".codex").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    (home / "config.toml").write_text('model = "gpt"\n', encoding="utf-8")
+    (first / ".codex" / "config.toml").write_text('model = "first"\n', encoding="utf-8")
+    (second / ".codex" / "config.toml").write_text('model = "second"\n', encoding="utf-8")
+    baseline = _baseline("codex", first)
+
+    payload = _discover("codex", second, baseline=baseline)
+
+    assert _changed(payload) == set()
+    assert payload["config_baseline"] == "captured"
+
+
+def test_a_plugin_manifest_edit_reaches_the_declaring_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest is read but never listed, so its content rides the registry."""
+    home = tmp_path / "claude-home"
+    user_home = tmp_path / "user"
+    cwd = tmp_path / "repo"
+    install = tmp_path / "plugins" / "demo"
+    for path in (home, user_home, cwd):
+        path.mkdir()
+    (install / ".claude-plugin").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: user_home))
+    registry = home / "plugins" / "installed_plugins.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        json.dumps({"plugins": {"demo@market": [{"installPath": str(install)}]}}),
+        encoding="utf-8",
+    )
+    manifest = install / ".claude-plugin" / "plugin.json"
+    manifest.write_text(json.dumps({"version": "1.0.0", "author": "a"}), encoding="utf-8")
+    baseline = _baseline("claude", cwd)
+
+    manifest.write_text(json.dumps({"version": "1.0.0", "author": "b"}), encoding="utf-8")
+    payload = _discover("claude", cwd, baseline=baseline, refresh=True)
+
+    assert _changed(payload) == {"Claude plugin registry"}
 
 
 def test_cached_scan_requires_explicit_refresh(

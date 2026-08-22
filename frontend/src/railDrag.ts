@@ -1,5 +1,5 @@
 // Pointer-drag machinery shared by the Action editors — the Configure Actions
-// modal (`RailEditor.tsx`) and the in-place rail editor (`RailInlineEditor.tsx`).
+// modal (`RailEditor.tsx`).
 //
 // The contract is DOM-attribute based so neither host keeps a registry of live
 // element refs: rows advertise themselves with `data-rail-row="device|surface|rowId"`
