@@ -230,10 +230,11 @@ test('the overflow chip is fixed-width, so the control that absorbs overflow can
   const rule = declarations(styles, /\.terminal-action-rail button\.rail-more\{([^}]*)\}/)
   assert.match(rule, /min-width:var\(--rail-more-width\)/)
   assert.match(rule, /width:var\(--rail-more-width\)/)
-  // The split reserves the chip's width before the chip exists, and reads the same
-  // variable to do it (RailStrip.tsx). A literal there would be a second answer.
+  // No reservation in the split any more: the chip lives outside the scroller, so the
+  // scroller's own clientWidth already excludes it and a reserved width would count it
+  // twice (RailStrip.tsx passes overflowWidth: 0).
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(strip, /getPropertyValue\('--rail-more-width'\)/)
+  assert.match(strip, /overflowWidth: 0/)
 })
 
 test('the measured copy of a row is unpaintable, untouchable, and outside the scroller', () => {
@@ -261,17 +262,23 @@ test('the strip carries no gear: Configure lives in the popover, not on a rail r
   assert.match(strip, /onConfigure=\{onConfigure\}/)
 })
 
-test('the overflow chip rides the trailing cluster, not the tail of the pinned chips', () => {
+test('the row scrolls end to end while the trailing cluster stays pinned outside it', () => {
+  // Operator decision 2026-08-22: scroll OR overlay, reader's choice. Every chip renders
+  // inside the scroller, and the cluster (readout + `+N`) is the row's fixed furniture
+  // beside it - never inside it, where a pan would carry it away.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  const cluster = strip.slice(strip.indexOf('class="rail-row-trailing"'), strip.indexOf('</OverflowRail>'))
+  const scroller = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('</OverflowRail>'))
+  assert.match(scroller, /\{chips\}/)
+  assert.ok(!scroller.includes('rail-row-trailing'), 'the cluster must sit outside the scroller')
+  const cluster = strip.slice(strip.indexOf('class="rail-row-trailing"'))
   // Order inside the cluster is load-bearing: the readout is the only shrinking thing, so
   // it goes first and the `+N` chip holds the trailing edge.
   assert.ok(cluster.indexOf('aria-live="polite"') < cluster.indexOf('ref={moreRef}'))
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
-  const rule = declarations(styles, /\.terminal-action-scroll>\.rail-row-trailing\{([^}]*)\}/)
-  // Taking the row's slack is what puts the cluster - and so the chip - on the trailing edge
-  // however many chips happened to fit.
-  assert.match(rule, /flex:1 1 auto/)
+  const rule = declarations(styles, /\.rail-row>\.rail-row-trailing\{([^}]*)\}/)
+  // Fixed furniture beside a flex:1 scroller: the cluster must never grow into the space
+  // the chips scroll through.
+  assert.match(rule, /flex:0 0 auto/)
   assert.match(rule, /justify-content:flex-end/)
 })
 

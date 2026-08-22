@@ -1566,11 +1566,11 @@ Its rules, and what each one is defending:
   Attach is the final scrolling item on agent rails.
   A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
   The strip itself carries no customize gear (operator decision 2026-08-22): a standing gear chip spent rail width on chrome and read as one more action, so the in-place editor is reached from the overflow popover's header, and the full editor stays one press away in Actions → Configure.
-- **A row that does not fit fills with what does and collapses the rest into a trailing `+N` chip.**
-  The rail is a toolbar, and a toolbar's answer to overflow is an overflow menu rather than a scroller: a horizontal scroller hides an unknown number of controls behind a gesture, says nothing about how many, and puts the one you want at an offset you have to hunt for.
-  Each row is split independently and gets its own popover, in row order, holding only that row's remainder.
-  An empty remainder draws no `+N` chip at all, so a rail that fits looks exactly as it did before the split existed — including not reserving the chip's width "just in case".
-  The `+N` chip is fixed-width by construction, because the one control that exists to absorb overflow must never be the thing that overflows, and the count follows the row's width live.
+- **A row that does not fit answers overflow twice: it scrolls end to end, and it collapses the remainder into a trailing `+N` chip** (operator decision 2026-08-22: scroll OR overlay, reader's choice).
+  Every chip renders in the scroller, which keeps the pan, chevrons, wheel translation, and click suppression it always had; the `+N` chip counts what lies beyond the unscrolled viewport, which is exactly the set its popover shows, so the two affordances always agree.
+  Each row is counted independently and gets its own popover, in row order, holding only that row's remainder.
+  An empty remainder draws no `+N` chip at all, so a rail that fits looks exactly as it did before either affordance existed.
+  The `+N` chip is fixed-width by construction and sits with the readout in fixed furniture outside the scroller, so the one control that exists to absorb overflow can neither overflow nor pan away, and the count follows the row's width live.
 - **The `+N` chip rides the row's trailing cluster**, rather than trailing the last pinned chip.
   The split leaves up to a chip's width of slack, so following the chips put the control at a different offset on every rail and on every resize; the cluster takes that slack and pushes its contents right, which gives it one place on every row however that row is populated.
   Its panel is placed against the *cluster*, whose right edge is the rail's trailing edge by construction.

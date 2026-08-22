@@ -54,45 +54,46 @@ async function openDropup(page: Page) {
   await expect.poll(async () => page.locator(DROPUP).evaluate(el => (el as HTMLElement).style.left)).not.toBe('')
 }
 
-test('the row keeps what fits and the rest is exactly the `+N` count, losing nothing', async ({ page }) => {
-  const pinned = await page.locator(ROW_CHIPS).count()
+test('every chip renders in the row, and the `+N` count is exactly what needs a scroll', async ({ page }) => {
+  // Scroll OR overlay, reader's choice (2026-08-22): the row holds every chip and pans,
+  // while the panel shows the ones beyond the unscrolled viewport. Nothing is sliced away.
+  const inRow = await page.locator(ROW_CHIPS).count()
+  expect(inRow).toBe(await total(page))
   const label = await page.locator(MORE).textContent()
   const hidden = Number((label || '').replace('+', ''))
   expect(hidden).toBeGreaterThan(0)
-  // No chip may be in both places and none may be in neither: the panel is the rest of
-  // the row, not a second menu that happens to look like it.
-  expect(pinned + hidden).toBe(await total(page))
+  expect(hidden).toBeLessThan(inRow)
 
   await open(page)
   expect(await page.locator(`${GRID} > *`).count()).toBe(hidden)
 })
 
-test('the pinned chips and the overflow chip fit the row they were measured against', async ({ page }) => {
+test('the row genuinely scrolls when the `+N` chip is up, and the chip never pans away', async ({ page }) => {
   const strip = page.locator(STRIP)
-  const [box, more] = await Promise.all([strip.boundingBox(), page.locator(MORE).boundingBox()])
-  expect(box).not.toBeNull()
-  expect(more).not.toBeNull()
-  // The one control that exists to absorb overflow must never be the thing that overflows.
-  expect(more!.x + more!.width).toBeLessThanOrEqual(box!.x + box!.width + 1)
-  // And the row genuinely does not scroll, which is what the split replaced.
+  // The `+N` chip exists exactly because the row overflows - and the row now answers that
+  // overflow twice: it scrolls, and it offers the panel.
   const scrolls = await strip.evaluate(el => el.scrollWidth - el.clientWidth)
-  expect(scrolls).toBeLessThanOrEqual(1)
+  expect(scrolls).toBeGreaterThan(1)
+  // The chip is fixed furniture outside the scroller: panning the chips moves none of it.
+  const before = await page.locator(MORE).boundingBox()
+  await strip.evaluate(el => { el.scrollLeft = 200 })
+  const after = await page.locator(MORE).boundingBox()
+  expect(Math.abs(before!.x - after!.x)).toBeLessThanOrEqual(1)
+  await strip.evaluate(el => { el.scrollLeft = 0 })
 })
 
-test('the overflow chip sits on the trailing edge, not wherever the split stopped', async ({ page }) => {
+test('the overflow chip sits on the row\'s trailing edge at every width', async ({ page }) => {
   // Every edge read inside one evaluate. Separate `boundingBox()` calls resolve at
   // different moments, and a viewport change between two of them reports one box from
   // before the relayout and one from after - which reads as a real geometry failure.
   const measure = () => page.evaluate(() => {
-    const strip = document.querySelector<HTMLElement>('.overflow-rail .terminal-action-scroll')!
-    const right = (selector: string) => strip.querySelector(selector)!.getBoundingClientRect().right
-    const chips = Array.from(strip.querySelectorAll<HTMLElement>(':scope > [data-key]'))
+    const row = document.querySelector<HTMLElement>('.rail-row')!
+    const more = row.querySelector<HTMLElement>('.rail-more')!
+    const cluster = row.querySelector<HTMLElement>('.rail-row-trailing')!
     return {
-      moreLeft: strip.querySelector('.rail-more')!.getBoundingClientRect().left,
-      moreRight: right('.rail-more'),
-      lastChipRight: chips[chips.length - 1].getBoundingClientRect().right,
-      stripRight: strip.getBoundingClientRect().right,
-      padRight: Number.parseFloat(getComputedStyle(strip).paddingRight) || 0,
+      moreRight: more.getBoundingClientRect().right,
+      rowRight: row.getBoundingClientRect().right,
+      clusterPad: Number.parseFloat(getComputedStyle(cluster).paddingRight) || 0,
     }
   })
   for (const width of [420, 520, 760]) {
@@ -100,16 +101,10 @@ test('the overflow chip sits on the trailing edge, not wherever the split stoppe
     await expect(page.locator(MORE)).toBeVisible()
     // Polled, because a viewport change is not settled by the time the chip is visible and
     // a single read can catch the row mid-relayout.
-    // The `+N` chip is the trailing cluster's last element (the strip carries no gear),
-    // so its right edge IS the rail's content edge.
     await expect.poll(async () => {
       const settling = await measure()
-      return Math.round(settling.stripRight - settling.padRight - settling.moreRight)
+      return Math.round(settling.rowRight - settling.clusterPad - settling.moreRight)
     }, { message: `the cluster is off the trailing edge at ${width}px` }).toBe(0)
-    const box = await measure()
-    // The slack the split leaves is real: the chip is measurably clear of the last pinned
-    // chip, which is exactly the gap that used to move it from rail to rail.
-    expect(box.moreLeft).toBeGreaterThanOrEqual(box.lastChipRight)
   }
 })
 

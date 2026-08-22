@@ -67,13 +67,11 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
     const gap = Number.parseFloat(style.columnGap || style.gap || '0') || 0
     const padding = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0)
     const widths = Array.from(measure.children, child => child.getBoundingClientRect().width)
-    // The `+N` chip is fixed-width by CSS, so its own width is a constant the split can
-    // reserve before it exists. Reading it when it happens to be mounted keeps the number
-    // honest across density and scale without a second copy of it here.
-    const overflowWidth = moreRef.current?.getBoundingClientRect().width
-      || Number.parseFloat(style.getPropertyValue('--rail-more-width')) || 44
+    // No width is reserved for the `+N` chip: it lives outside the scroller, in the
+    // row's fixed trailing cluster, so the scroller's own clientWidth already excludes
+    // it. The count is simply how many chips are beyond the unscrolled viewport.
     const available = strip.clientWidth - padding
-    const next = railFitCount({ widths, gap, available, overflowWidth })
+    const next = railFitCount({ widths, gap, available, overflowWidth: 0 })
     setFit(current => current === next ? current : next)
   }
 
@@ -137,28 +135,29 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
     <div class="terminal-action-scroll rail-row-measure" aria-hidden="true" ref={measureRef}>
       {chips.map(chip => cloneElement(chip))}
     </div>
+    {/* Every chip renders in the scroller - the row is scrollable end to end, and the
+        popover is the other way to the same chips, not the only one (operator decision
+        2026-08-22: scroll OR overlay, reader's choice). `OverflowRail` owns the pan,
+        chevrons, wheel translation, and click suppression exactly as it always did. */}
     <OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain={1.75} preserveSoftKeyboard>
-      {chips.slice(0, pinnedCount)}
-      {/* The trailing cluster, which is the row's fixed furniture *and* the `+N` chip.
-          The chip lives here rather than after the last pinned chip so it has one place
-          on every row however that row is populated - the split leaves up to a chip's
-          width of slack, so trailing it behind the chips put it at a different offset on
-          every rail. The cluster takes the slack and pushes its contents right, so the
-          chip is always at the rail's trailing edge and its panel always opens from
-          there. The readout sits to its left and is the only shrinking thing in here. */}
-      {(overflow.length > 0 || status !== undefined) && <div class="rail-row-trailing" ref={trailingRef}>
-        {status !== undefined && <span aria-live="polite">{status}</span>}
-        {overflow.length > 0 && <button
-          ref={moreRef}
-          type="button"
-          class={`rail-more${open ? ' rail-more-open' : ''}`}
-          aria-expanded={open}
-          aria-label={`${overflow.length} more action${overflow.length === 1 ? '' : 's'}`}
-          title={`${overflow.length} more action${overflow.length === 1 ? '' : 's'} — opens a panel that stays open`}
-          onClick={() => setOpen(value => !value)}
-        >+{overflow.length}</button>}
-      </div>}
+      {chips}
     </OverflowRail>
+    {/* The trailing cluster sits OUTSIDE the scroller as the row's fixed furniture, so
+        the `+N` chip and the readout stay pinned at the trailing edge while the chips
+        pan underneath. The count is the chips beyond the unscrolled viewport - the same
+        set the popover shows - so the two affordances always agree. */}
+    {(overflow.length > 0 || status !== undefined) && <div class="rail-row-trailing" ref={trailingRef}>
+      {status !== undefined && <span aria-live="polite">{status}</span>}
+      {overflow.length > 0 && <button
+        ref={moreRef}
+        type="button"
+        class={`rail-more${open ? ' rail-more-open' : ''}`}
+        aria-expanded={open}
+        aria-label={`${overflow.length} more action${overflow.length === 1 ? '' : 's'}`}
+        title={`${overflow.length} more action${overflow.length === 1 ? '' : 's'} — scroll the row, or open a panel that stays open`}
+        onClick={() => setOpen(value => !value)}
+      >+{overflow.length}</button>}
+    </div>}
     {open && overflow.length > 0 && <RailOverflowPopover
       label={label}
       // The whole trailing cluster, not the `+N` chip: the panel aligns to the rail's

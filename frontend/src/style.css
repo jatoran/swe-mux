@@ -2218,8 +2218,14 @@ body {
    behind the last pinned chip put it wherever the split happened to stop.
    Only the gear is reserved out of the fit budget (`data-rail-fixed`), and the chip is
    reserved separately by the split itself; the readout takes what is left and ellipsises,
-   so a chip never moves because a transient "Copied" appeared beside it. */
-.terminal-action-scroll>.rail-row-trailing{flex:1 1 auto;min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:var(--rail-gap)}
+   so a chip never moves because a transient "Copied" appeared beside it.
+   The cluster sits OUTSIDE the scroller as the row's fixed furniture (2026-08-22): the
+   chips pan underneath it while the `+N` chip and readout hold the trailing edge, so the
+   row is scrollable end to end AND the popover remains the see-it-all alternative. `flex:0`
+   with `max-width` on the readout, because inside a flex row beside a `flex:1` scroller the
+   cluster must never grow into the space the chips scroll through. */
+.rail-row>.rail-row-trailing{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:var(--rail-gap);padding-right:var(--rail-pad-x)}
+.rail-row>.rail-row-trailing>span{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* An arrow rather than the word: the end-cap is the one control on the rail with a fixed
    place, so it can be recognised by shape, and the width it gives back goes to the scrolling
    keys beside it. Narrower, but still a thumb target - the height is what makes it tappable,
