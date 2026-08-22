@@ -65,7 +65,23 @@ export type SessionSnapshot = {
 export type Preview = {
   id: string; session_id: string; project_id: string; url: string; host: string; port: number
   source: string; viewport: string; listed?: boolean
+  /** 'loopback' proxies a session-owned dev server; 'static' is a document in the
+   *  Project checkout the daemon serves itself. Absent on an older daemon, which
+   *  only ever had the first kind. */
+  kind?: 'loopback'|'static'
+  /** Static only: the file name to draw, the served directory, the entry within
+   *  it, that directory relative to the checkout root (what the file watcher
+   *  speaks in), and the exact worktree it came from ('' for the Project root). */
+  label?: string; doc_root?: string; entry?: string; doc_root_relative?: string; worktree?: string
 }
+
+/** What a Preview is called on a tab, a sidebar row, and its own header.
+ *  A loopback preview is known by its port; a static one has none, so its file
+ *  name is the only thing that identifies it. */
+export const previewLabel = (preview: Preview): string =>
+  preview.kind === 'static' ? (preview.label || preview.entry || preview.id) : `:${preview.port}`
+
+export const isStaticPreview = (preview: Preview): boolean => preview.kind === 'static'
 
 /** '' means every Project; anything else scopes a surface to that Project. */
 export type ProjectScope = string

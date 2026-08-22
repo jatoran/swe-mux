@@ -511,6 +511,12 @@ include a registered Project nested below another Git root.
   to Project ignores. Windows reveal selects a file and asks Explorer to foreground its window.
   The tree and search results offer the full action set. An opened file's workspace-tab menu
   repeats reveal plus both path forms, so a file never has to be re-found in the browser.
+- An `.html`, `.htm`, or `.xhtml` row additionally offers **Preview in a pane**, and an open
+  file tab of that kind carries the same action as a `preview` button in its header. Both
+  serve the document's own folder as a static Preview leaf, so its relative assets resolve;
+  neither starts a process or a port (`features/processes-and-previews.md`). The suffix, not
+  the file's readability, is the test: a page too large for the 2 MiB text editor still
+  renders, and withdrawing the action exactly there would be backwards.
 - Right-click or guarded touch long-press opens the Files actions; there is no permanent create
   button. **New file** and **New folder** target the clicked directory, the containing directory
   of a clicked file, or the Project root when invoked on empty tree/results space. A naming dialog

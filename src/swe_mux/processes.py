@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -1620,6 +1621,33 @@ def preview_id(project_id: str, scheme: str, host: str, port: int) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
+def static_preview_id(project_id: str, worktree: str, doc_root: str, entry: str) -> str:
+    """The routing identity of one static document preview.
+
+    Same contract as ``preview_id`` and for the same reason: the id is the path
+    segment of ``/preview/<id>/``, which is the URL a phone opens over the
+    tailnet, so re-previewing the same file must reproduce it exactly. Derived
+    from what the registry dedupes a static preview on - the Project, the exact
+    worktree, the served directory, and the entry file within it - and from
+    nothing that legitimately changes underneath it. There is no session in the
+    material because a static preview has no owning session at all.
+    """
+    material = chr(0).join(("static", project_id, worktree, doc_root, entry))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def static_preview_url(doc_root: str, entry: str) -> str:
+    """The `file://` identity a static preview is displayed and titled by.
+
+    Not a destination anything fetches - the daemon reads the bytes itself. It
+    exists because every surface above the registry titles a preview by its
+    ``url``, and "the absolute path of the document" is the honest answer to what
+    a static preview points at.
+    """
+    absolute = Path(doc_root, entry).as_posix()
+    return f"file:///{absolute.lstrip('/')}"
+
+
 @dataclass(slots=True)
 class PreviewRegistration:
     id: str
@@ -1636,6 +1664,30 @@ class PreviewRegistration:
     # Every live listener needs a routing identity, but only browser-facing or
     # explicitly opened endpoints belong in navigation.
     listed: bool = True
+    # ``loopback`` proxies to a session-owned development server; ``static``
+    # serves a directory of the Project checkout from the daemon itself. The two
+    # share every surface above the fetch - the proxy route, the sidebar row, the
+    # workspace leaf, capture, external open - and differ only in where the bytes
+    # come from, which is why this is a field rather than a second registry.
+    kind: str = "loopback"
+    # A loopback preview is known by host:port. A static one has neither, so its
+    # file name is the only thing that identifies it on a tab or a sidebar row.
+    label: str = ""
+    # Static only: the absolute directory served, and the entry file relative to
+    # it. Serving the directory rather than the single file is what makes a
+    # page's own ``./style.css`` and ``../assets/x.png`` resolve.
+    doc_root: str = ""
+    entry: str = ""
+    # Static only: the same directory expressed relative to the checkout root
+    # ("" when it *is* the root). The Project file watcher speaks in checkout
+    # relative paths, so without this the browser would have to subtract one
+    # absolute path from another across two path syntaxes to know which change
+    # events belong to this preview.
+    doc_root_relative: str = ""
+    # Static only: the exact worktree root the doc root was resolved inside, or
+    # "" for the Project root. Without it a preview opened from a worktree file
+    # tab would silently serve the primary checkout's copy of the same path.
+    worktree: str = ""
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
@@ -1756,7 +1808,9 @@ class PreviewRegistry:
         User-approved previews are never reaped. mux could not attribute that
         listener to the session in the first place (it may be in WSL, Docker, or
         another process tree), so its absence from the owned set is not evidence
-        that it stopped. Those stay until removed explicitly.
+        that it stopped. Those stay until removed explicitly. Static previews are
+        covered by the same rule for a stronger reason: they have no listener to
+        observe at all, so there is no absence that could ever mean anything.
         """
         moment = time.time() if now is None else now
         live = self.inspector.live_listeners()
@@ -1792,6 +1846,7 @@ class PreviewRegistry:
                 item
                 for item in self.items.values()
                 if item.project_id == project_id
+                and item.kind == "loopback"
                 and self._endpoint_key(item.url) == (scheme, host, port)
             ),
             None,
@@ -1949,6 +2004,10 @@ class PreviewRegistry:
         for item in self.items.values():
             if item.project_id != project_id:
                 continue
+            # A static preview has no origin to map: its `file://` url names bytes
+            # on disk, not a service another preview could dial.
+            if item.kind != "loopback":
+                continue
             parsed = urlsplit(item.url)
             host = parsed.hostname or ""
             displayed_host = f"[{host}]" if ":" in host else host
@@ -2034,6 +2093,71 @@ class PreviewRegistry:
         self._listener_seen[item.id] = time.time()
         # This is the preview nothing will ever rediscover, so the mirror is
         # written before the caller is told it exists.
+        self._persist()
+        return item
+
+    def register_static(
+        self,
+        *,
+        project_id: str,
+        doc_root: str,
+        entry: str,
+        doc_root_relative: str = "",
+        worktree: str = "",
+        label: str = "",
+        project_scope_id: str | None = None,
+        repo_group_id: str | None = None,
+    ) -> PreviewRegistration:
+        """Register a directory of the Project checkout as a browser-facing Preview.
+
+        No process, no port, no owning session. A static preview exists because a
+        document in the repository is worth looking at rendered, and the whole
+        point of routing it through the Preview registry rather than inventing a
+        second viewer is that everything above the fetch already works: the
+        `/preview/<id>/` route a phone can open over the tailnet, the sidebar row,
+        the workspace leaf with its viewport presets and capture, external open.
+
+        The caller resolves and validates the paths, because it is the layer that
+        knows which Project and which worktree the request is scoped to. Both
+        arrive absolute and already proven to be inside that checkout.
+
+        Re-registering the same document is idempotent by id, which is what makes
+        "preview this file" safe to press twice: it reactivates the registration
+        that already exists instead of minting a rival one on a new URL.
+        """
+        identity = static_preview_id(project_id, worktree, doc_root, entry)
+        existing = self.items.get(identity)
+        if existing is not None:
+            existing.label = label or existing.label
+            existing.listed = True
+            self._persist()
+            return existing
+        item = PreviewRegistration(
+            identity,
+            # Deliberately unowned. A static preview is Project-scoped like the
+            # file browser it is opened from, and tying it to whichever session
+            # happened to be focused would make it disappear when that session
+            # ended - taking a document that is still perfectly readable with it.
+            "",
+            project_id,
+            static_preview_url(doc_root, entry),
+            "",
+            0,
+            "static",
+            time.time(),
+            project_scope_id,
+            repo_group_id,
+            kind="static",
+            label=label or entry,
+            doc_root=doc_root,
+            entry=entry,
+            doc_root_relative=doc_root_relative,
+            worktree=worktree,
+        )
+        self.items[identity] = item
+        # Nothing rediscovers a static preview - there is no listener to poll - so
+        # the mirror is written before the caller is told it exists, exactly as
+        # for a user-approved one.
         self._persist()
         return item
 

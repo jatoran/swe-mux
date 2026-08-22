@@ -371,6 +371,13 @@
 - Changing processes, listeners, Preview ownership/proxying, or Preview tab lifetime:
   `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
   `technical/backend/packages.md`, `technical/frontend/workspace-state.md`
+- Changing static document previews (serving a page from the checkout, its entry allowlist,
+  its served directory, or where it is launched from): the same four, plus
+  `design/features/project-resources.md` for the file-browser and file-tab entry points and
+  `design/interfaces.md` for the `POST /previews` static body.
+  The rule it turns on: a static preview is a second *kind* on the one registry, never a
+  second viewer - so anything that reads a registration must branch on `kind` and not on
+  whether a session id happens to be empty.
 - Changing headless-browser ghost-window detection, the sweep predicate, or its remediation:
   `design/features/ghost-windows.md`, `technical/backend/packages.md`
 - Changing durable process/quota/reset/compaction/tool evidence or retention:

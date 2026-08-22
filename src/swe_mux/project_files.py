@@ -1131,6 +1131,53 @@ def read_project_file(root: str | Path, relative_path: str) -> dict[str, Any]:
     }
 
 
+#: Suffixes a static preview will accept as its *entry* document. Deliberately not
+#: every renderable type: a preview is a page, and offering it on a stylesheet or a
+#: lone image would produce a viewport showing something the file tab already shows
+#: better. Anything at all may be fetched as a *subresource* of that page.
+STATIC_PREVIEW_ENTRY_SUFFIXES = frozenset({".html", ".htm", ".xhtml"})
+
+
+def is_static_preview_entry(relative_path: str) -> bool:
+    """Whether this path may be opened as a static preview's entry document."""
+    return Path(relative_path.replace("\\", "/")).suffix.casefold() in STATIC_PREVIEW_ENTRY_SUFFIXES
+
+
+def read_static_preview_file(
+    doc_root: str | Path, relative_path: str, entry: str, limit: int
+) -> tuple[bytes | None, str, int]:
+    """Resolve one path under a static preview's served directory and read it.
+
+    ``relative_path`` is the proxy tail. An empty tail is the preview's own entry
+    document, and a directory resolves to its ``index.html`` - the two
+    conventions that let a page's ``href="subdir/"`` work the way it does on any
+    other static server.
+
+    Containment is enforced by ``project_path``, which rejects absolute paths and
+    ``..`` segments before resolving and then re-checks the resolved target
+    against the root, so neither a crafted tail nor a symlink inside the
+    directory can reach outside it.
+
+    Returns ``(data, path relative to doc_root, size)``. ``data`` is ``None``
+    when the file is larger than ``limit``, mirroring
+    ``_read_regular_file_bounded``: the caller answers 413 rather than the daemon
+    materialising an arbitrarily large file to discover it should not have.
+
+    Raises ``ValueError`` for a path outside the served directory and
+    ``FileNotFoundError`` when nothing regular is there.
+    """
+
+    root = Path(doc_root).resolve()
+    requested = relative_path.strip("/") or entry
+    target = project_path(root, requested)
+    if target.is_dir():
+        target = target / "index.html"
+    if not target.is_file():
+        raise FileNotFoundError(requested)
+    data, size = _read_regular_file_bounded(target, limit)
+    return data, target.relative_to(root).as_posix(), size
+
+
 def read_project_image_content(
     root: str | Path, relative_path: str, expected_revision: str
 ) -> tuple[bytes, dict[str, Any]]:

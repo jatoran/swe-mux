@@ -13,6 +13,7 @@ Periodic psutil work in this area is the daemon's largest measured cost centre; 
 - Creation-causal descendant inspection and actions, and versioned parent-walk and Job provenance.
 - Infrastructure reservation and ownership-conflict quarantine.
 - Project-wide loopback registration, discovery, listener attribution, and route maps.
+- Static document registration (`register_static`) and its derived route id (`static_preview_id`).
 - The reduced fleet projection for the browser watch.
 - The `background_tasks` fast-clear, since a descendant older than the annotation cannot be its task.
 
@@ -26,6 +27,7 @@ Preview rules it enforces:
 - A bounded HTML probe or an explicit registration promotes an identity into the listed Preview inventory.
 - Negative probes are cached by listener process identity and backed off, so a UI refresh does not create a request loop against tool listeners.
 - The iframe sandbox is never weakened, and a browser never dials raw loopback for cross-service traffic.
+- `kind` distinguishes a `loopback` registration from a `static` one, and every rule that differs between them is gated on that field rather than on an empty session id. A static registration is unowned, never pruned (it has no listener whose absence could mean anything), and absent from the cross-service route map (its `file://` url names bytes, not a service).
 
 ## `ghost_windows.py`
 
@@ -42,7 +44,8 @@ The optional headless preview screenshot (Playwright), typed-unavailable.
 ## `preview_store.py`
 
 The approved-preview mirror at `<data_dir>/previews.json`: load-at-startup, a whole-file rewrite on change, and dropping stored rows that cannot route.
-Only *approved* registrations are mirrored, because detected ones are rediscovered from the live listener set under the same derived id and mirroring them could only go stale.
+Only *approved* and *static* registrations are mirrored, because detected ones are rediscovered from the live listener set under the same derived id and mirroring them could only go stale.
+"Cannot route" is kind-dependent: a loopback row needs a host and a usable port, a static row needs a served directory and an entry, and neither carries the other's fields.
 
 **Not:** being authoritative at runtime (`PreviewRegistry.items` is), minting ids (`processes.preview_id` does), or ever failing loudly enough to stop the daemon starting.
 

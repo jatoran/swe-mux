@@ -1,6 +1,6 @@
-"""Approved preview registrations, across daemon restarts.
+"""Approved and static preview registrations, across daemon restarts.
 
-Only the ones a human approved. A *detected* preview is rediscovered from the
+Only the ones nothing will rediscover. A *detected* preview comes back from the
 live listener set within a poll of the daemon coming back, and now returns under
 the same id (`preview_id`), so persisting it would be redundant state that could
 only go stale. A **user-approved** preview is the opposite case: it exists
@@ -8,7 +8,9 @@ precisely because mux could not attribute the listener to a session - the server
 is in WSL, in Docker, or in a process tree mux does not own - so nothing will
 ever rediscover it. Before this, those vanished on every daemon restart and had
 to be re-added by hand, which is the one preview the user had already told us
-they could not express any other way.
+they could not express any other way. A **static** preview is the same case
+carried further: it has no listener at all, only a directory of the Project
+checkout and an entry file, so a poll could never bring it back.
 
 A JSON file rather than a table in the shared database: the set is small, it is
 written only when a human adds or removes one, and it carries no history worth
@@ -50,6 +52,12 @@ STORED_FIELDS = (
     "repo_group_id",
     "viewport",
     "listed",
+    "kind",
+    "label",
+    "doc_root",
+    "entry",
+    "doc_root_relative",
+    "worktree",
 )
 
 
@@ -83,8 +91,19 @@ class PreviewStore:
                 continue
             record = {key: entry.get(key) for key in STORED_FIELDS if key in entry}
             # An entry that cannot route is not worth restoring: it would occupy a
-            # sidebar row pointing at nothing the proxy can reach.
-            if not record.get("id") or not record.get("url") or not record.get("host"):
+            # sidebar row pointing at nothing the proxy can reach. What "can route"
+            # means depends on the kind - a loopback preview routes by host and
+            # port, a static one by the directory it serves, and neither carries
+            # the other's fields.
+            if not record.get("id") or not record.get("url"):
+                continue
+            if record.get("kind") == "static":
+                if not record.get("doc_root") or not record.get("entry"):
+                    continue
+                record["port"] = 0
+                restored.append(record)
+                continue
+            if not record.get("host"):
                 continue
             port = record.get("port")
             if not isinstance(port, int | str):

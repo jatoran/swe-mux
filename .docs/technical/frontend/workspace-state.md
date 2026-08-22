@@ -293,6 +293,14 @@ the existing endpoint to `/api/previews`, which reuses its project-wide registra
 the leaf beside the session that actually owns the listener. If the leaf already exists,
 `stack_leaf` activates it rather than producing a no-op layout response.
 
+A **static** preview has no owning session, so it takes the same path with two differences.
+The POST carries `target_view_id`, the id of the view the request was made from, and
+`stack_leaf` groups the preview into that pane; the sidebar lists it as a Project-level row
+rather than under a session, and that row reattaches the leaf through `openTab` at the
+current anchor instead of re-posting. `previewLabel` in `processFleet.ts` is what every
+surface titles a preview by, because a static one has no port to name it with. Nothing else
+in the layout code distinguishes the kinds: a `preview` leaf is a `preview` leaf.
+
 ## Mobile input boundaries
 
 - `ProjectNoteEditor.tsx` selects the native textarea path for narrow or coarse-pointer clients.

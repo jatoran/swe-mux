@@ -25,6 +25,7 @@ import { fileSaveTarget, globalNoteSaveTarget, noteQueueKey, noteSaveQueue, note
 import { resourceSaveIndicator } from './resourceSaveIndicator'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import { recentEntryTitle } from './recentFiles'
+import { isPreviewableDocument } from './staticPreview'
 import { currentInsertTarget } from './insertTarget'
 import { isFocusTraversalKey } from './keys'
 import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
@@ -91,6 +92,10 @@ type Props={
   /** Opens the send-to-agent dialog. Only the Continuity-backed views (notes and markdown
    *  files) offer it: they are the surfaces that own a real selection. */
   onSendToAgent?:(request:SendToAgentRequest)=>void
+  /** Serves an HTML document in this checkout as a Preview leaf. Offered by the file
+   *  browser's row menu and by an open HTML file's own header, which are the two places
+   *  the answer to "what does this page look like" is already being asked. */
+  onPreviewFile?:(path:string)=>void
   /** One-shot request from spoken Notes navigation to claim this editor for insertion. */
   claimInsertTargetToken?:number
   onInsertTargetClaimed?:(token:number)=>void
@@ -118,7 +123,7 @@ function scheduleTreeSave(projectId:string,paths:string[]){
   },400))
 }
 
-export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent,claimInsertTargetToken,onInsertTargetClaimed}:Props){
+export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent,onPreviewFile,claimInsertTargetToken,onInsertTargetClaimed}:Props){
   const isGlobalNote=resource.kind==='global-note'
   const isNote=resource.kind==='note'||isGlobalNote
   const isFile=resource.kind==='file'||resource.kind==='worktree-file'
@@ -1115,6 +1120,10 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     &&(presentation?.kind==='text'||presentation?.kind==='delimited')
     &&(status==='ready'||status==='read-only')
   const canSendText=!!onSendToAgent&&(isNote?editable:readableFile)
+  // Offered off the suffix rather than off `readableFile`: a page too large for the 2 MiB
+  // text editor still renders perfectly, and refusing to preview the one file the editor
+  // could not open would withdraw the button exactly where it is most useful.
+  const canPreviewDocument=!!onPreviewFile&&isFile&&isPreviewableDocument(resource.id)
   const imageReady=isImageFile&&status==='viewable'
     &&!!imagePresentation?.mime
     &&typeof imagePresentation.width==='number'
@@ -1412,6 +1421,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       {treeMenu.item.path&&<button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>Copy path from project root</button>}
       {treeMenu.item.kind==='file'&&<button role="menuitem" title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyContents(treeMenu.item)}>Copy file contents</button>}
       {treeMenu.item.kind==='file'&&onSendToAgent&&<button role="menuitem" title="Open the send-to-agent dialog with this file's contents" onClick={()=>void sendFileToAgent(treeMenu.item)}>Send to an agent session</button>}
+      {treeMenu.item.kind==='file'&&onPreviewFile&&isPreviewableDocument(treeMenu.item.path)&&<button role="menuitem" title="Serve this page from its own folder and open it in a Preview pane" onClick={()=>{const path=treeMenu.item.path;setTreeMenu(null);onPreviewFile(path)}}>Preview in a pane</button>}
       {treeMenu.item.path&&<><div class="context-rule"/>
         <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
         <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>Add pattern to project ignores</button>
@@ -1454,10 +1464,11 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='error'?null
     :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||canPreviewDocument||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
+      {canPreviewDocument&&<button class="resource-preview" title="Serve this page from its own folder and open it in a Preview pane" onClick={()=>onPreviewFile?.(resource.id)}>preview</button>}
       {autosaved&&<button class="resource-find" disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
       {autosaved&&<button ref={outlineTrigger} class={`resource-outline${peekMode?' pinned':''}`} disabled={!editable} title={outlineTitle} aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen} aria-pressed={peekMode}
         onMouseDown={event=>event.stopPropagation()}

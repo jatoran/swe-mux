@@ -98,6 +98,10 @@ type Props = {
   onManagePrompts: () => void
   /** Files: open a Project-relative path as a pane tab. */
   onOpenFile: (path: string) => void
+  /** Serves an HTML document in the active Project as a Preview leaf. `worktree` is the
+   *  exact checkout it came from; the drawer's own file surfaces are all Project-root
+   *  scoped, so it is the Git tab's worktree rows that will supply one. */
+  onPreviewFile: (path: string, worktree?: string) => void
   /** Git: open a file from an exact repository worktree as a durable pane tab. */
   onOpenWorktreeFile: (worktree: string, path: string) => void
   onProjectUpdated: (project: Project) => void
@@ -317,6 +321,7 @@ export function UtilityDrawer(props: Props) {
             resource={drawerNote.identity}
             onOpenFile={path => { props.onOpenFile(path); onDone() }}
             onSendToAgent={props.onSendToAgent}
+            onPreviewFile={path => props.onPreviewFile(path)}
             claimInsertTargetToken={props.noteTargetClaimToken}
             onInsertTargetClaimed={props.onNoteTargetClaimed}
           />
@@ -409,6 +414,7 @@ export function UtilityDrawer(props: Props) {
             onOpenFile={path => { props.onOpenFile(path); onDone() }}
             onFileDragStart={props.onFileDragStart}
             onSendToAgent={props.onSendToAgent}
+            onPreviewFile={path => { props.onPreviewFile(path); onDone() }}
           />
           : <p class="drawer-empty">Select a Project to browse its files.</p>
       case 'notes':

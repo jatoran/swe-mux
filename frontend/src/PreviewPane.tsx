@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { copyPreparedText } from './terminalClipboard'
-import type { Preview } from './processFleet'
+import { isStaticPreview, previewLabel, type Preview } from './processFleet'
 
 type CaptureResult = { available: boolean; path?: string; region?: boolean; reason?: string; install?: string; error?: string }
 type Rect = { x: number; y: number; w: number; h: number }
@@ -26,6 +26,9 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
   const dragStart = useRef<{x:number;y:number}|null>(null)
   const proxyUrl=`/preview/${encodeURIComponent(preview.id)}/`
   const fallbackWidth = viewport === 'mobile' ? 390 : viewport === 'tablet' ? 834 : 1280
+  const isStatic = isStaticPreview(preview)
+  const label = previewLabel(preview)
+  const [live,setLive] = useState(true)
 
   const copyReference = async (text: string) => {
     if (await copyPreparedText(text, manualRef.current)) {
@@ -51,7 +54,7 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
       if (!result.available) { setNote(`${result.reason||'Capture unavailable.'} Enable with: ${result.install||''}`); return }
       if (result.error || !result.path) { setNote(result.error || 'Capture failed.'); return }
       const scope = result.region ? 'selected region of the' : 'current'
-      await copyReference(`Here is the ${scope} ${preview.host}:${preview.port} preview at ${width}px width — screenshot saved at ${result.path}. Please read that image file.`)
+      await copyReference(`Here is the ${scope} ${isStatic?label:`${preview.host}:${preview.port}`} preview at ${width}px width — screenshot saved at ${result.path}. Please read that image file.`)
     } catch (err) { setNote(err instanceof Error ? err.message : String(err)) }
     finally { setBusy(false) }
   }
@@ -104,8 +107,41 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
     return () => window.removeEventListener('keydown', onKey, true)
   }, [selecting])
 
+  // A static preview has no HMR and no server to push a reload, so the daemon's
+  // own file watcher is the only thing that can tell it the document moved on.
+  // Hold the lease only while `live` is on: an unwatched directory costs the
+  // daemon nothing, and a page holding state is not worth blowing away on every
+  // keystroke-save, which is why this is a toggle and not the behaviour.
+  const watchRoot = preview.doc_root_relative ?? ''
+  useEffect(() => {
+    if (!isStatic || !live) return
+    const leaseId = `preview-${preview.id}-${Math.random().toString(36).slice(2)}`
+    const renew = () => void api('PUT', `/api/projects/${encodeURIComponent(preview.project_id)}/watch`,
+      { watch_id: leaseId, paths: [watchRoot], worktree: preview.worktree || undefined }).catch(() => {})
+    renew()
+    const timer = window.setInterval(renew, 30000)
+    return () => {
+      clearInterval(timer)
+      void api('DELETE', `/api/projects/${encodeURIComponent(preview.project_id)}/watch/${encodeURIComponent(leaseId)}`).catch(() => {})
+    }
+  }, [isStatic, live, preview.id, preview.project_id, preview.worktree, watchRoot])
+  useEffect(() => {
+    if (!isStatic || !live) return
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{projectId:string;paths:string[];worktree?:string}>).detail
+      if (detail.projectId !== preview.project_id) return
+      if ((detail.worktree || '') !== (preview.worktree || '')) return
+      // The lease is on the served directory, but the watcher reports the whole
+      // Project, so a change elsewhere in the repo must not reload this page.
+      if (!detail.paths.some(path => watchRoot ? path === watchRoot || path.startsWith(`${watchRoot}/`) : true)) return
+      setRefresh(value => value + 1)
+    }
+    window.addEventListener('mux:project-files-changed', changed)
+    return () => window.removeEventListener('mux:project-files-changed', changed)
+  }, [isStatic, live, preview.project_id, preview.worktree, watchRoot])
+
   return <section class={`preview-pane viewport-${viewport}`}>
-    <header><div><span>[PREVIEW]</span><strong title={preview.url}>{preview.host}:{preview.port}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={()=>setRefresh(value=>value+1)}>refresh</button><button onClick={()=>void navigator.clipboard.writeText(new URL(proxyUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(proxyUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
+    <header><div><span>[PREVIEW]</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={()=>setRefresh(value=>value+1)}>refresh</button>{isStatic&&<button class={live?'active':''} aria-pressed={live} title={live?'Reloading when the served files change':'Not following file changes'} onClick={()=>setLive(value=>!value)}>live</button>}<button onClick={()=>void navigator.clipboard.writeText(new URL(proxyUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(proxyUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
     <div class="preview-frame">
       <iframe ref={iframeRef} key={refresh} title={`Preview ${preview.url}`} src={proxyUrl} sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-scripts" />
       {selecting && <div ref={overlayRef} class="preview-select-overlay" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag}>
@@ -122,7 +158,7 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
     <footer class="preview-rail">
       <button class="rail-send" disabled={busy} onClick={()=>void capture()}>⧉ capture</button>
       <button class={`rail-region ${selecting?'active':''}`} disabled={busy} onClick={()=>{ if(selecting){cancelSelect()}else{setSelecting(true);setNote('Drag over the preview to select a region.')} }}>▢ region</button>
-      <small>{note||'session-owned loopback bridge · copies a screenshot reference'}</small>
+      <small>{note||(isStatic?`served from ${preview.doc_root_relative||'the project root'} · copies a screenshot reference`:'session-owned loopback bridge · copies a screenshot reference')}</small>
     </footer>
   </section>
 }

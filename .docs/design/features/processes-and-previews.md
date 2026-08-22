@@ -4,6 +4,8 @@
 
 - Per-session descendant attribution and bounded resource/listener snapshots.
 - Explicit preview leaves for a detected or user-approved literal-loopback development server.
+- Static document previews: a directory of the Project checkout served by the daemon itself,
+  through the same registry and the same `/preview/<id>/` route, with no process and no port.
 
 ## Ownership and actions
 
@@ -314,6 +316,9 @@ more — swe-mux does not reap or share language servers.
 
 ## Preview contract
 
+This section is the `loopback` kind. The `static` kind shares every surface above the fetch
+and differs where § Static document previews says it does.
+
 - Registrations identify one endpoint within a canonical Project and record the live session
   that actually owns its listener. The URL must use literal
   `127.0.0.1` or `::1`, contain no credentials/query/fragment, and either match the host
@@ -439,6 +444,85 @@ more — swe-mux does not reap or share language servers.
   refuses wrongly. The one genuine blocker, a process anchoring the bundle, remains a separate
   refusal (`409 bundle_in_use`) because that one really does fail the swap.
 
+## Static document previews
+
+A **static preview** is a second registration *kind*, not a second subsystem. It serves a
+directory of the Project checkout from the daemon itself, with no process, no port, and no
+owning session. Everything above the fetch is the shared Preview machinery unchanged: the
+`/preview/<id>/` route a phone opens over the tailnet, the sidebar row, the workspace leaf
+with its viewport presets, refresh, copy-URL, external open, and capture.
+
+- `PreviewRegistration.kind` is `loopback` (proxied to a session-owned development server) or
+  `static`. Every behavioural difference is gated on that field explicitly, never on "the
+  session id is empty", so a future unowned kind cannot inherit a rule by accident.
+- **The registration serves a directory and names an entry file within it.** A page's own
+  `./style.css` and `../assets/x.png` are the normal case, and serving a single file would
+  404 every one of them. The default doc root is the file's own folder; `scope: "project"`
+  widens it to the whole checkout for a built page whose absolute paths are repo-root
+  relative. Root-relative references are handled by the same `rewrite_preview_html`
+  prefixing the loopback proxy uses, so `/app.css` resolves under the served directory.
+- Only `.html`, `.htm`, and `.xhtml` may be an *entry* (`STATIC_PREVIEW_ENTRY_SUFFIXES`).
+  Anything at all may be fetched as a subresource of the page that is served. A preview is a
+  page; offering one on a stylesheet or a lone image would open a viewport showing something
+  the file tab already shows better.
+- **`static_preview_id` keeps the same bookmark contract as `preview_id`.** It is derived
+  from Project, worktree, doc root, and entry, so re-previewing the same document reproduces
+  the route and a copied tailnet link survives every daemon restart. Session id is absent
+  from the material because there is no session. Re-registering is idempotent: pressing
+  "preview" twice reactivates the existing registration rather than minting a rival on a new
+  URL.
+- The registration carries the exact `worktree` it was resolved inside (`""` for the Project
+  root) and `doc_root_relative`, the served directory expressed in the checkout-relative
+  paths the Project file watcher speaks. Without the first, a preview opened from a worktree
+  file tab silently serves the primary checkout's copy of the same path; without the second,
+  the browser would have to subtract one absolute path from another across two path syntaxes
+  to know which change events are its own.
+- **Static registrations are mirrored to `previews.json` and are never pruned.** They are the
+  approved-preview case carried further: an approved preview exists because mux could not
+  attribute a listener, while a static one has no listener at all, so no poll could ever
+  bring it back and no absence could ever mean it stopped.
+- **The session-liveness gate applies to `loopback` only.** A loopback preview points at a
+  listener a session owns, so an ended session means the destination is gone. A static
+  preview points at bytes in a Project that outlives every session.
+- Read-only by construction: `GET`/`HEAD` answer, everything else is `405`. There is no
+  upstream here, so a write has nothing it could mean. Containment is enforced by
+  `project_path`, which rejects absolute paths and `..` segments and then re-checks the
+  resolved target against the served directory, so neither a crafted tail nor a symlink
+  inside the directory reaches outside it. A leading `/` on a tail is the route separator,
+  not an escape; it resolves inside the directory as an ordinary hit or miss. Responses are
+  capped at `PREVIEW_RESPONSE_BYTES` and carry `Cache-Control: no-cache`.
+- **Web content types are stated, not guessed.** On Windows `mimetypes` consults the
+  registry, where `.js` is routinely `text/plain` and `.css` sometimes is; combined with the
+  `X-Content-Type-Options: nosniff` every response carries, that renders the page unstyled
+  and scriptless with nothing in the network log to explain it.
+- **A static preview document carries `Content-Security-Policy: sandbox allow-scripts
+  allow-forms allow-popups allow-modals`.** The in-app iframe already withholds
+  `allow-same-origin`, but the pane's `external` button navigates to the route directly on
+  the daemon's own origin, and that origin *is* the authority - swe-mux has no login, so
+  anything same-origin can drive the API. The CSP sandbox puts the document in an opaque
+  origin however it was reached, and `security_middleware` refuses an `Origin: null` mutation
+  outside `/preview/`. The cost is that a previewed page has no `localStorage`, which matches
+  what the iframe already gave it. `frame-ancestors 'self'` is restated in that header
+  because setting a CSP at all replaces the blanket preview policy.
+- **Capture points Playwright at the daemon's own loopback proxy route** rather than at a
+  port, so the screenshot is of exactly what the pane draws instead of a second render path
+  that could drift from it. The shot still lands in the owning Project's `.swe-mux`, resolved
+  from `project_id` since there is no session to resolve it from.
+- The pane offers a `live` toggle for static previews. The lease on the served directory is
+  held only while it is on, and a change under that directory bumps the iframe. It is a
+  toggle rather than the behaviour because a page holding state is not worth blowing away on
+  every keystroke-save, and an unwatched directory costs the daemon nothing.
+- Entry points are the file browser's row menu (`Preview in a pane`), an open HTML file tab's
+  own header (`preview`), and the command palette (`preview.file`, on the focused tab). All
+  three call one `POST /api/previews` with `kind: "static"`. The launching view's id is sent
+  as `target_view_id` so the preview lands as a tab in that pane rather than splitting an
+  unrelated one.
+- The sidebar lists static previews as Project-level rows rather than under a session, which
+  is what they are. Closing the tab leaves the registration standing; the row reattaches it,
+  the same contract a detected server's row has. Because that contract means nothing else
+  ever retires one - and unlike a detected preview, no stopped listener will - the row
+  carries the remove control that does, resting hidden and appearing on hover or focus.
+
 ## Preview capture
 
 - The preview rail can screenshot the live loopback server headlessly and copy a reference
@@ -476,6 +560,13 @@ more — swe-mux does not reap or share language servers.
   model: rollups, focused-first ordering, ended-process rules)
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
 - Duplicate tooling classification: `frontend/src/resourceTooling.ts`
+- Static previews: `src/swe_mux/processes.py` (`static_preview_id`, `static_preview_url`,
+  `PreviewRegistry.register_static`), `src/swe_mux/project_files.py`
+  (`read_static_preview_file`, `is_static_preview_entry`,
+  `STATIC_PREVIEW_ENTRY_SUFFIXES`), `src/swe_mux/server.py`
+  (`_register_static_preview`, `_serve_static_preview`, `static_preview_content_type`),
+  `frontend/src/staticPreview.ts` (the client-side entry allowlist),
+  `tests/test_static_preview.py`
 - Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`
 - Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`
 - Terminal-link routing: `frontend/src/TerminalPane.tsx`, `frontend/src/previewLinks.ts`

@@ -536,6 +536,17 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .stack-tabs .preview-tab { color:var(--blue) }
 .stack-tabs .preview-tab-glyph { margin-right:5px }
 .sidebar-note-row.preview-row .note-copy strong { color:var(--blue) }
+/* A static preview is a document, not a server: same preview shape, and the file name it is
+   labelled by can be long, so it truncates rather than widening the sidebar. Its remove
+   control is the only thing that retires the registration (closing the tab deliberately does
+   not), so it rests hidden and appears on hover or focus rather than living in a menu. */
+.static-preview-entry { display:flex;align-items:center;min-width:0 }
+.static-preview-entry .sidebar-note-row { flex:1;min-width:0 }
+.sidebar-note-row.static-preview-row .note-copy strong { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+.static-preview-remove { flex:none;width:18px;margin-right:5px;border:0;background:transparent;color:var(--muted);font-size:12px;line-height:1;cursor:pointer;opacity:0;visibility:hidden }
+.static-preview-entry:hover .static-preview-remove,.static-preview-remove:focus-visible { opacity:1;visibility:visible }
+.static-preview-remove:hover { color:var(--red) }
+@media(pointer:coarse){ .static-preview-remove { opacity:1;visibility:visible;width:28px } }
 
 
 .pane-bar .git-chip { color:#8b939d;text-transform:uppercase;white-space:nowrap }
@@ -2066,6 +2077,7 @@ body {
 /* The header's own `button:last-child` sizing exists for the lone Save glyph; the send button
    is a word, so it keeps the header font. */
 .resource-actions button.resource-send{font-size:inherit;white-space:nowrap}
+.resource-actions button.resource-preview{font-size:inherit;white-space:nowrap;color:var(--blue)}
 .send-agent-targets{max-height:236px;overflow:auto;border:1px solid var(--line);background:var(--bg)}
 .control-plane-modal-body .send-agent-option{grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);cursor:pointer}
 .send-agent-option:last-child{border-bottom:0}

@@ -32,7 +32,8 @@ import {
   projectCreateRoot, suggestFolderName, toggleInitScript,
   type InitScript, type ProjectCreateDraft,
 } from './projectCreate'
-import { type FleetSnapshot, type Preview } from './processFleet'
+import { isStaticPreview, previewLabel, type FleetSnapshot, type Preview } from './processFleet'
+import { isPreviewableDocument } from './staticPreview'
 import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch } from './ProjectsManager'
 import { MenuGroup } from './MenuGroup'
@@ -4483,6 +4484,15 @@ export function App() {
 
   const commandSession = contextMenu?.session || active
   const commandProject = projectMenu?.project || activeProject
+  // The focused tab, when it is a file tab holding a previewable document. Derived rather
+  // than tracked: the file identity is already encoded in the leaf id, and a second copy of
+  // "which file is focused" is one more thing that can disagree with the layout.
+  const focusedPreviewableFile = (() => {
+    const identity = focusedViewId ? parseNoteResourceId(focusedViewId) : null
+    if (!identity || (identity.kind !== 'file' && identity.kind !== 'worktree-file')) return null
+    if (!isPreviewableDocument(identity.id)) return null
+    return { path: identity.id, worktree: identity.kind === 'worktree-file' ? identity.worktree : undefined }
+  })()
   // Cycle the mobile unified tab strip. Recomputes the projection from live layout
   // state so it works when invoked from a gesture, outside the render-time `mobileProjection`.
   // Short label for a projected mobile tab; also what the swipe HUD announces.
@@ -4500,7 +4510,7 @@ export function App() {
 
   const mobileTabLabel = (leaf: PaneLeaf): string => {
     if (leaf.kind === 'terminal') { const session = sessions.find(item => item.id === leaf.id); return session ? sessionName(session) : leaf.id }
-    if (leaf.kind === 'preview') { const preview = previews[leaf.id]; return preview ? `:${preview.port}` : leaf.id }
+    if (leaf.kind === 'preview') { const preview = previews[leaf.id]; return preview ? previewLabel(preview) : leaf.id }
     if (leaf.kind === 'history') return 'History'
     if (leaf.kind === 'queue') return queueTabLabel(leaf.id)
     if (leaf.kind === 'changemap') return changeMapTabLabel(leaf.id)
@@ -5038,6 +5048,10 @@ export function App() {
     { id: 'notes.browseProject', label: 'Browse this project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'processes.open', label: 'Inspect selected session processes and previews', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => {if(commandSession)openProcessViewer(commandSession)} },
     { id: 'processes.all', label: 'Open unified process viewer', category: 'view', available: true, run: () => openProcessViewer() },
+    { id: 'preview.file', label: 'Preview the focused HTML file in a pane', category: 'view', available: !!focusedPreviewableFile, disabledReason: 'The focused tab is not an HTML file', run: () => {
+      if(!focusedPreviewableFile||!activeProject)return
+      void openStaticPreview(activeProject,focusedPreviewableFile.path,focusedPreviewableFile.worktree,focusedViewId||undefined)
+    } },
     { id: 'processes.project', label: 'Inspect selected project’s processes', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => openProcessViewer(null,commandProject?.id||null) },
     { id: 'terminal.find', label: 'Find in focused terminal', category: 'terminal', available: !!active, disabledReason: 'No focused terminal', run: () => window.dispatchEvent(new CustomEvent('mux:terminal-find', { detail: activeId })) },
     // Which note is focused is not App state — it is whatever Continuity editor reported
@@ -6032,8 +6046,10 @@ export function App() {
           const dragStyle={order:previewIds.indexOf(child.id)}
           if(child.kind==='preview'){
             const preview=previews[child.id]
-            const label=preview?.url||child.id
-            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
+            // A loopback preview is titled by its URL; a static one by its file name, because
+            // its `file://` url is a long absolute path that reads as noise on a tab.
+            const label=preview?(isStaticPreview(preview)?previewLabel(preview):preview.url):child.id
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?previewLabel(preview):child.id}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='note'){
             const label=noteTabLabel(child.id)
@@ -6074,7 +6090,7 @@ export function App() {
         <span>This note is being edited in the side panel. It stays in one place at a time so an edit cannot be lost to the other copy.</span>
         <button onClick={()=>popDrawerNoteToTab(node.id,activeProject.id)}>Move it back here</button>
       </section>
-      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(identity.kind==='worktree-file'){openWorktreeFile(activeProject,identity.worktree,path);return}if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={identity.kind==='worktree-file'?undefined:(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent}/>
+      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(identity.kind==='worktree-file'){openWorktreeFile(activeProject,identity.worktree,path);return}if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={identity.kind==='worktree-file'?undefined:(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent} onPreviewFile={path=>void openStaticPreview(activeProject,path,identity.kind==='worktree-file'?identity.worktree:undefined,node.id)}/>
     }
     if(node.kind==='history')return <section class="workspace-leaf-placeholder"><strong>History moved</strong><span>Session history is now a full-screen overlay.</span><button onClick={()=>{setHistoryOpen(true);void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'history',node.id))}}>Open History</button></section>
     if(node.kind==='queue'){
@@ -6280,6 +6296,44 @@ export function App() {
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{preview.port}</strong></span>
     </button>
   }
+  /** A static preview belongs to a Project, not a session, so it gets its own row under the
+   *  Project rather than nesting under whichever terminal happened to be focused when it was
+   *  opened. Closing its tab leaves the registration standing; this row reattaches it, which
+   *  is the same contract a detected server's row has. */
+  const sidebarStaticPreviewRow=(preview:Preview,project:Project)=>{
+    const layout=layoutMap[project.id]||parseLayout(project.layout)
+    const previewStack=stackForView(layout,preview.id)
+    const selected=previewStack?.active_child_id===preview.id
+    return <div key={preview.id} class={`static-preview-entry ${selected?'active':''}`}>
+      <button class={`sidebar-note-row preview-row static-preview-row ${selected?'active':''}`} title={`${preview.url} · served from disk by mux`} onClick={event=>{
+        event.stopPropagation()
+        setProjectId(project.id)
+        setFocusedViewId(preview.id)
+        if(previewStack)void updateLayout(project.id,activateStackChild(layout,previewStack.id,preview.id))
+        else{
+          // Reopen it the way every other resource opens: a tab in the pane you were last in,
+          // rather than splitting geometry off on a guess.
+          const anchor=(focusedViewId&&stackForView(layout,focusedViewId)?focusedViewId:null)||terminalIds(layout)[0]||leaves(layout)[0]?.id||null
+          void updateLayout(project.id,openTab(layout,openAnchorId(layout,anchor),resourceLeaf('preview',preview.id)))
+        }
+        setSidebarOpen(false)
+      }}>
+        <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{previewLabel(preview)}</strong></span>
+      </button>
+      {/* Closing the *tab* deliberately keeps the registration, the same contract a detected
+          server has. Nothing else rediscovers a static preview, so this row carries the one
+          control that actually retires it. */}
+      <button class="static-preview-remove" title={`Remove the ${previewLabel(preview)} preview`} aria-label={`Remove the ${previewLabel(preview)} preview`} onClick={event=>{event.stopPropagation();void removeStaticPreview(preview)}}>×</button>
+    </div>
+  }
+  const removeStaticPreview=async(preview:Preview)=>{
+    try{
+      await api('DELETE',`/api/previews/${encodeURIComponent(preview.id)}`)
+      setPreviews(current=>{const next={...current};delete next[preview.id];return next})
+      const layout=layoutMap[preview.project_id]||emptyLayout()
+      if(stackForView(layout,preview.id))await updateLayout(preview.project_id,removeLeaf(layout,'preview',preview.id))
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
   /** Land a registered Preview in the app: the item itself, the Project layout it was
    *  attached into, and — when the caller was asking to see it — focus. */
   const attachPreview=(preview:Preview,project:Project,focus=false)=>{
@@ -6294,6 +6348,22 @@ export function App() {
     try{
       const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:server.url,attach:true})
       attachPreview(result.preview,result.project,true)
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+  /** Serve one HTML document in a checkout as a Preview leaf. No process and no port: the
+   *  daemon serves the file's own folder, so the page's relative assets resolve and the
+   *  `/preview/<id>/` route works over the tailnet like any other preview.
+   *  `targetViewId` is the tab it was launched from, so the preview lands in that pane
+   *  rather than splitting an unrelated one. */
+  const openStaticPreview=async(project:Project,path:string,worktree?:string,targetViewId?:string)=>{
+    try{
+      const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{
+        kind:'static',project_id:project.id,path,attach:true,
+        ...(worktree?{worktree}:{}),
+        ...(targetViewId?{target_view_id:targetViewId}:{}),
+      })
+      attachPreview(result.preview,result.project,true)
+      setSidebarOpen(false)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   /** `placement` is whether this row's session sits in the Project's pane tree. An unpaned one
@@ -6493,6 +6563,9 @@ export function App() {
     touchSidebarSearch()
     setSidebarSearchCursor(moveSearchCursor(sidebarCursorIndex,delta,sidebarSearchRows.length))
   }
+  const staticPreviewsFor=(id:string)=>Object.values(previews)
+    .filter(item=>item.project_id===id&&isStaticPreview(item)&&item.listed!==false)
+    .sort((a,b)=>previewLabel(a).localeCompare(previewLabel(b))||a.id.localeCompare(b.id))
   const sidebarProjectRow=(project:Project)=>{
     const children = sessions
       .filter(session => session.project_id === project.id)
@@ -6517,6 +6590,7 @@ export function App() {
       {!collapsed&&<div class="session-list">
         {sidebarNode(projectLayout.root)}
         {unpanedChildren.map(session=>sessionRow(session,'unpaned'))}
+        {staticPreviewsFor(project.id).map(preview=>sidebarStaticPreviewRow(preview,project))}
       </div>}
     </section>
   }
@@ -6823,6 +6897,9 @@ export function App() {
           if(activeProject)openProjectFile(activeProject,path)
         }}
         onOpenWorktreeFile={(worktree,path)=>{if(activeProject)openWorktreeFile(activeProject,worktree,path)}}
+        // The drawer names no view of its own, so the preview lands in the pane you were last
+        // in — the same anchor rule opening a file from here already follows.
+        onPreviewFile={(path,worktree)=>{if(activeProject)void openStaticPreview(activeProject,path,worktree,focusedViewId||undefined)}}
         onProjectUpdated={updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item))}
         // Desktop only: the drawer is an in-flow column there, so a file row can be dragged
         // onto a visible pane. On mobile it is an overlay with nothing to drop onto.

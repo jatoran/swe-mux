@@ -1666,7 +1666,8 @@ POST   /land/verify-command/approve  {project_id, worktree_root, digest}
 GET    /processes[?session=&include_ended=1&unique_memory=1&summary=1]
 POST   /processes/action             {session_id, pid, identity_id, action}
 GET    /previews[?session=]
-POST   /previews                     {session_id, url, approved?, attach?, target_session_id?, direction?}
+POST   /previews                     {session_id, url, approved?, attach?, target_session_id?, direction?, target_view_id?}
+POST   /previews                     {kind:"static", project_id, path, worktree?, scope?, attach?, target_view_id?}
 POST   /previews/{id}/capture         {viewport?, width?, height?, clip?}
 DELETE /previews/{id}
 ```
@@ -1735,6 +1736,20 @@ which is what keeps an agent from approving the command its own land runs.
 `POST /land/verify-command/approve` requires the digest the caller was shown: `409
 digest_mismatch` means the bytes moved between the prompt and the click and returns the new
 digest, and `409 not_configured` means the repository declares no gate.
+
+`POST /previews` takes one of two bodies. The default registers a literal-loopback endpoint
+owned by a session. `kind: "static"` registers a document in a Project checkout instead:
+`path` is checkout-relative and must be an `.html`, `.htm`, or `.xhtml` file that exists;
+`worktree` is an exact worktree root (absent means the Project root); `scope` is `"file"`
+(default, serve the document's own folder) or `"project"` (serve the whole checkout). It
+carries no `session_id`, and the registration it returns has `kind: "static"`, `port: 0`, a
+`file://` `url`, and `label`/`doc_root`/`entry`/`doc_root_relative`/`worktree`. `target_view_id`
+is the workspace view the request came from, so the preview attaches as a tab in that pane.
+
+`/preview/{id}/…` serves a static registration from disk: `GET`/`HEAD` only (`405` otherwise),
+`403` for a path outside the served directory, `404` for a miss, `413` over
+`PREVIEW_RESPONSE_BYTES`, and a `Content-Security-Policy: sandbox …` that keeps an externally
+opened document in an opaque origin. It is not gated on a live session.
 
 `POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
 under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning

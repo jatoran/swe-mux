@@ -18,6 +18,11 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   loopback; remote browsers reach them only through `/preview/{registration}/…`. Absolute
   loopback fetch/XHR/WebSocket calls between services in one Project are remapped to the
   destination service's registered route, never to the remote device's loopback.
+  A **static** preview reaches a remote browser through the same route with no server
+  involved: the daemon reads the document from the Project checkout. Its route id is derived
+  from the served directory rather than a port, so a link copied to a phone survives daemon
+  restarts, and its document carries a `sandbox` CSP so opening it outside the app's iframe
+  cannot borrow the origin's authority (`features/processes-and-previews.md`).
 - `0.0.0.0`, LAN interfaces, port forwarding, and Tailscale Funnel are unsupported.
 - An SSH local forward is supported when its browser-facing address is loopback.
   For example, `ssh -L 9876:127.0.0.1:8765 workstation` exposes mux at

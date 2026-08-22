@@ -30,7 +30,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple, cast, get_args
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -223,6 +223,7 @@ from .project_files import (
     delete_note,
     effective_project_ignores,
     ignored_project_path,
+    is_static_preview_entry,
     list_project_directories,
     list_project_directory,
     note_save_loop_sample,
@@ -242,6 +243,7 @@ from .project_files import (
     read_project_config_values,
     read_project_file,
     read_project_image_content,
+    read_static_preview_file,
     search_project_files,
     update_observation_request,
     write_global_note,
@@ -13087,19 +13089,69 @@ async def list_previews(request: web.Request) -> web.Response:
     return json_response(await previews.list(request.query.get("session")))
 
 
+async def _register_static_preview(request: web.Request, body: dict[str, Any]) -> Any:
+    """Register a document in a Project checkout as a static Preview.
+
+    Everything security-relevant happens here rather than in the registry: this is
+    the layer that knows which Project and which worktree the request is scoped
+    to, so it is the only one that can prove the requested path is inside that
+    checkout before a route is minted for its directory.
+    """
+    projects: ProjectManager = request.app["projects"]
+    project = projects.projects.get(str(body.get("project_id") or ""))
+    if project is None:
+        raise ValueError("unknown project")
+    root = await _project_file_root(project.root, body.get("worktree"))
+    relative = str(body.get("path") or "")
+    if not is_static_preview_entry(relative):
+        raise ValueError("a static preview entry must be an .html, .htm, or .xhtml file")
+    target = await asyncio.to_thread(project_path, root, relative)
+    if not await asyncio.to_thread(target.is_file):
+        raise ValueError("static preview target is not a file")
+    # The served directory, not the file. A page's own `./style.css` and
+    # `../assets/x.png` are the normal case, and serving one file would 404 every
+    # one of them. `project` widens it to the whole checkout for a page whose
+    # absolute paths are repo-root-relative - a built `dist/index.html`.
+    resolved_root = Path(root).resolve()
+    doc_root = resolved_root if str(body.get("scope") or "file") == "project" else target.parent
+    relative_doc_root = doc_root.relative_to(resolved_root).as_posix()
+    previews: PreviewRegistry = request.app["previews"]
+    return previews.register_static(
+        project_id=project.id,
+        doc_root=str(doc_root),
+        entry=target.relative_to(doc_root).as_posix(),
+        doc_root_relative="" if relative_doc_root == "." else relative_doc_root,
+        # "" means the Project root, so a preview opened from a worktree file tab
+        # cannot silently serve the primary checkout's copy of the same path.
+        worktree="" if resolved_root == Path(project.root).resolve() else str(resolved_root),
+        label=target.name,
+    )
+
+
 async def create_preview(request: web.Request) -> web.Response:
     body = await request.json()
     previews: PreviewRegistry = request.app["previews"]
-    item = await previews.register(
-        str(body["session_id"]), str(body["url"]), approved=bool(body.get("approved"))
-    )
+    static = str(body.get("kind") or "loopback") == "static"
+    if static:
+        item = await _register_static_preview(request, body)
+    else:
+        item = await previews.register(
+            str(body["session_id"]), str(body["url"]), approved=bool(body.get("approved"))
+        )
     if body.get("attach", True):
         projects: ProjectManager = request.app["projects"]
         project = projects.projects[item.project_id]
         # A preview belongs beside whatever spawned it: group it as a tab in the
-        # owning session's region instead of splitting off an unrelated one. Fall
-        # back to a split when that session has no terminal in this layout.
-        grouped = stack_leaf(project.layout, "preview", item.id, target_id=item.session_id)
+        # owning session's region instead of splitting off an unrelated one. A
+        # static preview has no owning session, so the caller names the view it
+        # was launched from - the file tab - and the preview lands in that pane.
+        # Fall back to a split when the target has no leaf in this layout.
+        grouped = stack_leaf(
+            project.layout,
+            "preview",
+            item.id,
+            target_id=str(body.get("target_view_id") or "") or item.session_id,
+        )
         project.layout = (
             grouped
             if grouped is not None
@@ -13117,7 +13169,9 @@ async def create_preview(request: web.Request) -> web.Response:
         project = request.app["projects"].projects[item.project_id]
     await request.app["events"].emit(
         "preview_registered",
-        session_id=item.session_id,
+        # A static preview is unowned, so it reports no session rather than the
+        # empty string a consumer would have to know to read as "none".
+        session_id=item.session_id or None,
         source="user",
         preview_id=item.id,
         url=item.url,
@@ -13140,7 +13194,7 @@ async def delete_preview(request: web.Request) -> web.Response:
 
 
 async def capture_preview(request: web.Request) -> web.Response:
-    """Headlessly screenshot a session-owned loopback preview for the agent.
+    """Headlessly screenshot a registered preview for the agent.
 
     Returns a typed unavailable state when the optional Playwright backend is not
     installed. The image is saved server-side and its path returned; the browser
@@ -13166,7 +13220,15 @@ async def capture_preview(request: web.Request) -> web.Response:
     height = int(body.get("height") or 800)
     raw_clip = body.get("clip")
     clip = raw_clip if isinstance(raw_clip, dict) else None
-    url = f"http://{item.host}:{item.port}/"
+    # A static preview has no upstream port; the daemon's own loopback proxy route
+    # is the thing that renders it, and pointing the capture there means the
+    # screenshot is of exactly what the pane draws rather than of a second render
+    # path that could drift from it.
+    url = (
+        f"http://127.0.0.1:{config.port}/preview/{item.id}/"
+        if getattr(item, "kind", "loopback") == "static"
+        else f"http://{item.host}:{item.port}/"
+    )
     # Save into the owning project's .swe-mux so a local agent can read it without
     # hunting through the mux data dir; fall back to the data dir if unresolvable.
     session = request.app["sessions"].sessions.get(item.session_id)
@@ -13177,6 +13239,11 @@ async def capture_preview(request: web.Request) -> web.Response:
         if not root and record.project_id:
             project = request.app["projects"].projects.get(record.project_id)
             root = project.root if project else None
+    if not root and item.project_id:
+        # The unowned case: a static preview belongs to a Project, not a session,
+        # so its shot still lands in the repository an agent is working in.
+        owner = request.app["projects"].projects.get(item.project_id)
+        root = owner.root if owner else None
     shot_dir = (Path(root) / ".swe-mux" if root else config.data_dir) / "preview-shots"
     out_path = shot_dir / f"{item.id}-{uuid4().hex[:8]}.png"
     try:
@@ -13445,6 +13512,107 @@ def _rewrite_inline_scripts(text: str, prefix: str) -> str:
     return _SCRIPT_ELEMENT.sub(replace, text)
 
 
+#: Content types a static preview serves by extension, ahead of ``mimetypes``.
+#: Not a nicety: on Windows ``mimetypes`` consults the registry, where ``.js`` is
+#: routinely registered as ``text/plain`` and ``.css`` sometimes is too. Combined
+#: with the ``X-Content-Type-Options: nosniff`` every response here carries, that
+#: renders the page unstyled and scriptless with nothing in the network log to
+#: explain it. The web types are therefore stated, not asked for.
+_STATIC_PREVIEW_CONTENT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".ico": "image/x-icon",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".txt": "text/plain; charset=utf-8",
+    ".wasm": "application/wasm",
+    ".webmanifest": "application/manifest+json",
+    ".xhtml": "application/xhtml+xml; charset=utf-8",
+}
+#: A static preview document is served from the daemon's own origin, and this
+#: origin *is* the authority - swe-mux has no login, so anything same-origin can
+#: drive the API. The in-app iframe already withholds ``allow-same-origin``, but
+#: the pane's `external` button navigates to this route directly, where nothing
+#: else would. A CSP ``sandbox`` puts the document in an opaque origin however it
+#: was reached, so its scripts run and its `Origin: null` mutations are refused by
+#: `security_middleware` outside `/preview/`. `frame-ancestors 'self'` is restated
+#: because setting this header at all replaces the blanket preview CSP.
+_STATIC_PREVIEW_CSP = (
+    "sandbox allow-scripts allow-forms allow-popups allow-modals; "
+    "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; "
+    "connect-src * data: blob:; frame-ancestors 'self'"
+)
+
+
+def static_preview_content_type(relative_path: str) -> str:
+    suffix = PurePosixPath(relative_path).suffix.casefold()
+    stated = _STATIC_PREVIEW_CONTENT_TYPES.get(suffix)
+    if stated:
+        return stated
+    guessed, _encoding = mimetypes.guess_type(relative_path)
+    return guessed or "application/octet-stream"
+
+
+async def _serve_static_preview(
+    request: web.Request,
+    item: Any,
+    prefix: str,
+    project_routes: dict[str, str],
+) -> web.Response:
+    """Serve one file from a static preview's directory, through the proxy route.
+
+    The same rewriting the loopback proxy applies is applied here, so a page's
+    root-relative `/app.css` resolves under the served directory instead of
+    hitting the mux origin, and the runtime bridge still reaches sibling Project
+    services. Read-only by construction: a Preview is a viewport, and there is no
+    upstream here to give a write any meaning.
+    """
+    if request.method not in {"GET", "HEAD"}:
+        raise web.HTTPMethodNotAllowed(request.method, ["GET", "HEAD"])
+    tail = request.match_info.get("tail", "")
+    try:
+        data, resolved, size = await asyncio.to_thread(
+            read_static_preview_file, item.doc_root, tail, item.entry, PREVIEW_RESPONSE_BYTES
+        )
+    except FileNotFoundError:
+        raise web.HTTPNotFound(text="no such file in this preview") from None
+    except ValueError as exc:
+        # Containment and unreadable-file refusals arrive the same way; neither is
+        # a server fault and neither should echo a filesystem path back.
+        log.debug("static preview refused %s (%s)", item.id, exc)
+        raise web.HTTPForbidden(text="preview path is not inside the served directory") from None
+    if data is None:
+        raise web.HTTPRequestEntityTooLarge(max_size=PREVIEW_RESPONSE_BYTES, actual_size=size)
+    content_type = static_preview_content_type(resolved)
+    casefolded = content_type.casefold()
+    if "html" in casefolded:
+        data = rewrite_preview_html(data, prefix, project_routes)
+    elif "text/css" in casefolded:
+        data = rewrite_preview_css(data, prefix)
+    elif any(marker in casefolded for marker in ("javascript", "ecmascript")):
+        data = rewrite_preview_javascript(data, prefix)
+    headers = {
+        "Content-Type": content_type,
+        # A Preview is a development viewport: revalidate every resource so
+        # editing the file and pressing refresh cannot show yesterday's bytes.
+        "Cache-Control": "no-cache",
+        "Content-Security-Policy": _STATIC_PREVIEW_CSP,
+    }
+    if request.headers.get("Origin") == "null":
+        # The sandboxed document is its own opaque origin, so its own `fetch` of a
+        # sibling asset is cross-origin. Same narrow allowance the loopback proxy
+        # makes, and scoped to this route the same way.
+        headers["Access-Control-Allow-Origin"] = "null"
+        headers["Vary"] = "Origin"
+    if request.method == "HEAD":
+        return web.Response(body=b"", headers=headers)
+    return web.Response(body=data, headers=headers)
+
+
 def preview_target(item: Any, tail: str, query: str = "") -> tuple[str, str]:
     parsed = urlsplit(item.url)
     if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1"}:
@@ -13569,7 +13737,12 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
     item = request.app["previews"].items.get(preview_id)
     if item is None:
         raise web.HTTPNotFound(text="preview registration not found")
-    if item.session_id not in request.app["sessions"].sessions:
+    static = getattr(item, "kind", "loopback") == "static"
+    # Gated on the kind, never on "session_id is falsy". A loopback preview points
+    # at a listener a session owns, so an ended session means the destination is
+    # gone. A static preview points at bytes on disk in a Project that outlives
+    # every session, and has no owning session to check in the first place.
+    if not static and item.session_id not in request.app["sessions"].sessions:
         raise web.HTTPGone(text="preview session is no longer live")
     tail = request.match_info.get("tail", "")
     previews = request.app["previews"]
@@ -13578,6 +13751,10 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
         await ensure_detected(item.project_id)
     routes_for_project = getattr(previews, "routes_for_project", None)
     project_routes = routes_for_project(item.project_id) if routes_for_project else {}
+    if static:
+        return await _serve_static_preview(
+            request, item, f"/preview/{preview_id}/", project_routes
+        )
     target, origin = preview_target(item, tail, request.query_string)
     if request.headers.get("Upgrade", "").casefold() == "websocket":
         return await _proxy_websocket(request, target, origin)
