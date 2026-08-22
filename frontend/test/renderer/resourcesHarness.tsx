@@ -1,13 +1,13 @@
-// The real Resources dialog over a stubbed daemon, opened on Tokens.
+// The real Resources dialog over a stubbed daemon, opened on Fleet activity.
 //
-// It exists for the two surfaces the consolidation moved into it: the workload telemetry
-// that used to sit in the Automation dashboard's health view, and the spend view that is
-// now drawn from the *same component* in both places. Both are dense figures tables, which
-// is exactly the class of surface a unit test cannot check and a real layout can.
+// It exists for the surface the split moved into it: the workload telemetry that was a
+// domain of the old Tokens segment, and before that lived in the Automation dashboard's
+// health view. It is a dense figures table, which is exactly the class of surface a unit
+// test cannot check and a real layout can.
 //
 // The workload fixture is the one `automationCostHarness` used, unchanged, so the
-// human-scale formatting assertions that used to run against the dashboard now run against
-// its new home and would notice a regression introduced by the move itself.
+// human-scale formatting assertions that have followed this table through two homes keep
+// running against it and would notice a regression introduced by the move itself.
 import { render } from 'preact'
 import { ResourcesModal } from '../../src/ResourcesModal'
 import type { Project, Session } from '../../src/types'
@@ -25,37 +25,36 @@ const TELEMETRY = {
   event_counts: { turn_ended: 457 },
   interpretation: 'observational_correlation_only',
   observer_spend: { tokens: 2269, cost_usd: 0.0006258 },
-  provider_cost_dimensions: [
-    { backend: 'claude', model: 'claude-fable-5', tokens: 5_545_899_176, cost_usd: 8600.754787, cost_is_estimate: true, attribution: 'ccusage_provider_model_aggregate' },
-    { backend: 'claude', model: 'claude-haiku-4-5-20251001', tokens: 1_444_576_243, cost_usd: 354.726475, cost_is_estimate: true, attribution: 'ccusage_provider_model_aggregate' },
-  ],
+  provider_cost_dimensions: [],
   cost_note: 'ccusage costs are backend/model aggregates and are not attributed to individual runs',
 }
 
-const DASHBOARD = {
-  observer_calls: { cancelled: 39, completed: 446, failed: 196 },
-  unread_notifications: 0,
-  spend_today: { tokens: 2269, cost_usd: 0.0006258 },
-  spend_breakdown: {
-    days: 7, today: '2026-08-15', start_day: '2026-08-09',
-    rules: [
-      { rule_id: 'builtin:scan-timeline', label: 'Scan timeline', detail: 'Per-run scans that extract timeline records', kind: 'feature', enabled: true, setting_label: '', calls: 214, tokens: 4_182_664, cost_usd: 1.8342, today_calls: 31, today_tokens: 612_004, today_cost_usd: 0.2611, input_tokens: 3_900_000, cached_tokens: 3_000_000, today_input_tokens: 580_000, today_cached_tokens: 460_000, models: ['anthropic/claude-sonnet-5'], last_at: NOW - 400 },
-      { rule_id: 'custom.doc-drift', label: 'Doc drift watch', detail: '', kind: 'custom', enabled: true, setting_label: '', calls: 12, tokens: 9_004, cost_usd: 0.0004, today_calls: 1, today_tokens: 700, today_cost_usd: 0.00002, models: ['openai/gpt-5-mini'], last_at: NOW - 3600 },
+const OPERATIONAL = {
+  schema_version: 1,
+  interpretation: '',
+  quota: { samples: [], resets: [], attributions: [], rollups: [] },
+  tools: {
+    metrics: [
+      { backend: 'claude', model: 'claude-opus-4-8', project_id: 'project-aaaaaaaa', session_id: 'session-bbbbbbbb', taxonomy: 'edit_file', raw_tool: 'Edit', events: 4821, uses: 4610, errors: 211, average_duration_ms: 143.7 },
     ],
-    totals: { calls: 764, tokens: 4_608_904, cost_usd: 1.8849009, today_calls: 54, today_tokens: 628_904, today_cost_usd: 0.2617458, input_tokens: 4_150_000, cached_tokens: 3_000_000, today_input_tokens: 594_000, today_cached_tokens: 460_000 },
+    skills: [
+      { explicit_skill: 'documentation', backend: 'claude', project_id: 'project-aaaaaaaa', uses: 12, last_used_at: NOW - 7200 },
+    ],
+    unknown_or_unmapped: 17,
+    parser_version: 'v4',
+    parser_versions: { claude: 'v4', codex: 'v2' },
+    coverage: [
+      { session_id: 'session-bbbbbbbb', backend: 'claude', parser_version: 'v4', status: 'reconciled', recognized_records: 9814, unknown_records: 17, tool_events: 4821, skill_events: 12, compaction_events: 3, reconciled_at: NOW - 900 },
+    ],
   },
-}
-
-const USAGE = {
-  enabled: true, refreshing: false, refresh_minutes: 60, package: 'ccusage', install_command: '',
-  states: {}, collector: { status: 'ready', refreshed_at: NOW }, sources: [], cache: {},
+  compactions: [
+    { session_id: 'session-bbbbbbbb', backend: 'claude', project_id: 'project-aaaaaaaa', count: 3, last_compaction_at: NOW - 1800, capability: 'native_record', confidence: 'explicit' },
+  ],
 }
 
 const ROUTES: Array<[string, unknown]> = [
   ['/api/telemetry/workloads', TELEMETRY],
-  ['/api/telemetry/operational', { schema_version: 1, interpretation: '', quota: { samples: [], resets: [], attributions: [], rollups: [] }, tools: { metrics: [], skills: [], unknown_or_unmapped: 0, parser_version: 'v1', parser_versions: {}, coverage: [] }, compactions: [] }],
-  ['/api/automation/dashboard', DASHBOARD],
-  ['/api/usage', USAGE],
+  ['/api/telemetry/operational', OPERATIONAL],
 ]
 
 window.fetch = (async (input: RequestInfo | URL) => {
@@ -71,12 +70,11 @@ document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
   <ResourcesModal
-    initial="tokens"
+    initial="fleet"
     sessions={SESSIONS}
     projects={PROJECTS}
     onClose={() => {}}
     onAttached={() => {}}
-    onConfigureUsage={() => {}}
   />,
   document.querySelector('#root')!,
 )

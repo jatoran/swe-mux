@@ -49,9 +49,10 @@ type RulesFile={text:string}
 //    Also a link now; Findings grew a source filter to cover what this view showed.
 //  * `health` was three unrelated things wearing one name. The explainer of what the
 //    deterministic checks watch moved into the How-it-works panel, where every other
-//    explanation of this pipeline already lived; the workload telemetry moved to
-//    Resources → Tokens, following the cost column that had already left it for the same
-//    reason; and the away report moved to Alerts, which is the inbox it summarizes.
+//    explanation of this pipeline already lived; the workload telemetry moved out,
+//    following the cost column that had already left it for the same reason, and now lives
+//    in Resources → Fleet activity; and the away report moved to Alerts, which is the
+//    inbox it summarizes.
 //
 // The global switches moved the other way, to Settings → Automation, where every other
 // install-wide switch and bound already lived: "where do I change automation behaviour
@@ -89,12 +90,15 @@ function actionSummary(rule:Rule):string{
   return action.kind
 }
 
-export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAlerts,onOpenFindings}:{
+export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAlerts,onOpenFindings,onOpenUsage}:{
   onClose:()=>void;onConfigure:()=>void;onOpenSession:(id:string)=>void
   /** The single home for attention items. This dashboard used to draw a second copy. */
   onOpenAlerts:()=>void
   /** The single home for run notes. Same story. */
   onOpenFindings:()=>void
+  /** The other reading of the same spend table. Not a duplicate: this dashboard answers
+   *  which rule burned it, and Usage answers what that is a share of. */
+  onOpenUsage:()=>void
 }){
   const [data,setData]=useState<AutomationData|null>(null)
   const [experiences,setExperiences]=useState<Experience[]>([])
@@ -172,6 +176,10 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession,onOpenAle
         <div>
           <button onClick={onOpenAlerts}>Attention inbox{unread?` [${unread}]`:''}</button>
           <button onClick={onOpenFindings}>Run notes</button>
+          {/* Not a surface this dashboard duplicates - it is the other half of the same
+              question. The spend table below is one of three pots, and only Usage draws
+              the other two, so "is this a lot" is answerable only over there. */}
+          <button onClick={onOpenUsage}>Usage &amp; spend</button>
         </div>
       </div>
       <div class={`usage-progress ${!data&&!error?'running':''}`} role="status" aria-live="polite"><span>{error?'!':data?'·':'◌'}</span><strong>{error||message}</strong></div>

@@ -6,14 +6,15 @@ import { expect, test } from 'playwright/test'
  * Two things are measured here that no unit test can see.
  *
  * The frame. Its four segments contribute different numbers of rows — Processes is one
- * element, Network and Storage add a toolbar and a footer, Tokens adds a domain rail, an
- * actions row, and a status stack — so the panel is a flex column rather than the fixed
- * `grid-template-rows` each single-surface modal could afford. A regression there draws the
- * status line over the first heading, which is exactly what the Automation panel once did.
+ * element, Network and Storage add a toolbar and a footer, Fleet activity adds a domain rail
+ * and a footer — so the panel is a flex column rather than the fixed `grid-template-rows`
+ * each single-surface modal could afford. A regression there draws the status line over the
+ * first heading, which is exactly what the Automation panel once did.
  *
- * The workload table. It moved here from the Automation dashboard's health view, and its
- * whole reason for existing is that ten-figure token counts and raw seconds are technically
- * present and practically unreadable. Those assertions follow the table to its new home.
+ * The workload table. It has moved twice — out of the Automation dashboard's health view,
+ * then out of the Tokens segment when spend became its own dialog — and its whole reason for
+ * existing is that ten-figure token counts and raw seconds are technically present and
+ * practically unreadable. Those assertions follow the table to each new home.
  */
 
 const openDomain = async (page: import('playwright/test').Page, label: string) => {
@@ -35,17 +36,24 @@ test('the workload table reads at human scale rather than raw units', async ({ p
   await expect(row.locator('td').nth(6)).toHaveAttribute('title', /9.702.931.354/)
 })
 
-test('the spend view is the same table here as on the Automation dashboard', async ({ page }) => {
+test('collection health is collapsed beneath the metrics it qualifies', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openDomain(page, 'automation spend')
-  await page.locator('.cost-table tbody tr').first().waitFor()
+  await openDomain(page, 'tools + skills')
+  await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).locator('tbody tr').first().waitFor()
 
-  // Same component, so the same ranked rows and the same sub-cent guard. If these two
-  // surfaces ever disagree, the mirroring has been re-implemented as a copy.
-  const names = await page.locator('.cost-table tbody .cost-name strong').allInnerTexts()
-  expect(names[0]).toBe('Scan timeline')
-  const row = page.locator('.cost-table tbody tr', { hasText: 'Doc drift watch' })
-  await expect(row.locator('td').nth(1)).toHaveText('<$0.0001')
+  // Parser coverage does not measure the fleet — it says whether the two tables above it
+  // were collectable at all. Drawn open as a third peer table it pushed the real metrics
+  // off the first screen, so it ships closed and the tables sit above it.
+  const health = page.locator('.telemetry-collection-health')
+  await expect(health).toHaveJSProperty('open', false)
+  await expect(health.locator('summary')).toContainText('parser v4')
+
+  const metrics = await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).boundingBox()
+  const collapsed = await health.boundingBox()
+  expect(collapsed!.y).toBeGreaterThan(metrics!.y)
+
+  await health.locator('summary').click()
+  await expect(health.locator('tbody tr')).toHaveCount(1)
 })
 
 test('every segment fits the shared frame without overlapping its chrome', async ({ page }) => {
@@ -54,7 +62,7 @@ test('every segment fits the shared frame without overlapping its chrome', async
   await page.waitForSelector('.resources-segmented button')
 
   const labels = await page.locator('.resources-segmented button').allInnerTexts()
-  expect(labels).toEqual(['Processes', 'Network', 'Storage', 'Tokens'])
+  expect(labels).toEqual(['Processes', 'Network', 'Storage', 'Fleet activity'])
 
   for (const label of labels) {
     await page.locator('.resources-segmented button', { hasText: label }).click()
@@ -83,13 +91,14 @@ test('every segment fits the shared frame without overlapping its chrome', async
 
 test('at phone width the dialog fills the screen without scrolling sideways', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
-  await openDomain(page, 'automation spend')
-  await page.locator('.cost-table tbody tr').first().waitFor()
+  await openDomain(page, 'tools + skills')
+  await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).locator('tbody tr').first().waitFor()
   const overflow = await page.evaluate(() => ({
     body: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-    cells: [...document.querySelectorAll('.data-table td')]
+    cells: [...document.querySelectorAll('.usage-table td')]
       .filter(cell => cell.scrollWidth > cell.clientWidth + 1).length,
   }))
   expect(overflow.body).toBe(true)
+  // The wide table scrolls inside its own container rather than widening the page.
   expect(overflow.cells).toBe(0)
 })

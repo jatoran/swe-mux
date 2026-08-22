@@ -195,6 +195,11 @@ test('the dashboard keeps no second copy of the surfaces that moved out', async 
   // The way back to the two inboxes this dashboard used to duplicate is a permanent row,
   // not an empty-state hint: "where did the attention inbox go" is asked by someone
   // looking at a full one somewhere else.
+  //
+  // `Usage & spend` is a third kind of entry and rides the same row. It is not a surface
+  // this dashboard ever duplicated - it is the other half of the same question, since the
+  // spend table here is one of three pots and only Usage draws the other two, so "is this
+  // a lot" is answerable only over there.
   const elsewhere = page.locator('.automation-elsewhere button')
-  await expect(elsewhere).toHaveText([/Attention inbox/, 'Run notes'])
+  await expect(elsewhere).toHaveText([/Attention inbox/, 'Run notes', 'Usage & spend'])
 })

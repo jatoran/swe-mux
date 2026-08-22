@@ -145,17 +145,25 @@ and the declared minimum observation capability.
   showed.
   Its `health` view was three unrelated things under one name and was split three ways: the
   explainer of what the deterministic checks watch folded into the help panel, where every other
-  explanation of this pipeline already lived; the observed-workload telemetry moved to
-  Resources → Tokens, following the cost column that had already left it on that reasoning; and
-  the away report moved to Alerts, which is the inbox it summarizes (`ui.md`).
+  explanation of this pipeline already lived; the observed-workload telemetry moved out,
+  following the cost column that had already left it on that reasoning, and now lives in
+  Resources → Fleet activity; and the away report moved to Alerts, which is the inbox it
+  summarizes (`ui.md`).
   What is left is what only this dashboard can do: configure the pipeline, account for what it
   spent, run bounded knowledge batches, and show its own diagnostics.
-- **The spend view is mirrored into Resources → Tokens as the same component**, not as a second
+- **The spend view is mirrored into Usage → Automation as the same component**, not as a second
   view over one endpoint (`AutomationSpendView`). Both readings are legitimate and neither is
   the real one: from here you ask which rule burned this, and the rules are beside it; from
-  Resources you ask what you are burning in total, and the other three meters are beside it.
+  Usage you ask what you are burning in total, and the other two pots are beside it.
   Re-implementing the markup to serve both would have reproduced exactly the drift removed
   above. It fetches `/api/automation/dashboard` itself, since a shared component owns its data.
+- **Its agent-model table is a subset and says so.** `provider_cost_dimensions` covers only
+  runs swe-mux observed, while Usage → Agents reads ccusage over every transcript the harness
+  wrote - the same pot, two denominators. Drawn as a bare total beside the observer total it
+  read as a second, competing answer to "what did the agents cost", which is the
+  one-number-under-two-names failure the shared component exists to prevent. It is therefore
+  labelled by its denominator in its tile, its heading, and its table foot, and the observer
+  and agent figures are never summed (`usage.md`).
 - **Spend answers which automation costs what, not only what automation cost.** A single daily
   total cannot be acted on, because turning something off requires knowing which something.
   `GET /api/automation/dashboard` carries `spend_breakdown`, grouped from the same
@@ -196,7 +204,7 @@ and the declared minimum observation capability.
   a feature row asserting `True` regardless told the reader to go turn off something already
   off. Worse, a spender absent from `FEATURE_SPENDERS` falls through to the `retired` default,
   which is indistinguishable from the truth and says the opposite of it: `builtin:assistant`
-  shipped unlisted and Resources → Tokens described the assistant as `retired · off` while it
+  shipped unlisted and the spend view described the assistant as `retired · off` while it
   was running. `tests/test_spend_label_matrix.py` closes that by discovery rather than by
   memory — every `builtin:` rule id in the source must have an entry, and every entry's
   `setting_key` must be a real boolean `Config` field, since `getattr(…, default=False)`

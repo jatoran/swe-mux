@@ -344,7 +344,7 @@ Its rules, and what each one is defending:
 ## Menus and overlays
 
 - Scope follows the menu that opened a surface, never a hidden mode.
-  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
+  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, Usage & spend, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
   Right-clicking empty sidebar space is the no-Project case and matches the app menu.
 - **A Project menu row has to earn its place against the drawer.**
   Notes, Processes, the fleet queue, and Browse files each left it, because each is a drawer tab or a dialog that already opens on the *selected* Project - so right-clicking a Project row to reach them was a second route to a place one click away, and the two that stayed are the two with no such home.
@@ -364,6 +364,12 @@ Its rules, and what each one is defending:
   say which. Unfolded, those counts are back on the rows that own them, where one number
   means one thing. What divides the halves now is a plain rule, not a `CONFIGURATION`
   heading over an already-obvious group.
+- **`Usage & spend` is the eighth row, and the row is what the budget is for.**
+  It was a segment of Resources, and the way it did not fit is the argument for spending a
+  row on it: the surface named for money had no total on its first screen, and three of its
+  six tabs measured neither a token nor a dollar. A subject nobody finds by guessing which
+  meter it was filed under is exactly the thing a menu row buys. The row-count discipline
+  above is about rows that duplicate a route, not about refusing a destination.
 - **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
   the menu is — so a mark that means "this opens something" appeared on nearly all of them
   and therefore distinguished none.
@@ -2323,11 +2329,29 @@ Its rules, and what each one is defending:
 - **The Actions tab's three sections are separated by their headers, not by a line between
   them.** A 1px rule between sections is the same rule every row *inside* a section already
   carries, so the boundary read as one more row. Each header is a full-bleed bar with its own
-  darker ground and a leading edge, and a rule above it twice the weight of any row rule; the
-  bodies sit on the panel ground beneath, so a header reads as a lid over its section. The
-  edge is deliberately muted rather than accent: every green edge in this app means *this one
-  is active* — the selected Project, the active pane tab, the live segment — and three
-  permanent green bars on three permanent headers would spend that meaning on decoration.
+  ground and a leading edge, and a rule above it twice the weight of any row rule; the
+  bodies sit on the panel ground beneath, so a header reads as a lid over its section.
+- **Each of the three carries its own hue** — Skills green, Prompt templates blue, Clipboard
+  amber — on the header's leading edge, a 7% tint of its ground, the rule above it, and its
+  caret (operator decision 2026-08-22).
+  The separators above were the right fix for a boundary drawn too faintly, but they solve
+  the wrong half of the problem on a *sticky* header: a reader halfway down a catalog sees a
+  header with no boundary on screen at all, and "which of the three am I in" was answerable
+  only by reading the word.
+  This supersedes the earlier rule that the edge stay muted rather than accent. That rule was
+  about **sameness**, not about green: every green edge in this app means *this one is
+  active* (the selected Project, the active pane tab, the live segment), and three identical
+  green bars on three permanent headers would have read as three active things and spent that
+  meaning on decoration. Three *different* hues cannot be read that way, because activity is
+  never encoded here as a set of unlike colours — and one of the three has to be green, since
+  green, blue, and amber is the widest spread this palette offers once `--red` is excluded as
+  the one token in it that already means something.
+  Amber is safe for the same reason: this tab has no warn or error vocabulary of its own for a
+  3px spine to be confused with.
+  The hue is carried on a `--section-hue` variable rather than written three times, so a
+  fourth section added without one falls back to the muted spine instead of inheriting a
+  neighbour's colour, and a single-hue theme (game-boy, virtual-boy) collapses all three —
+  inherent to those themes, and the spine, the rule, and the caret all still draw.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed
@@ -2708,7 +2732,8 @@ Detailed UI behavior belongs with the owning feature:
 - Agent runtime and extension inspection: `agent-environment.md`
 - Provider selection and reset review: `provider-accounts.md`
 - CPU/RSS and the Resources dialog's Processes segment: `processes-and-previews.md`
-- Quota/context/tool evidence: `operational-telemetry.md`
+- The Usage dialog, the three pots, and historical collection: `usage.md`
+- Quota/context/tool evidence, and the Resources dialog's Fleet activity segment: `operational-telemetry.md`
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
 - Global Talk, registry-backed navigation, fleet speech, and guarded approvals: `voice.md`
