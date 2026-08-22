@@ -88,11 +88,8 @@ test('the overflow chip sits on the trailing edge, not wherever the split stoppe
     const right = (selector: string) => strip.querySelector(selector)!.getBoundingClientRect().right
     const chips = Array.from(strip.querySelectorAll<HTMLElement>(':scope > [data-key]'))
     return {
-      gap: Number.parseFloat(getComputedStyle(strip).columnGap) || 0,
       moreLeft: strip.querySelector('.rail-more')!.getBoundingClientRect().left,
       moreRight: right('.rail-more'),
-      gearLeft: strip.querySelector('.rail-config')!.getBoundingClientRect().left,
-      gearRight: right('.rail-config'),
       lastChipRight: chips[chips.length - 1].getBoundingClientRect().right,
       stripRight: strip.getBoundingClientRect().right,
       padRight: Number.parseFloat(getComputedStyle(strip).paddingRight) || 0,
@@ -103,14 +100,13 @@ test('the overflow chip sits on the trailing edge, not wherever the split stoppe
     await expect(page.locator(MORE)).toBeVisible()
     // Polled, because a viewport change is not settled by the time the chip is visible and
     // a single read can catch the row mid-relayout.
+    // The `+N` chip is the trailing cluster's last element (the strip carries no gear),
+    // so its right edge IS the rail's content edge.
     await expect.poll(async () => {
       const settling = await measure()
-      return Math.round(settling.stripRight - settling.padRight - settling.gearRight)
+      return Math.round(settling.stripRight - settling.padRight - settling.moreRight)
     }, { message: `the cluster is off the trailing edge at ${width}px` }).toBe(0)
     const box = await measure()
-    // Beside the gear, and the gear on the rail's content edge: that pair is the trailing
-    // edge, and the chip has to be at it however many chips happened to fit.
-    expect(Math.abs(box.gearLeft - box.moreRight - box.gap), `gear is not beside the chip at ${width}px`).toBeLessThanOrEqual(1)
     // The slack the split leaves is real: the chip is measurably clear of the last pinned
     // chip, which is exactly the gap that used to move it from rail to rail.
     expect(box.moreLeft).toBeGreaterThanOrEqual(box.lastChipRight)
@@ -143,15 +139,14 @@ test('the `+N` count follows the width live', async ({ page }) => {
 
 test('the panel opens upward and lands on the rail\'s trailing edge, inside the viewport', async ({ page }) => {
   await open(page)
-  const [box, more, gear, viewport] = await Promise.all([
+  const [box, more, viewport] = await Promise.all([
     page.locator(PANEL).boundingBox(),
     page.locator(MORE).boundingBox(),
-    page.locator('.rail-config').boundingBox(),
     page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
   ])
-  // The rail's trailing edge, which on this row is the gear's - not the `+N` chip's, which
-  // is a gear-width short of it.
-  expect(Math.abs((box!.x + box!.width) - (gear!.x + gear!.width))).toBeLessThanOrEqual(1)
+  // The rail's trailing edge, which is the `+N` chip's right edge now that the strip
+  // carries no gear.
+  expect(Math.abs((box!.x + box!.width) - (more!.x + more!.width))).toBeLessThanOrEqual(1)
   expect(box!.y + box!.height).toBeLessThanOrEqual(more!.y + 1)
   expect(box!.y).toBeGreaterThanOrEqual(0)
   expect(box!.x).toBeGreaterThanOrEqual(0)

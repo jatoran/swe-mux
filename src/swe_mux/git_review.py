@@ -19,7 +19,12 @@ from .subprocess_flags import background_creation_flags, reap_process_tree
 log = logging.getLogger(__name__)
 
 GIT_TIMEOUT_SECONDS = 4.0
-GIT_CONCURRENCY = 4
+# Concurrent git subprocesses per overview. The reads are independent per-worktree
+# queries, so the bound is process-spawn pressure rather than correctness; at 4, a
+# 25-worktree map cost ~0.7s of pure spawn serialization per request (measured
+# 2026-08-22), and 12 takes the same map to roughly a quarter of that on the
+# 16-core reference host without saturating it.
+GIT_CONCURRENCY = 12
 GIT_CHANGE_FILE_LIMIT = 200
 GIT_UNTRACKED_MEASURE_MAX_BYTES = 16 * 1024 * 1024
 GIT_DIFF_MAX_BYTES = 1024 * 1024

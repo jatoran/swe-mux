@@ -8,16 +8,21 @@ import test from 'node:test'
 // extreme it is. So `--rail-glass` is measured here rather than chosen by eye.
 //
 // Both directions are pinned, and both matter:
-//   * Too transparent and a theme whose chips already clear 4.5:1 stops clearing it once a
-//     bright buffer washes them out. That is the failure the number exists to prevent.
-//   * Too opaque and the "fix" for the first failure is to quietly stop being glass, which
-//     passes this file's contrast half while deleting the feature. Hence the ceiling.
+//   * Too transparent and labels wash out over a bright buffer. The floors below are what
+//     bound that.
+//   * Too opaque and the "fix" is to quietly stop being glass, which passes the contrast
+//     half while deleting the feature. Hence the ceiling.
 //
-// What is deliberately *not* asserted: that every theme clears 4.5:1. Three shipped themes
-// (game-boy, commodore-64, and catppuccin-latte at the margin) do not clear it on an opaque
-// rail either, and holding this panel to a bar the rail beneath it never met would fail on
-// day one for a reason that has nothing to do with translucency. The contract is that the
-// glass costs nothing: a theme that reads on the rail reads in the panel.
+// The contract, revised 2026-08-22 by an explicit operator trade (90% read as a solid
+// panel; visible translucency was chosen over a universal 4.5:1):
+//   * the shipped default/dark/light palettes clear a hard 4.5:1 through the glass on both
+//     extremes - a fresh install never trades readability for the look;
+//   * every theme in the file, novelty palettes included, holds the 3:1 large-text floor
+//     over both extremes - nothing ships illegible anywhere;
+//   * what is deliberately no longer asserted is that every theme keeps 4.5:1 through the
+//     glass. Holding that line put the opacity at 90%, which deleted the feature by other
+//     means; the palettes that now dip below 4.5 over a solid white buffer are the novelty
+//     ones that sit nearest the line on the opaque rail too.
 
 const CSS = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
 
@@ -100,25 +105,23 @@ test('every rail overlay is glass rather than a panel with a blur declaration on
   assert.match(CSS, /\.rail-dropup-row:hover,\.rail-dropup-row:focus-visible\{background:color-mix\(in srgb,var\(--panel2\) var\(--rail-glass\),transparent\)\}/)
 })
 
-test('glass costs no theme its label contrast, over a white or a black terminal', () => {
+test('every theme holds the 3:1 large-text floor through the glass, over white and black', () => {
+  // The universal floor. 4.5:1 for every theme is deliberately not the bar any more - see
+  // the header - but nothing may ship illegible: 3:1 is the WCAG large-text/UI floor, and
+  // every palette in the file must clear it through the glass on both extremes.
   const alpha = glassOpacity()
   const broken: string[] = []
   for (const theme of themes()) {
     for (const buffer of [WHITE, BLACK]) {
       for (const [surface, background] of labelBackgrounds(theme, alpha, buffer)) {
-        // Compared against what the same label reads at with no glass at all: three shipped
-        // themes are already under 4.5:1 opaque, and holding this panel to a bar the rail
-        // beneath it never met would fail for a reason that is not translucency.
-        const opaque = contrast(theme.text, surface === 'drop-up row' ? theme.panel : theme.chip)
-        if (opaque < 4.5) continue
         const composited = contrast(theme.text, background)
-        if (composited < 4.5) {
-          broken.push(`${theme.name} ${surface} over ${buffer === WHITE ? 'white' : 'black'}: ${opaque.toFixed(2)} → ${composited.toFixed(2)}`)
+        if (composited < 3) {
+          broken.push(`${theme.name} ${surface} over ${buffer === WHITE ? 'white' : 'black'}: ${composited.toFixed(2)}`)
         }
       }
     }
   }
-  assert.deepEqual(broken, [], `translucency dropped these below 4.5:1:\n${broken.join('\n')}`)
+  assert.deepEqual(broken, [], `translucency dropped these below 3:1:\n${broken.join('\n')}`)
 })
 
 test('the shipped default themes clear 4.5:1 through the glass on both extremes', () => {

@@ -1564,16 +1564,16 @@ Its rules, and what each one is defending:
   Immediately after Up/Down, five editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, copy the composer, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout and the customize gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into configuration.
-  Only the gear is reserved out of a row's fit budget; the readout takes whatever is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
+  A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
+  The strip itself carries no customize gear (operator decision 2026-08-22): a standing gear chip spent rail width on chrome and read as one more action, so the in-place editor is reached from the overflow popover's header, and the full editor stays one press away in Actions → Configure.
 - **A row that does not fit fills with what does and collapses the rest into a trailing `+N` chip.**
   The rail is a toolbar, and a toolbar's answer to overflow is an overflow menu rather than a scroller: a horizontal scroller hides an unknown number of controls behind a gesture, says nothing about how many, and puts the one you want at an offset you have to hunt for.
   Each row is split independently and gets its own popover, in row order, holding only that row's remainder.
   An empty remainder draws no `+N` chip at all, so a rail that fits looks exactly as it did before the split existed — including not reserving the chip's width "just in case".
   The `+N` chip is fixed-width by construction, because the one control that exists to absorb overflow must never be the thing that overflows, and the count follows the row's width live.
-- **The `+N` chip rides the row's trailing cluster, beside the gear**, rather than trailing the last pinned chip.
+- **The `+N` chip rides the row's trailing cluster**, rather than trailing the last pinned chip.
   The split leaves up to a chip's width of slack, so following the chips put the control at a different offset on every rail and on every resize; the cluster takes that slack and pushes its contents right, which gives it one place on every row however that row is populated.
-  Its panel is placed against the *cluster* for the same reason: aligning to the chip alone left the panel a gear-width short of the rail's edge on the one row that carries a gear and flush on every other row, which is two placements for one control.
+  Its panel is placed against the *cluster*, whose right edge is the rail's trailing edge by construction.
   The status readout sits to the chip's left and is the only thing in the cluster that shrinks.
 - **The popover is the rest of the row, not a picker, so a selection does not close it.**
   It is a wrap grid of the same real chips with their real handlers, which is what makes the two-click End session confirm complete in place and a repeat-tap arrow key repeat where it is.
@@ -1583,9 +1583,9 @@ Its rules, and what each one is defending:
   It is chrome rather than a chip in the grid, where it would read as one more thing to press into the terminal, and it closes the panel as it hands over — the editor replaces the whole rail area, so a panel left standing would float over a surface that no longer exists.
 - **Every command-rail overlay is glass: the popover and each of the drop-ups.**
   Panel, chips, and rows are translucent over a backdrop blur, with borders and text at full opacity.
-  One opacity for all of them, and a measured value rather than a taste one: the lowest at which the translucency costs no theme its label contrast when the terminal behind it is pure white or pure black, held under 95% so a later "fix" cannot buy contrast by quietly going opaque (`test/railGlassContrast.test.ts`, and the real composited pixels in `test/renderer/rail-overflow.spec.ts`).
-  The number is set by the **single-layer** case: a drop-up row is transparent over its panel, so its label sits on one layer of glass, where a popover chip has its own background and sits on two.
-  The binding surface owns the number and the other inherits it, rather than each carrying its own.
+  One opacity for all of them, and a measured value rather than a taste one, held under 95% so a later "fix" cannot buy contrast by quietly going opaque (`test/railGlassContrast.test.ts`, and the real composited pixels in `test/renderer/rail-overflow.spec.ts`).
+  The number is an explicit operator trade (2026-08-22): the lowest opacity at which *no* theme lost 4.5:1 was 90%, which read as a solid panel, so the contract was recut - the shipped default/dark/light palettes keep a hard 4.5:1 through the glass on both extremes, every theme keeps the 3:1 large-text floor, and universal 4.5:1 is deliberately no longer asserted.
+  The palettes that dip below 4.5 over a solid white buffer are the novelty ones that sit nearest the line on the opaque rail too.
   A browser without `backdrop-filter` falls back to near-solid, because unblurred glass is a flat wash of whatever pixel happens to be behind each letter — neither the look nor a contrast anyone can reason about.
 - **On a phone a rail overlay takes half the screen and goes to the screen's trailing edge**, whichever control opened it.
   On a wide pane hanging off the trigger is useful — it says which control this belongs to — but at half a phone's width a picker opened from a chip in the middle of the rail lands in the middle of the screen, so two pickers opened a second apart appear in two places.

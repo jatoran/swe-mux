@@ -250,30 +250,29 @@ test('the measured copy of a row is unpaintable, untouchable, and outside the sc
   assert.match(strip, /class="terminal-action-scroll rail-row-measure"[\s\S]*?<OverflowRail/)
 })
 
-test('the trailing gear is reserved out of the fit budget and the status readout is not', () => {
+test('the strip carries no gear: Configure lives in the popover, not on a rail row', () => {
+  // Operator decision 2026-08-22: a standing gear chip on the strip spent rail width on
+  // chrome and read as one more action. The in-place editor is reached from the overflow
+  // popover's header (and the full editor from Actions -> Configure); the strip renders
+  // only chips, the readout, and the `+N` chip.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(strip, /class="rail-config"\s+data-rail-fixed/)
-  assert.match(strip, /querySelectorAll<HTMLElement>\('\[data-rail-fixed\]'\)/)
-  // The readout's text changes under the row (a transient "Copied", a selection count).
-  // Reserving it would move every chip beside it each time it appeared.
-  assert.doesNotMatch(strip, /aria-live="polite" data-rail-fixed/)
+  assert.doesNotMatch(strip, /class="rail-config"/)
+  // The popover still receives the handler, or the gear would be gone everywhere.
+  assert.match(strip, /onConfigure=\{onConfigure\}/)
 })
 
 test('the overflow chip rides the trailing cluster, not the tail of the pinned chips', () => {
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
   const cluster = strip.slice(strip.indexOf('class="rail-row-trailing"'), strip.indexOf('</OverflowRail>'))
   // Order inside the cluster is load-bearing: the readout is the only shrinking thing, so
-  // it goes first, and the chip sits between it and the gear.
+  // it goes first and the `+N` chip holds the trailing edge.
   assert.ok(cluster.indexOf('aria-live="polite"') < cluster.indexOf('ref={moreRef}'))
-  assert.ok(cluster.indexOf('ref={moreRef}') < cluster.indexOf('class="rail-config"'))
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
   const rule = declarations(styles, /\.terminal-action-scroll>\.rail-row-trailing\{([^}]*)\}/)
   // Taking the row's slack is what puts the cluster - and so the chip - on the trailing edge
   // however many chips happened to fit.
   assert.match(rule, /flex:1 1 auto/)
   assert.match(rule, /justify-content:flex-end/)
-  // An auto margin on the gear would push it away from the chip it now sits beside.
-  assert.doesNotMatch(declarations(styles, /\.terminal-action-rail \.rail-config\{([^}]*)\}/), /margin-left:auto/)
 })
 
 test('the panel is placed against the trailing cluster, so it lands on the rail\'s edge', () => {

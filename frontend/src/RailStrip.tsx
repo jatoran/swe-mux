@@ -40,20 +40,13 @@ interface RailStripProps {
   /** The status readout, on whichever row carries it. Shrinks and ellipsises rather than
    *  taking room from the chips, so its text changing never moves one. */
   status?: string
-  /** Opens the in-place rail editor. Given to whichever row carries the gear; the popover
-   *  offers it too, because "this rail is too full" is most often thought while reading
-   *  the overflow. */
+  /** Opens the in-place rail editor. Offered only inside the row's overflow popover:
+   *  a standing gear chip on the strip spent rail width on chrome, and "this rail is
+   *  too full" is most often thought while reading the overflow anyway. The full
+   *  editor also stays reachable from Actions -> Configure. */
   onConfigure?: () => void
   /** Accessible name for this row's overflow popover. */
   label: string
-}
-
-/** Pixels reserved for trailing furniture that must never be pushed off the row. */
-function reservedWidth(host: HTMLElement | null, gap: number): number {
-  if (!host) return 0
-  const fixed = Array.from(host.querySelectorAll<HTMLElement>('[data-rail-fixed]'))
-  if (!fixed.length) return 0
-  return fixed.reduce((total, element) => total + element.getBoundingClientRect().width + gap, 0)
 }
 
 export function RailStrip({ chips, status, onConfigure, label }: RailStripProps) {
@@ -79,7 +72,7 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
     // honest across density and scale without a second copy of it here.
     const overflowWidth = moreRef.current?.getBoundingClientRect().width
       || Number.parseFloat(style.getPropertyValue('--rail-more-width')) || 44
-    const available = strip.clientWidth - padding - reservedWidth(trailingRef.current, gap)
+    const available = strip.clientWidth - padding
     const next = railFitCount({ widths, gap, available, overflowWidth })
     setFit(current => current === next ? current : next)
   }
@@ -153,7 +146,7 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
           every rail. The cluster takes the slack and pushes its contents right, so the
           chip is always at the rail's trailing edge and its panel always opens from
           there. The readout sits to its left and is the only shrinking thing in here. */}
-      {(overflow.length > 0 || status !== undefined || onConfigure) && <div class="rail-row-trailing" ref={trailingRef}>
+      {(overflow.length > 0 || status !== undefined) && <div class="rail-row-trailing" ref={trailingRef}>
         {status !== undefined && <span aria-live="polite">{status}</span>}
         {overflow.length > 0 && <button
           ref={moreRef}
@@ -164,21 +157,13 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
           title={`${overflow.length} more action${overflow.length === 1 ? '' : 's'} — opens a panel that stays open`}
           onClick={() => setOpen(value => !value)}
         >+{overflow.length}</button>}
-        {onConfigure && <button
-          class="rail-config"
-          data-rail-fixed
-          title="Customize this rail in place — drag, remove, add (All options… opens the full editor)"
-          aria-label="Customize actions"
-          onClick={onConfigure}
-        >⚙</button>}
       </div>}
     </OverflowRail>
     {open && overflow.length > 0 && <RailOverflowPopover
       label={label}
       // The whole trailing cluster, not the `+N` chip: the panel aligns to the rail's
-      // trailing edge, which is the cluster's right edge (the chip's own is a gear-width
-      // short of it on the row that carries one). The cluster's top is the chip's top,
-      // since it is a single centred row, so one element answers both axes.
+      // trailing edge, which is the cluster's right edge. The cluster's top is the
+      // chip's top, since it is a single centred row, so one element answers both axes.
       anchor={trailingRef.current}
       onClose={() => setOpen(false)}
       onConfigure={onConfigure}

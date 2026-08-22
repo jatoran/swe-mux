@@ -34,17 +34,16 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   // editor look emptier than the rail it was opened from.
   assert.ok(app.includes('<ActionEditorModal projectId='))
   assert.ok(app.includes("runNamedCommand('actions.configure')"), 'main menu must use the shared command')
-  // The rail gear opens the in-place editor; the full modal stays one click away
-  // behind its "All options…" control, so a rail configured down to nothing
-  // still has a way back into configuration.
-  // The gear is drawn by the row (`RailStrip`) rather than by the pane, because it rides
-  // the row's trailing cluster; the pane owns only what pressing it does. The overflow
-  // popover offers the same act from its header, since a full overflow is the surface
-  // that prompts the thought.
+  // The in-place editor is reached from the overflow popover's header gear (the strip
+  // itself carries no gear - operator decision 2026-08-22: a standing gear chip spent
+  // rail width on chrome); the full modal stays one click away behind the editor's
+  // "All options…" control and Actions -> Configure, so a rail configured down to
+  // nothing still has a way back into configuration.
   const strip = source('RailStrip.tsx')
   const popover = source('RailOverflowPopover.tsx')
-  assert.ok(strip.includes('aria-label="Customize actions"'), 'the Action rail gear must open the in-place editor')
-  assert.ok(popover.includes('aria-label="Customize actions"'), 'the overflow popover must reach the same editor')
+  assert.ok(!strip.includes('class="rail-config"'), 'the strip must not draw its own gear')
+  assert.ok(strip.includes('onConfigure={onConfigure}'), 'the row must hand Configure to its popover')
+  assert.ok(popover.includes('aria-label="Customize actions"'), 'the overflow popover must reach the editor')
   assert.ok(terminal.includes('onConfigure={index===renderedRailRows.length-1?()=>setRailEditOpen(true):undefined}'))
   assert.ok(terminal.includes('<RailInlineEditor'), 'the gear flips the rail area into RailInlineEditor')
   assert.ok(inline.includes('onOpenFull'), 'the in-place editor must reach the full modal')

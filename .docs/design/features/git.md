@@ -436,7 +436,8 @@ uncommitted work together.
 
 ### Refresh and mutation boundary
 
-- Overview measurement is explicit drawer work with concurrency four and does not expand the five-second session monitor.
+- Overview measurement is explicit drawer work with concurrency twelve (raised from four 2026-08-22: the reads are independent per-worktree queries, and at four a 25-worktree map paid ~0.7s of pure spawn serialization per request) and does not expand the five-second session monitor.
+- The Map additionally renders stale-while-revalidate: the last good overview per Project is kept module-scoped on the client and painted immediately on mount or Project switch, with the ordinary refresh revalidating it underneath - the tab is not `keepMounted`, so without this every open paid a blank round trip for an answer that rarely changed.
 - Concurrent overview requests for the same Project root, comparison ref, and worktree scope share one daemon computation.
   A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again.
 

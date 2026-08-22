@@ -2159,12 +2159,16 @@ body {
 /* How opaque every command-rail overlay is: the overflow popover, and each of the drop-ups.
    One number rather than one per surface, and a *measured* one rather than a taste one -
    `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every
-   theme in this file and requires it both to cost no theme its 4.5:1 and to stay under 95%,
-   so a later contrast fix cannot pass by quietly going opaque.
-   90% is set by the *single-layer* case: a drop-up row is transparent over its panel, so its
-   label sits on one layer of this, where the popover's chip labels sit on two and would have
-   been happy at 86%. The binding surface owns the number and the other inherits it. */
-:root{--rail-glass:90%}
+   theme in this file, and requires it to stay under 95% so a later contrast fix cannot pass
+   by quietly going opaque.
+   80% is a deliberate operator trade (2026-08-22): 90% was the exact floor at which NO theme
+   lost 4.5:1 over a worst-case buffer, and at 90% the glass read as a solid panel. At 80%
+   the shipped default/dark/light palettes still clear a hard 4.5:1 on both extremes (the
+   test asserts it), and every theme holds at least 3.3:1 - above the 3:1 large-text floor
+   the test now pins for all of them. The handful that dip under 4.5 are the novelty
+   palettes (virtual-boy, game-boy, commodore-64) over a solid white buffer, the same
+   palettes that sit nearest the line on the opaque rail. */
+:root{--rail-glass:80%}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
   /* With no blur behind it the glass is a flat wash of whatever pixel happens to be under
      each letter, which is neither the look nor a contrast anyone can reason about. */
@@ -2253,7 +2257,6 @@ body {
 .mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 /* No `margin-left:auto` any more: the trailing cluster owns the alignment now, and an auto
    margin inside it would push the gear away from the `+N` chip it is supposed to sit beside. */
-.terminal-action-rail .rail-config{min-width:30px!important;padding:0 var(--rail-chip-pad);font-size:12px}
 /* A rail picker's drop-up. Positioned by `anchoredPopoverStyle` (the same math the
    account and resource popovers use), which sets left/bottom/width and a max-height
    against the space above the trigger.

@@ -158,6 +158,21 @@ type Props={
 
 type ReviewState={files:ReviewFileChange[];locator:ReviewLocator;initialPath:string;truncated:boolean;provenance:GitProvenance[]}
 
+/** The last good overview per Project, for stale-while-revalidate rendering on mount.
+ *  Bounded: a handful of Projects is the working set, and an evicted entry only costs
+ *  the blank-first-paint this cache exists to remove. */
+const OVERVIEW_CACHE=new Map<string,GitWorktreeOverview>()
+const OVERVIEW_CACHE_LIMIT=8
+function rememberOverview(projectId:string,overview:GitWorktreeOverview){
+  OVERVIEW_CACHE.delete(projectId)
+  OVERVIEW_CACHE.set(projectId,overview)
+  while(OVERVIEW_CACHE.size>OVERVIEW_CACHE_LIMIT){
+    const oldest=OVERVIEW_CACHE.keys().next().value
+    if(oldest===undefined)break
+    OVERVIEW_CACHE.delete(oldest)
+  }
+}
+
 function SummaryHeader({title,summary}:{title:string;summary:ReviewChangeSummary}) {
   return <h4><span>{title}</span><small>{summary.total} file{summary.total===1?'':'s'} · +{summary.additions} -{summary.deletions}{summary.binaryFiles?` · ${summary.binaryFiles} binary`:''}</small></h4>
 }
@@ -175,7 +190,15 @@ function ReviewGroup(props:{
 
 export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFile,onSendToAgent,onProjectUpdated,onOpenSession,onOpenHistory}:Props) {
   const [links,setLinks]=useState<SessionLinkMenu|null>(null)
-  const [overview,setOverview]=useState<GitWorktreeOverview|null>(null)
+  // Stale-while-revalidate: the tab is not `keepMounted`, so every open is a cold mount,
+  // and without this the map is blank for a full network+git round trip that usually
+  // returns what the reader was just looking at. The last good overview per Project is
+  // rendered immediately and `refresh()` still runs underneath; `busy` tells the truth
+  // about the revalidation, and everything derived from a *changed* tree (detail rows,
+  // pending removals, selections) is reconciled by the refresh exactly as before.
+  // Same shape as `projectAutomations.ts`; bounded, module-scoped, dropped on daemon
+  // restart with the page.
+  const [overview,setOverview]=useState<GitWorktreeOverview|null>(()=>project?OVERVIEW_CACHE.get(project.id)??null:null)
   const [graph,setGraph]=useState<GitGraph|null>(null)
   const [provenance,setProvenance]=useState<GitProvenance[]>([])
   const [provenanceGroups,setProvenanceGroups]=useState<ProvenanceGroup[]>([])
@@ -254,7 +277,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       if(mine!==generation.current)return
       const parsed=parseGitOverview(raw)
       if(!parsed)throw new Error('The daemon returned an invalid Git overview.')
-      setOverview(parsed);setError('');setPreview({});setNotRepository(false)
+      setOverview(parsed);rememberOverview(project.id,parsed);setError('');setPreview({});setNotRepository(false)
       // Every expanded row's file lists are now a statement about a tree that has moved
       // (that is what brought us here), so they are dropped rather than redrawn. The
       // effect below re-reads whichever one is still open.
@@ -328,7 +351,9 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   },[project?.id])
 
   useEffect(()=>{
-    setOverview(null);setGraph(null);setProvenance([]);setProvenanceGroups([]);setRefMoves([]);setProvenanceError('');setExpandedTree('');setTreeDetail({});setDetailError('');setTreeFilter('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
+    // On a Project switch the map seeds from the cache instead of blanking, for the same
+    // reason the mount does; `refresh()` below revalidates it immediately.
+    setOverview(project?OVERVIEW_CACHE.get(project.id)??null:null);setGraph(null);setProvenance([]);setProvenanceGroups([]);setRefMoves([]);setProvenanceError('');setExpandedTree('');setTreeDetail({});setDetailError('');setTreeFilter('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
     void refresh()
     // Two filters on one listener, and both are the same defect: work done for a
     // repository nobody is looking at. `git_changed` is raised by *every* session's
