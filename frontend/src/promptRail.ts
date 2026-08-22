@@ -14,7 +14,7 @@
 //    opens Prompt templates in the Actions drawer with the template preselected and its fields
 //    expanded, which is the surface that already knows how to fill them.
 //
-// Both hosts (the strip in TerminalPane, the Quick actions grid in Actions) route through
+// Both hosts (the rail in TerminalPane and the Prompt templates list in Actions) route through
 // here, and both insert over the `mux:terminal-action` bus so the pane stays the
 // single owner of terminal writes.
 

@@ -32,17 +32,17 @@ import type { Project } from './types'
 
 // The Configure Actions surface.
 //
-// Progressive disclosure, top to bottom: one device's two layouts first (the
-// thing most visits came to rearrange), custom-action creation collapsed below
-// them, and the complete catalog collapsed at the bottom. One device at a time —
+// Progressive disclosure, top to bottom: one device's rail first (the thing most
+// visits came to rearrange), custom-action creation collapsed below it, and the
+// complete catalog collapsed at the bottom. One device at a time -
 // defaulting to the device this browser *is* — with a Desktop/Mobile switch,
 // because two columns of chips doubled the visual load for the rare cross-device
 // drag that the catalog's placement checkboxes already cover.
 //
 // The catalog is the index of everything that exists. A collapsed row is a
 // name, what it injects, and a plain-words summary of where it is placed;
-// expanding it exposes the actual controls — four placement checkboxes and a
-// named checkbox per harness — instead of the abbreviated badge code they
+// expanding it exposes the actual controls - one placement checkbox per device
+// and a named checkbox per harness - instead of the abbreviated badge code they
 // replaced.
 //
 // Scopes: the Global layout is shared by every project. A project selected in
@@ -54,10 +54,9 @@ import type { Project } from './types'
 //
 // Everything commits immediately, like the other device-settings domains.
 
-const SURFACE_LABEL: Record<RailSurface, string> = { strip: 'Rail', panel: 'Drawer' }
+const SURFACE_LABEL: Record<RailSurface, string> = { strip: 'Rail' }
 const SURFACE_HINT: Record<RailSurface, string> = {
   strip: 'the button strip under the terminal',
-  panel: 'Quick actions in the Actions tab',
 }
 const DEVICE_LABEL: Record<RailDevice, string> = { desktop: 'Desktop', mobile: 'Mobile' }
 const OTHER_DEVICE: Record<RailDevice, RailDevice> = { desktop: 'mobile', mobile: 'desktop' }
@@ -108,7 +107,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
   // Prompt templates the rail can point at, scoped like the layout being edited: a
   // Project scope lists global plus that Project's own, and the Global scope lists
   // global alone. The confinement is structural rather than a warning, because a
-  // Project template pinned to the shared layout is a button that inserts nothing
+  // Project template placed on the shared layout is a button that inserts nothing
   // in every other Project (`prompt-library.md`) — which is also why this editor
   // opens on a detached Project only when the operator came from one.
   useEffect(() => {
@@ -200,7 +199,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     return `${builtin ? item.type : `custom ${item.type}`}${preview ? ` · ${preview}` : ''}${item.submit && item.type !== 'prompt' ? ' · sends' : ''}`
   }
 
-  /** Plain-words "where is it": `Desktop rail + drawer · Mobile drawer`. */
+  /** Plain-words "where is it": `Desktop rail · Mobile rail`. */
   const placementSummary = (itemId: string): string => {
     const counts = railPlacementCounts(shown, itemId)
     const parts: string[] = []
@@ -344,7 +343,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
         {scope && kind !== 'fork' && <span class={`rail-origin${projectRow ? ' project' : ''}`} title={projectRow ? `Only ${projectName} has this row` : 'Shared with every project — edits here change all of them'}>{projectRow ? 'this project' : 'shared'}</span>}
         <input
           value={row.label || ''}
-          placeholder={`Row ${indexInGroup + 1}${surface === 'panel' ? ' (name shows as a heading)' : ''}`}
+          placeholder={`Row ${indexInGroup + 1}`}
           aria-label={`Name for row ${indexInGroup + 1}`}
           onChange={event => commitConfig(setRailRowLabel(resolved.config, device, surface, row.id, event.currentTarget.value))}
         />
@@ -496,7 +495,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     {showIntro && <div class="rail-intro-callout" role="note">
       <strong>How this works</strong>
       <ul>
-        <li><b>Rail</b> is the button strip under every terminal. <b>Drawer</b> is the Quick actions section of the Actions tab — the overflow with room for labels.</li>
+        <li><b>Rail</b> is the button strip under every terminal. Its drawer button opens the complete row when horizontal space is tight.</li>
         <li>Desktop and mobile each keep their own arrangement. Pick a device, then drag buttons between rows, or remove them with ×.</li>
         <li>Everything that can be placed lives under <b>All actions</b> below — open one to choose where it appears and which sessions show it.</li>
       </ul>
@@ -599,7 +598,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     </section>}
 
     <div class="rail-device">
-      {RAIL_SURFACES.map(surface => renderSurface(surface))}
+      {renderSurface('strip')}
     </div>
 
     <RailAddForm
@@ -609,7 +608,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
       scopeName={projectName}
       onAdd={(item, target) => {
         commitBlob(addScopedRailItem(currentRailBlob(), scope || undefined, item, target))
-        setNote(`Added “${item.label}” to the ${item.defaultSurface === 'strip' ? 'Rail' : 'Drawer'} on both devices.`)
+        setNote(`Added “${item.label}” to the Rail on both devices.`)
       }}
     />
 
@@ -634,7 +633,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
   </section>
 }
 
-type AddDraft = { type: RailItemType; name: string; label: string; submit: boolean; surface: RailSurface; target: RailAddTarget }
+type AddDraft = { type: RailItemType; name: string; label: string; submit: boolean; target: RailAddTarget }
 
 /** Adding an action places it into *both* device layouts, because a button you
  *  must remember to add twice is a button that never reaches the phone. In a
@@ -651,7 +650,7 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
   onAdd: (item: RailItem, target: RailAddTarget) => void
 }) {
   const backends = allRailBackends()
-  const [draft, setDraft] = useState<AddDraft>({ type: 'skill', name: '', label: '', submit: true, surface: 'panel', target: projectName ? 'project' : 'global' })
+  const [draft, setDraft] = useState<AddDraft>({ type: 'skill', name: '', label: '', submit: true, target: projectName ? 'project' : 'global' })
   // Entering or leaving a project scope re-defaults the target without touching
   // the rest of a half-typed draft.
   useEffect(() => { setDraft(current => ({ ...current, target: projectName ? 'project' : 'global' })) }, [projectName])
@@ -683,7 +682,6 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
         label: typed || template.title,
         ...(typed ? {} : { autoLabel: true }),
         promptKey: template.key,
-        defaultSurface: draft.surface,
         backends: restricted,
       }, target)
       setDraft({ ...draft, name: '', label: '' })
@@ -693,8 +691,8 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
     const label = draft.label.trim() || (draft.type === 'text' ? base.slice(0, 12) : base)
     const id = uniqueId(`custom:${draft.type}:${base}`)
     onAdd(draft.type === 'text'
-      ? { id, type: 'text', label, text: name, submit: draft.submit, defaultSurface: draft.surface }
-      : { id, type: draft.type, label, text: base, submit: draft.submit, defaultSurface: draft.surface }, target)
+      ? { id, type: 'text', label, text: name, submit: draft.submit }
+      : { id, type: draft.type, label, text: base, submit: draft.submit }, target)
     setDraft({ ...draft, name: '', label: '' })
   }
 
@@ -719,10 +717,6 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
         ]}/></label>
         : <label>{draft.type === 'text' ? 'Text to insert' : 'Name'}<input value={draft.name} placeholder={draft.type === 'skill' ? 'commit' : draft.type === 'slash' ? 'new' : 'literal text'} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
       <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>
-      <label>Place in<Dropdown value={draft.surface} onChange={value => setDraft({ ...draft, surface: value as RailSurface })} options={[
-        { value: 'panel', label: 'Drawer, on both devices' },
-        { value: 'strip', label: 'Rail, on both devices' },
-      ]}/></label>
       {projectName && <label>For<Dropdown value={draft.target} onChange={value => setDraft({ ...draft, target: value as RailAddTarget })} options={[
         { value: 'project', label: `${projectName} only` },
         { value: 'global', label: 'All projects' },
@@ -741,7 +735,7 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
       belong on that Project’s layout — pick it in “Editing” above.
     </p>}
     <p class="rail-add-note">
-      Tip: skills and prompt templates can also be pinned straight from their lists in the Actions tab.
+      Add skills and prompt templates here when they need dedicated rail buttons.
       Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands
       inject <code>/name</code> in both. Built-in actions can be placed and filtered, but not edited.
     </p>

@@ -1,10 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren } from 'preact'
-import { allRailBackends, isBuiltinRailId, railPayload, resolveRailRows, type RailBackend, type RailItem } from './commandRail'
-import { pinPrompt, pinSkill, pinnedPromptItem, pinnedSkillItem, removeScopedRailItem, resolveRail } from './railScope'
-import { activatePromptRailItem, railItemLabel } from './promptRail'
-import { usePromptTitles } from './promptTitles'
-import { currentProfile, currentRailBlob, loadRailConfig, saveRailBlob } from './deviceSettings'
+import type { RailBackend } from './commandRail'
 import { api } from './api'
 import {
   filterSkills, groupSkills, inventoryNote, skillLabel, skillTitle,
@@ -15,11 +11,10 @@ import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
 import { ClipboardTab } from './ClipboardPanel'
 import { drawerSectionTarget } from './drawerSegments'
-import type { PromptTemplate } from './promptTemplates'
 
-// The Actions drawer combines four catalogs that can act on the focused session:
-// the configured Drawer half of the action layout, the live skill inventory,
-// reusable prompt templates, and clipboard history. They share a destination, not an
+// The Actions drawer combines three catalogs that can act on the focused session:
+// the live skill inventory, reusable prompt templates, and clipboard history.
+// They share a destination, not an
 // identity, so each remains an independently collapsible section.
 //
 // Clipboard was its own tab until the drawer consolidation. It belongs here by verb —
@@ -29,18 +24,8 @@ import type { PromptTemplate } from './promptTemplates'
 // folding in the surface people reach for fastest cost no extra click. A segment would
 // have made "insert the thing I just copied" a three-step navigation.
 //
-// The strip under a terminal holds what you hammer (Esc, Enter, arrows, ^C); it is
-// horizontally scarce, which is why several built-ins used to ship switched off.
-// Everything else — extra keys, skills, slash commands, literal text snippets —
-// lives here, where room is not the constraint and items can carry full labels.
-//
-// This is the `panel` surface of the rail layout, and like the strip it is
-// arranged per device: the rows below come from the desktop or mobile layout,
-// whichever this browser is. Rows are the user's own grouping; within each one
-// the terminal keys still split into their own dense grid, because a 44px key and
-// a labelled command want different cell sizes.
-//
-// Below the configured items sits the *discovered* half: the skills the focused
+// The command rail owns placed shortcuts and its permanent drawer popover exposes
+// the complete configured row. This tab owns the discovered catalogs instead: the skills the focused
 // session's CLI can actually see, read off disk by the daemon from the same
 // directories Claude and Codex read. Those are not rail items and are never
 // configured here — the list is a window onto the CLI's own state, so it is
@@ -66,7 +51,7 @@ type Props = Pick<PromptsTabProps, 'project' | 'backend' | 'onInsert' | 'onManag
 }
 
 /** The tab's sections, in draw order. Mirrored by the `actions` rows in `drawerSegments.ts`. */
-const ACTION_SECTION_IDS = ['quick', 'skills', 'prompts', 'clipboard'] as const
+const ACTION_SECTION_IDS = ['skills', 'prompts', 'clipboard'] as const
 type ActionSectionId = typeof ACTION_SECTION_IDS[number]
 const ACTION_SECTION_KEY = 'mux.actions.sections.v1'
 
@@ -110,58 +95,13 @@ function dispatch(sessionId: string, action: string, detail: Record<string, unkn
   window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId, action, ...detail } }))
 }
 
-/** Built-in action items the drawer can run; the rest are injection types. */
-const ACTION_LABELS: Record<string, string> = {
-  attach: 'Attach',
-  paste: 'Paste',
-  copyReply: 'Copy reply',
-  copyResume: 'Copy resume',
-  branch: 'Branch',
-  relaunch: 'Relaunch',
-  toggleKeyboard: 'Keyboard',
-  clipboardHistory: 'Clipboard',
-  copyInput: 'Copy input',
-  endSession: 'End session',
-}
-
 export function ActionsTab({ session, onDone, onConfigureActions, project, backend: promptBackend, onInsert, onManage, sessions, onSend, preselect, onClipboardInsert, onClipboardDone, onOpenSettings, reveal }: Props) {
-  const [note, setNote] = useState('')
-  // End session is the one item here that arms a confirm rather than acting, so this
-  // tab mirrors the workspace's armed id (broadcast by App) to label the second click.
-  const [killArmed, setKillArmed] = useState(false)
   const [inventory, setInventory] = useState<SkillInventory | null>(null)
   const [skillsError, setSkillsError] = useState('')
   const [query, setQuery] = useState('')
   const [sections, setSections] = useState<Record<ActionSectionId, boolean>>(initialSectionState)
   const backend = (session?.backend || 'shell') as RailBackend
   const isAgent = isAgentBackend(backend)
-  // Bumped when any surface edits the Action config, so Quick actions and the
-  // pin toggles below re-read it without a remount.
-  const [railRev, setRailRev] = useState(0)
-  useEffect(() => {
-    const on = () => setRailRev(value => value + 1)
-    window.addEventListener('mux:settings-changed', on)
-    return () => window.removeEventListener('mux:settings-changed', on)
-  }, [])
-  const rows = useMemo(
-    () => resolveRailRows(loadRailConfig(session?.project_id), 'panel', { device: currentProfile(), backend }),
-    [session?.project_id, backend, railRev],
-  )
-  // Effective catalog for the pin toggles: pinning creates a placed Action
-  // button in one tap (`railScope.ts`), scoped to the project when the skill or
-  // template itself is project-scoped.
-  const railResolved = useMemo(() => resolveRail(currentRailBlob(), session?.project_id), [session?.project_id, railRev])
-  // Live titles for prompt buttons pinned without a name of their own; skipped
-  // entirely when this device's Drawer layout carries none (`promptTitles.ts`).
-  const promptTitles = usePromptTitles(
-    session?.project_id,
-    rows.some(row => row.entries.some(entry => entry.item.type === 'prompt' && entry.item.autoLabel)),
-  )
-  useEffect(() => {
-    const on = (event: Event) => setKillArmed((event as CustomEvent<string | null>).detail === session?.id)
-    window.addEventListener('mux:kill-armed', on)
-    return () => window.removeEventListener('mux:kill-armed', on)
-  }, [session?.id])
 
   // A generation guard rather than a cancel flag: switching the focused session
   // fires a second fetch while the first is still in flight, and the newest must
@@ -219,38 +159,6 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     })
   }
 
-  const run = (item: RailItem) => {
-    // Prompt templates are fetched from the library at click time, so this one path
-    // is asynchronous: it closes the drawer only once the insert (or the hand-off to
-    // the Prompt templates section for variable filling) has actually happened.
-    if (!session) return
-    if (item.type === 'prompt') {
-      void activatePromptRailItem(item, { sessionId: session.id, projectId: session.project_id })
-        .then(result => {
-          if (result.status === 'error') setNote(result.message)
-          else if (result.status === 'inserted') onDone()
-        })
-      return
-    }
-    if (item.type === 'key') dispatch(session.id, 'sendKey', { text: item.bytes || '' })
-    else if (item.type === 'action') {
-      // `clipboardHistory` now names the Clipboard *section of this tab*, so a button
-      // for it here would scroll the surface it is already on. It stays filtered out of
-      // the grid below for that reason. Outside the drawer it is still a real action:
-      // the terminal strip's Clip key runs `clipboard.open`, which opens this tab and
-      // reveals that section.
-      dispatch(session.id, item.action || '', {})
-      // End session only *arms* a confirm on the first click; closing the drawer here
-      // would leave nowhere to make the second one before the window lapses.
-      if (item.action === 'endSession' && !killArmed) return
-    } else {
-      const payload = railPayload(item, backend)
-      if (!payload) { setNote(`${item.label} has no payload configured.`); return }
-      dispatch(session.id, 'insertText', { text: payload, submit: !!item.submit })
-    }
-    onDone()
-  }
-
   const insertSkill = (skill: AgentSkill) => {
     if (!session) return
     // Inserted, never submitted: a skill invoked bare runs with no context, and the
@@ -259,61 +167,6 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     onDone()
   }
 
-  // One-tap pinning: a discovered skill (or a prompt template, below) becomes a
-  // placed Quick-actions button on both devices without opening the editor. A
-  // project-scoped source pins to the project; everything else pins globally.
-  const togglePinSkill = (skill: AgentSkill, pinned: RailItem | null) => {
-    const blob = currentRailBlob()
-    if (pinned) {
-      if (isBuiltinRailId(pinned.id)) { setNote(`“${pinned.label}” is a built-in button — manage it from Configure Actions.`); return }
-      void saveRailBlob(removeScopedRailItem(blob, session?.project_id, pinned.id))
-      return
-    }
-    void saveRailBlob(pinSkill(blob, session?.project_id, {
-      name: skill.name,
-      label: skillLabel(skill),
-      kind: skill.kind,
-      backend,
-      projectScoped: skill.scope === 'project',
-    }))
-  }
-
-  const promptPin = {
-    isPinned: (template: PromptTemplate) => !!pinnedPromptItem(railResolved.config, template.key),
-    toggle: (template: PromptTemplate) => {
-      const blob = currentRailBlob()
-      const existing = pinnedPromptItem(railResolved.config, template.key)
-      if (existing) {
-        void saveRailBlob(removeScopedRailItem(blob, session?.project_id, existing.id))
-        return
-      }
-      void saveRailBlob(pinPrompt(blob, session?.project_id, {
-        key: template.key,
-        id: template.id,
-        title: template.title,
-        backends: template.backends,
-        allBackends: allRailBackends(),
-        projectScoped: template.scope === 'project',
-      }))
-    },
-  }
-
-  // These built-ins are shortcuts *to* this drawer — Clipboard, Skills and Prompts
-  // open a rail drop-up whose own first row lands on the section already rendered
-  // below, and Actions opens the drawer itself. Running any of them from in here is
-  // a round trip to where the reader is standing, so they are filtered out of every
-  // row entirely.
-  const visibleRows = session ? rows
-    .map(row => ({
-      ...row,
-      entries: row.entries.filter(entry => !['clipboardHistory', 'skills', 'prompts', 'openActions'].includes(entry.item.action || '') && (entry.item.action !== 'attach' || isAgent)),
-    }))
-    .filter(row => row.entries.length) : []
-  const anyVisible = visibleRows.some(row => row.entries.length)
-  const actionDisabled = (item: RailItem) => item.action === 'attach' && (session?.state === 'exited' || session?.state === 'crashed')
-  const label = (item: RailItem) =>
-    item.action === 'endSession' && killArmed ? 'Confirm ✓'
-      : item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : railItemLabel(item, promptTitles)
   const matched = inventory ? filterSkills(inventory.skills, query) : []
   const groups = groupSkills(matched)
   const disclosure = inventoryNote(inventory)
@@ -322,34 +175,9 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   // and says so in more words ("Session: <name>"), and the harness this tab is resolved
   // against is stated where it decides anything - the Skills section's own header.
   return <div class="actions-tab">
-    <ActionSection
-      id="quick"
-      title="Quick actions"
-      detail="configured Drawer layout"
-      expanded={sections.quick}
-      onExpanded={setSectionExpanded}
-      action={{ label: 'Configure', title: 'Configure Desktop and Mobile Action rail and Drawer layouts', run: onConfigureActions }}
-    >
-    {!session && <p class="drawer-empty">Quick actions target a terminal. Focus one to use this device’s configured Drawer layout.</p>}
-    {session && visibleRows.map(row => {
-      const keys = row.entries.filter(entry => entry.item.type === 'key')
-      const rest = row.entries.filter(entry => entry.item.type !== 'key')
-      return <section class="drawer-command-row" key={row.id}>
-        {row.label && <h4 class="drawer-command-row-label">{row.label}</h4>}
-        {rest.length > 0 && <div class="drawer-grid" role="group" aria-label={row.label ? `${row.label} actions` : 'Session actions'}>
-          {rest.map(({ item, key }) => <button key={key} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} disabled={actionDisabled(item)} title={actionDisabled(item)?'Files cannot be attached to an ended session':item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
-            <span>{label(item)}</span>
-            {item.type !== 'action' && <small>{item.type === 'skill' ? 'skill' : item.type === 'slash' ? 'command' : item.type === 'prompt' ? 'prompt' : 'text'}{item.type !== 'prompt' && item.submit ? ' · sends' : ''}</small>}
-          </button>)}
-        </div>}
-        {keys.length > 0 && <div class="drawer-grid keys" role="group" aria-label={row.label ? `${row.label} keys` : 'Terminal keys'}>
-          {keys.map(({ item, key }) => <button key={key} title={item.title || item.label} onClick={() => run(item)}><span>{item.label}</span></button>)}
-        </div>}
-      </section>
-    })}
-    {session && !anyVisible && <p class="drawer-empty">Nothing is assigned to this device’s Drawer layout. Open Configure Actions to add some.</p>}
-    {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
-    </ActionSection>
+    <div class="actions-tab-toolbar">
+      <button type="button" title="Choose command rail actions, order, rows, and button appearance" onClick={onConfigureActions}>Configure command rail</button>
+    </div>
     <ActionSection
       id="skills"
       title="Skills"
@@ -381,9 +209,7 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
         {inventory && !!inventory.skills.length && !matched.length && <p class="drawer-empty">No skill matches “{query}”.</p>}
         {groups.map(group => <div key={group.scope} class="drawer-skill-group">
           <h5>{group.label}</h5>
-          {group.skills.map(skill => {
-            const pinned = pinnedSkillItem(railResolved.config, skill.name, backend)
-            return <div class="drawer-skill-row" key={skill.path}>
+          {group.skills.map(skill => <div class="drawer-skill-row" key={skill.path}>
               <button
                 class={skill.shadowed_by ? 'shadowed' : undefined}
                 title={skillTitle(skill)}
@@ -397,16 +223,8 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
                 </span>
                 <small>{skill.short_description || skill.description || skill.origin}</small>
               </button>
-              <button
-                class={`skill-pin${pinned ? ' on' : ''}`}
-                aria-pressed={!!pinned}
-                title={pinned
-                  ? `Remove the “${pinned.label}” button from your Actions`
-                  : `Add a button for this ${skill.kind === 'command' ? 'command' : 'skill'} to Quick actions on both devices${skill.scope === 'project' ? ' — this project only' : ''}`}
-                onClick={() => togglePinSkill(skill, pinned)}
-              >{pinned ? 'Pinned' : 'Pin'}</button>
             </div>
-          })}
+          )}
         </div>)}
         {disclosure && <p class="drawer-skill-note">{disclosure}</p>}
       </div>
@@ -430,7 +248,6 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
         sessions={sessions}
         onSend={onSend}
         preselect={preselect}
-        pin={promptPin}
       />
     </ActionSection>
     {/* Last, and the only section that is not a *catalog*: the others are things you keep,

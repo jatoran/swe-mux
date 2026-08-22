@@ -2445,15 +2445,12 @@ body {
   .commandrail-settings .rail-add-form label{flex:1 1 140px}
   .commandrail-settings .rail-detail-group label.check{min-height:calc(30px*var(--ui-scale))}
 }
-/* --- pin toggles (Skills and Prompt templates in the Actions tab) ----------- */
-.actions-tab button.skill-pin{flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:calc(24px*var(--ui-scale));padding:2px 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
-.actions-tab button.skill-pin.on{border-color:var(--green);color:var(--green)}
-@media(hover:hover){.actions-tab button.skill-pin:hover{border-color:var(--accent);color:var(--text)}}
 .drawer-skill-row{display:flex;align-items:stretch;gap:4px}
 .drawer-skill-row>button:first-child{flex:1 1 auto;min-width:0}
-.clipboard-entry.has-pin{display:flex;align-items:stretch;gap:4px;padding-right:6px}
-.clipboard-entry.has-pin>.clipboard-entry-body{flex:1 1 auto;min-width:0}
-.actions-tab button.skill-pin.edit{min-width:36px}
+.clipboard-entry.has-actions{display:flex;align-items:stretch;gap:4px;padding-right:6px}
+.clipboard-entry.has-actions>.clipboard-entry-body{flex:1 1 auto;min-width:0}
+.actions-tab button.prompt-row-edit{flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:calc(24px*var(--ui-scale));padding:2px 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.actions-tab button.prompt-row-edit:hover{border-color:var(--accent);color:var(--text)}}
 /* Authoring inside the drawer: the shared prompt form replaces the list rather
    than expanding under a row, so it owns the column and the scroll. */
 .prompt-drawer-search{display:flex;align-items:center;gap:6px}
@@ -2498,7 +2495,6 @@ body {
 .terminal-action-rail button.rail-danger{color:var(--muted)}
 @media(hover:hover){.terminal-action-rail button.rail-danger:hover:not(:disabled){border-color:var(--red);color:var(--red)}}
 .terminal-action-rail button.rail-danger.confirming{border-color:var(--red);background:color-mix(in srgb,var(--red) 22%,var(--panel2));color:var(--red)}
-.drawer-grid button.confirming{border-color:var(--red);color:var(--red)}
 .action-editor-layer{z-index:82}.action-editor-modal{width:min(1180px,calc(100vw - 24px));height:min(860px,calc(100dvh - 24px));display:grid;grid-template-rows:auto minmax(0,1fr) auto}.action-editor-body{min-height:0;overflow:auto;padding:14px 18px}.action-editor-body>.commandrail-settings>h3{margin-top:0}
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored
@@ -3925,21 +3921,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-sync-card>header small{overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:8px;white-space:nowrap}
 .agent-context-sync-card>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
 .agent-context-sync-modal .agent-context-confirm{border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line))}
-/* Command grid: labelled buttons, unlike the strip's abbreviated keys. */
-/* One section per configured panel row. A row's optional name becomes a heading;
-   an unnamed row is just a visual break, so it gets a rule rather than a label. */
-.drawer-command-row+.drawer-command-row{border-top:1px solid var(--line)}
-.drawer-command-row-label{margin:8px 9px 0;color:var(--muted);font-size:9px;letter-spacing:.06em;text-transform:uppercase}
-.drawer-command-row-label+.drawer-grid{padding-top:5px}
-.drawer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:5px;padding:8px 9px}
-.drawer-grid.keys{grid-template-columns:repeat(auto-fill,minmax(58px,1fr));border-top:1px solid var(--line)}
-/* The keys grid's rule separates it from the commands above it in the same row;
-   a row that is only keys already has the section's own rule. */
-.drawer-command-row>.drawer-grid.keys:first-child{border-top:0}
-.drawer-grid button{min-height:38px;display:grid;align-content:center;gap:2px;padding:5px 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
-.drawer-grid.keys button{place-items:center;text-align:center}
-.drawer-grid button:hover{border-color:var(--accent)}
-.drawer-grid button>small{color:var(--muted);font-size:8px}
 /* Discovered agent skills: a read-only list, so rows rather than the configured
    items' grid — a name plus the description that decides whether you want it. */
 .drawer-skills{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;border-top:1px solid var(--line)}
@@ -3963,6 +3944,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .skill-flag.warn{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
 .drawer-skill-note{margin:0;padding:8px 9px;color:var(--muted);font-size:8px;line-height:1.45}
 .actions-tab{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.actions-tab-toolbar{display:flex;justify-content:flex-end;padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--line)}
+.actions-tab-toolbar>button{min-height:calc(28px*var(--ui-scale));padding:3px 9px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.actions-tab-toolbar>button:hover{border-color:var(--accent)}}
 .actions-section+.actions-section{border-top:2px solid var(--line)}
 .actions-section-header{position:sticky;top:0;z-index:5;display:flex;align-items:stretch;min-height:34px;background:linear-gradient(var(--bg),var(--bg));box-shadow:inset 3px 0 color-mix(in srgb,var(--muted) 60%,transparent);border-bottom:1px solid var(--line)}
 .actions-section:not(.expanded)>.actions-section-header{border-bottom-color:transparent}
@@ -4257,7 +4241,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
      the selected tab auto-scrolls into view while the close target stays fixed. */
   .drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px;max-width:none}
   .drawer-tabs button svg{width:19px;height:19px}
-  .drawer-grid button{min-height:46px}
   .drawer-fields input{min-height:38px;font-size:16px}
   .drawer-actions button{min-height:40px}
   .agent-context-header button,.agent-context-disclosure button,.agent-context-confirm button,.agent-context-sync-card button{min-height:38px}

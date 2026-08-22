@@ -16,14 +16,9 @@
 //
 // Row creation and catalog additions cannot be routed by diffing (a brand-new
 // row has no recorded owner), so they go through the dedicated scoped helpers.
-//
-// Pinning lives here too: turning a discovered skill or a prompt template into a
-// placed catalog item in one step, scoped to the project when the source itself
-// is project-scoped. It exists so the common act — "give this skill a button" —
-// never requires the full editor.
 
 import {
-  isProjectRailDelta, newRailRowId, railConfigFromBlob, railItemVisible, railProjectScopeKind,
+  isProjectRailDelta, newRailRowId, railConfigFromBlob, railProjectScopeKind,
   railRowKey, resolveDeltaScope, writeRailConfigBlob,
   RAIL_BLOB_VERSION, RAIL_DEVICES, RAIL_SURFACES,
   type RailBlob, type RailConfig, type RailDeltaMap, type RailDevice, type RailHide,
@@ -176,7 +171,7 @@ export function applyScopedRail(
   const deltaSplices: RailProjectDelta['splices'] = {}
   const deltaHides: RailProjectDelta['hides'] = {}
   for (const device of RAIL_DEVICES) {
-    globalLayouts[device] = { strip: [], panel: [] }
+    globalLayouts[device] = { strip: [] }
     for (const surface of RAIL_SURFACES) {
       const shared: RailRow[] = []
       const own: RailRow[] = []
@@ -333,7 +328,7 @@ export function addScopedRailItem(
   // Refuse an id the effective catalog already has, mirroring addRailCatalogItem.
   if (railConfigFromBlob(blob, projectId).items.some(entry => entry.id === item.id)) return blob || {}
   const current = projectDelta(blob, projectId) || { mode: 'delta' as const }
-  const surface: RailSurface = item.defaultSurface === 'strip' ? 'strip' : 'panel'
+  const surface: RailSurface = 'strip'
   const layouts: RailProjectDelta['layouts'] = { ...(current.layouts || {}) }
   for (const device of RAIL_DEVICES) {
     const deviceRows = { ...(layouts[device] || {}) }
@@ -350,8 +345,8 @@ export function addScopedRailItem(
 
 /** Remove a custom item — wherever it lives — and every button pointing at it,
  *  including the splices that placed it into shared rows. Project rows the
- *  removal empties are pruned, so pinning and unpinning a project action leaves
- *  no stray delta behind and the project returns to plain inheritance. */
+ *  removal empties are pruned, so deleting a project action leaves no stray
+ *  delta behind and the project returns to plain inheritance. */
 export function removeScopedRailItem(blob: RailBlob | undefined, projectId: string | undefined, itemId: string): RailBlob {
   const resolved = resolveRail(blob, projectId)
   if (projectId && resolved.projectItemIds.has(itemId)) {
@@ -438,101 +433,4 @@ export function toggleScopedPlacement(
   }
   const next = toggleRailPlacement(resolved.config, itemId, device, surface)
   return applyScopedRail(blob, projectId, resolved, next)
-}
-
-// ---------------------------------------------------------------------------
-// Pinning discovered skills and prompt templates
-// ---------------------------------------------------------------------------
-
-const bareName = (text: string | undefined): string => (text || '').trim().replace(/^[/$]/, '').toLowerCase()
-
-/** The catalog item a pinned skill (or slash command) resolves to, if any. The
- *  match is by payload, not by id, so a hand-authored button counts as pinned.
- *  With a backend given, only items that backend can see count: a skill pinned
- *  for Claude must read as unpinned in a Codex session, where pinning creates a
- *  second, Codex-restricted button rather than stealing Claude's. */
-export function pinnedSkillItem(config: RailConfig, name: string, backend?: string): RailItem | null {
-  const wanted = bareName(name)
-  if (!wanted) return null
-  return config.items.find(item =>
-    (item.type === 'skill' || item.type === 'slash')
-    && bareName(item.text) === wanted
-    && (!backend || railItemVisible(item, backend))) || null
-}
-
-/** The catalog item a pinned prompt template resolves to, if any. */
-export function pinnedPromptItem(config: RailConfig, promptKey: string): RailItem | null {
-  return config.items.find(item => item.type === 'prompt' && item.promptKey === promptKey) || null
-}
-
-function uniquePinId(config: RailConfig, base: string): string {
-  let candidate = base, suffix = 1
-  while (config.items.some(item => item.id === candidate)) { suffix += 1; candidate = `${base}:${suffix}` }
-  return candidate
-}
-
-export interface SkillPin {
-  /** Bare skill or command name as discovered (no `/`/`$` sigil required). */
-  name: string
-  label: string
-  /** 'command' pins as a literal slash command; anything else as a skill. */
-  kind?: 'skill' | 'command'
-  /** Restrict the button to the harness the skill was discovered for: the same
-   *  name is not guaranteed to exist for any other CLI. */
-  backend: string
-  /** The skill came from the project's own checkout, so the button belongs to
-   *  the project rather than to every project. */
-  projectScoped: boolean
-}
-
-/** Pin a discovered skill: create a drawer button on both devices, scoped to the
- *  project when the skill itself is project-scoped (and the project not forked). */
-export function pinSkill(blob: RailBlob | undefined, projectId: string | undefined, pin: SkillPin): RailBlob {
-  const effective = railConfigFromBlob(blob, projectId)
-  if (pinnedSkillItem(effective, pin.name, pin.backend)) return blob || {}
-  const name = pin.name.trim().replace(/^[/$]/, '')
-  if (!name) return blob || {}
-  const type = pin.kind === 'command' ? 'slash' : 'skill'
-  const item: RailItem = {
-    id: uniquePinId(effective, `pin:${type}:${name}`),
-    type,
-    label: pin.label || name,
-    text: name,
-    submit: false,
-    defaultSurface: 'panel',
-    backends: [pin.backend],
-  }
-  const target: RailAddTarget = pin.projectScoped && projectId ? 'project' : 'global'
-  return addScopedRailItem(blob, projectId, item, target)
-}
-
-export interface PromptPin {
-  key: string
-  id: string
-  title: string
-  /** Backends the template declares; carried as a restriction only when it is one. */
-  backends: readonly string[]
-  allBackends: readonly string[]
-  projectScoped: boolean
-}
-
-/** Pin a prompt template: a pointer at the template (never a copy of its body). */
-export function pinPrompt(blob: RailBlob | undefined, projectId: string | undefined, pin: PromptPin): RailBlob {
-  const effective = railConfigFromBlob(blob, projectId)
-  if (pinnedPromptItem(effective, pin.key)) return blob || {}
-  const restricted = pin.backends.length === pin.allBackends.length ? undefined : [...pin.backends]
-  const item: RailItem = {
-    id: uniquePinId(effective, `pin:prompt:${pin.id}`),
-    type: 'prompt',
-    // Nobody typed this name — the pin toggle takes no input — so it is the
-    // template's title and follows it. `autoLabel` is what says so; without it a
-    // rename would leave the button announcing the old name forever.
-    label: pin.title,
-    autoLabel: true,
-    promptKey: pin.key,
-    defaultSurface: 'panel',
-    ...(restricted ? { backends: restricted } : {}),
-  }
-  const target: RailAddTarget = pin.projectScoped && projectId ? 'project' : 'global'
-  return addScopedRailItem(blob, projectId, item, target)
 }

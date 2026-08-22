@@ -16,7 +16,7 @@
 // by (device, surface, rowId, index) rather than by id.
 
 import {
-  defaultRowId, isBuiltinRailId, itemDefaultSurface, newRailRowId,
+  defaultRowId, isBuiltinRailId, newRailRowId,
   RAIL_DEVICES, RAIL_SURFACES,
   type RailConfig, type RailDevice, type RailItem, type RailRow, type RailSurface,
 } from './commandRail.ts'
@@ -45,7 +45,6 @@ function cloneConfig(config: RailConfig): RailConfig {
   for (const device of RAIL_DEVICES) {
     layouts[device] = {
       strip: cloneRows(config.layouts[device]?.strip || []),
-      panel: cloneRows(config.layouts[device]?.panel || []),
     }
   }
   return { items: config.items.map(item => ({ ...item })), layouts }
@@ -114,7 +113,7 @@ export function duplicateRailEntry(config: RailConfig, ref: RailRef): RailConfig
 export function railPlacementCounts(config: RailConfig, itemId: string): Record<RailDevice, Record<RailSurface, number>> {
   const counts = {} as Record<RailDevice, Record<RailSurface, number>>
   for (const device of RAIL_DEVICES) {
-    counts[device] = { strip: 0, panel: 0 }
+    counts[device] = { strip: 0 }
     for (const surface of RAIL_SURFACES) {
       for (const row of surfaceRows(config, device, surface)) {
         counts[device][surface] += row.items.filter(id => id === itemId).length
@@ -213,9 +212,8 @@ export function addRailCatalogItem(config: RailConfig, item: RailItem, devices: 
   if (config.items.some(entry => entry.id === item.id)) return config
   const next = cloneConfig(config)
   next.items.push({ ...item })
-  const surface = itemDefaultSurface(item)
   for (const device of devices) {
-    const rows = next.layouts[device][surface]
+    const rows = next.layouts[device].strip
     rows[rows.length - 1].items.push(item.id)
   }
   return next

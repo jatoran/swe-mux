@@ -76,7 +76,6 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // Actions. Sections rather than segments: everything here ends in text reaching the
   // focused agent, and a mode switch between "the thing I want to send" and "the other
   // thing I want to send" is a click that buys nothing.
-  { tab: 'actions', id: 'quick', kind: 'section', label: 'Quick actions', title: 'Quick actions - this device’s configured Drawer layout' },
   { tab: 'actions', id: 'skills', kind: 'section', label: 'Skills', title: 'Skills - what the focused session’s CLI can actually see' },
   { tab: 'actions', id: 'prompts', kind: 'section', label: 'Prompt templates', title: 'Prompt templates - saved reusable messages' },
   { tab: 'actions', id: 'clipboard', kind: 'section', label: 'Clipboard', title: 'Clipboard history - insert a recent copy' },

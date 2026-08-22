@@ -1,4 +1,4 @@
-// Data model for configurable Actions across the terminal rail and utility drawer.
+// Data model for configurable Actions on the terminal command rail.
 //
 // Two halves, deliberately separate:
 //
@@ -6,8 +6,7 @@
 //    what it injects, and which backends it means anything for. Identity and
 //    behaviour, nothing about position.
 //  * the **layouts** (`RailConfig.layouts`) say where commands *appear*. One
-//    layout per device class, each holding rows for two surfaces: the `strip`
-//    under the terminal and the `panel` (Quick actions in the Actions drawer).
+//    layout per device class, each holding rows for the rail under the terminal.
 //
 // Desktop and mobile therefore have genuinely independent arrangements: their
 // own rows, their own order, their own membership. A command in no row on a
@@ -19,8 +18,8 @@
 // a rendered entry therefore carries a `key` of its own rather than reusing the
 // item id.
 //
-// Rendering lives in TerminalPane (strip) and ActionsTab (panel), which own the
-// terminal handles and clipboard handlers. This module owns only the pure data
+// Rendering lives in TerminalPane, which owns the terminal handles and clipboard
+// handlers. This module owns only the pure data
 // model, the built-in defaults, the resolve helpers, and the one-way migration
 // from the pre-layout format, so it all stays unit testable under the node
 // type-stripping runner (no browser dependencies here).
@@ -30,14 +29,13 @@ import { allBackendNames, isAgentBackend, skillInvocationPrefix } from './harnes
 
 /** Device classes with independent layouts. Matches `deviceSettings.currentProfile()`. */
 export type RailDevice = 'desktop' | 'mobile'
-/** The two regions a row can belong to: the rail under a terminal, or Quick actions
- *  in the utility drawer. Nothing is hidden by surface - placement in
- *  neither is what hides a command on that device. */
-export type RailSurface = 'strip' | 'panel'
+/** The command rail is the single placement surface. Kept as an address type because
+ *  scoped row operations use the same device/surface/row coordinate throughout. */
+export type RailSurface = 'strip'
 export type RailBackend = string
 
 export const RAIL_DEVICES: readonly RailDevice[] = ['desktop', 'mobile']
-export const RAIL_SURFACES: readonly RailSurface[] = ['strip', 'panel']
+export const RAIL_SURFACES: readonly RailSurface[] = ['strip']
 
 // 'key'   → inject a raw byte sequence (arrow keys, Esc, Ctrl-C, newline…)
 // 'action'→ invoke a named built-in handler (copy/paste/relaunch/toggle…)
@@ -94,17 +92,12 @@ export interface RailItem {
   backends?: RailBackend[]
   /** Restrict a built-in to registered agent harnesses without freezing their names. */
   agentOnly?: boolean
-  /** Which surface this item is seeded into when a layout is first built, and
-   *  where a newly shipped built-in lands in an existing layout. Never consulted
-   *  once the item is placed — the layouts are authoritative from then on. */
-  defaultSurface?: RailSurface
 }
 
-/** One row of a surface. Rows are ordered, and so are the items inside them. */
+/** One rail row. Rows are ordered, and so are the items inside them. */
 export interface RailRow {
   id: string
-  /** Optional caption. Rendered as a group heading in the panel; the strip has
-   *  no room for one, so it is editor-only there. */
+  /** Optional caption used by the editor to identify grouped rows. */
   label?: string
   /** Ordered catalog item ids. Duplicates are legal, here and across rows. */
   items: string[]
@@ -112,7 +105,6 @@ export interface RailRow {
 
 export interface RailDeviceLayout {
   strip: RailRow[]
-  panel: RailRow[]
 }
 
 export type RailLayouts = Record<RailDevice, RailDeviceLayout>
@@ -124,9 +116,9 @@ export interface RailConfig {
 
 export const allRailBackends = (): readonly RailBackend[] => allBackendNames()
 
-/** Custom items (skills, slash commands, literal text) are seeded into the panel:
- *  they are unbounded in number and would otherwise crowd the arrows off the strip. */
-export const DEFAULT_CUSTOM_SURFACE: RailSurface = 'panel'
+/** Every custom item is placed on the rail. Horizontal overflow and the permanent
+ *  drawer popover keep an unbounded catalog reachable without a second layout. */
+export const DEFAULT_CUSTOM_SURFACE: RailSurface = 'strip'
 
 /** Encode line breaks as the composer-newline key understood by both agent TUIs.
  *  Raw LF/CR is submission input in these composers, so multiline editing helpers
@@ -166,10 +158,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'skills', type: 'action', action: 'skills', label: 'Skills', agentOnly: true, title: 'Insert one of this session’s skills' },
   // The prompt library, as a drop-up, beside Clip and Skills because it is the
   // third picker with the same shape. It is the *whole* library rather than the
-  // handful of templates somebody remembered to pin: a per-template pin button
-  // still exists and still earns a template its own dedicated button, but a
-  // library reachable only through pinning means the templates nobody pinned are
-  // three taps away in a drawer.
+  // handful of templates placed as dedicated buttons. A library reachable only
+  // through configured buttons would leave every other template three taps away.
   //
   // Not `agentOnly`: a template is text, and text goes into a shell composer as
   // readily as into an agent's. Templates that mean something to only one harness
@@ -182,7 +172,7 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab', voicePhrases: ['tab', 'press tab', 'tab key'] },
   // Back-tab (ESC[Z). Both agent TUIs read it as "cycle permission mode" — the
   // "(shift+tab to cycle)" footer — and shells treat it as reverse focus/completion,
-  // so it pairs with Tab on the strip rather than hiding in the panel.
+  // so it pairs with Tab on the rail.
   { id: 'shiftTab', type: 'key', bytes: '\x1b[Z', label: '⇧Tab', className: 'term-key', title: 'Shift+Tab (cycle mode / back-tab)', voicePhrases: ['shift tab', 'press shift tab', 'cycle mode'] },
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)', voicePhrases: ['control c', 'press control c'] },
   { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
@@ -220,22 +210,21 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)', voicePhrases: ['restore input', 'yank input'] },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left', voicePhrases: ['left arrow', 'press left'] },
   { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right', voicePhrases: ['right arrow', 'press right'] },
-  // Navigation + editing extras. The strip has no room for them, so they seed into
-  // the panel, where room is not the constraint.
-  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', defaultSurface: 'panel', voicePhrases: ['home key', 'press home'] },
-  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', defaultSurface: 'panel', voicePhrases: ['end key', 'press end'] },
-  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', defaultSurface: 'panel', voicePhrases: ['control home', 'press control home'] },
-  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', defaultSurface: 'panel', voicePhrases: ['control end', 'press control end'] },
+  // Navigation + editing extras remain in the catalog and follow the main rail row.
+  // The permanent drawer popover makes the long tail reachable without a second surface.
+  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', voicePhrases: ['home key', 'press home'] },
+  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', voicePhrases: ['end key', 'press end'] },
+  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', voicePhrases: ['control home', 'press control home'] },
+  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', voicePhrases: ['control end', 'press control end'] },
   // ESC+CR is the one newline sequence both agent composers accept. Raw LF works
   // in Claude but Codex treats it as ordinary input instead of editor.newline.
-  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', defaultSurface: 'panel', voicePhrases: ['new line', 'insert new line'] },
+  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', voicePhrases: ['new line', 'insert new line'] },
   // Opens Claude's interactive /rewind picker (there is no one-shot,
   // conversation-only variant, so this just launches the picker).
-  { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)', defaultSurface: 'panel' },
-  // Ends the session the rail belongs to. Destructive, so it seeds into the panel
-  // rather than the strip — a kill button one mis-tap away from the arrow keys is
-  // the wrong default even with the two-click confirm behind it.
-  { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)', defaultSurface: 'panel' },
+  { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)' },
+  // Ends the session the rail belongs to. The two-click confirm remains the guard;
+  // operators who do not want it visible can remove its rail placement.
+  { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)' },
   { id: 'attach', type: 'action', action: 'attach', label: 'Attach', agentOnly: true, title: 'Attach files to this chat without sending' },
 ]
 
@@ -287,10 +276,6 @@ export function isBuiltinRailId(id: string): boolean {
   return BUILTIN_BY_ID.has(id)
 }
 
-export function itemDefaultSurface(item: RailItem): RailSurface {
-  return item.defaultSurface === 'panel' ? 'panel' : 'strip'
-}
-
 // Row ids only have to be unique within a config and stable across a save; they
 // are never shown. Default rows get fixed ids so an untouched layout round-trips
 // byte-identically instead of churning a new id on every load.
@@ -301,17 +286,16 @@ export function newRailRowId(): string {
 }
 export const defaultRowId = (device: RailDevice, surface: RailSurface): string => `${device}-${surface}`
 
-/** The layout every device starts with: one row per surface, seeded from each
- *  built-in's `defaultSurface`. Desktop and mobile start identical and diverge
- *  from there — they are separate rows from the first save, never a shared one. */
+/** The layout every device starts with: one rail row containing every built-in.
+ *  Desktop and mobile start identical and diverge from there. */
 export function defaultRailLayouts(items: readonly RailItem[] = BUILTIN_RAIL): RailLayouts {
-  const seed = (device: RailDevice, surface: RailSurface): RailRow => ({
-    id: defaultRowId(device, surface),
-    items: items.filter(item => itemDefaultSurface(item) === surface).map(item => item.id),
+  const seed = (device: RailDevice): RailRow => ({
+    id: defaultRowId(device, 'strip'),
+    items: items.map(item => item.id),
   })
   return {
-    desktop: { strip: [seed('desktop', 'strip')], panel: [seed('desktop', 'panel')] },
-    mobile: { strip: [seed('mobile', 'strip')], panel: [seed('mobile', 'panel')] },
+    desktop: { strip: [seed('desktop')] },
+    mobile: { strip: [seed('mobile')] },
   }
 }
 
@@ -388,7 +372,7 @@ function normalizeRow(raw: unknown, known: Set<string>): RailRow | null {
   return { id: raw.id, ...(label ? { label } : {}), items }
 }
 
-function normalizeSurface(raw: unknown, known: Set<string>, device: RailDevice, surface: RailSurface): RailRow[] {
+function normalizeRows(raw: unknown, known: Set<string>): RailRow[] {
   const rows: RailRow[] = []
   const seen = new Set<string>()
   if (Array.isArray(raw)) {
@@ -399,14 +383,37 @@ function normalizeSurface(raw: unknown, known: Set<string>, device: RailDevice, 
       rows.push(row)
     }
   }
-  // Every surface keeps at least one row so the editor always has a drop target
+  return rows
+}
+
+function normalizeSurface(raw: unknown, known: Set<string>, device: RailDevice, surface: RailSurface): RailRow[] {
+  const rows = normalizeRows(raw, known)
+  // The rail keeps at least one row so the editor always has a drop target
   // and the renderer always has somewhere for a new built-in to land.
   if (!rows.length) rows.push({ id: defaultRowId(device, surface), items: [] })
   return rows
 }
 
-/** Normalize any stored shape into a usable config: a v2 `{items, layouts}`
- *  object, a pre-layout item array, or nothing at all. */
+/** Collapse the retired Quick-actions panel into the final rail row. Items already
+ *  placed anywhere on the rail are not duplicated. Old pin-created catalog items
+ *  need no special case: they become ordinary explicit rail entries here. */
+function migrateLegacyPanel(strip: RailRow[], rawPanel: unknown, known: Set<string>): RailRow[] {
+  const placed = new Set(strip.flatMap(row => row.items))
+  const migrated = normalizeRows(rawPanel, known)
+    .flatMap(row => row.items)
+    .filter(id => {
+      if (placed.has(id)) return false
+      placed.add(id)
+      return true
+    })
+  if (!migrated.length) return strip
+  const target = strip.length - 1
+  strip[target] = { ...strip[target], items: [...strip[target].items, ...migrated] }
+  return strip
+}
+
+/** Normalize any stored shape into a usable config: a v3 rail-only object, a v2
+ *  rail/panel object, a pre-layout item array, or nothing at all. */
 export function normalizeRailConfig(saved: unknown): RailConfig {
   if (Array.isArray(saved)) return migrateLegacyRail(saved)
   if (!isRecord(saved)) return defaultRailConfig()
@@ -419,18 +426,15 @@ export function normalizeRailConfig(saved: unknown): RailConfig {
   const layouts = {} as RailLayouts
   for (const device of RAIL_DEVICES) {
     const rawDevice = isRecord(rawLayouts[device]) ? rawLayouts[device] as Record<string, unknown> : {}
-    layouts[device] = {
-      strip: normalizeSurface(rawDevice.strip, known, device, 'strip'),
-      panel: normalizeSurface(rawDevice.panel, known, device, 'panel'),
-    }
+    const strip = normalizeSurface(rawDevice.strip, known, device, 'strip')
+    layouts[device] = { strip: migrateLegacyPanel(strip, rawDevice.panel, known) }
   }
   // A built-in shipped after this save was written is appended to the first row
-  // of its default surface on both devices. Doing nothing would leave it
+  // of the rail on both devices. Doing nothing would leave it
   // permanently invisible to anyone with an existing layout.
   for (const item of addedBuiltins) {
-    const surface = itemDefaultSurface(item)
     for (const device of RAIL_DEVICES) {
-      const row = layouts[device][surface][0].items
+      const row = layouts[device].strip[0].items
       row.push(item.id)
     }
   }
@@ -443,9 +447,8 @@ export function normalizeRailConfig(saved: unknown): RailConfig {
 //
 // The old model was one ordered list shared by every device and both surfaces,
 // with `platforms`, `placement` and `enabled` on each item deciding where it
-// showed. Resolving that list once per device/surface reproduces exactly what
-// the user saw, so an upgrade lands on four rows that render identically and
-// only then diverge by hand.
+// showed. The retired drawer placement now follows the strip placement into the
+// single rail, preserving every enabled item once per device.
 
 type LegacyPlacement = 'strip' | 'drawer' | 'both'
 
@@ -461,8 +464,7 @@ export interface LegacyRailItem extends RailItem {
 const LEGACY_EDITING_CLUSTER = ['markdownDivider', 'markdownCodeFence', 'ctrlU', 'restoreInput'] as const
 const LEGACY_NEW_EDITING_CLUSTER = ['markdownDivider', 'markdownCodeFence', 'restoreInput'] as const
 
-const legacyBuiltin = (item: RailItem): LegacyRailItem =>
-  ({ ...item, placement: itemDefaultSurface(item) === 'panel' ? 'drawer' : 'strip' })
+const legacyBuiltin = (item: RailItem): LegacyRailItem => ({ ...item, placement: 'strip' })
 
 /** Resolve a saved entry's enabled/placement pair, including saves that predate
  *  `placement` entirely. Back then "off" was the only way to get an item out of a
@@ -524,27 +526,22 @@ export function mergeLegacyRail(saved: LegacyRailItem[] | undefined | null): Leg
   return out
 }
 
-function legacyShows(item: LegacyRailItem, device: RailDevice, surface: RailSurface): boolean {
+function legacyShows(item: LegacyRailItem, device: RailDevice): boolean {
   if (item.enabled === false) return false
   if (item.platforms && !item.platforms.includes(device)) return false
-  const placement = item.placement === 'drawer' || item.placement === 'both' ? item.placement : 'strip'
-  return placement === 'both' || (surface === 'panel' ? placement === 'drawer' : placement === 'strip')
+  return true
 }
 
-/** Turn one pre-layout list into four rows that render exactly as it did. */
+/** Turn one pre-layout list into one rail row per device. */
 export function migrateLegacyRail(saved: LegacyRailItem[] | undefined | null): RailConfig {
   const merged = mergeLegacyRail(saved)
   const items: RailItem[] = merged.map(({ platforms: _p, placement: _c, enabled: _e, ...item }) => ({ ...item }))
   const layouts = {} as RailLayouts
   for (const device of RAIL_DEVICES) {
-    const surfaces = {} as RailDeviceLayout
-    for (const surface of RAIL_SURFACES) {
-      surfaces[surface] = [{
-        id: defaultRowId(device, surface),
-        items: merged.filter(item => legacyShows(item, device, surface)).map(item => item.id),
-      }]
-    }
-    layouts[device] = surfaces
+    layouts[device] = { strip: [{
+      id: defaultRowId(device, 'strip'),
+      items: merged.filter(item => legacyShows(item, device)).map(item => item.id),
+    }] }
   }
   return { items, layouts }
 }
@@ -688,7 +685,7 @@ export interface RailBlob extends RailScopeBlob {
   projects?: Record<string, RailProjectScope>
 }
 
-export const RAIL_BLOB_VERSION = 2
+export const RAIL_BLOB_VERSION = 3
 
 export function isProjectRailDelta(scope: unknown): scope is RailProjectDelta {
   return isRecord(scope) && scope.mode === 'delta'
@@ -749,7 +746,7 @@ export interface ResolvedDeltaScope {
   projectPlacements: Map<string, Set<string>>
 }
 
-const deltaRecords = <T>(map: RailDeltaMap<T> | undefined, device: RailDevice, surface: RailSurface): unknown[] => {
+const deltaRecords = <T>(map: RailDeltaMap<T> | undefined, device: RailDevice, surface: RailSurface | 'panel'): unknown[] => {
   if (!isRecord(map)) return []
   const forDevice = (map as Record<string, unknown>)[device]
   if (!isRecord(forDevice)) return []
@@ -792,12 +789,22 @@ export function resolveDeltaScope(global: RailConfig, delta: RailProjectDelta): 
     for (const surface of RAIL_SURFACES) {
       const baseRows = global.layouts[device]?.[surface] || []
       const baseIds = new Set(baseRows.map(row => row.id))
+      const legacyTargetRow = baseRows[baseRows.length - 1]?.id
+      // v2 project overlays may have edited the retired panel's shared row. The
+      // global panel was appended to the final rail row during normalization, so
+      // point those old records at the same destination before applying them.
+      const legacyHides = legacyTargetRow
+        ? deltaRecords(delta.hides, device, 'panel').map(raw => isRecord(raw) ? { ...raw, row: legacyTargetRow } : raw)
+        : []
+      const legacySplices = legacyTargetRow
+        ? deltaRecords(delta.splices, device, 'panel').map(raw => isRecord(raw) ? { ...raw, row: legacyTargetRow } : raw)
+        : []
       // A splice or hide may only name a *shared* row: a project row is wholly
       // owned, so it says the same thing by simply holding (or not holding) the id.
-      const hides = deltaRecords(delta.hides, device, surface)
+      const hides = [...deltaRecords(delta.hides, device, surface), ...legacyHides]
         .filter((raw): raw is RailHide =>
           isRecord(raw) && typeof raw.row === 'string' && typeof raw.item === 'string' && baseIds.has(raw.row))
-      const splices = deltaRecords(delta.splices, device, surface)
+      const splices = [...deltaRecords(delta.splices, device, surface), ...legacySplices]
         .filter((raw): raw is RailSplice =>
           isRecord(raw) && typeof raw.row === 'string' && typeof raw.item === 'string'
           && baseIds.has(raw.row) && known.has(raw.item))
@@ -849,6 +856,33 @@ export function resolveDeltaScope(global: RailConfig, delta: RailProjectDelta): 
         seen.add(row.id)
         projectRowIds.add(row.id)
         extra.push(row)
+      }
+      // Project-owned v2 panel rows become ordinary project rail placements. Add
+      // only entries not already reachable on this device, then fold them into the
+      // final project row so migration does not create another permanent rail row.
+      const legacyPanel = isRecord(deviceRows)
+        ? normalizeRows((deviceRows as Record<string, unknown>).panel, known)
+        : []
+      const placed = new Set([...resolvedBase, ...extra].flatMap(row => row.items))
+      const migrated = legacyPanel.flatMap(row => row.items).filter(id => {
+        if (placed.has(id)) return false
+        placed.add(id)
+        return true
+      })
+      if (migrated.length) {
+        if (extra.length) {
+          const target = extra.length - 1
+          extra[target] = { ...extra[target], items: [...extra[target].items, ...migrated] }
+        } else {
+          const first = legacyPanel[0]
+          const row: RailRow = {
+            id: first && !seen.has(first.id) ? first.id : `${device}-project-migrated`,
+            ...(first?.label ? { label: first.label } : { label: 'Project' }),
+            items: migrated,
+          }
+          projectRowIds.add(row.id)
+          extra.push(row)
+        }
       }
       layouts[device][surface] = [...resolvedBase, ...extra]
     }

@@ -3231,9 +3231,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else if (detail.action === 'find') find()
       else if (detail.action === 'toggleKeyboard') cycleMobileInputMode()
       else if (detail.action === 'insertText' && detail.text) perform(()=>injectText(detail.text!, detail.submit))
-      // Rail items rendered outside this pane (Quick actions in the Actions tab) route
-      // here rather than touching xterm: the pane stays the single owner of
-      // terminal writes, so broadcast, replay, and read/select mode still apply.
+      // External action surfaces route key writes here rather than touching xterm:
+      // the pane stays the single owner of terminal writes, so broadcast, replay,
+      // and read/select mode still apply.
       else if (detail.action === 'sendKey' && detail.text) perform(()=>{
         if(!termRef.current)throw new Error('The target terminal is not mounted.')
         sendKey(detail.text!)
@@ -3420,8 +3420,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   //
   // Strip surface only, and one scroller per configured row: the rows come from
   // *this device's* layout, so a phone's rail is arranged independently of the
-  // desktop's rather than sharing one order. The long tail lives in the utility
-  // drawer's Quick actions section, where a full-width grid can show it with labels.
+  // desktop's rather than sharing one order. The permanent row drawer exposes the
+  // complete list when the visible strip is horizontally constrained.
   const mobilePinnedSend=isMobileTerminalInput()&&mobileEnterNeedsPinnedSend(session.backend)
   const mobileInputModeState=mobileTerminalInputMode(keyboardOff,mobileDraftOpen)
   const mobileInputModeIcon=mobileInputModeState==='live'?'⌨':mobileInputModeState==='read'?'↕':'✎'
@@ -3486,8 +3486,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       case 'clipboardHistory':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='clipboard'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='clipboard'} title="Recent clipboard - tap an entry to insert it here" onClick={event=>toggleDropup('clipboard',event.currentTarget as HTMLElement)}>{view.content}</button>}
       // `agentOnly` already keeps this off shells, where the endpoint 409s.
       case 'skills':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='skills'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='skills'} title={item.title||'Insert one of this session’s skills'} onClick={event=>toggleDropup('skills',event.currentTarget as HTMLElement)}>{view.content}</button>}
-      // Every template, not only the pinned ones. Pinning still exists and still
-      // gives a template its own button; this is the route to the rest of them.
+      // Every template, not only those with dedicated configured buttons.
       case 'prompts':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='prompts'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='prompts'} title={item.title||'Insert one of your prompt templates'} onClick={event=>toggleDropup('prompts',event.currentTarget as HTMLElement)}>{view.content}</button>}
       case 'copyInput':{
         // Disabled rather than absent on an unmeasured harness: a button that is

@@ -47,7 +47,7 @@ type Props = {
    * As a tab this autofocused on mount, which was right: opening the tab *was* the
    * request. As a section it is on screen whenever Actions is, so focusing on mount would
    * steal the caret from the terminal every time the drawer opened — and on a phone would
-   * throw the soft keyboard up over the Quick actions above it. So the focus now follows a
+   * throw the soft keyboard up over the drawer content above it. So the focus now follows a
    * deliberate arrival (the `drawer.actions.clipboard` command, or the Clipboard Action
    * button) rather than the render.
    */

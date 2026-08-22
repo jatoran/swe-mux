@@ -880,8 +880,8 @@ Its rules, and what each one is defending:
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
   Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
 - Action layout is not a Settings section.
-  **Configure Actions** opens as a standalone modal from the main menu, command palette, every rail-row popover, or the Quick actions section in the Actions drawer.
-  This surface owns the shared catalog, action appearance, custom action creation, and all four Desktop/Mobile Rail/Drawer placements.
+  **Configure Actions** opens as a standalone modal from the main menu, command palette, every rail-row popover, or the Configure command rail control in the Actions drawer.
+  This surface owns the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
 - Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
@@ -1631,26 +1631,27 @@ Its rules, and what each one is defending:
   The other half of the fix is at the caller: opening the Queue to *reveal* an already-written message no longer asks for focus at all (`prompt-queue.md`).
 - Action configuration separates **what an action is** from **where it appears**, and the second half is per device.
   The shared *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
-  The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` under the terminal and the `panel` rendered as Quick actions in the Actions drawer.
-  The `strip` and `panel` property names remain internal storage terms for backward compatibility; user-facing controls call them Rail and Drawer.
+  The *layouts* (`RailConfig.layouts`) hold position: one rail layout per device class, rendered under the terminal and repeated in full by each row's drawer popover.
   Desktop and mobile therefore have genuinely independent arrangements: their own rows, order, and membership, with no shared row and no "applies to both" switch.
   A shared row would be the trap the split exists to avoid: the two devices want different rails, so anything that live-links them is something you would immediately disable.
 - Row membership subsumes three older mechanisms and replaces all of them.
   A per-item `platforms` tag, a per-item `strip`/`drawer`/`both` placement, and an `enabled` flag all said "not here" in different vocabularies; a command in no row on a device is now the single way to say it.
   Nothing else dims or hides.
   The one filter that stays on the item is `backends` (plus `agentOnly`), because that is a property of the command itself: `/rewind` means nothing outside Claude regardless of where it is placed.
-- The strip renders **one horizontal scroller per configured row**, so a row that overflows pages independently of the others.
+- The rail renders **one horizontal scroller per configured row**, so a row that overflows pages independently of the others.
   Each row costs the terminal one row of height, which is why the practical ceiling is around three; the editor treats that as a soft guide, not a data constraint.
   Row count comes from configuration and is fixed for the render, never measured and then adjusted, which keeps it clear of the geometry-echo resize loop.
-  The Drawer layout renders each row as an optionally captioned section, and within a section terminal keys still split into their own dense grid because a 44px key and a labelled action want different cell sizes.
+  The drawer popover renders the complete row rather than only the clipped tail, so it is a stable alternate view at every width.
 - An item id may appear in several rows and more than once within a row, so a rendered entry carries a `key` of its own (`rowId:index:itemId`) rather than reusing the item id.
   Anything keyed by item id, including render keys, focus, and key-repeat, must key by the entry instead.
-- Layouts always keep at least one row per surface, so the editor always has a drop target and a newly shipped built-in always has somewhere to land.
-  Deleting the last row of a surface empties it instead of removing it.
-  A built-in introduced after a config was saved is appended to the first row of its `defaultSurface` on both devices; cataloguing it without placing it would leave it permanently invisible to anyone with an existing layout.
+- Layouts always keep at least one row, so the editor always has a drop target and a newly shipped built-in always has somewhere to land.
+  Deleting the last row empties it instead of removing it.
+  A built-in introduced after a config was saved is appended to the first row on both devices; cataloguing it without placing it would leave it permanently invisible to anyone with an existing layout.
 - Saves predating the layout model are migrated on read, per scope and by shape rather than by a version field, so a rewritten global scope and a still-legacy project override coexist.
-  The old list is resolved once for each device/surface combination and each result becomes a row, so an upgrade renders identically on both devices and only then diverges by hand.
-  Legacy semantics are preserved through that resolution: `enabled: false` on an entry that predates `placement` meant "not on the strip", so it keeps rendering in the panel, while `enabled: false` alongside an explicit placement was a genuine hide and lands in no row.
+  The old list is resolved once for each device and becomes its rail row, so an upgrade renders identically on both devices and only then diverges by hand.
+  Legacy `drawer` and `both` placements become one ordinary rail placement, while `enabled: false` alongside an explicit placement remains a genuine hide.
+  Version 2 `panel` rows are appended to the final rail row and deduplicated against every existing rail occurrence.
+  That preserves old one-tap-created skill and prompt buttons as ordinary configured actions without preserving pinning as a second feature.
   Saves predating the editing-helper cluster still receive the four helpers after Down and Attach at the end once.
   Project scopes are detected the same way: a legacy array or an `{items, layouts}` object is a fork honoured exactly as saved, while `mode: 'delta'` is the additive overlay — so a project forked under the old fork-on-first-edit editor keeps behaving as it did, and only deliberately created deltas track the live global layout.
   A delta item whose id collides with the base catalog is dropped (the base wins), which is what keeps a stale delta from shadowing a built-in.
@@ -1661,7 +1662,7 @@ Its rules, and what each one is defending:
   Templates carrying `{{variables}}` have nothing to inject yet, so the button opens the Actions drawer with Prompt templates expanded and the template preselected rather than pasting a half-rendered body.
   Both hosts route through `promptRail.ts` and insert over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
 - **A prompt button's *name* is a pointer too, unless somebody typed one.**
-  Pinning takes no name, so the label it stores is the template's title at pin time - a snapshot of a name, which is exactly the kind of copy this item type exists to avoid.
+  Adding one without a name stores the template's current title only as a fallback, because a snapshot of a name is exactly the kind of copy this item type exists to avoid.
   An item carrying `autoLabel` therefore renders the template's live title and renames itself when the template is renamed; the stored copy stays as the fallback for before the library has been read and for a template that has gone.
   A label the operator typed is never overridden, and neither is one saved before this rule existed - the flag's absence means "somebody's own name", so nothing that was deliberately named gets renamed under them.
   Clearing the label field in the catalog editor is how an existing button opts in; the field shows the live title as its placeholder.
@@ -1671,7 +1672,7 @@ Its rules, and what each one is defending:
   Submitted custom commands require their own explicit voice phrases.
   Copy is the existing focused-terminal registry command because it is not a rail catalog item.
   Literal text and prompt macros are excluded, as are destructive and UI-only actions such as clear-input, Attach, keyboard mode, relaunch, and End session.
-  Only items placed on the current device's Rail or Drawer layout participate, and duplicate placements collapse to one spoken command.
+  Only items placed on the current device's rail participate, and duplicate placements collapse to one spoken command.
   The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
   Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
 - A project relates to the shared Action config in one of three strengths, and the middle one is the default a project accumulates (`railScope.ts`, `commandRail.ts`).
@@ -1680,7 +1681,7 @@ Its rules, and what each one is defending:
   A **fork** is a detached full copy that stops tracking global edits; it is created only by the explicit Detach control, because the old fork-on-first-edit behavior deviated a project from every later global improvement the moment it added one button.
   A fork can be reattached as a delta from the same toolbar (below), which is the way back for one made before splices and hides existed.
   Edits route by ownership rather than by a write-target switch: an edit to a shared row lands in the global scope (all projects, said in place by the scope note and per-row origin tags), while project rows and project actions stay project state.
-  Reverting is symmetric — "Remove project additions" drops a delta, "Use global layout" drops a fork — and unpinning the last project addition returns the project to plain inheritance with no stray delta behind it.
+  Reverting is symmetric: "Remove project additions" drops a delta, "Use global layout" drops a fork, and removing the last project addition returns the project to plain inheritance with no stray delta behind it.
 - **A shared row's *definition* never contains a project-owned action; only the resolved projection does.**
   That is the invariant, and it is what a delta's two shared-row overlays are built to preserve.
   A **splice** records "this project also places item X in shared row R, after item Y"; the row's definition stays global and keeps flowing through, and the splice is applied at resolve time, so a later global reorder, insert, or removal re-anchors it rather than breaking it.
@@ -1704,24 +1705,24 @@ Its rules, and what each one is defending:
   A row that survives none of that is redone with every id floated, which always reproduces it at the cost of no longer tracking global changes to that row.
   It is user-invoked and never automatic: a fork is somebody's arrangement, and a migration that happens to you is one you could not review first.
 - The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) is the only rail editor.
-  It opens from the main menu, command palette, every row popover, and the Configure control in Quick actions rather than replacing the live rail inline or living inside Settings.
-  It discloses progressively: one device's Rail and Drawer layouts first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below them, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
+  It opens from the main menu, command palette, every row popover, and the Configure command rail control at the top of Actions rather than replacing the live rail inline or living inside Settings.
+  It discloses progressively: one device's rail layout first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below it, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
   The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
-  A dismissible first-open callout carries the three-line orientation (Rail vs Drawer, per-device layouts, the catalog) instead of a standing paragraph.
+  A dismissible first-open callout carries the orientation (per-device rails, the drawer popover, and the catalog) instead of a standing paragraph.
   A "Preview as" backend selector dims what a session of that type would not show, making the backend filter visible before a session surprises anyone.
   It opens on **Global** unless the current Project already has a detached fork.
   A detached current Project opens directly because Global cannot edit that fork.
   While Global is selected, the toolbar offers to detach the current Project and switches into that new fork immediately.
   At Global scope it names which Projects hold something of their own, and whether each is a fork or additions, because project-held items are otherwise invisible from the default view and "all actions" reads as though the fleet had none of them.
-- Four affordances are what keep two independent device layouts manageable, and none of them is a shared row.
+- The editor keeps the two independent device layouts manageable without coupling them.
   Adding a custom action places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone; in a project scope the add form offers "this project only" (the default there) or "all projects".
-  The catalog's placement controls are four **labelled checkboxes** - Desktop rail, Desktop drawer, Mobile rail, Mobile drawer - inside an expandable per-action panel, with a plain-words summary ("Desktop rail + drawer · Mobile drawer") on the collapsed row.
+  The catalog's placement controls are two **labelled checkboxes** - Desktop rail and Mobile rail - inside an expandable per-action panel, with a plain-words summary on the collapsed row.
   Every action row also expands into Button appearance controls for its visible label and, where an icon exists, Automatic, Icon only, Label only, or Icon + label display.
   Built-in behavior remains app-owned while its presentation and backend visibility remain configurable.
   Catalog and layout previews use the same icon registry and display resolution as the live rail, so an icon action such as Copy input does not turn into a text-only configuration chip.
-  A per-surface "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
+  "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
   Dragging a catalog row into a layout places it exactly.
-- Chips drag within a row, between rows, and between surfaces, on mouse and on touch, through the shared controller (`railDrag.ts`) mounted by the modal editor.
+- Chips drag within and between rows, on mouse and on touch, through the shared controller (`railDrag.ts`) mounted by the modal editor.
   Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the modal instead of dragging.
   The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.
   Pointer capture is taken on the editor root, not on the chip: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
@@ -1732,23 +1733,15 @@ Its rules, and what each one is defending:
 - The expanded catalog panel also holds per-action appearance, backend checkboxes under their harness display names ("Shown in these sessions"), custom-action editing (label, payload, submit-on-insert), and delete.
   The catalog head previews the live button presentation in the elastic column, with the type or payload summary beneath it and placement on the right.
   Phones drop the placement summary under the preview.
-- The **Actions** tab is session-scoped and contains three independently collapsible sections that start expanded: **Quick actions**, **Skills**, and **Prompt templates**.
+- The **Actions** tab is session-scoped and contains three independently collapsible sections that start expanded: **Skills**, **Prompt templates**, and **Clipboard**.
   Disclosure state is device-local and persists independently from the Action layout.
-  Quick actions renders the `panel` surface of *this device's* layout, so its grouping and order are independent of the other device class.
-  It is a configured overflow and favorites surface, not another catalog editor.
-  Skills and prompt templates may intentionally appear both in Quick actions and in their complete sections because one is the chosen shortcut layout and the others are browsable inventories.
-  The Configure control in the Quick actions header opens the standalone Configure Actions modal.
+  A compact **Configure command rail** control above the sections opens the standalone editor.
+  Skills and prompt templates are browsable inventories here; adding either as a dedicated rail button happens only in that editor.
   A transient visit opened from the Action rail closes after an action completes on desktop as well as mobile; a prompt with unresolved fields remains open until those fields are completed, and an ordinary visit retains the existing repeated-action behavior.
   The Manage control in the Prompt templates header opens the full prompt-template editor.
   Prompt rows include a bounded body excerpt so similar titles can be distinguished in the drawer.
-  Skill and template rows both carry a **Pin** toggle: one tap creates a placed Quick-actions button on both devices (`pinSkill` / `pinPrompt` in `railScope.ts`) instead of routing the most common creation — "give this thing a button" — through the editor's typed-name form.
-  A pin follows its source's scope (a project skill or project template pins to the project's delta; anything else pins globally; a forked project pins into its fork), restricts a pinned skill to the harness it was discovered for (the same name is not guaranteed to exist for any other CLI), and stores a template pin as the usual key pointer.
-  Pinned state is matched by payload rather than by id, so a hand-authored button counts, a built-in slash command reads as already pinned rather than growing a twin, and unpinning removes the catalog item wherever it lives.
-  Actions renders outside the terminal pane, so it activates items over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`, `branch`, `relaunch`, `endSession`).
-  The pane stays the single owner of terminal writes, so broadcast, replay, and read/select mode keep applying.
-  With no terminal focused, Quick actions and Skills explain what target is missing while Prompt templates remain browsable.
-  Keys inject raw bytes on the normal input path.
-  The built-in newline uses `ESC+CR`, the legacy sequence both Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
+  Skills insert their invocation over the terminal-action bus, while prompt templates insert their resolved body through the same owner-controlled path.
+  With no terminal focused, Skills explains what target is missing while Prompt templates remain browsable.
   The Action rail never wraps.
   Every row keeps all chips in the shared overflow scroller and offers the complete list through its permanent drawer control.
   Passive endpoint glow wedges indicate more content without becoming another interaction target.
@@ -1767,19 +1760,16 @@ Its rules, and what each one is defending:
 - Skills are scoped per session, not per Project, because the CLI resolves repo skills from its
   **live cwd** — a session sitting in a worktree sees a different set than one in the primary
   checkout of the same repository, and the tab refetches when that cwd moves.
-- **End session** is the rail's one destructive item, so it ships in the drawer rather than on the
-  strip — a kill button one mis-tap from the arrow keys is the wrong default even behind a confirm.
-  Both hosts route it to the workspace's `session.kill` command, which already owns the two-click
-  confirm (2 s window), the pty stop, and the layout/focus cleanup; neither host reimplements any
-  of that. The armed id is broadcast on `mux:kill-armed` (App, on every change to `confirmKillId`)
-  because the pane is memoized against callback props and could not otherwise see it: both the rail
-  button and the drawer button read that broadcast instead of running a second timer, so their
+- **End session** is the rail's one destructive item and keeps the workspace's shared two-click
+  confirmation (2 s window), pty stop, and layout/focus cleanup.
+  The armed id is broadcast on `mux:kill-armed` (App, on every change to `confirmKillId`)
+  because the pane is memoized against callback props and could not otherwise see it.
+  The rail and its full-row popover render the same item and read that broadcast, so their
   label can never disagree with what the next click does. On an exited or crashed session the
   button relabels to Remove, matching the command's own fallback, and skips the confirm entirely:
   confirmation guards against destroying work, and an ended session has none left to destroy — no
-  process to interrupt and no turn to lose, only a record the operator has finished reading. The
-  drawer deliberately stays open on the arming click — closing it would leave nowhere to make the
-  second one.
+  process to interrupt and no turn to lose, only a record the operator has finished reading.
+  The row popover stays open on the arming click so the second confirmation remains available.
 - **An ended or recovered session's pane is openable and read-only.** Its row and tab keep the
   same 0.62 dimming they always had; a *recovered* one adds a dotted underline, because the
   difference between "you watched this exit" and "this came back from disk after a crash" decides
@@ -1789,7 +1779,7 @@ Its rules, and what each one is defending:
   (`features/session-recovery.md`).
 - **`Clip`, `Skills` and `Prompts` open a drop-up over the rail**, not the drawer.
   All three surfaces already exist as sections of the Actions tab, and all three are reached from the drop-up's sticky first row, so nothing became less reachable - what changed is that the two-tap jobs (paste the thing I copied a minute ago; type a skill name; insert a template) no longer cost a drawer trip.
-  `Prompts` is the *whole* library rather than the handful somebody remembered to pin: per-template pinning still exists and still earns a template its own dedicated button, but a library reachable only through pinning leaves everything unpinned three taps away.
+  `Prompts` is the *whole* library rather than only the templates configured as dedicated rail buttons.
   It is deliberately not `agentOnly` - a template is text, and text suits a shell composer as readily as an agent's - and templates that mean something to one harness carry their own `backends` and are filtered by them.
   Its rows are ordered favourites, then most recently used, then title, which is the library's own notion of relevant rather than a second one, and a template with `{{fields}}` says so on its row before the tap hands off to the drawer.
   It carries a second sticky exit, `+ New`, which opens the prompt library already on a blank template, because "I want a template for this" is where a picker of existing ones most often ends.
@@ -1797,7 +1787,7 @@ Its rules, and what each one is defending:
   The drop-up shows five rows and then scrolls; the cap is a height, never a slice, because capping by count would make the sticky link the only route to a sixth entry.
   It opens upward from its trigger through `anchoredPopoverStyle`, the same placement math the account and resource popovers use, and repositions on scroll with capture because the rail is itself a horizontal scroller.
   A row does the one obvious thing and closes: Clipboard inserts the entry, Skills inserts the invocation without submitting, Prompts inserts the template body (also without submitting) or hands a template with fields to the drawer.
-  Reading, searching, pinning and deleting stay in the drawer section - a drop-up that also expanded rows would rebuild the surface it is a shortcut past.
+  Reading, searching, editing, and deleting stay in the drawer section - a drop-up that also expanded rows would rebuild the surface it is a shortcut past.
   Inserting from the ring never touches `navigator.clipboard`, which is what makes it the working paste path on a plain-HTTP tailnet client and on mobile Safari.
 - **Copy input reads the draft off the terminal grid.**
   Nothing else can answer the question: no harness publishes its composer, and the daemon's write log deliberately keeps a character count rather than text (`features/terminal-input.md`).
@@ -1878,7 +1868,7 @@ Its rules, and what each one is defending:
   meaningful assistant text; provider control acknowledgements such as `No response requested.`
   never replace the last copyable reply.
 - Claude/Codex terminal bodies also accept OS file drops and copied-file paste, while the paperclip rail button supplies the same multi-file picker on desktop and mobile.
-  Attach is a built-in Action item, so it can be moved, filtered, placed in Quick actions, or hidden.
+  Attach is a built-in Action item, so it can be moved, filtered, or hidden.
   Upload status is reported in the rail.
   A general file inserts a quoted workspace-local path into the draft; a recognized image keeps the provider's native image reference.
   Neither path submits.
@@ -1968,7 +1958,7 @@ Its rules, and what each one is defending:
   A drawer with nothing left at all — reachable only by the structural filter taking the remainder — carries its own `Choose panels…` control, because a drawer with no tab strip has no context menu to right-click.
 - Actions replaces the former separate Commands and Prompts tabs.
   Saved drawer layouts, orders, and selected tabs map either legacy id to one `actions` singleton on read, with the first encountered position winning so migration cannot duplicate a tab.
-  Existing `RailConfig` data is not rewritten; its `panel` layouts become the Quick actions section unchanged.
+  Version 2 command-rail `panel` layouts migrate into each device's final rail row, preserving custom actions and removing duplicate ids already placed on the rail.
 - The injection surfaces share verbs but not routing.
   Clipboard inserts land in the last-focused surface, editor or terminal.
   Prompt-template inserts inside **Actions** are terminals-only, and their rows additionally answer right-click / long-press with a target menu for a live agent session in the current Project or a new Claude/Codex session.
@@ -2304,14 +2294,14 @@ Its rules, and what each one is defending:
   the heading cancels the indent so it sits as the box's lid rather than as its first
   indented child. A folded Group drops the indent and the rule under its heading, because it
   has no body left to contain. None of it costs vertical space.
-- **The Actions tab's four sections are separated by their headers, not by a line between
+- **The Actions tab's three sections are separated by their headers, not by a line between
   them.** A 1px rule between sections is the same rule every row *inside* a section already
   carries, so the boundary read as one more row. Each header is a full-bleed bar with its own
   darker ground and a leading edge, and a rule above it twice the weight of any row rule; the
   bodies sit on the panel ground beneath, so a header reads as a lid over its section. The
   edge is deliberately muted rather than accent: every green edge in this app means *this one
-  is active* — the selected Project, the active pane tab, the live segment — and four
-  permanent green bars on four permanent headers would spend that meaning on decoration.
+  is active* — the selected Project, the active pane tab, the live segment — and three
+  permanent green bars on three permanent headers would spend that meaning on decoration.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed
