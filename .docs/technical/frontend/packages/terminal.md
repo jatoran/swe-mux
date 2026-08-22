@@ -6,6 +6,7 @@ Design: `../../../design/features/terminal-input.md`.
 ## Terminal viewport
 
 `TerminalPane.tsx`, `terminalInputDiagnostics.ts`, `terminalCaretPlacement.ts`, `composerText.ts`,
+`composerInsertion.ts`,
 `railKeyRepeat.ts`, `RailRepeatKey.tsx`, `terminalAttachments.ts`, `terminalProtocol.ts`,
 `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts`, `terminalRenderPause.ts`,
 `mobileInput.ts`
@@ -35,6 +36,14 @@ A resolver also returns that contract as a `ComposerRegion` rectangle, so readin
 `composerRegionForBackend` is the wider registry over the same measurements: it adds Claude, which negotiates mouse tracking and therefore needs no caret resolver but whose draft is still on screen.
 
 `composerText.ts` is the pure assembly on top: dim cells dropped so a placeholder hint and a ghost completion never reach the clipboard, soft wraps rejoined at the measured wrap column, trailing box padding discarded, and `null` reserved for "this screen is not showing a readable draft" as distinct from an empty one.
+
+`composerInsertion.ts` is the other direction: the bytes that put authored text *into* a composer, for every path that pushes text somebody wrote elsewhere - a prompt template, a skill, a clipboard entry, a dictated draft, a note selection - plus the native paste handlers, all of which reach it through `pasteIntoTerminal`.
+It mirrors `composer_input.composer_insertion` in the daemon, and the pair is kept in step by the harness registry rather than by matching constants.
+Its one non-obvious rule: a bracketed paste does not protect its own first character, and Codex reads a paste that *begins* with a newline as Enter (measured 2026-08-22 against v0.149.0), so a leading newline run is lifted out and written as the harness's `composerNewline` keys ahead of the paste.
+`term.input` rather than prepending to the paste text, because xterm would rewrite it to a bare CR.
+
+`terminalActions.ts` carries the request/acknowledgement contract for those insertions and `insertionRefusal`, the pure predicate that refuses one into a session showing an approval or a question - the same three sub-reasons `prompt_queue.PROTECTED_AWAITING_REASONS` names, because typed text there answers the dialog rather than filling a composer.
+The refusal is why insertion is acknowledged at all: a dispatch-and-forget reported every insert as done, including the ones that never happened.
 
 ## Multi-device terminal input
 

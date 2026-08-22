@@ -8,6 +8,10 @@
 //
 // The decision is a pure function so the routing is unit-testable without a DOM.
 
+// Explicit extension: the pure helpers here are unit-tested under node's
+// type-stripping runner, which does not resolve extensionless specifiers.
+import { insertIntoTerminal } from './terminalActions.ts'
+
 export type EditorHandle = {
   insertText: (text: string) => void
   /** DOM nodes expose this; a detached editor must never be inserted into. */
@@ -35,7 +39,11 @@ export type InsertDecision =
 /** `terminalsOnly` refuses an editor outright rather than ranking it lower: a prompt
  *  template is written to be read by an agent, and landing one in the note or file the
  *  user happened to touch last is silent damage to a document, not a misplaced paste. */
-export type InsertOptions = { terminalsOnly?: boolean }
+/** `onRefused` reports a terminal insert the pane would not perform - most often a
+ *  session showing an approval dialog, where the text would answer it rather than
+ *  land in a composer. The insert is asynchronous while the return value is not, so
+ *  a refusal has nowhere else to go and would otherwise be silent. */
+export type InsertOptions = { terminalsOnly?: boolean; onRefused?: (message: string) => void }
 
 let current: InsertTarget | null = null
 const listeners = new Set<(target: InsertTarget | null) => void>()
@@ -135,11 +143,9 @@ export function insertIntoFocusedSurface(
     return 'editor'
   }
   if (decision.kind === 'terminal') {
-    window.dispatchEvent(
-      new CustomEvent('mux:terminal-action', {
-        detail: { sessionId: decision.sessionId, action: 'insertText', text },
-      }),
-    )
+    void insertIntoTerminal(decision.sessionId, text, false).catch(cause => {
+      options.onRefused?.(cause instanceof Error ? cause.message : String(cause))
+    })
     return 'terminal'
   }
   return 'none'

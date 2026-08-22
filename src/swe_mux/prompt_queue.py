@@ -45,7 +45,8 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
-from .harness import delivers_prompts_through_pty
+from .composer_input import composer_insertion
+from .harness import composer_insertion_rules, delivers_prompts_through_pty
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -94,14 +95,13 @@ HISTORY_LIMIT = 200
 # "whenever this daemon happens to be running in 2030".
 MAX_SCHEDULE_HORIZON_SECONDS = 30 * 86400
 
-# Delivery bytes mirror the browser's live-session path (`noteSelection.ts`):
-# a multi-line body sent unwrapped would submit at every newline, so the text
-# is wrapped in bracketed paste with newlines as CR, and the submit is a
-# separate write after the same settle delay the browser uses.
+# Delivery bytes mirror the browser's live-session path
+# (`composerInsertion.ts`), and both are built by `composer_input`: a multi-line
+# body sent unwrapped would submit at every newline, so the text is wrapped in
+# bracketed paste with newlines as CR, and the submit is a separate write after
+# the same settle delay the browser uses.
 log = logging.getLogger("swe_mux.prompt_queue")
 
-BRACKETED_PASTE_START = "\x1b[200~"
-BRACKETED_PASTE_END = "\x1b[201~"
 SUBMIT_SEQUENCE = "\r"
 SUBMIT_DELAY_SECONDS = 0.18
 # A CLI turns a large paste into a placeholder chip and is busy while it does,
@@ -2222,7 +2222,7 @@ class PromptQueueService:
                 confirmed = True
 
         body = str(message["body"])
-        data = paste_payload(body)
+        data = delivery_payload(body, session.record.backend)
         byte_count = len(data.encode("utf-8")) + len(SUBMIT_SEQUENCE)
         try:
             self._write(session, data)
@@ -2445,10 +2445,27 @@ def schedule_status(message: dict[str, Any], now: float) -> str:
     return "due"
 
 
-def paste_payload(message: str) -> str:
-    """Bracketed-paste wrapper with newlines as CR — what xterm writes for a real paste."""
-    normalized = message.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r")
-    return f"{BRACKETED_PASTE_START}{normalized}{BRACKETED_PASTE_END}"
+def delivery_payload(message: str, backend: object) -> str:
+    """The bytes that put one queued body into ``backend``'s composer.
+
+    Leading newlines are dropped rather than lifted into key presses, which is
+    the one place the two differ from an ordinary insert. Delivery has already
+    passed the readiness gate, so the composer is empty by contract and a leading
+    blank line is noise ahead of a body that is about to be submitted — while a
+    rail or library insert lands on top of whatever a person was mid-way through
+    typing, where the same newline is the separator they asked for.
+
+    Dropping them is also the defence that does not depend on a measurement: it
+    is safe on a harness nobody has characterised, and on Codex it is what stops
+    a body beginning with a newline from submitting the operator's own draft as
+    its own turn to the model.
+    """
+    newline_keys, lift = composer_insertion_rules(backend)
+    return composer_insertion(
+        message.lstrip("\r\n"),
+        newline_keys=newline_keys,
+        lift_leading_newline=lift,
+    )
 
 
 def stage_seed_argv(cwd: str, text: str) -> str:

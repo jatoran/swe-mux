@@ -16,7 +16,7 @@ import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
-import { pastePayload } from './noteSelection'
+import { composerInsertion } from './composerInsertion'
 import { QueuePane } from './QueuePane'
 import { ChangeMapPane } from './ChangeMapPane'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
@@ -166,7 +166,7 @@ import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalView
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
-import { insertIntoTerminal, requestTerminalAction } from './terminalActions.ts'
+import { insertIntoTerminal, insertionRefusal, requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -4288,7 +4288,11 @@ export function App() {
     const sid = target.session.id
     try {
       if (!target.submit) {
-        await api('POST',`/api/sessions/${sid}/input`,{data:pastePayload(message)})
+        // Filling a composer is an insert, not a delivery, so it does not pass the
+        // queue's readiness gate — and therefore has to refuse a dialog itself.
+        const refusal=insertionRefusal(target.session)
+        if(refusal)return{status:'error',error:refusal}
+        await api('POST',`/api/sessions/${sid}/input`,{data:composerInsertion(message,target.session.backend)})
         await selectSession(target.session)
         return { status: 'done' }
       }
@@ -7027,14 +7031,14 @@ export function App() {
         defaultWidth={DRAWER_DEFAULT_WIDTH}
         onWidth={width=>persistDrawerWidth(width,drawerWidthLimit)}
         onInsert={text=>{
-          const target=insertIntoFocusedSurface(text,activeId)
+          const target=insertIntoFocusedSurface(text,activeId,{onRefused:setError})
           if(target==='none')setError('Focus a terminal or note before inserting text.')
           return target
         }}
         // A prompt template is written for an agent to read: routing one into whichever
         // note or file pane happened to be focused last edits that document instead.
         onInsertPrompt={text=>{
-          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true})
+          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true,onRefused:setError})
           if(target==='none')setError('Focus an agent session before inserting a prompt.')
           return target
         }}
@@ -7527,7 +7531,7 @@ export function App() {
         under the dialog closes it instead of leaving it aimed at a pane that is gone. */}
     {(()=>{const target=branchPickerId?sessions.find(item=>item.id===branchPickerId):null
       return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
-    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
+    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} startCreating={promptLibraryCreating} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null);setPromptLibraryCreating(false)}} onInsert={text=>{const sid=promptTargetId||activeId;if(sid)void insertIntoTerminal(sid,text,false).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))}}/>}
 
     {resourcesOpen&&<ResourcesModal
       initial={resourcesOpen}

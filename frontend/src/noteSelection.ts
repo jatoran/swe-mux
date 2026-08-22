@@ -164,16 +164,8 @@ export function composeAgentMessage(body: string, source: MessageSource): string
 // into the workspace with a reader prompt, so the browser carries no length ceiling.
 
 // Filling a *live* session's composer goes over `POST /api/sessions/{id}/input`, which writes
-// raw bytes: a multi-line body sent unwrapped would submit at every newline. xterm's own paste
-// path (what the terminal rail uses) wraps in bracketed paste, so the same wrapping is rebuilt
-// here for the writes that never pass through a mounted pane. Agent TUIs have bracketed paste
-// on, which is why only Claude/Codex sessions are offered as targets. Actual *delivery*
+// raw bytes: a multi-line body sent unwrapped would submit at every newline. The bytes for that
+// write are built by `composerInsertion.ts`, which is also what the mounted pane and the daemon
+// use, so a harness quirk is answered once rather than per caller. Agent TUIs have bracketed
+// paste on, which is why only Claude/Codex sessions are offered as targets. Actual *delivery*
 // (paste + submit) is the queue's send operation, performed daemon-side.
-export const BRACKETED_PASTE_START = '\x1b[200~'
-export const BRACKETED_PASTE_END = '\x1b[201~'
-
-/** Newlines become CR inside the block, matching what xterm writes for a real paste. */
-export function pastePayload(message: string): string {
-  const normalized = message.replace(/\r\n?/g, '\n').replace(/\n/g, '\r')
-  return `${BRACKETED_PASTE_START}${normalized}${BRACKETED_PASTE_END}`
-}
