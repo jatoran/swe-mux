@@ -6,19 +6,27 @@ import {
 } from './automationCost'
 import { ModelName } from './ModelName'
 
-// What automation and the agents cost, drawn identically in two places.
+// What automation costs, drawn identically in two places.
 //
-// It is the Automation dashboard's `spend` view and it is a domain of Resources / Tokens,
-// and it is deliberately the *same component* rather than two views over one endpoint.
-// Both readings are legitimate and neither is the "real" one: from Automation you ask which
-// rule burned this, and the rules are right there; from Resources you ask what you are
-// burning in total, and the other three meters are right there. Duplicating the markup to
-// serve both would have reproduced exactly the drift this consolidation removed elsewhere,
-// where one table under two names disagreed with itself.
+// It is the Automation dashboard's `cost breakdown` view and it is the Usage dialog's
+// `Automation` segment, and it is deliberately the *same component* rather than two views
+// over one endpoint. Both readings are legitimate and neither is the "real" one: from
+// Automation you ask which rule burned this, and the rules are right there; from Usage you
+// ask what you are burning in total, and the other two pots are right there. Duplicating
+// the markup to serve both would have reproduced exactly the drift this consolidation
+// removed elsewhere, where one table under two names disagreed with itself.
 //
-// The two pots are never summed. Observers bill a metered OpenRouter key by the call;
-// agents bill a subscription and their figures are estimates. A total across them would be
-// a number that is true of nothing.
+// The pots are never summed. Observers bill a metered OpenRouter key by the call; agents
+// bill a subscription and their figures are estimates. A total across them would be a
+// number that is true of nothing.
+//
+// The agent table is a *subset*, and saying so is a correction rather than a caption.
+// `provider_cost_dimensions` covers only runs mux observed, while the Usage dialog's Agents
+// segment reads ccusage over every transcript the harness wrote - the same pot, two
+// denominators. Drawn as a bare total beside a bare total it read as a second, competing
+// answer to "what did the agents cost", which is precisely the one-number-under-two-names
+// failure the shared component above exists to prevent. It is therefore labelled by its
+// denominator everywhere it appears and never as the agent total.
 
 type SpendData = {
   spend_today: { tokens: number; cost_usd: number }
@@ -83,7 +91,9 @@ export function AutomationSpendView() {
               invisible in a seven-day average. */}
           <article><span>prompt cache</span><strong title={cacheHitDetail(todayCache)}>{todayCache?formatPercent(todayCache.rate):'—'}</strong><small title={cacheHitDetail(windowCache)}>{windowCache?`${formatPercent(windowCache.rate)} over ${spendDays}d · ${formatCount(windowCache.cached)} tokens cached`:'no billed prompt tokens yet'}</small></article>
           <article><span>call outcomes</span><strong>{formatCount(calls.total)}</strong><small class={calls.failed?'warn':''}>{formatCount(calls.failed)} failed or cancelled · {formatPercent(calls.failureRate)}</small></article>
-          <article><span>agent models</span><strong title={exactMoney(agentSpend)}>{formatMoney(agentSpend)}</strong><small>estimated · {formatCount(agentTokens)} tokens</small></article>
+          {/* Named for its denominator, not for its subject. This is what the runs mux
+              *watched* cost, which is a floor under the agent pot rather than the pot. */}
+          <article><span>agents · observed runs</span><strong title={exactMoney(agentSpend)}>{formatMoney(agentSpend)}</strong><small>estimated subset · {formatCount(agentTokens)} tokens</small></article>
         </div>
         <section class="usage-table">
           <h3>What automation is costing</h3>
@@ -107,8 +117,8 @@ export function AutomationSpendView() {
           </table></div>:<div class="automation-empty"><strong>No observer spend in the last {spendDays} days</strong><span>Enabled observers that never fired, and deterministic health checks, cost nothing and do not appear here.</span></div>}
         </section>
         <section class="usage-table">
-          <h3>Agent model spend</h3>
-          <p>Your agent subscription usage, which is a different pot of money from the observer spend above and is never added to it. {telemetry?.cost_note?`${telemetry.cost_note}.`:'Backend/model aggregates from the harness, not attributed to individual runs.'}</p>
+          <h3>Agent model spend · observed runs only</h3>
+          <p>A different pot of money from the observer spend, and never added to it: this is subscription usage, estimated. It is also a <strong>subset</strong> - only runs swe-mux observed - so it is a floor under the agent total rather than the total. Usage → Agents reads ccusage over every transcript the harness wrote, and that is the figure to compare a bill against. {telemetry?.cost_note?`${telemetry.cost_note}.`:'Backend/model aggregates from the harness, not attributed to individual runs.'}</p>
           {telemetry?.provider_cost_dimensions.length?<div class="usage-table-scroll"><table class="data-table">
             <thead><tr><th>backend / model</th><th>cost</th><th>tokens</th><th>source</th></tr></thead>
             <tbody>{telemetry.provider_cost_dimensions.map(row=><tr key={`${row.backend}:${row.model}`}>
@@ -117,7 +127,7 @@ export function AutomationSpendView() {
               <td data-label="tokens" title={integer.format(row.tokens)}>{formatCount(row.tokens)}</td>
               <td data-label="source" class="cost-source">{row.attribution}</td>
             </tr>)}</tbody>
-            <tfoot><tr><td data-label="backend / model">all backends</td><td data-label="cost" title={exactMoney(agentSpend)}>{formatMoney(agentSpend)}</td><td data-label="tokens">{formatCount(agentTokens)}</td><td/></tr></tfoot>
+            <tfoot><tr><td data-label="backend / model">all observed runs</td><td data-label="cost" title={exactMoney(agentSpend)}>≥ {formatMoney(agentSpend)}</td><td data-label="tokens">{formatCount(agentTokens)}</td><td/></tr></tfoot>
           </table></div>:<div class="automation-empty"><strong>No agent cost aggregates</strong><span>Harness usage reporting has not produced per-model figures yet.</span></div>}
         </section>
   </div>

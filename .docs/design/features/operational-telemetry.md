@@ -162,6 +162,17 @@ lane, not on every pull request. Compaction remains fixture-driven because forci
 context compaction is slow, costly, and nondeterministic; newly observed native compaction
 records must be sanitized into the versioned fixture corpus.
 
+## Surfaces
+
+`/api/telemetry/operational` is read by two dialogs, for different halves of one payload.
+
+- **Usage → Quota** takes `quota.attributions`, beside the quota charts and the reset log (`usage.md`).
+- **Resources → Fleet activity** takes `tools` and `compactions`, and draws `runs + workload` from `/api/telemetry/workloads` beside them (`ui.md`).
+
+The split follows the question rather than the endpoint.
+Quota movement is one of the three pots of spend; tool calls, skill invocations, and compaction events measure behavior and are not a currency, so they sit beside Processes rather than beside a bill.
+Parser and reconciliation coverage is drawn collapsed under the tool metrics it qualifies: it says whether those figures were collectable, which is asked only once they already look wrong.
+
 ## API surface
 
 ```text
@@ -205,7 +216,8 @@ or session lifecycle.
 - History summaries/migrations: `src/swe_mux/history.py`
 - Composition/API: `src/swe_mux/server.py`
 - Process UI: `frontend/src/ProcessPanel.tsx`
-- Telemetry UI: `frontend/src/UsageDashboardView.tsx`, `frontend/src/QuotaAnalytics.tsx`, `frontend/src/ProviderAccounts.tsx`
+- Telemetry UI: `frontend/src/FleetActivityView.tsx`, `frontend/src/WorkloadTelemetry.tsx`, `frontend/src/QuotaAnalytics.tsx`, `frontend/src/ProviderAccounts.tsx`
+- Frontend payload shapes: `frontend/src/operationalTelemetry.ts`
 - Fixtures/tests: `tests/fixtures/telemetry/v1/`, `tests/test_operational_telemetry_phase2.py`,
   `tests/test_live_agent_conformance.py`
 

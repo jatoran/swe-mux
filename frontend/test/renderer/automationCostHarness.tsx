@@ -103,6 +103,6 @@ window.fetch = (async (input: RequestInfo | URL) => {
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  <AutomationDashboard onClose={() => {}} onConfigure={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} />,
+  <AutomationDashboard onClose={() => {}} onConfigure={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} onOpenUsage={() => {}} />,
   document.querySelector('#root')!,
 )

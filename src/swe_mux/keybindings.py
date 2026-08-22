@@ -34,6 +34,7 @@ KEYBINDING_COMMANDS = (
     ("projects.open", "Browse project registry", "view"),
     ("settings.open", "Open Settings", "view"),
     ("usage.open", "Open usage analytics", "view"),
+    ("usage.quota", "Open provider quota windows", "view"),
     ("hooks.open", "Open hooks and notification settings", "view"),
     ("notifications.open", "Open notifications", "view"),
     ("notes.scratchpad", "Open global Scratchpad", "view"),
@@ -163,7 +164,8 @@ KEYBINDING_COMMANDS = (
     ("drawer.moveUp", "Side panel: move focused tab up", "view"),
     ("drawer.moveDown", "Side panel: move focused tab down", "view"),
     ("clipboard.open", "Side panel: always clipboard history (rail Clip button)", "clipboard"),
-    ("resources.open", "Open resources (processes, bandwidth, storage, tokens)", "view"),
+    ("resources.open", "Open resources (processes, bandwidth, storage, fleet activity)", "view"),
+    ("fleetActivity.open", "Open fleet activity telemetry", "view"),
     ("clipboard.clear", "Clear unpinned clipboard history", "clipboard"),
     # Conversation capture is workspace-level. These commands make the visible mic
     # and target-pin controls optional gesture/keybinding destinations too.

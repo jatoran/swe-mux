@@ -93,7 +93,20 @@ test('the spend view is one component drawn in both places rather than two copie
   // "Fully mirrored" has to mean the same component: two views over one endpoint is
   // exactly the drift this consolidation removed everywhere else.
   assert.ok(source('AutomationDashboard.tsx').includes('<AutomationSpendView/>'))
-  assert.ok(source('UsageDashboardView.tsx').includes('<AutomationSpendView/>'))
+  assert.ok(source('UsageModal.tsx').includes('<AutomationSpendView />'))
+})
+
+test('the agent figure in the spend view is labelled as a subset, not as the agent total', () => {
+  // `provider_cost_dimensions` covers only runs mux observed; ccusage covers every
+  // transcript the harness wrote. Drawn as two bare totals they were two competing answers
+  // to one question, which is the exact failure the shared component above prevents
+  // elsewhere. The denominator is therefore in the label, in the heading, and in the foot.
+  const spend = source('AutomationSpendView.tsx')
+  assert.ok(spend.includes('agents · observed runs'))
+  assert.ok(spend.includes('Agent model spend · observed runs only'))
+  assert.ok(spend.includes('all observed runs'))
+  // ...and it never claims to be the whole pot.
+  assert.ok(!spend.includes('<h3>Agent model spend</h3>'))
 })
 
 test('the Findings pane is read-only and links to the Automation dashboard', () => {

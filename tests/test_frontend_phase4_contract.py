@@ -591,12 +591,23 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     assert "BROWSE ALL PROJECTS" not in main_menu
     assert "CURRENT PROJECT" not in main_menu
     # The app menu opens each browser unscoped, never its project-scoped variant.
-    # Processes, bandwidth, storage, and token spend are one `Resources…` row now, so the
-    # menu names the dialog rather than four of its segments; `processes.all` survives as a
+    # Processes, bandwidth, storage, and fleet activity are one `Resources` row, so the menu
+    # names the dialog rather than four of its segments; `processes.all` survives as a
     # command and as the sidebar menu's row, and still opens the dialog on Processes.
-    for command in ("history.open", "notes.browse", "resources.open", "prompts.open"):
+    #
+    # `usage.open` is a row again, and a separate one. Spend was a segment of Resources,
+    # where the surface named for money had no total on its first screen and three of its
+    # six tabs measured neither a token nor a dollar. A subject nobody finds by guessing
+    # which meter it was filed under is what a menu row is for.
+    for command in (
+        "history.open",
+        "notes.browse",
+        "resources.open",
+        "usage.open",
+        "prompts.open",
+    ):
         assert f"runNamedCommand('{command}')" in main_menu
-    for retired_row in ("usage.open", "networkUsage.open", "storageUsage.open"):
+    for retired_row in ("networkUsage.open", "storageUsage.open", "fleetActivity.open"):
         assert f"runNamedCommand('{retired_row}')" not in main_menu
     for scoped in (
         "history.openProject",

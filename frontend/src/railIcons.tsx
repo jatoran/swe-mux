@@ -357,6 +357,17 @@ export const DashboardIcon = () => <svg {...stroke}>
   <circle cx="12" cy="17.5" r="1.3" fill="currentColor" stroke="none" />
 </svg>
 
+/** Three bars of different heights over a baseline: spend, which is a quantity compared
+ *  against other quantities. Deliberately not a coin or a currency glyph — one of the three
+ *  pots behind this row is a percentage of a provider window and is not money at all, and a
+ *  dollar sign would promise a dialog that only holds two thirds of what it opens. */
+export const SpendIcon = () => <svg {...stroke}>
+  <line x1="3.5" y1="20" x2="20.5" y2="20" />
+  <rect x="5" y="12.5" width="3.6" height="7.5" />
+  <rect x="10.2" y="7" width="3.6" height="13" />
+  <rect x="15.4" y="4" width="3.6" height="16" />
+</svg>
+
 /** A wrench: the group holding the reload and rebuild controls. Maintenance is the one entry
  *  here that is a category rather than a destination, and a tool is how a menu says so. */
 export const WrenchIcon = () => <svg {...stroke}>

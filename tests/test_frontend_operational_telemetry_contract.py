@@ -30,21 +30,57 @@ def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() ->
     assert "auto" + "kill" not in view.lower()
 
 
-def test_usage_dashboard_exposes_phase2_evidence_without_identity_overclaim() -> None:
-    dashboard = source("UsageDashboardView.tsx")
+def test_operational_evidence_survives_the_split_without_identity_overclaim() -> None:
+    """The evidence surfaces moved to two dialogs; every claim they make moved with them.
+
+    Quota is one of the three pots of spend and lives in the Usage dialog. Tool, skill, and
+    compaction evidence measures behavior rather than money and lives in Resources → Fleet
+    activity. One `/api/telemetry/operational` payload feeds both halves, so the shapes are
+    shared rather than copied into each reader.
+    """
+    telemetry = source("operationalTelemetry.ts")
+    fleet = source("FleetActivityView.tsx")
+    modal = source("UsageModal.tsx")
+    segments = source("usageSegments.ts")
     quota = source("QuotaAnalytics.tsx")
-    assert "/api/telemetry/operational" in dashboard
-    assert "quota + resets" in dashboard
+
+    # One declared path and one set of shapes, read by both dialogs.
+    assert "/api/telemetry/operational" in telemetry
+    assert "OPERATIONAL_TELEMETRY_PATH" in fleet
+    assert "OPERATIONAL_TELEMETRY_PATH" in modal
     assert "/api/telemetry/quota-series" in source("usageAnalytics.ts")
+
+    # Quota keeps its account semantics and its refusal to overclaim them.
+    assert "<QuotaAnalytics" in modal
     assert "external/unassigned" in quota
     assert "Correlation remains observational" in quota
     assert "Legacy rows without a provider ID are marked explicitly" in quota
-    assert "not account-specific" in dashboard
-    assert "tools + skills" in dashboard
-    assert "unknown or unmapped" in dashboard
-    assert "project/session" in dashboard
-    assert "parser_versions" in dashboard
-    assert "Token drops alone remain unknown" in dashboard
+
+    # ...and the historical pot beside it keeps the opposite promise, which is why the
+    # caveat is per segment rather than one line for the dialog: ccusage reads transcript
+    # roots that carry no trustworthy saved-account identity, so a historical row must never
+    # be presented as belonging to an account slot.
+    assert "not account-specific" in segments
+    assert "quota utilization, not tokens" in segments
+    assert "{active.footer}" in modal
+
+    # Tool, skill, and compaction evidence, with every caveat it carried before the move.
+    assert "tools + skills" in fleet
+    assert "context + compaction" in fleet
+    assert "unknown or unmapped" in fleet
+    assert "project/session" in fleet
+    assert "parser_versions" in fleet
+    assert "Token drops alone remain unknown" in fleet
+    assert "Prompt similarity and file reads never imply skill usage" in fleet
+    # Parser coverage is a collapsed diagnostic, not a third peer metric: it says whether
+    # the figures above were collectable, which is asked only once they look wrong.
+    assert "telemetry-collection-health" in fleet
+    assert "<details class=\"telemetry-collection-health\">" in fleet
+
+    # Money is deliberately absent here. The Usage dialog is the whole cost picture, and a
+    # second table of one number under a second name is the drift this split removed.
+    for money in ("cost_usd", "AutomationSpendView", "formatMoney"):
+        assert money not in fleet
 
 
 def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile() -> None:

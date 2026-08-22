@@ -41,6 +41,8 @@ import { PreviewPane } from './PreviewPane'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { ResourcesModal, type ResourceSegment } from './ResourcesModal'
+import { UsageModal } from './UsageModal'
+import type { UsageSegment } from './usageSegments'
 import { HistoryBrowser } from './HistoryBrowser'
 import { resumeDraft, type ScheduleDraft, type ScheduleTargetKind } from './schedules'
 import { AccountSwitcher } from './ProviderAccounts'
@@ -90,7 +92,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, TrashIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
+import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -658,10 +660,13 @@ export function App() {
   // through the `mux:settings-changed` event the device-settings cache emits.
   const [alertsEnabled, setAlertsEnabled] = useState(() => alertPreferences().enabled)
   const [railVoiceRevision,setRailVoiceRevision]=useState(0)
-  // Processes, bandwidth, storage, and token spend are one dialog now (`ResourcesModal`).
+  // Processes, bandwidth, storage, and fleet activity are one dialog (`ResourcesModal`).
   // `null` is closed; the value is the segment it opens on, so every entry point that
   // named a resource still lands on that resource.
   const [resourcesOpen,setResourcesOpen]=useState<ResourceSegment|null>(null)
+  // Spend is its own dialog (`UsageModal`), not a segment of the one above. Same
+  // null-is-closed shape, because the same deep-link commands point into it.
+  const [usageOpen,setUsageOpen]=useState<UsageSegment|null>(null)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
@@ -4175,6 +4180,13 @@ export function App() {
     setResourcesOpen(segment)
     setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null)
   }
+  /** Open the Usage dialog on one of its segments. Separate from `openResources` because
+   *  they are separate dialogs: spend is a retrospective question asked of a ledger, and
+   *  the meters beside Processes go stale in seconds. */
+  const openUsage=(segment:UsageSegment)=>{
+    setUsageOpen(segment)
+    setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null)
+  }
 
   const removeWorkspaceNote = async (targetProject:string,resourceId:string) => {
     if(focusedViewId===resourceId)setFocusedViewId(activeId)
@@ -5140,10 +5152,16 @@ export function App() {
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
     { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
-    // One dialog, four entry points. The ids are unchanged so keybindings and menu rows
-    // that already name a resource keep working and keep landing on that resource.
+    // Two dialogs. The ids are unchanged so keybindings and menu rows that already name a
+    // surface keep working and keep landing on it — `usage.open` most of all, which has
+    // been called "Open usage analytics" the whole time while opening a segment of the
+    // dialog about processes and disk, and now opens the dialog it is named for.
     { id: 'resources.open', label: 'Open resources', category: 'view', available: true, run: () => openResources('processes') },
-    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => openResources('tokens') },
+    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => openUsage('overview') },
+    // Quota is the one reading here that is ever urgent, so it gets a command of its own
+    // rather than being two clicks inside the one above.
+    { id: 'usage.quota', label: 'Open provider quota windows', category: 'view', available: true, run: () => openUsage('quota') },
+    { id: 'fleetActivity.open', label: 'Open fleet activity telemetry', category: 'view', available: true, run: () => openResources('fleet') },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => openResources('network') },
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
@@ -7447,11 +7465,16 @@ export function App() {
       <button class="menu-row" onClick={() => runNamedCommand('queue.fleet')}><span class="menu-row-icon" aria-hidden="true"><QueueClockIcon/></span><span class="menu-row-label">Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</span></button>
       <button class="menu-row" onClick={()=>runNamedCommand('prompts.open')}><span class="menu-row-icon" aria-hidden="true"><PromptsIcon/></span><span class="menu-row-label">Prompt library</span></button>
       <button class="menu-row" onClick={()=>runNamedCommand('clipboard.open')}><span class="menu-row-icon" aria-hidden="true"><ClipboardHistoryIcon/></span><span class="menu-row-label">Clipboard history</span></button>
-      {/* One row for what used to be four — processes, bandwidth, storage, and token
-          spend are segments of one dialog now. The three named entry points survive as
-          palette commands and as the sidebar's resource chip, which lands on the
-          segment it was already showing. */}
+      {/* One row for processes, bandwidth, storage, and fleet activity — segments of one
+          dialog. The named entry points survive as palette commands and as the sidebar's
+          resource chip, which lands on the segment it was already showing. */}
       <button class="menu-row" onClick={() => runNamedCommand('resources.open')}><span class="menu-row-icon" aria-hidden="true"><ProcessesIcon/></span><span class="menu-row-label">Resources</span></button>
+      {/* Spend is the eighth row, and it is worth the row. It was a segment of Resources,
+          where the surface named for money had no total on its first screen and three of
+          its six tabs measured neither a token nor a dollar. The menu-row budget is real
+          and this is what it is for: a subject nobody finds by guessing which meter it was
+          filed under. */}
+      <button class="menu-row" onClick={() => runNamedCommand('usage.open')}><span class="menu-row-icon" aria-hidden="true"><SpendIcon/></span><span class="menu-row-label">Usage &amp; spend</span></button>
       <button class="menu-row" onClick={() => runNamedCommand('notifications.open')}><span class="menu-row-icon" aria-hidden="true"><AlertsIcon/></span><span class="menu-row-label">Notifications{notificationUnread?` [${notificationUnread} new]`:''}</span></button>
       <div class="context-rule"/>
       {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
@@ -7550,7 +7573,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setResourcesOpen('tokens')}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
@@ -7569,8 +7592,13 @@ export function App() {
       sessions={sessions}
       projects={projects}
       onAttached={attachPreview}
-      onConfigureUsage={()=>{setResourcesOpen(null);openSettings('Usage analytics')}}
       onClose={()=>{setResourcesOpen(null);setProcessSession(null)}}
+    />}
+    {usageOpen&&<UsageModal
+      initial={usageOpen}
+      onConfigure={()=>{setUsageOpen(null);openSettings('Usage analytics')}}
+      onOpenAutomation={()=>{setUsageOpen(null);setAutomationOpen(true)}}
+      onClose={()=>setUsageOpen(null)}
     />}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}}
@@ -7578,6 +7606,10 @@ export function App() {
       // way out: they are drawer tabs, and the dialog covers the drawer.
       onOpenAlerts={()=>{setAutomationOpen(false);openDrawerTab('notifications')}}
       onOpenFindings={()=>{setAutomationOpen(false);openDrawerTab('activity',projectId,'findings')}}
+      // Lands on the spend table's own segment, not on the Overview: someone crossing from
+      // the rules is already asking about automation, and wants the other two pots beside
+      // it rather than instead of it.
+      onOpenUsage={()=>{setAutomationOpen(false);openUsage('automation')}}
       onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
 

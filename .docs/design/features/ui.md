@@ -344,7 +344,7 @@ Its rules, and what each one is defending:
 ## Menus and overlays
 
 - Scope follows the menu that opened a surface, never a hidden mode.
-  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
+  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, Usage & spend, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
   Right-clicking empty sidebar space is the no-Project case and matches the app menu.
 - **A Project menu row has to earn its place against the drawer.**
   Notes, Processes, the fleet queue, and Browse files each left it, because each is a drawer tab or a dialog that already opens on the *selected* Project - so right-clicking a Project row to reach them was a second route to a place one click away, and the two that stayed are the two with no such home.
@@ -364,6 +364,12 @@ Its rules, and what each one is defending:
   say which. Unfolded, those counts are back on the rows that own them, where one number
   means one thing. What divides the halves now is a plain rule, not a `CONFIGURATION`
   heading over an already-obvious group.
+- **`Usage & spend` is the eighth row, and the row is what the budget is for.**
+  It was a segment of Resources, and the way it did not fit is the argument for spending a
+  row on it: the surface named for money had no total on its first screen, and three of its
+  six tabs measured neither a token nor a dollar. A subject nobody finds by guessing which
+  meter it was filed under is exactly the thing a menu row buys. The row-count discipline
+  above is about rows that duplicate a route, not about refusing a destination.
 - **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
   the menu is — so a mark that means "this opens something" appeared on nearly all of them
   and therefore distinguished none.
@@ -2708,7 +2714,8 @@ Detailed UI behavior belongs with the owning feature:
 - Agent runtime and extension inspection: `agent-environment.md`
 - Provider selection and reset review: `provider-accounts.md`
 - CPU/RSS and the Resources dialog's Processes segment: `processes-and-previews.md`
-- Quota/context/tool evidence: `operational-telemetry.md`
+- The Usage dialog, the three pots, and historical collection: `usage.md`
+- Quota/context/tool evidence, and the Resources dialog's Fleet activity segment: `operational-telemetry.md`
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
 - Global Talk, registry-backed navigation, fleet speech, and guarded approvals: `voice.md`
