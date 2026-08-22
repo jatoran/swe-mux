@@ -3511,6 +3511,15 @@ export function App() {
       create_missing:projectCreate.mode==='new',
     })
     setProjects(items=>[...items,next]);setProjectId(next.id);setProjectCreateOpen(false);setFolderPickerOpen(false)
+    // Land in the new Project's workspace, not on the registry that happens to be behind
+    // this dialog (operator decision 2026-08-22). The sidebar's `+` opens Manage projects
+    // as a backdrop for the create form, so submitting used to reveal the settings editor
+    // for a Project nobody has looked at yet - a configuration screen offered before the
+    // thing being configured has been seen. The registry is one click away from the
+    // sidebar for anyone who actually wants it, and the tutorial's own `project-open` step
+    // reopens it by name. On a phone the sidebar closes too, or the Project is selected
+    // behind a panel covering the workspace it just switched to.
+    setProjectsManagerOpen(false);setProjectsManagerFocus(null);setSidebarOpen(false)
     emitTutorialAction({action:'project-created'})
     // The starting set, through the ordinary grant path so it leaves the same audit
     // record as one pressed from a gate. After the registration and never before it: a
@@ -6656,13 +6665,20 @@ export function App() {
           images, and an edge toggle sitting anywhere but its own edge reads as unrelated to
           the panel it opens. Run gives up the corner for it and is found by its label. Opens
           the last tab used, which is why the icon is the panel and not one tab's mark. */}
+      {/* In the bar rather than under it. A floating card below a 44px toolbar covers the
+          top of the workspace for the whole multi-minute build, on the screen that has the
+          least of it to spare. It is a real toolbar control here: spinner and clock only,
+          with the phase word and the build log behind a tap. The Project title is the item
+          that gives up the width - it already ellipsizes, and it is also in the sidebar. */}
+      {mobileWorkspace&&<RedeployChip state={redeploy} inline />}
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
-    {/* Pinned to the top-left corner for every client, whether or not it is the
-        one that started the redeploy. Non-blocking: during the build stage there
-        is a working app underneath it. */}
-    <RedeployChip state={redeploy} />
+    {/* Desktop only: the phone renders it inside `.mobile-toolbar` above, and mounting
+        both would run a second one-second timer for a chip nobody can see. Pinned under
+        `.app-topbar` for every client, whether or not it is the one that started the
+        redeploy. Non-blocking: during the build stage there is a working app underneath. */}
+    {!mobileWorkspace&&<RedeployChip state={redeploy} />}
 
     <ContinuityBanner />
     {uiUpdateAvailable && <div class="ui-update-banner" role="status" aria-live="polite">

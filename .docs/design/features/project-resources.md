@@ -452,12 +452,23 @@ include a registered Project nested below another Git root.
   lazily expanded from the canonical Project root. Traversal and symlink escapes are rejected;
   one directory response is capped at 2,000 entries. Its header carries the Project root, which
   is the only thing naming which tree this is once it stopped being a labelled pane tab.
+- That header also carries the tab's one link to **ignore patterns** (operator decision
+  2026-08-22), which is where the reader who has just noticed `node_modules` in this tree is
+  standing. It is a `SettingLink` to Settings → Projects → Global project ignores
+  (`setting-links.md`), not an editor: a link is what a *value* gets, because a control can
+  honestly offer "turn this on" and never "type a glob list". The global list rather than the
+  Project's, because that is the one that hides a folder everywhere, and the panel it lands on
+  names the per-Project half that composes with it.
+- The tab has **two subtabs**: `File Explorer` (the tree) and `Recent`. See `ui.md` for why these
+  are registered segments rather than the pressed icon they replaced.
 - A debounced search box at the top of the Files tab filters recursively by file name, file
   content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
   path-ordered result list (content matches show the first matching line); clearing it restores
   the tree. Results and the tree share the same open, context-menu, and drag behavior.
-- A **Recent** toggle beside the search-scope button replaces the tree with the files Git says
-  were touched here, at most twenty of them.
+- The **Recent** subtab replaces the tree with the files Git says were touched here, at most
+  twenty of them. It was a pressed clock icon beside the search-scope button until 2026-08-22;
+  a search query still outranks whichever subtab is selected behind it, because searching is an
+  explicit act.
   Working-tree changes lead, in the order `git status` prints them, then paths from the most
   recent commits, newest first.
   A working-tree row has no timestamp and needs none - an uncommitted edit is by definition

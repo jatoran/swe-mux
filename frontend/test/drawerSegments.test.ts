@@ -41,7 +41,11 @@ test('a segmented tab has at least two segments, and a section-only tab has none
   for (const tab of DRAWER_SEGMENT_TABS) {
     assert.ok(drawerSegmentsFor(tab, 'segment').length >= 2, `${tab} needs a real choice`)
   }
-  assert.deepEqual([...DRAWER_SEGMENT_TABS].sort(), ['activity', 'agent', 'git'])
+  assert.deepEqual([...DRAWER_SEGMENT_TABS].sort(), ['activity', 'agent', 'files', 'git'])
+  // Files is the newest of them (2026-08-22): the tree and Recent were one component and a
+  // pressed icon in the search row, which is a mode with no name in the chrome and no way
+  // to reach it by command or by voice. Two segments is exactly the choice that toggle was.
+  assert.deepEqual(drawerSegmentsFor('files', 'segment').map(item => item.id), ['explorer', 'recent'])
   // Actions is sections only: everything on it ends in text reaching the focused agent,
   // so a mode switch between "the thing I want to send" and "the other thing I want to
   // send" would buy nothing and cost a click.

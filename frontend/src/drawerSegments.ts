@@ -101,6 +101,17 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // instructions in effect. The heading carries the longer, exact name.
   { tab: 'agent', id: 'instructions', kind: 'segment', label: 'Instructions', heading: 'Instructions & Memory', title: 'Instructions - instruction files and learned project memory this agent reads' },
 
+  // Files. The tree and the Recent list are two readings of the same Project, and Recent
+  // was a pressed icon inside the search row until now - a mode with no name anywhere in
+  // the chrome, which is exactly the shape this registry exists to replace. As a segment it
+  // is addressable ("open Recent"), it persists per Project like every other view choice,
+  // and the reader can see which of the two they are in without inspecting a toggle's
+  // pressed state. The labels are the headings rather than shorter chips: "File Explorer"
+  // is what this surface is called everywhere else, and abbreviating it here to fit a chip
+  // would rename it for no reason.
+  { tab: 'files', id: 'explorer', kind: 'segment', label: 'File Explorer', heading: 'File Explorer', title: 'File Explorer - browse and search this Project’s tree' },
+  { tab: 'files', id: 'recent', kind: 'segment', label: 'Recent', heading: 'Recent', title: 'Recent - what Git says was touched here, uncommitted work first' },
+
   // Git. Registered rather than left on local state, so the drawer has one mechanism for
   // this idea instead of two. Lifting it also buys "open Git Log" as a voice phrase.
   { tab: 'git', id: 'map', kind: 'segment', label: 'Map', heading: 'Worktree Map', title: 'Map - one row per worktree, with its files, changes, and live sessions' },

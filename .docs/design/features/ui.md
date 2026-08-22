@@ -530,8 +530,16 @@ Its rules, and what each one is defending:
   frozen-app rebuild; the only reload that reaches the frozen bundle's own assets).
   A redeploy has two stages that the UI deliberately treats as unalike.
   While the new bundle builds in `dist/.staging` the current daemon keeps serving, so the app stays
-  fully usable and the only sign of the redeploy is a persistent expandable spinner pinned to the
-  top-left corner, carrying the stage, an elapsed timer, and the build log tail.
+  fully usable and the only sign of the redeploy is a persistent expandable spinner **in the top
+  bar**, carrying the stage, an elapsed timer, and the build log tail.
+  Two placements, one per bar, and exactly one is mounted - a second instance would run a second
+  one-second timer for a chip nobody can see. On desktop it is a card floating under
+  `.app-topbar`. On a phone it is a control *inside* `.mobile-toolbar` (fixed 2026-08-22): it used
+  to float 54px below that bar, which covered the top of the workspace it was reporting on, for
+  the whole multi-minute build, on the screen with the least of it to spare.
+  Inline it is a spinner and a clock; the phase word stays in the DOM (`sr-only`) so the
+  `role="status"` announcement is unchanged, and a tap drops the full phase and the log below
+  the bar rather than growing it to a second row.
   Blocking here would lock the user out of a working app, and a failed build would have locked them
   out for nothing.
   Once the daemon actually goes away, the app is unusable in a way that loses work silently -
@@ -1601,6 +1609,11 @@ Its rules, and what each one is defending:
   That is the "the panel is thrown up the screen when I start typing" report exactly.
   Both are corrected rather than side-stepped by portalling the overlays to the body, which would take the rail's chip styling with them.
   Placement re-runs on `visualViewport` resize and scroll as well as on window resize and capture-phase scroll, because the keyboard's open and close fire nothing else.
+- **The same trap has a third victim: any full-screen panel sized to `100dvh`.**
+  `100dvh` *is* the layout viewport, so under `interactive-widget=resizes-visual` a panel sized to it keeps its full height with the keyboard up, and its fixed footer sits behind the keyboard.
+  Settings and Manage projects are both a grid of header / scrolling body / footer, and the footer is where Save lives, so typing into any field put the save button out of reach - not scrolled away, but under the keyboard, where scrolling the body cannot reach it (fixed 2026-08-22).
+  They are shortened by the published inset instead: `:root.soft-keyboard-open` sets `bottom:var(--keyboard-inset)` on the layer and `height:100%` on the panel, so the *scroller* gives up the height and every control stays reachable while the buttons come back above the keyboard.
+  `height:auto` on the layer is load-bearing - the explicit `100dvh` would otherwise out-rank the shorter box the insets describe.
 - **The drop-up pickers work from inside the popover.**
   A Clip, Skills, Prompts, or Actions chip opened there renders its drop-up *over* the panel and leaves it standing, which needs two exemptions rather than one: the tap that opens a drop-up is an outside press for the panel, and Escape reaches both listeners on `window` where `stopPropagation` stops neither — so the panel stands aside for as long as a drop-up is open.
   The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
@@ -1917,9 +1930,15 @@ Its rules, and what each one is defending:
   Agent Context is **Agent's Instructions segment**, because tools, policies, and instruction files are the halves of "what is this agent running with".
 - The two kinds are deliberately distinct rather than collapsed into one (`frontend/src/drawerSegments.ts`).
   A **segment** is a mutually exclusive view of a tab, drawn by the drawer's single shared segmented control under the pane heading; the heading names the segment, not the tab, because "Change Map" is what that pane *is* while "Activity" is only where it lives.
-  **Git is the exception, and the exception proves the rule**: its three headings *are* its three segment labels, so the heading row was printing the selected chip's own text directly above that chip and spending a row of a narrow panel to do it.
-  There the control is drawn compactly **in** the heading row, in place of the heading, sized to its labels so the Project scope still fits beside it - the same control, the same registry, the same keyboard behaviour, and no second toggle (`git.md`).
+  **Git and Files are the exception, and the exception proves the rule**: their headings *are* their segment labels, so the heading row was printing the selected chip's own text directly above that chip and spending a row of a narrow panel to do it.
+  There the control is drawn compactly **in** the heading row, in place of the heading - the same control, the same registry, the same keyboard behaviour, and no second toggle (`git.md`).
+  In that row the subtabs never shrink and the scope caption beside them does: the subtabs are the row's navigation, the caption is a caption, and a Project name that refused to yield is what ellipsised Git's three subtabs into stubs on a phone.
   Every tab whose heading names something the segments do not keeps the strip under the heading, unchanged.
+- **Files is the newest of them, and it converted a toggle rather than splitting a tab** (operator decision 2026-08-22).
+  Its two readings - the tree and Recent, what Git says was touched in this checkout - were one component and a pressed clock icon inside the search row.
+  That is a mode with no name anywhere in the chrome: unreachable by command or by voice, not persisted, and told apart only by inspecting `aria-pressed` on an icon.
+  As `File Explorer` and `Recent` they are named, addressable, and persisted per Project like every other view choice, and the search field still outranks both because searching is an explicit act.
+  The labels are the full headings rather than shorter chips - "File Explorer" is what this surface is called everywhere else, and abbreviating it to fit a chip would rename it for no reason.
   A **section** is a co-visible region of one scroller, reached by scrolling to it and flashing it through the same `settingReveal.ts` arrival the Settings deep links use (`setting-links.md`).
 - Segments are **registered, not local state**, and that is the point rather than tidiness.
   Every registered tab generates two palette commands and three voice phrases; a segment reached only by clicking would have none, so folding Clipboard into Actions and Change Map into Activity would have *deleted* "open Clipboard" and "open Change Map" as commands and as spoken navigation.
@@ -2348,6 +2367,10 @@ Its rules, and what each one is defending:
   each pane strip shows only its own subset. The per-tab palette commands, their voice phrases, and
   pane tab cycling all still reach any tab, and a rail that appears and disappears with split
   geometry would be harder to predict than one that simply means "collapsed".
+- Every pane heading carries a **scope caption** at its right: the focused session for a session-scoped tab, the active Project's name for a Project-scoped one, "Application-wide" for the rest.
+  The Project's caption is its **bare name**, with no `Project:` in front of it (operator decision 2026-08-22).
+  The word cost eight characters of the heading row on every Project-scoped tab, and on a phone that is what pushed Git's three subtabs into ellipses.
+  It also said nothing: the sidebar, the toolbar title, and the tab's own scope marker already establish that a Project is what is being named, and the session caption beside it is the only other thing the slot can say - so the two are told apart by the one prefix still doing work.
 - Losing the rail on open also loses the pointer affordance for closing again, since clicking an
   already-selected tab collapses the drawer but does not advertise that it will.
   Exactly one pane heading therefore carries a **collapse control**: the pane holding the drawer's

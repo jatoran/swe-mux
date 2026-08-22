@@ -257,7 +257,7 @@ uncommitted work together.
   Land answered "what is happening to this worktree" beside a Map answering "what is in it", and the split cost more than it bought: the act sat on a surface with a second copy of Map's own list of checkouts and none of the diff that decides whether to press it.
   Moving the act onto the row left the segment holding one Project-wide block, which is not a view.
 - Landing is split by what each part is a property of, and drawn in one place each.
-  A worktree **row** owns the act: its Land button, its live land state including what a running verification gate reports about itself, a Cancel, and what stopped it last time.
+  A worktree **row** owns the act: its Land button, its live land state including what a running verification gate reports about itself, a Cancel, and what stopped it last time, drawn above the expansion's change groups so an unbounded file list cannot push them out of reach (`land-queue.md`).
   A compact **strip at the head of the map** owns everything Project-wide: the verification command with its approval and editor, who besides the operator may start a land, and the queue in run order with its history.
   Nothing Project-wide is drawn on a row - a fact true of the Project drawn on a row is drawn once per worktree, which is what the verification block did under each of eight expansions before it moved up.
   The strip is one summary line with the rest behind a disclosure, so the tab still opens on a map; it opens itself only when a land is stuck on a human, and never merely because this repository has no verification command (`land-queue.md`).

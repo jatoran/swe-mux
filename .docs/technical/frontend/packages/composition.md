@@ -50,7 +50,9 @@ The frozen-app rebuild's two unalike stages, and everything the UI does about th
 - `applyProbe`'s `sawDown` separates "the successor is up, reload into it" from "the build failed and this is the same daemon that has been serving all along"; reloading in the second case would discard the failure message and load nothing new.
 - Two consecutive failed probes are required before the overlay, so a phone waking or a momentary stall cannot raise it; the authoritative `daemon_redeploy_stopping` broadcast skips that wait.
 - Restored sentinels are clamped to `building` with `sawDown` cleared, because there is no offline shell: a page that loaded at all was served by a live daemon.
-- `RedeployChip.tsx` is the corner spinner every client shows, expandable to the phase, the elapsed timer, and the daemon-served build log tail.
+- `RedeployChip.tsx` is the top-bar spinner every client shows, expandable to the phase, the elapsed timer, and the daemon-served build log tail.
+  Two placements, one per top bar, and `App` mounts whichever bar exists rather than both: `inline` makes it a control inside `.mobile-toolbar`, and without it a card floating under `.app-topbar`.
+  Mounting both would run a second one-second elapsed timer for a chip in a `display:none` container.
   The elapsed clock is deliberately the only progress signal once the daemon is gone, because the sole process that knows more is the one that took it away.
 
 ## Shared interaction

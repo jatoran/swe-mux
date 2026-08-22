@@ -145,6 +145,43 @@ test('narrow: picking a section closes the drawer and retitles the header', asyn
   await expect(page.locator('.settings-content h3').first()).toHaveText('Theme')
 })
 
+test('narrow: the soft keyboard shortens the panel instead of hiding its footer', async ({ page }) => {
+  // The bug this pins: on a phone the panel is sized to `100dvh`, and `100dvh` is the
+  // *layout* viewport, which `interactive-widget=resizes-visual` deliberately keeps at full
+  // height while the keyboard is up (see `updateAppHeight` in `App.tsx`). So the footer -
+  // where Save lives - sat under the keyboard, unreachable by scrolling, because scrolling
+  // moves the middle row and not the fixed one below it.
+  //
+  // The keyboard is simulated the way the app publishes it, because that is the whole
+  // contract: a class on the root and a length. Playwright cannot raise a real one.
+  await page.setViewportSize(PHONE)
+  await page.goto('/settings-harness.html')
+  await page.waitForSelector('.settings-panel>footer button', { state: 'attached' })
+
+  const INSET = 320
+  const before = await page.evaluate(() => document.querySelector('.settings-panel>footer')!.getBoundingClientRect().bottom)
+  expect(before).toBeGreaterThan(PHONE.height - 4)
+
+  const after = await page.evaluate(inset => {
+    document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`)
+    document.documentElement.classList.add('soft-keyboard-open')
+    const footer = document.querySelector<HTMLElement>('.settings-panel>footer')!
+    const save = [...footer.querySelectorAll('button')].pop()!
+    return {
+      footer: footer.getBoundingClientRect().bottom,
+      save: save.getBoundingClientRect().bottom,
+      // The scroller is what gives up the height, which is what keeps every control
+      // reachable rather than merely keeping the buttons on screen.
+      content: document.querySelector('.settings-body')!.getBoundingClientRect().height,
+    }
+  }, INSET)
+
+  const visible = PHONE.height - INSET
+  expect(after.footer).toBeLessThanOrEqual(visible + 1)
+  expect(after.save).toBeLessThanOrEqual(visible + 1)
+  expect(after.content).toBeGreaterThan(0)
+})
+
 test('wide: the section list is the docked column it always was', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')

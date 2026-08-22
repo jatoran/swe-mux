@@ -406,11 +406,16 @@ export function UtilityDrawer(props: Props) {
         if (segment === 'tools') return <AgentToolsTab session={session} />
         return <AgentContextTab project={project} session={session} />
       case 'files':
+        // Two readings of one Project, chosen by the segment strip rather than by a
+        // pressed icon inside the search row (`drawerSegments.ts`). The tree state
+        // survives the remount a segment switch causes: `ProjectResource` keeps its
+        // directory cache in a module-level map for exactly this.
         return project
           ? <ProjectResource
             key={`drawer-files:${project.id}`}
             project={project}
             resource={{ kind: 'files', id: project.id }}
+            filesView={segment === 'recent' ? 'recent' : 'explorer'}
             onOpenFile={path => { props.onOpenFile(path); onDone() }}
             onFileDragStart={props.onFileDragStart}
             onSendToAgent={props.onSendToAgent}
@@ -527,7 +532,14 @@ export function UtilityDrawer(props: Props) {
     // and the tab strip name, and a drawer that still said `claude-0e7d93` after a title
     // arrived read as a different session than the pane it describes.
     if (scope === 'session') return session ? `Session: ${sessionDisplayName(session)}` : 'No focused session'
-    if (scope === 'project') return project ? `Project: ${project.name}` : 'No active Project'
+    // The Project's bare name, with no `Project:` in front of it (operator decision
+    // 2026-08-22). The word cost eight characters of the heading row on every
+    // Project-scoped tab, and on a phone that is what pushed Git's three subtabs into
+    // ellipses. It also said nothing: the sidebar, the toolbar title, and this tab's own
+    // scope dot already establish that a Project is what is being named here, and the
+    // session line beside it is the only other thing this slot can say - so the two are
+    // told apart by the one prefix that is still doing work.
+    if (scope === 'project') return project ? project.name : 'No active Project'
     return 'Application-wide'
   }
 
@@ -616,8 +628,9 @@ export function UtilityDrawer(props: Props) {
     // that pane is; "Activity" is only where it lives, and a heading that never changed
     // while the body did would be the tab strip repeated rather than a label.
     const heading = (segment && drawerSegment(selected, segment)?.heading) || active.heading
-    // The one tab whose heading is always exactly its selected segment's label.
-    const inlineSegments = selected === 'git'
+    // The tabs whose heading is always exactly their selected segment's label. Drawing both
+    // spends a row of a narrow panel printing the selected chip's own word above it.
+    const inlineSegments = selected === 'git' || selected === 'files'
     const notesHere = stack.tabs.includes('notes')
     return <section
       key={stack.id}

@@ -453,6 +453,9 @@ Moving the act onto the row fixed that and exposed the other half: what was left
 So the map holds both halves, split by **what each part is a property of**:
 
 - **The row owns the act**, and only the act. Expanding a worktree shows that branch's Land button, its live land state (including the running gate's own reading of itself), a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths, a refusal's reason, which are facts about *this* branch.
+  It sits **above** the expansion's change groups (operator decision 2026-08-22).
+  Those groups are unbounded - a branch with sixty changed files is ordinary - so below them the row's one action, and the live state it reports, were reachable only by scrolling past the thing they act on.
+  The destructive control keeps the bottom: "remove worktree" is not what should be under the cursor when a row opens.
   A land that **skipped** the gate says so here and in the strip's queue and history, because it is the one thing about a finished land that the states cannot show: a documentation-only row goes from merging the trunk straight to fast-forwarding, never passing through `Verifying`, and afterwards reads exactly like a land that passed three minutes of pytest.
   A *full* gate is deliberately not labelled, because it is what every land does and the states already narrate it; drawing both would put a redundant chip on every row and bury the one that matters.
   A **verify-only** row is labelled on exactly the same grounds and in exactly the same place: it moves through `Merging trunk` and `Verifying` in a landing's own words and stops one step early, which is when nobody is still watching, so `verify only` is drawn beside the branch - before the states it qualifies - and its green reads `Verified` rather than `Landed`.

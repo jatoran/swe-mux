@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { elapsedLabel, phaseDetail, phaseLabel, type RedeployState } from './redeployProgress.ts'
 
-/** The persistent redeploy indicator: a spinner pinned to the top-left corner.
+/** The persistent redeploy indicator: a spinner in the top bar.
  *
  *  It exists because a redeploy used to be invisible to every client except the
  *  tab that started it - a phone, a second window, or the desktop when the
@@ -12,8 +12,14 @@ import { elapsedLabel, phaseDetail, phaseLabel, type RedeployState } from './red
  *  Non-blocking on purpose. During the build the app is fully usable and this is
  *  only a notice; the blocking overlay is a separate surface that appears only
  *  once the daemon actually goes away.
+ *
+ *  Two placements, one per top bar, and `App` renders whichever bar exists rather
+ *  than mounting both: a second instance would run a second one-second timer for
+ *  a chip nobody can see. On desktop it floats under `.app-topbar`; on a phone it
+ *  is a control *inside* `.mobile-toolbar` (`inline`), because a floating card
+ *  below a 44px bar on a 390px screen covers the workspace it is reporting on.
  */
-export function RedeployChip({ state }: { state: RedeployState }) {
+export function RedeployChip({ state, inline }: { state: RedeployState; inline?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   // Re-renders once a second purely for the elapsed timer. With the daemon gone
   // there is nothing to poll for real progress, and a clock that visibly moves is
@@ -30,7 +36,7 @@ export function RedeployChip({ state }: { state: RedeployState }) {
   if (state.phase === 'idle') return null
   const label = phaseLabel(state.phase)
   const elapsed = elapsedLabel(state.startedAt, now)
-  return <div class={`redeploy-chip ${state.phase}`} role="status" aria-live="polite">
+  return <div class={`redeploy-chip ${state.phase}${inline ? ' redeploy-chip-inline' : ''}`} role="status" aria-live="polite">
     <button
       type="button"
       class="redeploy-chip-summary"
@@ -39,7 +45,11 @@ export function RedeployChip({ state }: { state: RedeployState }) {
       onClick={() => setExpanded(value => !value)}
     >
       <span class="redeploy-spinner" aria-hidden="true" />
-      <strong>{label}</strong>
+      {/* The phase word is `sr-only` inline: the phone's bar has room for a spinner and a
+          clock and nothing else, and dropping the word from the DOM would take it out of
+          the `role="status"` announcement as well - the one reading that does not depend
+          on having seen the bar. Tapping expands the panel, where it is drawn in full. */}
+      <strong class={inline ? 'sr-only' : undefined}>{label}</strong>
       <small>{elapsed}</small>
     </button>
     {expanded && <div class="redeploy-chip-body">

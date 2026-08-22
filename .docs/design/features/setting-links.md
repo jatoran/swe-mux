@@ -188,6 +188,7 @@ only route to the owning overlay.
 | Read-aloud chip | `tts_enabled` | install | link (a pane-bar chip, not a gate) |
 | Talk toggle | `stt_enabled` | install | link |
 | Claude width notice | `claude_max_columns` | install | link (a value, not a switch) |
+| Files tab header (`ignores`) | `project_ignore_patterns` | install | link (a header control, not a gate; a value, not a switch) |
 | Projects registry (model-backed row, provider unproven) | `llm_provider` | install | link (a value, not a switch) |
 | Any gate over a `needs_llm` switch | `llm_provider` | install | link, disclosed beside `spends` |
 

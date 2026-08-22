@@ -27,6 +27,29 @@ test('a Map row offers the land of the branch it is showing, and nothing Project
   await expect(landing.locator('.git-land-gate')).toHaveCount(0)
   await expect(landing.locator('.git-land-authority')).toHaveCount(0)
   await expect(landing).not.toContainText('Verification')
+
+  // Above the change groups, not below them (operator decision 2026-08-22). Those groups
+  // are unbounded — this row alone carries 22 unstaged and 11 staged files — so Land, and
+  // the live land state it reports, used to sit past the end of a scroller full of the
+  // thing it acts on. Measured by document order rather than by pixels: the detail is a
+  // scroller, so "further down the page" is the claim, not "lower on screen".
+  const order = await page.evaluate(() => {
+    const detail = document.querySelector('.git-map-detail')!
+    const land = detail.querySelector('.git-land-row-section')!
+    const groups = [...detail.querySelectorAll('.git-review-group')]
+    const last = groups[groups.length - 1]
+    return {
+      groups: groups.length,
+      // 4 === DOCUMENT_POSITION_FOLLOWING: every group comes after the Land row.
+      allAfterLand: groups.every(group => !!(land.compareDocumentPosition(group) & 4)),
+      // The destructive control keeps the bottom, where it is not the first thing under
+      // the cursor when a row opens.
+      removeAfterGroups: !!(last.compareDocumentPosition(detail.querySelector('.git-map-actions')!) & 4),
+    }
+  })
+  expect(order.groups).toBeGreaterThan(0)
+  expect(order.allAfterLand).toBe(true)
+  expect(order.removeAfterGroups).toBe(true)
 })
 
 test('the verification block exists once on the tab, in the strip above the map', async ({ page }) => {

@@ -86,6 +86,16 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Projects', setting: 'new_project_parent',
     label: 'Default parent folder for new projects', where: 'Settings → Projects',
   },
+  // What the file tree and the resource watchers skip. A *value* rather than a switch - a
+  // gate can offer "turn this on", never "type a glob list" - so it is a link, offered from
+  // the file explorer's own header because that is the surface where a reader notices the
+  // tree is full of things they never want to see. The global list rather than the
+  // Project's: this is the one that hides `node_modules` everywhere, and the panel it lands
+  // on names the per-Project list that composes with it.
+  'projects.ignorePatterns': {
+    surface: 'settings', section: 'Projects', setting: 'project_ignore_patterns',
+    label: 'Ignore patterns', where: 'Settings → Projects',
+  },
   'schedules.install': {
     surface: 'settings', section: 'Automation', setting: 'scheduled_runs_enabled',
     label: 'Let schedules start sessions', where: 'Settings → Automation',

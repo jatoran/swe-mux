@@ -23,6 +23,7 @@ import { CodeEditor } from './CodeEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
 import { fileSaveTarget, globalNoteSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import { resourceSaveIndicator } from './resourceSaveIndicator'
+import { SettingLink } from './SettingLink'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import { recentEntryTitle } from './recentFiles'
 import { isPreviewableDocument } from './staticPreview'
@@ -76,7 +77,10 @@ type FileDraft={revision:string;text:string;baseline:string;status:string;size:n
  *  produced it and only one of `status`/`committed_at` is ever set. */
 type RecentFile={name:string;path:string;kind:'file';origin:'working'|'committed';status:string|null;committed_at:number|null}
 type RecentPayload={items:RecentFile[];available:boolean;reason?:string}
-type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>;recent:boolean}
+/** Survives a remount so the tree redraws from cache rather than from a blank panel. Which
+ *  *view* was showing is not here any more: that is the drawer's `files` segment, persisted
+ *  per Project by `drawerLayout.ts` rather than by this in-memory map. */
+type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>}
 
 // Resource views can be reparented when a tab is dragged between panes. Keep
 // their local working state outside the component so that reparenting never
@@ -99,6 +103,9 @@ type Props={
   /** One-shot request from spoken Notes navigation to claim this editor for insertion. */
   claimInsertTargetToken?:number
   onInsertTargetClaimed?:(token:number)=>void
+  /** Which reading of a `kind:'files'` resource to draw. The drawer's `files` segment
+   *  (`drawerSegments.ts`) owns this; every other resource kind ignores it. */
+  filesView?:'explorer'|'recent'
 }
 
 const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf('/')):''
@@ -123,7 +130,7 @@ function scheduleTreeSave(projectId:string,paths:string[]){
   },400))
 }
 
-export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent,onPreviewFile,claimInsertTargetToken,onInsertTargetClaimed}:Props){
+export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent,onPreviewFile,claimInsertTargetToken,onInsertTargetClaimed,filesView='explorer'}:Props){
   const isGlobalNote=resource.kind==='global-note'
   const isNote=resource.kind==='note'||isGlobalNote
   const isFile=resource.kind==='file'||resource.kind==='worktree-file'
@@ -171,8 +178,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [pendingCopy,setPendingCopy]=useState<string|null>(null)
   const [query,setQuery]=useState('')
   // The Recent view replaces the tree (not the search results — searching is an explicit
-  // act and wins). Cached with the tree so reparenting a tab keeps the view you were in.
-  const [recentOpen,setRecentOpen]=useState(cachedBrowser?.recent||false)
+  // act and wins). Which of the two is showing is the drawer's `files` segment, not local
+  // state: it was a pressed icon in the search row, a mode with no name in the chrome, and
+  // as a registered segment it is addressable, persisted per Project, and visible as the
+  // selected subtab. `filesView` is only ever set for `kind:'files'`, which the drawer is
+  // the only host of (`parseNoteResourceId` cannot produce that kind for a pane leaf).
+  const recentOpen=filesView==='recent'
   const [recent,setRecent]=useState<RecentPayload|null>(null)
   const [recentLoading,setRecentLoading]=useState(false)
   const recentGeneration=useRef(0)
@@ -431,8 +442,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[resource.kind,resourceKey,revision,text,baseline,status,fileSize,presentation,saveState,error])
 
   useEffect(()=>{
-    if(resource.kind==='files')browserStates.set(resourceKey,{directories,expanded:new Set(expanded),recent:recentOpen})
-  },[resource.kind,resourceKey,directories,expanded,recentOpen])
+    if(resource.kind==='files')browserStates.set(resourceKey,{directories,expanded:new Set(expanded)})
+  },[resource.kind,resourceKey,directories,expanded])
 
   // The Recent view's one read. Git-backed and bounded (see `recent_files.py`), so it is
   // cheap enough to re-run whenever a watched path changes while the view is open rather
@@ -1361,7 +1372,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // Any error with a retry queued behind it says so, and offers to skip the wait.
   const errorLine=error?<p class="resource-error">{error}{pendingRetry&&<> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>}</p>:null
   if(resource.kind==='files')return <section class="project-resource file-browser">
-    <header><div><strong>{project.root}</strong></div></header>
+    {/* The header names the checkout, and now carries the one control that changes what
+        this tree contains. A reader who notices `node_modules` in here is standing on the
+        surface that raised the question and had no way from it to the answer - the globs
+        were reachable only by knowing they live under Settings → Projects. The icon is a
+        crossed-out eye: this is what the tree is told not to look at. */}
+    <header>
+      <div><strong>{project.root}</strong></div>
+      <SettingLink target="projects.ignorePatterns" class="file-browser-ignores"
+        title="Ignore patterns — what the file tree and resource watchers skip · Settings → Projects, where this Project’s own additions are named too">
+        <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5c1.7 0 3.2.5 4.5 1.2"/><path d="M20.4 9.1c.9 1.1 1.6 2.2 1.6 2.9 0 0-3.6 6.5-10 6.5-1.4 0-2.7-.3-3.8-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><line x1="3" y1="21" x2="21" y2="3"/></svg>
+        <span>ignores</span>
+      </SettingLink>
+    </header>
     <div class="file-browser-body">
       <div class="file-search">
         <div class="file-search-field">
@@ -1372,12 +1395,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           <button class={`file-search-filter${filtersOpen?' active':''}`} aria-label="Search scope" aria-expanded={filtersOpen} title={`Search scope: ${searchModeLabel[searchMode]}`} onClick={()=>setFiltersOpen(open=>!open)}>
             <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
           </button>
-          {/* Recent replaces the tree with what Git says was touched here. A clock running
-              backwards, the same mark the app menu's Session history wears — this is the
-              same question asked of files. */}
-          <button class={`file-search-recent${recentOpen?' active':''}`} aria-label="Recently changed files" aria-pressed={recentOpen} title="Recently changed files — uncommitted work first, then the newest commits" onClick={()=>setRecentOpen(open=>!open)}>
-            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.7-6.2"/><polyline points="3 3.5 3 9 8.5 9"/><path d="M12 7.6V12l3.2 1.9"/></svg>
-          </button>
+          {/* Recent used to be a pressed clock icon here. It is the `files` tab's second
+              subtab now (`drawerSegments.ts`): the same two readings, named in the chrome
+              rather than encoded in a toggle's pressed state. Search still wins over both. */}
         </div>
         {filtersOpen&&<div class="file-search-modes" role="group" aria-label="Search scope">
           {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={`Match file ${searchModeLabel[mode].toLowerCase()}`} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}

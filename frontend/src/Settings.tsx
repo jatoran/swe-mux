@@ -1281,7 +1281,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Global project ignores</h3>
-            <label>Ignore patterns<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label>
+            <label data-setting="project_ignore_patterns">Ignore patterns<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label>
             <p>One glob per line. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p>
             <p>Every Project adds its own list on top of this one, under <strong>Manage projects → Repository options → Additional ignore patterns</strong>. The two compose; neither replaces the other.</p>
           </section>

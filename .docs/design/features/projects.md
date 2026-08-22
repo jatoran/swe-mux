@@ -157,6 +157,12 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   The new folder's leaf is validated server-side under the shared Windows-safe leaf rules
   (`leaf_names.py`), because the dialog's folder field is free text and not every create path
   has a dialog; adopting an existing folder skips the leaf check.
+- **A successful creation lands in the new Project's workspace** (operator decision 2026-08-22).
+  It selects the Project, closes the create form, closes Manage projects, and closes the mobile
+  sidebar. The sidebar's `+` opens Manage projects only as a backdrop for the form, so submitting
+  used to reveal the settings editor for a Project nobody has looked at yet - a configuration
+  screen offered before the thing being configured has been seen. The registry stays one click
+  away in the sidebar, and the guided tour's own next step reopens it by name when it wants it.
 - The Mux assistant's `create_project` tool is a second entry point into the same create flow,
   constrained to name-only: the folder leaf is derived from the spoken name and the parent is
   always the configured `new_project_parent` (Settings → Projects), never a model-supplied

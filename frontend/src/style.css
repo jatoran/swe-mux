@@ -901,11 +901,41 @@ body {
    otherwise looks exactly like success, so its notice is not styled as an error. */
 .toast.redeploy-notice { background:#2a2410;border-color:#7a6522;color:#e7cf8d;line-height:1.5 }
 @media(max-width:760px) {
-  /* The desktop top bar is hidden at this width and the mobile toolbar takes its
-     place, so the chip re-anchors under that instead. */
-  .redeploy-chip { top:calc(max(5px,env(safe-area-inset-top)) + 54px);max-width:calc(100vw - 20px) }
+  .redeploy-chip { max-width:calc(100vw - 20px) }
   .redeploy-chip-summary { min-height:38px }
 }
+/* The phone's chip is a control inside `.mobile-toolbar`, not a card floating beneath it:
+   a fixed card under a 44px bar covered the top of the workspace for the whole build. It
+   becomes an ordinary flex item, and only its expanded body floats - anchored to the bar's
+   own bottom edge, which is why the wrapper keeps `position:relative` rather than `static`.
+   `overflow:visible` on the toolbar would let that body escape; it does not need it,
+   because the body is `position:fixed` and the toolbar establishes no containing block. */
+.redeploy-chip-inline {
+  position:relative;
+  z-index:auto;
+  top:auto;
+  left:auto;
+  flex:0 0 auto;
+  max-width:none;
+  box-shadow:none;
+}
+.redeploy-chip-inline .redeploy-chip-summary { gap:6px;min-height:calc(36px*var(--ui-scale));padding:0 7px }
+.redeploy-chip-inline .redeploy-chip-summary small { margin-left:0 }
+/* Dropped out of the bar and re-anchored under it, so a tapped chip can show the build log
+   without the toolbar growing a second row. `right` as well as `left` because the chip
+   itself is only as wide as a spinner and a clock. */
+.redeploy-chip-inline .redeploy-chip-body {
+  position:fixed;
+  z-index:520;
+  left:max(8px,env(safe-area-inset-left));
+  right:max(8px,env(safe-area-inset-right));
+  top:calc(max(5px,env(safe-area-inset-top)) + 50px);
+  padding:9px 11px;
+  border:1px solid var(--accent);
+  background:color-mix(in srgb,var(--panel) 94%,var(--accent));
+  box-shadow:0 6px 20px #000a;
+}
+.redeploy-chip-inline.down .redeploy-chip-body { border-color:var(--amber);background:color-mix(in srgb,var(--panel) 92%,var(--amber)) }
 .rename-modal .modal-heading {
   padding:14px 16px 12px;
 }
@@ -1489,9 +1519,19 @@ body {
 .file-search-input:focus{outline:0;border-color:var(--green)}
 .file-search-clear{position:absolute;right:2px;width:22px;height:calc(22px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1}
 .file-search-clear:hover{color:var(--text)}
-.file-search-filter,.file-search-recent{flex:none;display:flex;align-items:center;justify-content:center;width:28px;height:calc(28px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;font-size:13px}
-.file-search-filter:hover,.file-search-recent:hover{color:var(--text)}
-.file-search-filter.active,.file-search-recent.active{background:var(--bg);color:var(--green);border-color:var(--green)}
+/* `.file-search-recent` is gone: Recent is the tab's second subtab now, not a pressed icon
+   in this row (`drawerSegments.ts`). */
+.file-search-filter{flex:none;display:flex;align-items:center;justify-content:center;width:28px;height:calc(28px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;font-size:13px}
+.file-search-filter:hover{color:var(--text)}
+.file-search-filter.active{background:var(--bg);color:var(--green);border-color:var(--green)}
+/* The header's one control: where the globs that decide what this tree contains are edited.
+   `flex:none` so the Project root - the item that already ellipsizes - is what gives up
+   width, and the word beside the mark because a crossed-out eye alone does not say
+   "ignore patterns" to somebody who has not seen this button before. */
+.file-browser-ignores{flex:none;display:flex;align-items:center;gap:5px;min-height:calc(24px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.file-browser-ignores:hover,.file-browser-ignores:focus-visible{border-color:var(--green);color:var(--green);outline:0}
+.file-browser-ignores svg{flex:none;width:12px;height:12px}
+@media(max-width:760px){.file-browser-ignores{min-height:34px;padding:0 9px}}
 .file-search-modes{display:flex;gap:4px}
 .file-search-modes button{flex:1;height:calc(24px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 .file-search-modes button:hover{color:var(--text)}
@@ -2658,6 +2698,18 @@ body {
   :root.soft-keyboard-open .mobile-unified-active>.preview-pane{height:calc(100% - var(--keyboard-inset,0px))}
   :root.soft-keyboard-open .utility-drawer.overlay,
   :root.soft-keyboard-open .sidebar.open{bottom:var(--keyboard-inset,0px)}
+  /* The full-screen editors, for the same reason and with the same fix. `100dvh` is the
+     *layout* viewport, which `interactive-widget=resizes-visual` deliberately keeps at full
+     height while the keyboard is up (see `updateAppHeight`) — so a panel sized to it kept
+     its footer under the keyboard, and the footer is where Save lives. Every one of these
+     is a grid whose middle row scrolls and whose last row is fixed, so shortening the box
+     shortens the scroller and nothing else: the content stays reachable, and the buttons
+     come back above the keyboard. `height:auto` is load-bearing — the explicit `100dvh`
+     below would otherwise out-rank the shorter box these insets describe. */
+  :root.soft-keyboard-open .settings-layer,
+  :root.soft-keyboard-open .modal-layer{bottom:var(--keyboard-inset,0px);height:auto}
+  :root.soft-keyboard-open .settings-panel,
+  :root.soft-keyboard-open .projects-manager{height:100%}
   /* [nav] [quota] [project name] [Talk] [Run] [drawer]. Flex, not grid: only the title flexes and
      the rest are content-sized, which grid expressed poorly here — an `auto` track next to
      the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`
@@ -3672,7 +3724,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
 .drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-.drawer-body-files>.project-resource.file-browser>header,.drawer-body-agent .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+/* Files is not in this list any more: it draws its segments inline, so there is no title to
+   clear, and its browser now sits inside a `.drawer-segment-body` that the old direct-child
+   selector could not have reached anyway. */
+.drawer-body-agent .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
 
 /* The dock owns one persistent layout tree. Each leaf is a tab stack and every internal
@@ -3694,12 +3749,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-pane-heading{position:relative;z-index:6;flex:none;min-height:27px;display:flex;align-items:center;gap:6px;padding:3px 7px;border-bottom:1px solid var(--line);background:var(--panel)}
 .drawer-pane-heading .drawer-panel-title{position:static;flex:0 1 auto;width:auto;max-width:55%;cursor:help}
 .drawer-scope-context{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:7px}
-/* Segments inline in the heading row (Git), replacing a heading that only ever repeated the
-   selected segment's own label. `flex:0 1 auto` and content-sized buttons, not the full-width
-   strip: this shares the row with the Project scope, so it takes the width its three labels
-   need and no more. */
-.drawer-pane-heading .drawer-segmented-inline{flex:0 1 auto;min-width:0;border-bottom:0;background:transparent}
-.drawer-pane-heading .drawer-segmented-inline button{flex:0 1 auto;min-height:21px;padding:0 7px;font-size:9px;letter-spacing:.02em}
+/* Segments inline in the heading row (Git, Files), replacing a heading that only ever
+   repeated the selected segment's own label. Content-sized buttons, not the full-width
+   strip: this shares the row with the Project name, so it takes the width its labels need
+   and no more.
+   `flex:0 0 auto`, NOT `0 1 auto`: these are the row's navigation, and the scope beside them
+   is a caption. Letting them shrink is what ellipsised Git's three subtabs on a phone into
+   unreadable stubs while the Project name beside them stayed whole. The scope is the item
+   that gives - it already has `min-width:0` and its own ellipsis, and the Project it names
+   is also in the toolbar title and the sidebar, which the subtabs are not. */
+.drawer-pane-heading .drawer-segmented-inline{flex:0 0 auto;min-width:0;border-bottom:0;background:transparent}
+.drawer-pane-heading .drawer-segmented-inline button{flex:0 0 auto;min-height:21px;padding:0 7px;overflow:visible;text-overflow:clip;font-size:9px;letter-spacing:.02em}
 /* The title is what reserved this inset; a heading row that draws the segments instead has no
    absolutely-positioned title to clear. */
 .drawer-body-git>.drawer-pane-heading.with-segments~.drawer-status{padding-left:9px}
@@ -3727,7 +3787,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    which beats the user-agent default - the same trap `.drawer-note-host[hidden]` documents. */
 .drawer-segment-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
 .drawer-segment-body[hidden]{display:none}
-.drawer-segment-body>.scan-timeline-panel,.drawer-segment-body>.findings-pane,.drawer-segment-body>.change-map-pane,.drawer-segment-body>.agent-environment,.drawer-segment-body>.agent-context{flex:1;min-height:0}
+.drawer-segment-body>.scan-timeline-panel,.drawer-segment-body>.findings-pane,.drawer-segment-body>.change-map-pane,.drawer-segment-body>.agent-environment,.drawer-segment-body>.agent-context,.drawer-segment-body>.project-resource{flex:1;min-height:0}
 @media(max-width:760px){.segmented-tabs button{min-height:38px}}
 .drawer-pane[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 13%,transparent)}
 .drawer-pane[data-pointer-drop-indicator="join"]:after{inset:34px 0 0}
