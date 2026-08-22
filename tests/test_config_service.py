@@ -726,6 +726,9 @@ def test_mobile_gestures_default_and_are_hot_reloadable_and_validated(tmp_path: 
         "two_finger_swipe_up": "notes.open",
         "two_finger_swipe_down": "terminal.keyboardToggle",
         "two_finger_tap": "palette.open",
+        # Region-scoped: recognized only for a touch that began on the command rail,
+        # which is why a *single*-finger vertical is a real slot here.
+        "rail_swipe_up": "menu.toggle",
     }
 
     # Vertical two-finger slots are real, mappable slots (only single-finger

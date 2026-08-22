@@ -187,7 +187,7 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { RESERVE_INTENT_WINDOW_MS, reservedKeyboardPx } from './keyboardReserve'
 import { SOFT_KEYBOARD_EVENT, deepActiveElement, dismissSoftKeyboard, lastSoftKeyboardInset, raisesSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset, softKeyboardVisualOffset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
-import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, classifyRailGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, pathOwnsRailGesture, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
@@ -5108,6 +5108,17 @@ export function App() {
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
+    // The app menu, as a command rather than only a button. Its two triggers live in the
+    // sidebar (the footer's `: menu`, and the collapsed rail's `:`), so on a phone the
+    // menu was reachable only by pulling the sidebar in first — yet the menu itself is a
+    // viewport-anchored overlay that never needed it. This is the door that skips that
+    // trip, and being a registered command is what lets a gesture, a chord and the
+    // palette all reach it. Toggling matches both buttons; note that on the gesture path
+    // the touch's own `pointerdown` has already dismissed an open menu, so a swipe always
+    // ends with it open.
+    { id: 'menu.toggle', label: 'Toggle the swe-mux menu', category: 'view', available: true, run: () => setMainMenuOpen(value => !value), voice:{
+      phrases:['open the menu','show the menu','open swe mux menu','open app menu'],
+    } },
     // Brings the sidebar with it, because the filter is chrome inside a column that is
     // hidden on a phone and collapsible on the desktop.
     { id: 'sidebar.search', label: 'Filter Projects and sessions', category: 'view', available: true, run: () => toggleSidebarSearch(), voice:{
@@ -5847,7 +5858,7 @@ export function App() {
   settingsNav.current = { open: settingsNavOpen }
   useEffect(() => {
     if (!mobileWorkspace) return
-    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; claims:ReturnType<typeof markPointerDragClaims> } | null = null
+    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; rail:boolean; claims:ReturnType<typeof markPointerDragClaims> } | null = null
     const centroid = (touches: TouchList) => {
       let x = 0, y = 0
       for (let i = 0; i < touches.length; i++) { x += touches[i].clientX; y += touches[i].clientY }
@@ -5874,12 +5885,18 @@ export function App() {
       // Overlays stay immune to that hijacking by a stronger rule than exclusion:
       // `resolveGestureCommand` resolves every non-back slot to nothing whenever the
       // dismiss stack is non-empty.
-      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer, .settings-layer, .usage-layer, .process-layer, .folder-picker-layer, .palette-layer') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)) { state = null; detachMove(); return }
+      // The command rail is the one scroller that keeps a gesture of its own: it owns
+      // every horizontal touch, and has no vertical scroll for the upward swipe to
+      // steal. Recognized without the `touchmove` listener below — there is nothing to
+      // preventDefault, and attaching one is precisely what swallows the rail's first
+      // horizontal drag — so its travel is measured from the touch that lifts.
+      const rail = pathOwnsRailGesture(path)
+      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer, .settings-layer, .usage-layer, .process-layer, .folder-picker-layer, .palette-layer') || (!rail && pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX))) { state = null; detachMove(); return }
       // A drag that has claimed the pointer owns it outright (`pointerDragClaim.ts`); a
       // second finger landing mid-drag does not get to start a gesture behind it.
       if (pointerDragOwnsPointer()) { state = null; detachMove(); return }
       const point = centroid(event.touches)
-      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?', claims: markPointerDragClaims() }
+      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?', rail, claims: markPointerDragClaims() }
       else state.maxPointers = Math.max(state.maxPointers, event.touches.length)
       // Two fingers is never text entry, so lower the keyboard the moment the second
       // one lands rather than waiting for the command at touchend. An editor focuses
@@ -5887,8 +5904,12 @@ export function App() {
       // two-finger swipe starting over a note raises the keyboard on the way in — and
       // a swipe later is far too late to hide that it happened. Blurring in the same
       // frame the focus landed is what keeps it from ever animating up.
-      if (event.touches.length >= 2) dismissSoftKeyboard()
-      attachMove()
+      // Not for a rail sequence: that slot is single-finger by construction, so a second
+      // finger there resolves to nothing — exactly as it did when the rail was excluded
+      // outright — and dropping the keyboard for a gesture that will not run is a change
+      // this one has no business making.
+      if (event.touches.length >= 2 && !state.rail) dismissSoftKeyboard()
+      if (!state.rail) attachMove()
     }
     const onMove = (event: TouchEvent) => {
       if (!state) return
@@ -5923,7 +5944,12 @@ export function App() {
       // `pointerup` precedes `touchend`, so a drag that just released its claim is still
       // the owner of everything this sequence measured.
       if (pointerDragOwnsPointer(state.claims)) { state = null; return }
-      const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
+      // A rail sequence ran with no move listener, so the last position it recorded is
+      // still the touch-down one. The finger that lifted is where it ended.
+      const lifted = state.rail ? event.changedTouches[0] : undefined
+      if (lifted) { state.lastX = lifted.clientX; state.lastY = lifted.clientY }
+      const sample = { pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start }
+      const slot = state.rail ? classifyRailGesture(sample) : classifyGesture(sample)
       state = null
       if (!slot) return
       const panels = overlayPanels.current

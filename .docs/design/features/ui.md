@@ -1236,6 +1236,35 @@ Its rules, and what each one is defending:
   channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real
   mappable slot. Edge- and top-anchored swipes stay with the OS. Slot names are validated
   server-side, so adding one requires the same slot list in `config.py`.
+- **One slot is scoped to a region rather than to the screen: `rail_swipe_up`.**
+  A single-finger upward swipe that *starts on the command rail* runs it; the default is
+  `menu.toggle`, the app menu.
+  The reservation the other bullet states is about the terminal's scrollback, and the rail has
+  none - it scrolls sideways and never up - so the channel is free exactly there and nowhere
+  else. Scoping it to that strip is also what makes it discoverable: the rail is a row of
+  controls at the bottom of the pane, and swiping up off a row of controls is a familiar way to
+  ask for more of them.
+  The rail keeps every *horizontal* touch for its own pan and a second finger over it has never
+  resolved to anything, so the slot is deliberately one finger and one direction
+  (`classifyRailGesture`): widening it would take input away from a control rather than find
+  input nobody was using.
+  The note editor's own command rail is not this rail. It is a different surface in a different
+  pane, and it keeps the older rule.
+- **The app menu is a command (`menu.toggle`), not only a button.**
+  Both of its triggers live in the sidebar - the footer's `: menu` and the collapsed rail's `:` -
+  so on a phone the menu was reachable only by pulling the sidebar in first, which then sat open
+  over the pane. The menu itself is a viewport-anchored overlay that never needed the sidebar,
+  and a registered command is what lets the rail swipe, a chord, and the palette all reach it
+  directly. There is no default chord: the desktop always has a button in view.
+  On the gesture path the touch's own `pointerdown` has already dismissed an open menu (the
+  outside-pointer dismissal), so a swipe always ends with the menu open; from a chord or the
+  palette it toggles.
+  It is also the one context menu anchored to the bottom of the viewport rather than placed at
+  a pointer, and the soft keyboard overlays that viewport instead of resizing it - so on a
+  phone it was being drawn underneath the keys. Harmless while its only door was the sidebar
+  footer; not harmless from a strip directly above the composer, so it now rides `--keyboard-cover`
+  and shortens by the same amount, because lifting a long menu without shortening it only moves
+  the hidden part to the top of the screen.
 - The gesture recognizer yields to anything that owns horizontal scrolling (the action rail,
   tab strips, the voice strip, plus a generic `overflow-x` scan), and it must yield *cheaply*.
   Ownership is resolved from the touch event's **composed path**, not `event.target` plus
@@ -1249,6 +1278,11 @@ Its rules, and what each one is defending:
   touchstart has claimed the gesture, then dropped when the sequence ends. Registering it during
   touchstart dispatch still yields cancelable moves, so owned gestures keep working while drags
   inside a scroller meet no handler at all.
+  The rail swipe above is recognized **without** that listener for the same reason: it has
+  nothing to `preventDefault` (a vertical drag on the rail cancels the pan by itself,
+  `RailScroller`), and attaching one for every touch that lands on the rail is precisely the
+  swallowed first drag this rule exists to avoid. Its travel is measured from the touch that
+  lifts (`changedTouches`) rather than from moves nobody listened for.
 - It also yields to a **pointer drag**, and that yield is stated rather than measured. Dragging a
   drawer tab along the strip is, in coordinates, exactly the single-finger horizontal swipe that
   toggles a panel — so rearranging tabs on a phone fired the swipe bindings until the drag began

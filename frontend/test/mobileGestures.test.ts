@@ -3,12 +3,14 @@ import test from 'node:test'
 import {
   BACK_COMMAND,
   classifyGesture,
+  classifyRailGesture,
   defaultMobileGestureSettings,
   GESTURE_SLOTS,
   gestureOverlayDepth,
   mobileGestureSettings,
   overlayBackEnabled,
   pathOwnsHorizontalScroll,
+  pathOwnsRailGesture,
   resolveGestureCommand,
   swipeAwayCloseEnabled,
 } from '../src/mobileGestures.ts'
@@ -110,8 +112,52 @@ test('gesture settings fall back to opinionated defaults and accept overrides', 
   assert.equal(overridden.swipe_left, 'palette.open')
   assert.equal(overridden.two_finger_tap, '')
   assert.equal(overridden.swipe_right, defaultMobileGestureSettings.swipe_right)
-  assert.equal(GESTURE_SLOTS.length, 7)
+  assert.equal(GESTURE_SLOTS.length, 8)
   assert.equal(overridden.two_finger_swipe_down, defaultMobileGestureSettings.two_finger_swipe_down)
+  // A slot added after a config was saved arrives at its default rather than disabled.
+  assert.equal(overridden.rail_swipe_up, 'menu.toggle')
+})
+
+test('the command rail is recognized from the composed path, and only that rail', () => {
+  const railChip = fakeElement('term-key', 30, 30, 'visible')
+  const rail = fakeElement('terminal-action-rail', 520, 300, 'hidden')
+  const noteRail = fakeElement('overflow-rail-touch-drag', 520, 300, 'auto')
+  const drawerTabs = fakeElement('drawer-tabs', 520, 300, 'auto')
+
+  assert.equal(pathOwnsRailGesture([railChip, rail]), true)
+  // The note editor's own strip and the drawer's tab bar are horizontal scrollers too,
+  // and both keep the older rule: a vertical drag there is not a swe-mux gesture.
+  assert.equal(pathOwnsRailGesture([noteRail]), false)
+  assert.equal(pathOwnsRailGesture([drawerTabs]), false)
+})
+
+test('a single-finger upward swipe on the command rail is a slot of its own', () => {
+  assert.equal(classifyRailGesture({ pointerCount: 1, dx: 8, dy: -90, durationMs: 200 }), 'rail_swipe_up')
+  // Downward is not the same gesture, and the rail keeps every horizontal touch for its
+  // own pan — so nothing else the rail sees resolves at all.
+  assert.equal(classifyRailGesture({ pointerCount: 1, dx: 8, dy: 90, durationMs: 200 }), null)
+  assert.equal(classifyRailGesture({ pointerCount: 1, dx: -90, dy: 8, durationMs: 200 }), null)
+  assert.equal(classifyRailGesture({ pointerCount: 2, dx: 8, dy: -90, durationMs: 200 }), null)
+})
+
+test('the rail swipe answers to the same distance, axis and duration bars as every other', () => {
+  assert.equal(classifyRailGesture({ pointerCount: 1, dx: 4, dy: -30, durationMs: 120 }), null)
+  assert.equal(classifyRailGesture({ pointerCount: 1, dx: 60, dy: -62, durationMs: 150 }), null)
+  // A long press that then travels is a hold-to-repeat or a drag, not a flick.
+  assert.equal(classifyRailGesture({ pointerCount: 1, dx: 4, dy: -120, durationMs: 2000 }), null)
+})
+
+test('the rail slot resolves through the ordinary rules, overlay suppression included', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  assert.equal(resolveGestureCommand('rail_swipe_up', defaultMobileGestureSettings, closed, true), 'menu.toggle')
+  // Rebinding is the whole point of it being a slot.
+  const rebound = { ...defaultMobileGestureSettings, rail_swipe_up: 'palette.open' }
+  assert.equal(resolveGestureCommand('rail_swipe_up', rebound, closed, true), 'palette.open')
+  // It is not a horizontal slot, so an open panel never repurposes it...
+  const sidebar = { sidebarOpen: true, drawerOpen: false }
+  assert.equal(resolveGestureCommand('rail_swipe_up', defaultMobileGestureSettings, sidebar, true), 'menu.toggle')
+  // ...and an overlay painted over the workspace suppresses it like every non-back slot.
+  assert.equal(resolveGestureCommand('rail_swipe_up', defaultMobileGestureSettings, closed, true, { depth: 1, enabled: true }), '')
 })
 
 test('swipe-away override closes the open panel instead of running the binding', () => {

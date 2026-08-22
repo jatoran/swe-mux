@@ -9,7 +9,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.clipboard_store import ClipboardStore, clipboard_preview, looks_like_secret
-from swe_mux.config import SCHEMA_VERSION, Config, default_mobile_gestures, load_config
+from swe_mux.config import (
+    MOBILE_GESTURE_SLOTS,
+    SCHEMA_VERSION,
+    Config,
+    default_mobile_gestures,
+    load_config,
+)
 from swe_mux.keybindings import COMMAND_IDS, normalize_binding
 from swe_mux.server import (
     capture_clipboard_entry,
@@ -344,3 +350,22 @@ def test_deliberate_gesture_mapping_survives_migration(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert load_config(path).mobile_gestures["two_finger_swipe_left"] == "terminal.find"
+
+
+def test_a_gesture_slot_added_later_arrives_carrying_its_default(tmp_path: Path) -> None:
+    # Settings renders the stored map directly, so a slot missing from an older config
+    # showed a live gesture as "Disabled" - and saving any other slot made that true.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[mobile_gestures]\n"
+        'swipe_left = "terminal.find"\n'
+        'two_finger_tap = ""\n',
+        encoding="utf-8",
+    )
+    gestures = load_config(path).mobile_gestures
+
+    assert set(gestures) == set(MOBILE_GESTURE_SLOTS)
+    assert gestures["rail_swipe_up"] == "menu.toggle"
+    # What the file did say is untouched, including a slot deliberately turned off.
+    assert gestures["swipe_left"] == "terminal.find"
+    assert gestures["two_finger_tap"] == ""

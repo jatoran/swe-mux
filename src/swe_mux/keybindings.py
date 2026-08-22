@@ -77,6 +77,11 @@ KEYBINDING_COMMANDS = (
     ("sidebar.open", "Open navigation sidebar", "view"),
     ("sidebar.close", "Close navigation sidebar", "view"),
     ("sidebar.toggle", "Toggle navigation sidebar", "view"),
+    # The app menu. Both of its buttons live in the sidebar, so on a phone it was
+    # reachable only by opening the sidebar first even though the menu itself is a
+    # viewport-anchored overlay. It carries the default command-rail swipe-up gesture;
+    # no default chord, because the desktop always has a button in view.
+    ("menu.toggle", "Toggle the swe-mux menu", "view"),
     # The sidebar's typed filter over Projects and sessions. No default chord: it has a
     # button on the PROJECTS header, and this is here for the palette, a gesture, and
     # anyone who wants one.

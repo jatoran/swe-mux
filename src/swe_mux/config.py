@@ -322,6 +322,9 @@ def default_voice_commands() -> list[dict[str, Any]]:
 # "" to disable it.
 # Vertical two-finger swipes are mappable: only the *single*-finger vertical
 # channel is reserved for the terminal (scrollback / application wheel).
+# `rail_swipe_up` is the one region-scoped slot: it is recognized only for a touch
+# that began on the command rail, which owns every horizontal touch for its own pan
+# but has no vertical scroll for an upward swipe to steal.
 MOBILE_GESTURE_SLOTS = (
     "swipe_left",
     "swipe_right",
@@ -330,6 +333,7 @@ MOBILE_GESTURE_SLOTS = (
     "two_finger_swipe_up",
     "two_finger_swipe_down",
     "two_finger_tap",
+    "rail_swipe_up",
 )
 
 
@@ -345,6 +349,9 @@ def default_mobile_gestures() -> dict[str, str]:
         "two_finger_swipe_up": "notes.open",
         "two_finger_swipe_down": "terminal.keyboardToggle",
         "two_finger_tap": "palette.open",
+        # The app menu, from the strip under the operator's thumb. Its only other
+        # door on a phone is the sidebar footer.
+        "rail_swipe_up": "menu.toggle",
     }
 
 
@@ -2003,6 +2010,15 @@ def load_config(path: Path | None = None) -> Config:
         cfg.harness_exe = {**default_harness_executables(), **configured_exe}
         cfg.harness_args = {**default_harness_args(), **configured_args}
         cfg.usage_commands = configured_usage
+        # A gesture slot added after this file was written must arrive carrying its
+        # default, not absent. The frontend already falls back per slot, so the runtime
+        # was right either way — but Settings reads the stored map directly, so a
+        # missing key rendered a live gesture as "Disabled" and the first save of any
+        # *other* slot made that lie true. Merged rather than migrated because it then
+        # holds for every future slot; a slot the operator deliberately turned off is
+        # stored as "" and is not missing.
+        if isinstance(raw.get("mobile_gestures"), dict):
+            cfg.mobile_gestures = {**default_mobile_gestures(), **raw["mobile_gestures"]}
         # Unknown *top-level* keys are deliberately tolerated above; profile keys
         # get the same treatment. Without it a mistyped key — or a profile field
         # added by a newer build, which the redeploy rollback path makes real —

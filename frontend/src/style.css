@@ -1032,6 +1032,15 @@ body {
 .pane-divider:hover { background:var(--accent) }
 .pane-tools .pane-tool-label{width:auto;min-width:28px;max-width:150px;padding:0 4px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .context-menu,.terminal-menu { max-height:calc(100dvh - 8px);overflow-y:auto;overscroll-behavior:contain }
+/* The app menu is the one context menu anchored to the bottom of the viewport rather than
+   placed at a pointer, and the soft keyboard overlays that viewport instead of resizing it
+   — so with the keyboard up it was drawn underneath the keys. That went unnoticed while its
+   only door was the sidebar footer; the command-rail swipe up (`rail_swipe_up`) opens it
+   from the strip directly above the composer, which is precisely where the keyboard is.
+   `--keyboard-cover` is how much of what the operator can actually see the keyboard still
+   hides. The height clamp is the other half: lifting a long menu without shortening it just
+   moves the hidden part to the top of the screen. */
+.main-menu { bottom:calc(39px + var(--keyboard-cover,0px));max-height:calc(100dvh - 47px - var(--keyboard-cover,0px)) }
 .session-row { grid-template-columns:10px minmax(0,1fr) }
 /* Absolutely positioned, so showing it never reflows the row it sits on. The box is
    wider than the button by the 12px the fade lane needs (see `.row-actions` below),

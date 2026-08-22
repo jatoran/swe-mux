@@ -4,6 +4,11 @@
 // horizontal swipes and two-finger gestures. Vertical single-finger drags stay with
 // the terminal (scrollback / application wheel) and are never claimed here.
 //
+// One region is the exception, and it is a region rather than a whole-screen channel:
+// the command rail has no vertical scroll of its own to protect, so the single-finger
+// upward swipe that would be reserved anywhere else is a real slot *there*
+// (`classifyRailGesture`). See `RAIL_GESTURE_SELECTOR`.
+//
 // This module is pure so the classification thresholds can be unit-tested without a DOM.
 
 export type GestureSlot =
@@ -14,6 +19,7 @@ export type GestureSlot =
   | 'two_finger_swipe_up'
   | 'two_finger_swipe_down'
   | 'two_finger_tap'
+  | 'rail_swipe_up'
 
 export const GESTURE_SLOTS: GestureSlot[] = [
   'swipe_left',
@@ -23,6 +29,7 @@ export const GESTURE_SLOTS: GestureSlot[] = [
   'two_finger_swipe_up',
   'two_finger_swipe_down',
   'two_finger_tap',
+  'rail_swipe_up',
 ]
 
 export const GESTURE_LABELS: Record<GestureSlot, string> = {
@@ -33,6 +40,7 @@ export const GESTURE_LABELS: Record<GestureSlot, string> = {
   two_finger_swipe_up: 'Two-finger swipe up',
   two_finger_swipe_down: 'Two-finger swipe down',
   two_finger_tap: 'Two-finger tap',
+  rail_swipe_up: 'Swipe up on the command rail',
 }
 
 // Command id per slot, or '' to disable the gesture.
@@ -54,6 +62,12 @@ export const defaultMobileGestureSettings: MobileGestureSettings = {
   two_finger_swipe_up: 'notes.open',
   two_finger_swipe_down: 'terminal.keyboardToggle',
   two_finger_tap: 'palette.open',
+  // The app menu, from the strip that sits directly under the operator's thumb.
+  // Its only other door on a phone is the sidebar footer, so reaching it meant
+  // pulling the sidebar in, tapping `: menu`, and then having a sidebar open over
+  // the pane. Swiping up off the rail is that trip in one motion, and the menu is
+  // a viewport-anchored overlay, so nothing about it needs the sidebar.
+  rail_swipe_up: 'menu.toggle',
 }
 
 // A swipe must travel this far along its dominant axis, and beat the cross-axis by
@@ -79,6 +93,17 @@ export type GestureSample = {
 
 type HorizontalScrollElement = Pick<Element, 'matches' | 'scrollWidth' | 'clientWidth'>
 
+/**
+ * The one horizontal scroller that also answers to a gesture of its own.
+ *
+ * It is named separately from the list below rather than removed from it: the rail
+ * still owns every *horizontal* touch (that is its pan), and the exception is only
+ * the single-finger vertical channel, which the rail has no use for. The note
+ * editor's own command rail is deliberately not here — it is a different surface
+ * inside a different pane, and its strip is reached through `.overflow-rail-touch-drag`.
+ */
+export const RAIL_GESTURE_SELECTOR = '.terminal-action-rail'
+
 const KNOWN_HORIZONTAL_SCROLLERS = '.terminal-action-rail, .stack-tabs, .drawer-tabs, .overflow-rail-touch-drag, .voice-strip'
 
 /**
@@ -97,6 +122,38 @@ export function pathOwnsHorizontalScroll<T extends HorizontalScrollElement>(
     if ((overflow === 'auto' || overflow === 'scroll') && element.scrollWidth > element.clientWidth + 1) return true
   }
   return false
+}
+
+/**
+ * Whether this touch began on the command rail.
+ *
+ * Composed path for the same reason `pathOwnsHorizontalScroll` uses one: a window
+ * listener sees a retargeted target, and the rail's chips include components that
+ * bring their own shadow roots.
+ */
+export function pathOwnsRailGesture(path: readonly { matches: (selector: string) => boolean }[]): boolean {
+  return path.some(element => element.matches(RAIL_GESTURE_SELECTOR))
+}
+
+/**
+ * Classification for a sequence that began on the command rail.
+ *
+ * Deliberately narrow: **one finger, upward, and nothing else.** The rail keeps every
+ * horizontal touch for its own pan, and a second finger over it has never resolved to
+ * anything, so widening this would take input away from a control rather than find
+ * unused input. The distance, axis-ratio and duration bars are the shared ones, so a
+ * hesitant drag up the pane is no more a rail swipe than it is a tab flick, and a
+ * long press that becomes a hold-to-repeat or a drag is settled before this by the
+ * pointer-drag claim.
+ */
+export function classifyRailGesture(sample: GestureSample): GestureSlot | null {
+  const { pointerCount, dx, dy, durationMs } = sample
+  if (pointerCount !== 1 || dy >= 0) return null
+  if (durationMs > GESTURE_THRESHOLDS.singleFingerSwipeMaxDurationMs) return null
+  const absX = Math.abs(dx)
+  const absY = Math.abs(dy)
+  if (absY < GESTURE_THRESHOLDS.swipeMinDistance || absY < absX * GESTURE_THRESHOLDS.swipeAxisRatio) return null
+  return 'rail_swipe_up'
 }
 
 export function classifyGesture(sample: GestureSample): GestureSlot | null {
