@@ -104,7 +104,8 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
       }
       const title = document.querySelector<HTMLElement>('.pane-title')!
       return {
-        bar: at('.pane-bar'), title: at('.pane-title'), chip: at('.pane-voice .voice-chip'), tools: at('.pane-tools'),
+        bar: at('.pane-bar'), title: at('.pane-title'), chip: at('.pane-tools .approval-chip'), tools: at('.pane-tools'),
+        transcript: at('.pane-tools .transcript-chip'),
         clipped: title.scrollWidth > title.clientWidth,
         // No status text left in the bar; the state reading it replaced lives in the tooltip.
         states: document.querySelectorAll('.pane-bar .pane-state').length,
@@ -113,11 +114,15 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
     expect(header.states).toBe(0)
     expect(header.clipped).toBe(true)
     expect(header.title.width).toBeLessThanOrEqual(header.bar.width * viewport.share)
-    // The chips and tools keep their full width, and everything stays on the one row.
+    // The tools keep their full width, and everything stays on the one row.
     expect(header.chip.width).toBeGreaterThan(0)
-    expect(header.title.right).toBeLessThanOrEqual(header.chip.x)
-    expect(header.chip.right).toBeLessThanOrEqual(header.tools.x)
+    expect(header.title.right).toBeLessThanOrEqual(header.tools.x)
+    // `appr:` leads the group, and the group is flush with the bar's right edge — the agent
+    // header has no path, so the tools hold the flexible track and right-align inside it.
+    // A left-aligned group here reads as a bar that failed to lay out.
+    expect(header.chip.x).toBeLessThan(header.transcript.x)
     expect(header.tools.right).toBeLessThanOrEqual(header.bar.right)
+    expect(header.bar.right - header.tools.right).toBeLessThanOrEqual(14)
     expect(Math.round(header.title.middle)).toBe(Math.round(header.tools.middle))
   })
 
@@ -139,12 +144,12 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
       const title = document.querySelector<HTMLElement>('.pane-title')!
       return {
         bar: at('.pane-bar'), identity: at('.pane-identity'), title: at('.pane-title'),
-        fault: at('.pane-fault'), chip: at('.pane-voice .voice-chip'),
+        fault: at('.pane-fault'), chip: at('.pane-tools .approval-chip'),
         clipped: title.scrollWidth > title.clientWidth,
       }
     })
     expect(header.fault.width).toBeGreaterThan(0)
-    // Inside the capped identity track, after the name, and clear of the voice chips.
+    // Inside the capped identity track, after the name, and clear of the pane tools.
     expect(header.fault.right).toBeLessThanOrEqual(header.identity.right + 1)
     expect(header.fault.x).toBeGreaterThanOrEqual(header.title.right)
     expect(header.fault.right).toBeLessThanOrEqual(header.chip.x)

@@ -16,14 +16,16 @@ import { useDismissLevel } from './modalFocus'
 import type { ApprovalMode, ApprovalStatus, Session } from './types'
 
 /**
- * The approval control, in the pane bar beside `tts:`.
+ * The approval control, leading the pane bar's tools group ahead of `queue` and
+ * `transcript`.
  *
- * A chip rather than a strip. Both chips answer the same class of question —
- * "what is swe-mux doing for this session without being asked each time" — so
- * they belong in the same row, at the same weight, and the pane bar is the one
- * surface that is always visible while the pane is. The earlier full-width
+ * A chip rather than a strip. It answers the same class of question those two do —
+ * "what is happening for this session, and where do I go to change it" — so it
+ * belongs in the same right-aligned group, at the same weight, and the pane bar is
+ * the one surface that is always visible while the pane is. The earlier full-width
  * disclosure above the command rail spent a permanent line on a control that is
- * `wait` almost all the time.
+ * `wait` almost all the time. It leads the group because it is the only standing
+ * *mode* there: `queue` and `transcript` open a surface, this one states a policy.
  *
  * The label is deliberately tiny (`appr:wait` / `appr:list` / `appr:ALL`) and the
  * detail lives in the drop-down, because the chip's job on a glance is only to
@@ -111,10 +113,10 @@ export function ApprovalChip({ session }: Props) {
   useDismissLevel(() => setOpen(false), open, 'approval-menu')
 
   // Anchored from the chip's viewport rect, because the menu is portalled to the
-  // body rather than positioned inside the chip. It has to be: `.pane-voice` is a
-  // horizontal scroller with a mask, and an `overflow-x: auto` ancestor clips an
-  // absolutely-positioned descendant on *both* axes — the menu rendered fine and
-  // was cropped to nothing, which looks exactly like a control that does not work.
+  // body rather than positioned inside the chip. It has to be: the chip sits in a
+  // bounded pane-bar group, and an `overflow` ancestor clips an absolutely-positioned
+  // descendant on *both* axes — the menu rendered fine and was cropped to nothing,
+  // which looks exactly like a control that does not work.
   const position = useCallback(() => {
     const rect = wrap.current?.getBoundingClientRect()
     if (rect) {
@@ -182,7 +184,7 @@ export function ApprovalChip({ session }: Props) {
     <div class="approval-chip-wrap" ref={wrap}>
       <button
         type="button"
-        class={`voice-chip approval-chip${active ? ' approval-on' : ''}`}
+        class={`pane-tool-label approval-chip${active ? ' approval-on' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Approvals for this conversation: ${approvalSummary(status, now)}. Click to change.`}

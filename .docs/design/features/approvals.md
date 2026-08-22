@@ -213,13 +213,19 @@ Two rules about matching are not conveniences:
 
 ## UI
 
-- **The `appr:` chip** (`ApprovalChip.tsx`), the pane bar's one remaining standing chip since the per-session `tts:` control moved into the voice panel's `tts` tab (`voice.md`). It
-  answer the same class of question — what mux does for this session without being asked each
-  time — so they belong in the same row at the same weight, and the pane bar is the one surface
-  visible for as long as the pane is. A brake reachable only through an overlay is a brake
-  nobody reaches in the moment they want it.
+- **The `appr:` chip** (`ApprovalChip.tsx`), leading the pane bar's right-aligned tools group
+  ahead of `queue` and `transcript` (operator decision 2026-08-22). It used to sit in a separate
+  voice-chip group beside `tts:`; that control moved into the voice panel's `tts` tab
+  (`voice.md`), leaving `appr:` alone in a group of its own, and a lone chip floating apart from
+  the pane's other per-session controls read as a separate feature rather than as one of them.
+  All three answer the same class of question — what is happening for this session, and where do
+  I go to change it — so they belong in the same row at the same weight, and the pane bar is the
+  one surface visible for as long as the pane is. A brake reachable only through an overlay is a
+  brake nobody reaches in the moment they want it.
+  It leads the group because it is the only standing *mode* there: `queue` and `transcript` open
+  a surface, `appr:` states a policy.
   The label is four characters at most (`appr:wait` / `appr:list` / `appr:ALL`, plus `off` and
-  `n/a`) because it shares a bar with the session state, the path, and the tools; on a glance
+  `n/a`) because it shares a bar with the session name, the path, and the other tools; on a glance
   its only job is "is authority standing here", and every number, reason, and expiry lives in
   the drop-down. It reads the **effective** mode, so a lapsed or superseded grant shows `wait`.
   It does not cycle on click. The three positions are not a ladder you want to

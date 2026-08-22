@@ -1221,8 +1221,8 @@ Its rules, and what each one is defending:
   surface. Terminal visibility does not depend on convergence with a separate global active ID.
 - Agent headers omit cwd on every device. A spawn path marked `last-known::` is stale metadata,
   not an actionable session control, and consumed the header's central space. Shell headers keep
-  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so the name, voice group,
-  and tools remain on one row.
+  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so the name and the tools
+  remain on one row.
 - Touch gestures are configurable command slots: single-finger horizontal swipes, two-finger
   horizontal *and vertical* swipes, and a two-finger tap. Only the **single**-finger vertical
   channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real
@@ -1493,14 +1493,17 @@ Its rules, and what each one is defending:
   that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
   opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
   operation with nothing open (`features/auto-delivery.md`).
-- The pane header is `[name] [cwd] [voice] [tools]` and **must stay one row**.
+- The pane header is `[name] [cwd] [tools]` and **must stay one row**.
   It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
-  The pane-local voice group contains read-aloud only; workspace talk is in the app-level voice dock.
-  Overflow is absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade and never grows the bar.
+  There is no pane-local voice chip group: read-aloud is the voice panel's `tts` tab, workspace talk is the app-level voice dock, and `appr:` - the last chip that group held - is a pane tool now.
+  `.pane-tools` is the one right-aligned group, ordered `appr:` then `queue` then `transcript` then the overflow menu: the standing *mode* leads, and the surfaces that open on click follow it.
+  Three grid tracks are declared for every variant, because the cwd is the item that comes and goes.
+  A two-item header therefore puts the tools in the flexible track and leaves the trailing `auto` track empty, and an `auto` track holding nothing is zero wide, so the group stays flush with the bar's right edge without a spacer element and without one template per variant.
+  `.pane-tools` right-aligns its own contents (`justify-content:flex-end`), which is a no-op when it lands in the trailing track.
   Phones drop the cwd column, and every device caps the name track so the group keeps room.
 - The header's first field is the session's display name (`sessionNames.ts`), not its status.
   State is already carried by the tab, the sidebar row, and the terminal being read, while the name is the field those surfaces crop: a tab is only as wide as its strip allows.
-  The name track is `fit-content()` rather than `auto`, because an `auto` track takes its max-content size before the flexible track expands - a sentence-length generated title would take the cwd's space and squeeze the voice chips to their floor.
+  The name track is `fit-content()` rather than `auto`, because an `auto` track takes its max-content size before the flexible track expands - a sentence-length generated title would take the cwd's space and squeeze the pane tools to their floor.
   The rendered name ellipsizes; the whole of it leads the `title` tooltip, followed by the status line, any faults, and delivery readiness.
   Faults keep a visible marker beside the name (`.pane-fault`) because they have no other pane-level surface - an agent header draws no path chip, which is where a non-local boundary is otherwise reported - and because a stale observation is the one fault that looks like a healthy session.
   Routine state never re-enters the bar: that is what the tab and the row are for.
@@ -1555,8 +1558,8 @@ Its rules, and what each one is defending:
 - The app-level Conversation fallback uses z-index 24; workspace chrome uses lower values, while command-palette and modal layers use higher values.
   The normal named-target Talk panel follows focus inside the pane voice overlay without entering pane or drawer layout.
 - Prose of unbounded length belongs on a floating surface of this kind, never in the header
-  chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
-  placed there can only ever show a truncated tail.
+  chip group: `.pane-tools` is a fixed-chip row in a bar that cannot wrap, so a readout placed
+  there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
   It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, the clipboard-history picker (`Clip`), and the session's skill picker (`Skills`).
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.

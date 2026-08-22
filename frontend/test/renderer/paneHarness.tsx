@@ -51,10 +51,16 @@ const pane = <section class="terminal-pane focused">
     {/* Deliberately longer than any pane is wide: the header's contract is that a generated
         title ellipsizes rather than taking width from the voice chips or the pane tools. */}
     <div class="pane-identity"><span class="pane-title">claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay</span>{fault && <span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>}</div>
-    <div class="pane-voice">
-      <button class="voice-chip auto">tts:auto</button>
+    {/* The real bar's right-aligned group, in its shipped order: the standing `appr:` mode
+        first, then the two chips that open a surface, then the overflow menu. Mirrored as
+        plain markup rather than mounting `ApprovalChip` because the geometry contract is
+        what this harness pins, and the real chip would put a fetch behind every load. */}
+    <div class="pane-tools">
+      <div class="approval-chip-wrap"><button class="pane-tool-label approval-chip">appr:wait</button></div>
+      <button class="pane-tool-label queue-chip">queue</button>
+      <button class="pane-tool-label transcript-chip">transcript</button>
+      <button>⋯</button>
     </div>
-    <div class="pane-tools"><button>⋯</button></div>
   </div>
   {overlay && <div class="voice-overlay-anchor"><div class="voice-overlay">
     <VoicePlayer session={session} status={status} mode="auto" commands={commands} onSession={() => {}} onOpenSettings={() => {}} />

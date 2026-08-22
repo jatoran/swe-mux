@@ -36,17 +36,25 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
 .main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-/* A shell header is [name] [cwd] [voice] [tools]; an agent header omits cwd and gives that
-   space to voice controls. `grid-auto-flow:column` keeps both variants on one row. Without it
-   an item beyond the declared column count auto-places into a second row, which is how the
-   variable-length voice set would silently wrap the pane tools under the name.
+/* A shell header is [name] [cwd] [tools]; an agent header omits cwd, and a touch header hides it
+   for every backend. `grid-auto-flow:column` keeps every variant on one row. Without it an item
+   beyond the declared column count auto-places into a second row, which is how a variable-length
+   control set would silently wrap the pane tools under the name.
    The name track is `fit-content(35%)`, NOT `auto`: it sizes to the name while one fits, but a
    long generated title is clamped at just over a third of the bar. An `auto` track takes its
    max-content size before the flexible track is expanded, so a wordy title would have eaten the
-   cwd and squeezed the voice chips down to their 50px floor — the controls are what the header
-   is for, and a name is still readable truncated (the whole of it is in the title attribute). */
-.pane-bar { grid-auto-flow:column;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto auto }
-.pane-bar.agent-pane-bar { grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }
+   cwd and squeezed the tools down to their 50px floor — the controls are what the header
+   is for, and a name is still readable truncated (the whole of it is in the title attribute).
+   Three tracks are declared for every variant deliberately, rather than one template per
+   variant. The path is the item that comes and goes, so a two-item header puts the tools in the
+   flexible track and leaves the trailing `auto` track empty — and an `auto` track holding
+   nothing is zero wide, so it costs no gap at the right edge. That is what lets the same
+   template serve [name][cwd][tools] and [name][tools] without counting children, which is a
+   count that already depends on pointer type as well as on backend. */
+.pane-bar { grid-auto-flow:column;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }
+/* Right-aligned from inside, so the group sits at the bar's right edge whether it landed in the
+   trailing `auto` track (where this is a no-op) or in the flexible one. */
+.pane-tools { justify-content:flex-end }
 /* The session's name, which is what the tab strip crops first and this header is wide enough to
    show. `overflow:hidden` is load-bearing twice: it draws the ellipsis, and it is what lets the
    name's grid track collapse under pressure instead of the tracks holding controls. */
@@ -55,17 +63,9 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 /* Shown only for a fault with no other pane-level surface — a stale observation, a non-local
    boundary, a parser or observation diagnostic. Routine state is deliberately not here. */
 .pane-fault { flex:0 0 auto;color:var(--amber);font-size:10px;cursor:help }
-/* The trailing fade is the group's overflow affordance. It costs nothing when the chips fit
-   (it lands on empty track) and turns the chip the scroller cuts in half into a visible
-   "there is more, scroll me" instead of something that reads as a clipping bug. */
-.pane-voice { min-width:0;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none;-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 13px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 13px),transparent) }
-.pane-voice::-webkit-scrollbar { display:none }
-.pane-voice>* { flex:0 0 auto }
-.pane-voice button { height:calc(23px*var(--ui-scale));min-width:auto;padding:0 6px;border:0;border-radius:4px;background:transparent;color:#7d8692;white-space:nowrap;cursor:pointer;font:9px 'JetBrains Mono' }
-.pane-voice button:hover:not(:disabled) { background:#252b32;color:var(--text) }
-/* Desktop keeps only the mode chip and the mic here; speak / verbatim / autoplay / settings
-   are the strip's job one row below. On touch the strip is harder to hit, so they show. */
-.pane-voice .mobile-voice-action { display:none }
+/* The pane bar's voice-chip group is gone: read-aloud moved to the voice panel's `tts` tab and
+   `appr:` moved into `.pane-tools`, which left an empty scroller holding the agent header's
+   flexible track. The tools group holds that track itself now. */
 .pane-grid { grid-row:1/-1;min-width:0;min-height:0;display:grid;gap:1px;background:#293039 }.pane-grid.count-1 { grid-template-columns:1fr }.pane-grid.count-2 { grid-template-columns:repeat(2,minmax(0,1fr)) }.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr)) }.terminal-pane { position:relative;min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f;box-shadow:inset 0 0 0 1px transparent }.terminal-pane>.pane-bar { grid-row:1 }
 /* grid-column:1 is MANDATORY, not tidiness. This grid declares no columns, so two items
    sharing row 2 with an auto column cannot both take column 1: auto-placement gives the
@@ -2693,13 +2693,13 @@ body {
      definite remaining height after the in-flow session/voice headers. */
   .mobile-unified-active{height:100%;min-height:0;overflow:hidden}
   .mobile-unified-active>.terminal-pane{display:flex!important;flex-direction:column;height:100%;min-height:0;overflow:hidden}
-  /* The session header is one row on a phone: the session name at the left, the voice group in
-     the middle, queue/transcript/⋯ at the right. The cwd column is dropped here — it is the
-     pane's least useful field on a narrow screen, and as an extra item it was silently wrapping
-     the tools onto a second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy
-     `.pane-path{display:none}` mobile rule (0,1,0), which is why the path showed at all,
-     so hide it from the bar itself. The voice group takes the flexible column and scrolls
-     inside itself; the name track is capped so it cannot squeeze the group out of the bar. */
+  /* The session header is one row on a phone: the session name at the left, appr/queue/
+     transcript/⋯ at the right. The cwd column is dropped here — it is the pane's least useful
+     field on a narrow screen, and as an extra item it was silently wrapping the tools onto a
+     second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy `.pane-path{display:none}`
+     mobile rule (0,1,0), which is why the path showed at all, so hide it from the bar itself.
+     With the path gone the tools take the flexible column and right-align inside it; the name
+     track is capped so it cannot squeeze the group out of the bar. */
   .pane-bar>.pane-path{display:none}
   .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:fit-content(45%) minmax(0,1fr) auto;padding:5px 6px 1px 10px}
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
@@ -2714,12 +2714,11 @@ body {
   /* Font size only — the min/max that bound the auto-grow are in `em`, so they follow it
      without being restated. 16px keeps mobile browsers from zooming the viewport on focus. */
   .dictation-draft{padding:6px 7px;font-size:16px;user-select:text;-webkit-user-select:text;touch-action:auto}
-  /* Touch-sized voice chips, and the settings shortcut the strip has no room for. Metrics are
-     tuned so the whole group fits unscrolled at 390–412 px (where phones actually are); the
-     group still scrolls below that rather than clipping the pane tools. */
-  .pane-voice{gap:3px}
-  .pane-voice button{height:calc(32px*var(--ui-scale));padding:0 5px;font-size:10px}
-  .pane-voice .mobile-voice-action{display:inline-flex;align-items:center;justify-content:center}
+  /* No touch override for the pane tools. `appr:` is one of them now rather than a voice chip
+     with its own metrics, and the group's job on a phone is to fit unscrolled at 390–412 px
+     (where phones actually are) beside the capped name track — three labelled chips plus the
+     overflow menu is already the width the bar can hold there. Sizing them up would ellipsize
+     `transcript` to buy touch height the bar has no room for. */
   .mobile-unified-active>.terminal-pane>.terminal-surface{flex:1 1 0;height:auto;min-height:0;overflow:hidden}
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
@@ -3502,16 +3501,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .history-modal>.modal-heading{flex:none}
 .history-modal>.history-workspace{flex:1;min-height:0}
 @media(max-width:760px){.history-modal{width:100%;height:100%;max-height:100dvh;border-radius:0}}
-/* Voice chip states. These read as tinted text in the header (the bar's buttons are
-   borderless) and keep their outline on the bottom rail's bordered buttons, so both the
-   border and the colour are set and whichever the host applies wins. */
-.pane-voice .voice-chip.auto{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
-.pane-voice .voice-chip.on_demand{color:var(--text)}
-/* Read aloud remains session-scoped in the pane header. Talk state stays app-owned while
-   its panel renders in the focused pane's floating voice stack. */
-.pane-voice .voice-mic.recording{color:var(--error,#f07178);animation:voice-rec-pulse 1.2s ease-in-out infinite}
+/* Shared by the dictation phase readout, the assistant's thinking line, and anything else that
+   has to say "live" without a spinner. The pane bar's own mic and `tts:` chips are gone — the
+   voice panel owns them now — so nothing in the header animates on it any more. */
 @keyframes voice-rec-pulse{0%,100%{opacity:1}50%{opacity:.35}}
-@media(pointer:coarse){.pane-voice .voice-mic{display:none}}
 @media(max-width:760px){.voice-strip{min-height:30px}.voice-strip button{height:calc(24px*var(--ui-scale));min-width:26px}.voice-strip .voice-seek{height:calc(20px*var(--ui-scale))}}
 .mux-pointer-drag-ghost{position:fixed;left:0;top:0;z-index:9999;max-width:260px;padding:7px 11px;border:1px solid var(--green);background:var(--panel2);color:var(--text);box-shadow:5px 6px 0 #0008;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font:10px 'Cascadia Mono',Consolas,monospace;will-change:transform}
 /* The landing slot: where the row in the air will come down, drawn over the gap it would take.
@@ -4374,21 +4367,24 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-auto-on{color:var(--accent)}
 .queue-auto-note{margin:0;color:var(--muted);line-height:1.45}
 
-/* ---- Approval strip (pane-level, above the action rail) ---- */
+/* ---- Approval chip (pane bar, leading the pane tools) ---- */
 /* Same collapsed-disclosure shape as the auto-delivery strip above, deliberately:
    both answer "what is swe-mux doing on my behalf here", and two different
    treatments for the same question would read as two unrelated features. */
-/* The `appr:` chip sits beside `tts:` in the pane bar and inherits `.voice-chip`,
-   so the two read as one row of session controls rather than as two features. */
-.approval-chip-wrap{position:relative;display:inline-flex}
-/* Amber rather than accent or green: a standing grant is closer to "attention"
-   than to "on", and `tts:auto` next to it is already green. */
-.pane-voice .voice-chip.approval-on{border-color:var(--amber);color:var(--amber)}
+/* The `appr:` chip leads `queue` and `transcript` in `.pane-tools` and takes
+   `.pane-tool-label` like them, so the group reads as one row of session controls
+   rather than as a chip bolted onto a toolbar. `flex:0 0 auto` because the wrapper is
+   a flex item of a right-aligned group: without it the label's `max-width` would let
+   the wrapper shrink and clip `appr:` mid-word before `queue` gave up any width. */
+.approval-chip-wrap{position:relative;display:inline-flex;flex:0 0 auto}
+/* Amber rather than accent or green: a standing grant is closer to "attention" than to
+   "on", and `queue` beside it already claims the accent for a pending count. */
+.pane-tools .approval-chip.approval-on{color:var(--amber)}
 /* Portalled to the body and positioned from the chip's viewport rect, NOT nested
-   under it. `.pane-voice` is a horizontal scroller with a mask, and an
-   `overflow-x: auto` ancestor clips an absolutely-positioned descendant on both
-   axes — nested, this menu rendered correctly and was cropped to nothing, which
-   reads exactly like a control that does not work. Left/top/width come from
+   under it. The group it sits in is a bounded flex row inside a grid track, and any
+   `overflow` ancestor clips an absolutely-positioned descendant on both axes —
+   nested, this menu rendered correctly and was cropped to nothing, which reads
+   exactly like a control that does not work. Left/top/width come from
    `anchoredPopoverStyle`, the same math the account and resource popovers use. */
 .approval-menu{position:fixed;z-index:90;display:grid;gap:2px;overflow-y:auto;padding:4px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);box-shadow:0 6px 18px #0009}
 .approval-menu-item{display:grid;gap:1px;padding:5px 8px;border:0;border-radius:4px;background:transparent;color:var(--text);font:inherit;font-size:10px;text-align:left;cursor:pointer}

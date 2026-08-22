@@ -6161,28 +6161,15 @@ export function App() {
     // The playback strip (seek, clip nav, generate) floats directly beneath the header. It
     // used to lead the bottom Action rail, but that rail is a horizontal scroller the user
     // pages through to reach terminal keys, so the voice chips were both in the way there and
-    // easy to lose off-screen. Grouped in the header they have a fixed home; the group is its
-    // own scroller so a long chip set can never push the pane tools out of the bar.
-    const paneVoice=agentVoice&&voiceStatus?<>
-      {/* The per-session read-aloud controls used to live here, one copy per pane, and
-          they answered the same question - what does read aloud do for the session I am
-          looking at - once per pane on whichever pane happened to be drawn. They are in
-          the voice panel's `tts` tab now, which knows the focused session and is one
-          surface rather than N. The pane keeps its player strip below: that is the local
-          *view* of this session's clips, the same watch-here/act-there split the drawer's
-          Processes tab has with the Resources dialog. */}
-      {/* The pane bar's one remaining standing chip. It stays because it answers what
-          mux does for this session without being asked each time, and the pane bar is
-          the one surface visible for as long as the pane is. It does not cycle on
-          click: the three positions are not a ladder you want to pass *through*
-          (`allow_all` is not a step on the way back to `wait`), so it opens a menu and
-          each mode is chosen directly. */}
-      <ApprovalChip session={session}/>
-      {/* speak / verbatim-summary / autoplay were repeated here for touch while the playback
-          strip was buried at the bottom of the pane; the strip owns them now. The `audio…`
-          settings chip went the same way once both floating surfaces grew their own gear —
-          three routes to one Settings section is two too many. */}
-    </>:null
+    // easy to lose off-screen.
+    //
+    // The header no longer carries a voice *chip* group at all. The per-session read-aloud
+    // controls moved to the voice panel's `tts` tab (one surface that follows focus, rather
+    // than one copy per drawn pane), and `appr:` — the last chip standing in that group —
+    // moved into the pane tools beside `queue` and `transcript`, where the pane's other
+    // per-session controls already live. That left the group empty, so the slot and its
+    // scroller are gone with it; the pane keeps its player strip below, which is the local
+    // *view* of this session's clips.
     const openVoiceSettings=()=>openSettings('Voice')
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} commands={commands} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
     // The read-aloud strip hangs off a zero-height pane anchor, and is now the only thing
@@ -6226,8 +6213,17 @@ export function App() {
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
         {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
-        <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
+        {/* `appr:` leads the tools group. It is a standing *mode* rather than a one-shot
+            action, so it reads first and the two surfaces that open a panel (`queue`,
+            `transcript`) follow it, with the overflow menu last. It stays on every agent
+            pane, including ones where no mode can be selected: a control that disappears
+            when unavailable teaches the operator it does not exist, while one that stays
+            and says why teaches them what would make it work. It does not cycle on click —
+            the three positions are not a ladder you want to pass *through* (`allow_all` is
+            not a step on the way back to `wait`) — so it opens a menu and each mode is
+            chosen directly. `ApprovalChip` renders nothing on a shell backend, which is
+            what lets this one group serve both header variants. */}
+        <div class="pane-tools"><ApprovalChip session={session}/>{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
             on a phone it cost 40px of a bar that also has to fit the session name and path. What it
             opened is now the drawer's Processes tab, which pins this session's row first, and the
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
