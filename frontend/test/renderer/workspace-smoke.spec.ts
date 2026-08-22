@@ -36,7 +36,7 @@ for (const viewport of [
 ]) {
   test(`the terminal surface owns the pane below its bar on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto(`/pane-harness.html?overlay=0&mobile=${viewport.mobile}`)
+    await page.goto(`/pane-harness.html?mobile=${viewport.mobile}`)
     await expect(page.locator('.terminal-surface')).toBeVisible()
     const b = await page.evaluate(bounds)
     // One column, two rows: the surface fills the pane width and all the height
@@ -50,10 +50,10 @@ for (const viewport of [
 
 test('the mobile Draft composer overlays the host without resizing the terminal', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
-  await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=0')
+  await page.goto('/pane-harness.html?mobile=1&draft=0')
   const off = await page.evaluate(bounds)
 
-  await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=1')
+  await page.goto('/pane-harness.html?mobile=1&draft=1')
   await expect(page.locator('.mobile-terminal-draft')).toBeVisible()
   const on = await page.evaluate(bounds)
 

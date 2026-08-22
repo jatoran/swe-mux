@@ -5,8 +5,9 @@ import { SettingLink } from './SettingLink'
 import { sessionDisplayName } from './sessionNames'
 import type { Session, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import {
-  autoplayEnabled, clipDeviceState, dismissHeldClips, getPlayback, heldClipTotal, pausePlayback,
-  playAllHeldClips, playClip, setAutoplayEnabled, subscribePlayback, unlockPlayback,
+  autoplayEnabled, beginRequestedStream, cancelRequestedStream, clipDeviceState, dismissHeldClips,
+  getPlayback, heldClipTotal, newVoiceStreamId, pausePlayback, playAllHeldClips, playClip,
+  playRequestedStreamFirst, seekTo, setAutoplayEnabled, subscribePlayback, unlockPlayback,
 } from './voice'
 import type { ClipDeviceState } from './voice'
 import type { VoiceBodyVariant } from './voiceDock'
@@ -17,16 +18,26 @@ import type { VoiceBodyVariant } from './voiceDock'
  * Everything read aloud *does* was reachable only from three places that are each about
  * something else - a checkbox several sections into Settings, a chip on whichever pane
  * happened to be on screen, and a floating strip under that pane - so "what is speaking,
- * and what is waiting" had no surface at all. This is that surface, and the split with
- * Settings is the one `setting-links.md` requires:
+ * and what is waiting" had no surface at all. This is that surface, and it is now the only
+ * read-aloud *control* surface in the workspace: the pane's player strip is gone, because a
+ * per-session control drawn once per visible pane answered "what is this session doing with
+ * audio" four times in a four-way split, about four different sessions, none of them
+ * necessarily the one being listened to. The two things the strip could do and nothing else
+ * could - scrub within a clip, and generate one on demand - are here.
+ *
+ * The split with Settings is the one `setting-links.md` requires:
  *
  * - **Settings -> Voice owns the master switch.** It is where `tts_enabled` is edited, and
  *   in particular the only place it can be turned *off*. This tab renders the standard
  *   gate while it is off - a gate may only ever turn something on - and, while it is on,
  *   a link back to the owner rather than a second copy of the switch.
- * - **The clip record is the join point.** One clip model, three views over it: the pane's
- *   strip is the local one, this is the global one, and the transcript's per-message
- *   markers are the third. None of them owns a clip; they all read the same rows.
+ * - **The clip record is the join point.** One clip model, two views over it: this list is
+ *   one, and the transcript's per-message markers are the other. Neither owns a clip; they
+ *   read the same rows.
+ * - **Which sessions participate is reported outside this tab**, by a mark on every sidebar
+ *   row and workspace tab (the `voice` row field). This tab edits the mode for the session
+ *   in focus, one at a time; the marks answer "which of them speak" for the whole fleet at
+ *   once, which is the question a control panel following focus cannot answer.
  * - **The list is ordered by when each reply arrived**, never by when its audio finished.
  *   A held backlog is synthesized in whatever order engine slots free up, so synthesis
  *   order puts an hour-old update above the reply that just landed - which is the whole
@@ -38,6 +49,12 @@ const CLIP_LIMIT = 60
 
 const formatClock = (seconds: number) =>
   new Date(seconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+/** Elapsed/total, for the transport. Clamped: a clip with no duration reads `0:00`. */
+const formatSeconds = (value: number) => {
+  const total = Math.max(0, Math.floor(value || 0))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
 
 /** When the clip's own message arrived, falling back to when it was synthesized. */
 export const clipArrival = (clip: VoiceClip): number =>
@@ -76,6 +93,7 @@ export function VoiceReadTab({
 }) {
   const [clips, setClips] = useState<VoiceClip[]>([])
   const [error, setError] = useState('')
+  const [speaking, setSpeaking] = useState(false)
   const [, force] = useState(0)
   const enabled = !!status?.enabled
 
@@ -96,6 +114,38 @@ export function VoiceReadTab({
     window.addEventListener('mux:voice-clip', onClip)
     return () => window.removeEventListener('mux:voice-clip', onClip)
   }, [enabled])
+
+  /**
+   * Generate audio for the focused session's last reply, now.
+   *
+   * Gated on a focused agent and the master switch only, never on the session's own
+   * mode: the daemon's manual path checks `tts_enabled` and an observable transcript
+   * and nothing else, so a session set to `off` can still be asked to speak once. The
+   * strip this replaced could not offer that - it was only drawn when the mode was
+   * already on - which left `off` sessions reachable from the command palette alone.
+   */
+  const speak = async () => {
+    if (!session || speaking) return
+    setSpeaking(true)
+    setError('')
+    unlockPlayback()
+    const streamId = newVoiceStreamId()
+    beginRequestedStream(streamId, session.id, 'agent')
+    try {
+      const created = await api<VoiceClip>(
+        'POST', `/api/sessions/${session.id}/voice/generate`, { stream_id: streamId })
+      await load()
+      if (created?.id) {
+        await playRequestedStreamFirst(created.id, created.stream_id || streamId, session.id, 'agent')
+      }
+    } catch (cause) {
+      // The stream has to be cancelled explicitly: it was opened before the request, so
+      // a failed generation would otherwise leave this device waiting to play a clip
+      // that will never arrive, and holding every later one behind it.
+      cancelRequestedStream(streamId)
+      setError(cause instanceof Error ? cause.message : 'generation failed')
+    } finally { setSpeaking(false) }
+  }
 
   if (variant === 'hidden') return <div class="voice-read hidden-variant" hidden />
 
@@ -125,6 +175,14 @@ export function VoiceReadTab({
   }
 
   const modeLabel = mode === 'on_demand' ? 'on demand' : mode === 'auto' ? 'auto on reply' : 'off'
+  // The clip the transport addresses: whatever this device loaded last, whether or not it
+  // is still playing and whichever session it belongs to. A clip older than the list's
+  // window has no row to describe it, so the bar simply does not draw rather than
+  // scrubbing something it cannot name.
+  const loaded = clips.find(clip => clip.id === playback.clipId) || null
+  // The live duration once the audio element knows it; the daemon's estimate until then,
+  // so the bar's range is right on the first frame instead of snapping when metadata lands.
+  const loadedDuration = playback.duration > 0 ? playback.duration : (loaded?.duration_hint_s || 0)
   return <div class="voice-read">
     <div class="voice-read-controls">
       {/* Layer 2, for the session in focus. It moved here from the pane bar: a control
@@ -153,6 +211,16 @@ export function VoiceReadTab({
             : 'Speaking replies verbatim, no LLM involved · click for spoken summaries'}
           onClick={() => onContent(content === 'summary' ? 'verbatim' : 'summary')}
         >{content}</button>
+        {/* Deliberately not disabled by `mode`: see `speak`. */}
+        <button
+          class="voice-read-speak"
+          disabled={!session || speaking}
+          aria-label="Speak the focused session’s last reply now"
+          title={session
+            ? `Generate ${content === 'summary' ? 'a spoken summary' : 'verbatim audio'} of this session’s last reply and play it`
+            : 'Focus an agent session to speak its last reply'}
+          onClick={() => void speak()}
+        >{speaking ? 'speaking…' : '↻ speak'}</button>
       </div>
       {/* Layer 3, stored in this browser. */}
       <button
@@ -174,6 +242,32 @@ export function VoiceReadTab({
       <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, voice, budget, cache)" onClick={onOpenSettings}>⚙</button>
     </div>
     {error && <p class="voice-read-error">{error}</p>}
+    {/* The transport, for whatever this device last loaded.
+        One bar rather than a control on every row: there is exactly one audio element,
+        so a per-row scrubber would be the same widget drawn N times with N-1 of them
+        inert - and the row that is playing scrolls out of a sixty-clip list, taking its
+        scrubber with it. It stays after a clip ends (playback keeps the clip id), which
+        is what makes "play that back from the middle" possible at all. */}
+    {loaded && <div class="voice-read-now" role="group" aria-label="Playback">
+      <button
+        class="voice-read-now-play"
+        aria-label={playback.playing ? 'Pause' : 'Play'}
+        title={playback.playing ? 'Pause' : 'Play'}
+        onClick={() => {
+          unlockPlayback()
+          if (playback.playing) { pausePlayback(); return }
+          void playClip(loaded.id, loaded.session_id).catch(() => setError('Playback failed.'))
+        }}
+      >{playback.playing ? '⏸' : '▶'}</button>
+      <input
+        class="voice-read-seek" type="range" min="0" max={loadedDuration || 1} step="0.1"
+        value={playback.position} aria-label="Seek within the clip"
+        onInput={event => seekTo(Number(event.currentTarget.value))} />
+      <span class="voice-read-now-time">
+        {formatSeconds(playback.position)}/{formatSeconds(loadedDuration)}
+      </span>
+      <span class="voice-read-now-text" title={loaded.text || ''}>{loaded.text || '…'}</span>
+    </div>}
     <div class="voice-read-clips" role="list" aria-label="Voice clips">
       {clips.length === 0
         ? <p class="voice-read-empty">No clips yet. A session set to <code>auto</code> makes one at the end of every reply; <code>on demand</code> makes one when you ask.</p>

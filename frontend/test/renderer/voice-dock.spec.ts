@@ -128,10 +128,32 @@ test('the read-aloud tab is a third body and fits without moving the terminal', 
   const open = await page.evaluate(bounds)
   await expect(page.locator('.voice-read-controls')).toBeVisible()
   await expect(page.locator('.voice-read-clip')).toHaveCount(3)
+  // On-demand generation and the transport are here rather than on a pane: this tab is read
+  // aloud's only control surface, and the retired player strip was the only other route to
+  // either. `↻ speak` is not gated on the session's mode - the daemon's manual path checks
+  // the master switch alone - which is a capability the strip could not offer, because it
+  // was drawn only once the mode was already on.
+  await expect(page.locator('.voice-read-speak')).toBeVisible()
+  await expect(page.locator('.voice-read-now')).toBeVisible()
   // The clip list scrolls inside the panel rather than growing it past its bound.
   const overflow = await page.evaluate(() =>
     getComputedStyle(document.querySelector<HTMLElement>('.voice-read-clips')!).overflowY)
   expect(overflow).toBe('auto')
+  // The panel's flexible height belongs to the list and to nothing else. A fixed
+  // `auto minmax(0,1fr)` template handed it to whichever child was second instead, so the
+  // transport (or an error line) took the panel and left the list in an implicit `auto` row
+  // it could not scroll inside. Both facts are geometric, and neither is visible to tsc.
+  const stack = await page.evaluate(() => {
+    const at = (selector: string) => {
+      const { y, height } = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect()
+      return { y: Math.round(y), height: Math.round(height) }
+    }
+    return { panel: at('.voice-read'), controls: at('.voice-read-controls'), now: at('.voice-read-now'), clips: at('.voice-read-clips') }
+  })
+  expect(stack.now.y).toBeGreaterThanOrEqual(stack.controls.y + stack.controls.height)
+  expect(stack.clips.y).toBeGreaterThanOrEqual(stack.now.y + stack.now.height)
+  expect(stack.now.height).toBeLessThan(stack.clips.height)
+  expect(stack.clips.y + stack.clips.height).toBeLessThanOrEqual(stack.panel.y + stack.panel.height + 1)
   // Same floating contract as every other body: the terminal is untouched.
   await page.goto('/voice-dock-harness.html?dock=chip')
   const collapsed = await page.evaluate(bounds)

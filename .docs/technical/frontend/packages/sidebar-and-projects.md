@@ -21,6 +21,8 @@ Its normalizer is where the layout invariants live, so the renderer never has to
 
 The normalizer is also where the stored blob is migrated.
 Version 2 moved presence-only flags into the top line's right section (the flag strip) and placed the `draft` field, because changing the shipped default reaches nobody who has ever saved a layout.
+Version 3 places `voice` on the same rule, next to `approvals`.
+Each step runs only for a blob written before it, so a layout from a later build runs none of them and a relocation never repeats.
 Identity tokens are exempt from shedding, since the strip's section may hold nothing else and the narrow widths that trigger shedding are exactly where a flag is worth most.
 
 ### `sessionRowFields.ts` - the DOM-free engine

@@ -2,17 +2,21 @@ import { expect, test } from 'playwright/test'
 
 /**
  * The pane geometry contract (`design/features/ui.md`): a terminal pane is two rows —
- * header and surface - and pane voice playback floats over the terminal while the
- * conversation surface lives at app level (`voice-dock.spec.ts`). The pane's remaining
- * height *is* the PTY's row count, so any layout change that moves or resizes
+ * header and surface — and the surface owns the whole of the second one. The pane's
+ * remaining height *is* the PTY's row count, so any layout change that moves or resizes
  * `.terminal-surface` resizes a live agent's terminal and makes its TUI reflow; the damage
- * outlives the overlay because the reflowed scrollback does not come back when it closes.
+ * outlives whatever caused it, because the reflowed scrollback does not come back.
  *
  * Both regressions this pins were pure CSS, invisible to tsc and to the unit suite:
  * a template that declared one track too few (the surface fell into an implicit `auto`
  * row, leaving the real `1fr` track as dead black space), and a shared row with no
  * `grid-column`, which auto-placed the surface into an implicit second column and gave
  * the terminal less than half the pane's width.
+ *
+ * The pane now carries no voice surface at all: the conversation surface is app-level
+ * chrome (`voice-dock.spec.ts`) and the read-aloud player strip is retired, so read aloud
+ * is operated from the dock's `tts` tab. Its absence is asserted rather than assumed —
+ * a per-session control on the pane is exactly the shape that grows back.
  */
 const bounds = () => {
   const box = (selector: string) => {
@@ -23,17 +27,16 @@ const bounds = () => {
   }
   return {
     pane: box('.terminal-pane')!, bar: box('.pane-bar')!, surface: box('.terminal-surface')!,
-    host: box('.terminal-host')!, overlay: box('.voice-overlay'), strip: box('.voice-strip'),
-    anchor: box('.voice-overlay-anchor'),
+    host: box('.terminal-host')!,
     draft: box('.mobile-terminal-draft'), rail: box('.terminal-action-rail'),
   }
 }
 
 test('the mobile Draft composer overlays the host without resizing the terminal', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
-  await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=0')
+  await page.goto('/pane-harness.html?mobile=1&draft=0')
   const off = await page.evaluate(bounds)
-  await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=1')
+  await page.goto('/pane-harness.html?mobile=1&draft=1')
   await expect(page.locator('.mobile-terminal-draft')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Insert' })).toHaveAttribute('title', 'Insert into the agent composer without submitting')
   const on = await page.evaluate(bounds)
@@ -42,47 +45,35 @@ test('the mobile Draft composer overlays the host without resizing the terminal'
   expect(on.draft!.x).toBeGreaterThanOrEqual(on.surface.x)
   expect(on.draft!.x + on.draft!.width).toBeLessThanOrEqual(on.surface.x + on.surface.width)
   expect(on.draft!.y + on.draft!.height).toBeLessThanOrEqual(on.rail!.y)
-
-  await page.goto('/pane-harness.html?overlay=1&mobile=1&draft=1')
-  const shared = await page.evaluate(bounds)
-  expect(shared.overlay!.y + shared.overlay!.height).toBeLessThanOrEqual(shared.draft!.y)
 })
 
 for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }, { name: 'mobile', width: 390, height: 780, mobile: 1 }]) {
-  test(`the read-aloud strip floats without moving the terminal on ${viewport.name}`, async ({ page }) => {
+  test(`the surface owns the pane's whole second row on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
 
-    await page.goto(`/pane-harness.html?overlay=0&mobile=${viewport.mobile}`)
+    await page.goto(`/pane-harness.html?mobile=${viewport.mobile}`)
     await expect(page.locator('.terminal-surface')).toBeVisible()
-    const off = await page.evaluate(bounds)
-
-    await page.goto(`/pane-harness.html?overlay=1&mobile=${viewport.mobile}`)
-    await expect(page.locator('.voice-strip')).toBeVisible()
     const on = await page.evaluate(bounds)
-
-    // The entire point of floating: the terminal is untouched while the strip is up.
-    expect(on.surface).toEqual(off.surface)
-    expect(on.host).toEqual(off.host)
 
     // The pane is one column and two rows, and the surface owns all of both.
     expect(on.surface.width).toBe(on.pane.width)
     expect(on.surface.x).toBe(on.pane.x)
     expect(on.surface.y).toBe(on.bar.y + on.bar.height)
     expect(on.surface.height).toBe(on.pane.height - on.bar.height)
+    // The host is inside the surface and shares it with the Action rail, so it is bounded
+    // by the surface rather than equal to it.
+    expect(on.host.y).toBeGreaterThanOrEqual(on.surface.y)
+    expect(on.host.y + on.host.height).toBeLessThanOrEqual(on.surface.y + on.surface.height)
 
-    // The strip stays inside the focused pane's floating stack, near its top.
-    expect(on.overlay!.x).toBeGreaterThanOrEqual(on.pane.x)
-    expect(on.overlay!.x + on.overlay!.width).toBeLessThanOrEqual(on.pane.x + on.pane.width)
-    expect(on.overlay!.y).toBeGreaterThanOrEqual(on.surface.y)
-    expect(on.overlay!.y).toBeLessThan(on.surface.y + 40)
-    expect(on.overlay!.height).toBeLessThan(on.surface.height * 0.6)
-    expect(on.strip!.x).toBeGreaterThanOrEqual(on.overlay!.x)
-    expect(on.strip!.x + on.strip!.width).toBeLessThanOrEqual(on.overlay!.x + on.overlay!.width)
-    expect(on.strip!.y + on.strip!.height).toBeLessThan(on.surface.y + on.surface.height)
-
-    // And the conversation surface is not in the pane at all any more: it moved to one
-    // app-level dock so that following focus can never remount the assistant inside it.
+    // No voice surface is mounted in a pane, in either direction. The conversation surface
+    // moved to one app-level dock, so that following focus can never remount the assistant
+    // inside it; the read-aloud player strip was retired outright, because a per-session
+    // control drawn once per visible pane answers the same question once per pane. Both are
+    // asserted here because a pane-local voice row is the shape most likely to grow back,
+    // and the way it hurts — a row taken out of the surface resizes the live PTY — is
+    // exactly what the rest of this test measures.
     expect(await page.locator('.voice-dock').count()).toBe(0)
+    expect(await page.locator('.voice-strip, .voice-overlay, .voice-overlay-anchor').count()).toBe(0)
   })
 }
 
@@ -95,7 +86,7 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
 for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, share: 0.36 }, { name: 'mobile', width: 390, height: 780, mobile: 1, share: 0.46 }]) {
   test(`a long session name is truncated rather than crowding the pane controls on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto(`/pane-harness.html?overlay=0&mobile=${viewport.mobile}`)
+    await page.goto(`/pane-harness.html?mobile=${viewport.mobile}`)
     await expect(page.locator('.pane-title')).toBeVisible()
     const header = await page.evaluate(() => {
       const at = (selector: string) => {
@@ -133,7 +124,7 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
    */
   test(`the fault marker survives beside a name too long for the bar on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto(`/pane-harness.html?overlay=0&fault=1&mobile=${viewport.mobile}`)
+    await page.goto(`/pane-harness.html?fault=1&mobile=${viewport.mobile}`)
     const marker = page.locator('.pane-fault')
     await expect(marker).toBeVisible()
     const header = await page.evaluate(() => {
@@ -160,21 +151,26 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
   })
 }
 
-test('the pane-local voice layer stays below modal overlays', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 760 })
-  await page.goto('/pane-harness.html?overlay=1&mobile=0')
-  await expect(page.locator('.voice-strip')).toBeVisible()
+/**
+ * The pane's floating surfaces sit in a band below the app's modal layers, so a palette or
+ * a dialog is never drawn behind the pane it was opened from. With the read-aloud strip
+ * retired the Draft composer is the pane's only float, and it inherits the rule.
+ */
+test('a pane-local float stays below modal overlays', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await page.goto('/pane-harness.html?mobile=1&draft=1')
+  await expect(page.locator('.mobile-terminal-draft')).toBeVisible()
   const bands = await page.evaluate(() => {
-    const layer = document.querySelector<HTMLElement>('.voice-overlay-anchor')!
+    const layer = document.querySelector<HTMLElement>('.mobile-terminal-draft')!
     const modal = document.createElement('div')
     modal.className = 'palette-layer'
     document.body.append(modal)
     const result = {
-      conversation: Number(getComputedStyle(layer).zIndex),
+      paneFloat: Number(getComputedStyle(layer).zIndex),
       modal: Number(getComputedStyle(modal).zIndex),
     }
     modal.remove()
     return result
   })
-  expect(bands.conversation).toBeLessThan(bands.modal)
+  expect(bands.paneFloat).toBeLessThan(bands.modal)
 })

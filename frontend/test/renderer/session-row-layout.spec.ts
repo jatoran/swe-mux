@@ -338,7 +338,9 @@ for (const width of [420, 240, 180]) {
     await page.goto('/session-row-harness.html')
     const g = await stripGeometry(page, width)
 
-    expect(g.flags.length).toBe(3)
+    // broadcast, read aloud, standing activity, unsent input — every mark the strip can
+    // hold, on the one row whose title cannot fit.
+    expect(g.flags.length).toBe(4)
     for (const flag of g.flags) {
       expect(flag!.width).toBeGreaterThan(0)
       expect(flag!.x).toBeGreaterThanOrEqual(g.line!.x - 0.5)

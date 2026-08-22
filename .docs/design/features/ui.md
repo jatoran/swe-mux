@@ -1478,9 +1478,11 @@ Its rules, and what each one is defending:
   maps to the same backend-aware payload: Claude/Codex receive `ESC+CR` to insert a composer newline,
   while shells retain `CR` submit. Agent submission is the fixed rail **Send** action, never the
   soft-keyboard Enter key.
-- A terminal pane is three rows: the header bar, an optional read-aloud player strip, then the
-  terminal surface (terminal + action rail). The rows are placed explicitly so the middle track
-  collapses to nothing when no strip is rendered.
+- A terminal pane is two rows: the header bar, then the terminal surface (terminal + action
+  rail). No feature may add a third.
+  The read-aloud player strip that once sat between them is retired: read aloud is operated
+  entirely from the voice dock's `tts` tab, and which sessions speak is marked on the sidebar
+  row and the workspace tab.
 - The pane tools row carries `note`, `queue[:N]` (agent sessions only - focuses that session
   and opens the drawer's Queue tab on it, the count is its pending items;
   `features/prompt-queue.md`), `transcript` (transcript-capable sessions only - focuses that
@@ -1523,7 +1525,8 @@ Its rules, and what each one is defending:
   Faults deliberately do not touch the dot, the tab, or the status line, because a session can be perfectly `idle` while reporting on a conversation it no longer owns - which is precisely what a state axis cannot say.
 - **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
-  The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
+  The pane's only remaining float is the mobile Draft composer, which overlays the terminal host from inside the surface.
+  Anything added later must float from a zero-height anchor sharing the surface's track rather than take a row of its own.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
   It is a square, icon-only microphone button that is **lit only while capture is actually
   running**: green edge, green fill and a plain mic when on, and a recessed neutral box with a
@@ -1546,7 +1549,7 @@ Its rules, and what each one is defending:
   `chip` hides rather than unmounts, which is load-bearing: the per-device set of already-announced cards lives in the mounted component, so a remount speaks an open card's line a second time.
   The Talk history header is its disclosure control, and its expanded or collapsed state persists device-locally across remounts.
   The dock header contains the two size steps, the talk/chat tabs, phase, last latency, and the action row; response and transcript prose belongs in Talk history, while transient phase detail remains screen-reader text and a badge tooltip.
-  The player strip and dock actions both open the shared voice-command catalog as a root viewport modal, so pane overflow cannot clip it and terminal geometry does not change.
+  The dock actions open the shared voice-command catalog as a root viewport modal, so pane overflow cannot clip it and terminal geometry does not change.
   Voice Comms remains a dock toggle and spoken command, not a utility-drawer tab.
   Any new pane-local overlay belongs on the pane anchor, and any view placed there must remain out of flow.
   Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
@@ -2766,7 +2769,7 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 - **Placement and visibility are one decision.**
   A field placed in no section is off; there is no separate enable flag, and therefore no "enabled but nowhere" state.
 - **Presence-only marks live in a flag strip pinned to the top line's right edge.**
-  The strip is the top line's right section: the broadcast flag, standing activity, and unsent input, in that order, unshrinkable and never shed.
+  The strip is the top line's right section: the approval mode, read aloud, the broadcast flag, standing activity, and unsent input, in that order, unshrinkable and never shed.
   Placed after the title instead, the marks sat inside the section that clips, so a title long enough to fill the sidebar hid every one of them — and the rows with the most to report are the ones with the longest names.
   A flag whose entire content is "this is true" has nothing to ellipsize, while a name that loses its tail stays recognisable, so the strip is laid out first and the title takes whatever is left.
   Placement is still configurable: putting a flag ahead of the title in the left section keeps it fully visible too, at the cost of a ragged left edge down the list.
@@ -2780,6 +2783,13 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   It is a CSS mark at the indicator box's empty top-right corner, not another SVG path: a 24-unit box with a 6.2 core and a 10.2 ring has no empty annulus left, a mark on the ring is indistinguishable from the context gauge's peak dash, and one inside it lands on the state colour.
   Sized in pixels, it also stays legible at a 10 px indicator, where a shape-relative mark would be under two pixels across.
   The choice applies to tab strips and menus too, so one session never reports it twice on one screen.
+- **Read aloud is marked with a speaker, and only for a session that actually speaks.**
+  It reports the *resolved* mode, not the stored one: a session carries `voice_mode` only once somebody has chosen one, so a fleet running on a global default of `auto` is a fleet that all speaks and is all marked.
+  The master switch overrides both — with read aloud off nothing generates and nothing plays, so no row is marked whatever it stores.
+  Two renderings, because the modes differ in whether they make a sound by themselves: `auto` takes the accent, `on_demand` stays muted, `off` draws nothing.
+  Shell sessions and pending panes are never marked; read aloud reads an agent transcript, so the setting cannot take effect there.
+  The mark exists because read aloud has no pane surface: it is operated from the voice dock's `tts` tab, which follows focus and can therefore only speak for one session at a time (`features/voice.md`).
+  The workspace tab strip draws the same mark from the same resolved mode, gated on the same configured field, so the two surfaces cannot disagree.
 - **Unsent input is marked with a caret bar (`▌`), in teal.**
   It reports `unsent_input` from the daemon (`features/terminal-input.md`) unioned with this device's own mobile draft registry, which never reaches the PTY and so is invisible to every other client.
   Where the two disagree the mark reports the **oldest**: the question is how long something has been sitting there, and a phone draft from an hour ago is not made recent by a keystroke on the desktop a minute ago.
@@ -2875,9 +2885,10 @@ Mobile shares the one layout rather than keeping a second one.
 The strip survives the identity projection because a phone is where an unsent draft is most likely to have been left behind, and a projection that dropped the marks would be silent on exactly the device that stages text and walks away.
 Both screens want the same information in the same order; only how much of it fits differs.
 
-The stored layout is versioned, and version 2 introduced the flag strip.
-Changing the shipped default reaches nobody who has ever opened the settings — a stored blob is authoritative and an unplaced field is off — so the migration moves already-placed flags into the strip and places `draft`, which nobody could have declined because it did not exist.
-A flag the user had removed stays removed: the migration relocates a choice, it does not re-impose one.
+The stored layout is versioned, because changing the shipped default reaches nobody who has ever opened the settings — a stored blob is authoritative and an unplaced field is off.
+Version 2 introduced the flag strip: it moves already-placed flags into the strip and places `draft`, which nobody could have declined because it did not exist.
+Version 3 places `voice`, for the same reason and beside `approvals`, the other standing mode in the strip.
+A flag the user had removed stays removed: a migration relocates a choice, it does not re-impose one, and each step runs only for a blob written before it — a layout from a later build runs none of them.
 
 The state indicator is SVG rather than a styled element.
 A hexagon is expressible as `clip-path`, a *hollow* hexagon is not, and a gauge that follows a hexagon's outline is not expressible in CSS at all.

@@ -16,6 +16,7 @@
 import { harnessDisplayName } from './harnessRegistry.ts'
 import { agentTargetName } from './agentTargets.ts'
 import { harnessMark } from './harnessIcons'
+import { SpeakerIcon } from './railIcons'
 import type { RowSection, RowToken, SessionRowTokens } from './sessionRowFields.ts'
 import { GAUGE_CELLS, MAX_PIPS, type SessionRowConfig } from './sessionRowConfig.ts'
 import type { Session } from './types'
@@ -74,6 +75,14 @@ function TokenView({ token, session, config }: { token: RowToken; session: Sessi
   }
   if (token.kind === 'broadcast') {
     return <span class="broadcast-flag" title={token.title}>⇶</span>
+  }
+  if (token.kind === 'voice') {
+    // SVG rather than a text glyph, for the reason `railIcons.tsx` states: at the
+    // 9-10px this row runs, a monospace speaker character is a hairline beside a
+    // heavy neighbour and there is no way to normalize the two.
+    return <span class={`row-voice ${token.voice || 'off'}`} title={token.title} role="img" aria-label={token.text}>
+      <SpeakerIcon />
+    </span>
   }
   if (token.kind === 'draft') {
     // A caret bar, because the fact is "a cursor is sitting in text here". It is

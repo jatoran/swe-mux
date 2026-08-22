@@ -22,7 +22,7 @@
 
 /** Every field the row can draw. Order here is the settings-UI catalog order. */
 export type RowFieldId =
-  | 'glyph' | 'title' | 'broadcast' | 'badges' | 'draft'
+  | 'glyph' | 'title' | 'broadcast' | 'badges' | 'draft' | 'voice'
   | 'state' | 'detail' | 'duration' | 'sincePrompt' | 'idleFor' | 'context'
   | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
@@ -72,8 +72,16 @@ export const DEFAULT_DOT_SIZE_DESKTOP = 15
  */
 export const DEFAULT_DOT_SIZE_MOBILE = 17
 
+/**
+ * Stored-layout version. Bumped whenever a *new* field must reach layouts that
+ * already exist: a stored blob is authoritative and an unplaced field is off, so
+ * adding one to `defaultSessionRowConfig` alone reaches nobody who has ever
+ * opened the settings panel.
+ */
+export const ROW_CONFIG_VERSION = 3
+
 export interface SessionRowConfig {
-  version: 2
+  version: typeof ROW_CONFIG_VERSION
   top: RowLineConfig
   bottom: RowLineConfig
   /** Shape of the state indicator and of any gauge drawn around it. */
@@ -183,6 +191,11 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'broadcast', label: 'Broadcast flag', notable: 'session is in the broadcast set', priority: 88, identity: true },
   { id: 'badges', label: 'Standing activity', notable: 'a loop, cron, subagent, or background task is live', priority: 90, identity: true },
   { id: 'draft', label: 'Unsent input', notable: 'text is sitting unsent in this session’s composer', priority: 92, identity: true },
+  // Read aloud is the one setting in the strip whose effect you hear rather than
+  // see, and its controls live in the voice panel rather than on the pane — so
+  // without this mark the only way to know which sessions speak is to focus each
+  // of them in turn and read the panel.
+  { id: 'voice', label: 'Read aloud', notable: 'this session turns replies into audio', priority: 94, identity: true },
   // Sits in the flag strip and is on by default, unlike almost every other
   // field. The mode's entire effect is *removing* the notification an approval
   // would raise, so the fleet list is the only place a grant nobody remembers
@@ -234,7 +247,7 @@ const ALL_FIELD_IDS = new Set(ROW_FIELDS.map(field => field.id))
  */
 export function defaultSessionRowConfig(): SessionRowConfig {
   return {
-    version: 2,
+    version: ROW_CONFIG_VERSION,
     top: {
       left: [
         { id: 'glyph', mode: 'always' },
@@ -242,6 +255,7 @@ export function defaultSessionRowConfig(): SessionRowConfig {
       ],
       right: [
         { id: 'approvals', mode: 'notable' },
+        { id: 'voice', mode: 'notable' },
         { id: 'broadcast', mode: 'notable' },
         { id: 'badges', mode: 'notable' },
         { id: 'draft', mode: 'always' },
@@ -376,7 +390,14 @@ export function normalizeDotSize(value: unknown, fallback: number): number {
   return Math.max(DOT_SIZE_MIN, Math.min(DOT_SIZE_MAX, Math.round(value)))
 }
 
-/** Flags in the order the strip reads them, ahead of any field placed by hand. */
+/**
+ * The flags version 2 relocated, in the order the strip read them then.
+ *
+ * Deliberately frozen rather than kept current: it is the *input to a
+ * migration*, so a later flag added here would rewrite what version 2 meant for
+ * a blob that has not run it yet. New flags reach stored layouts through their
+ * own version step (`placeVoiceFlag`).
+ */
 const FLAG_STRIP: RowFieldId[] = ['broadcast', 'badges', 'draft']
 
 /**
@@ -415,6 +436,25 @@ function migrateToFlagStrip(config: SessionRowConfig): SessionRowConfig {
 }
 
 /**
+ * Bring a pre-read-aloud layout onto version 3 by placing the `voice` flag.
+ *
+ * A field nobody could have configured yet is new rather than declined, so it is
+ * placed rather than left off — the same rule version 2 applied to `draft`. It
+ * goes immediately after `approvals` when that is in the strip, because the two
+ * report the same shape of fact: a standing mode this session was deliberately
+ * put into, whose effect is otherwise invisible from the list.
+ */
+function placeVoiceFlag(config: SessionRowConfig): SessionRowConfig {
+  const placed = [...config.top.left, ...config.top.right, ...config.bottom.left, ...config.bottom.right]
+  if (placed.some(slot => slot.id === 'voice')) return config
+  const slot: RowSlot = { id: 'voice', mode: 'notable' }
+  const right = [...config.top.right]
+  const after = right.findIndex(item => item.id === 'approvals')
+  right.splice(after >= 0 ? after + 1 : 0, 0, slot)
+  return { ...config, top: { ...config.top, right } }
+}
+
+/**
  * Coerce any stored blob into a usable configuration.
  *
  * Invariants enforced here rather than in the renderer, so the row never has to
@@ -432,7 +472,7 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
   const bottom = normalizeLine(raw.bottom, seen, false, base.bottom)
   if (!seen.has('title')) top.left.push({ id: 'title', mode: 'always' })
   const config: SessionRowConfig = {
-    version: 2,
+    version: ROW_CONFIG_VERSION,
     top,
     bottom,
     dotShape: pick(raw.dotShape, ['hexagon', 'circle', 'square'] as const, base.dotShape),
@@ -445,7 +485,25 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
     gitGlyphs: typeof raw.gitGlyphs === 'boolean' ? raw.gitGlyphs : base.gitGlyphs,
     mobileFields: typeof raw.mobileFields === 'boolean' ? raw.mobileFields : base.mobileFields,
   }
-  return raw.version === 2 ? config : migrateToFlagStrip(config)
+  // Each step runs only for a blob written before it, and a blob from a *later*
+  // build runs none of them: re-imposing an old migration on a layout that has
+  // already moved past it is how a relocation becomes a loop.
+  const stored = typeof raw.version === 'number' ? raw.version : 0
+  const migrated = stored < 2 ? migrateToFlagStrip(config) : config
+  return stored < 3 ? placeVoiceFlag(migrated) : migrated
+}
+
+/**
+ * Whether a field is drawn at all under this configuration.
+ *
+ * Placement and visibility are one decision here (a field in no section is off),
+ * so this is the question any *other* surface has to ask before drawing the same
+ * fact — the tab strip picks its marks by hand rather than running the token
+ * engine, and must not print what the sidebar row is configured to omit.
+ */
+export function isFieldPlaced(config: SessionRowConfig, id: RowFieldId): boolean {
+  return [...config.top.left, ...config.top.right, ...config.bottom.left, ...config.bottom.right]
+    .some(slot => slot.id === id)
 }
 
 /** Fields not currently placed anywhere, in catalog order, for the settings pool. */

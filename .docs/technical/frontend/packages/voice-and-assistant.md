@@ -10,10 +10,10 @@ Design: `../../../design/features/voice.md`, `../../../design/features/assistant
 `voiceCommandReference.ts`, `conversationTarget.ts`, `conversation.ts`, `voiceIntents.ts`, `voiceQueries.ts`,
 `fleetStatus.ts`, `insertTarget.ts`, `audioFrames.ts`, `speechGate.ts`, `utteranceCompleteness.ts`,
 `utteranceDeferral.ts`, `sileroVad.ts`, `voiceCaptureWorklet.ts`, `voiceLatency.ts`, `wakeWordTest.ts`,
-`VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoicePlayer.tsx`, `VoiceReadTab.tsx`, `voiceDock.ts`,
+`VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoiceReadTab.tsx`, `voiceDock.ts`, `voiceMode.ts`,
 `voice.ts`, `mobileVoice.ts`
 
-Scope: app-owned capture, draft, and history; a pane-attached floating view with a top fallback; follow and pin targets; registry-backed commands; typed fleet, help, and reply queries; guarded approvals; confirmed-speech barge-in; segmented playback; session-scoped Voice Comms; mobile HTTPS.
+Scope: app-owned capture, draft, and history; one app-level dock holding every voice surface, with no pane-attached view; follow and pin targets; registry-backed commands; typed fleet, help, and reply queries; guarded approvals; confirmed-speech barge-in; segmented playback; session-scoped Voice Comms; mobile HTTPS.
 
 ### Pure policy
 
@@ -43,7 +43,7 @@ The worklet, resampler and framer, Silero, and the frame-counted gate remain sep
 - A claim survives a non-positive `segment_count` - an open stream whose length is not yet known - until its closing segment or `voice_stream_closed`.
 - A new segment queues whenever a clip is loaded and unfinished, rather than only while audio is audible.
 - Every stop switch suppresses the whole claim map rather than the audible stream alone, **because a claim outlives its clip**.
-- Autoplay is additionally focus-driven and global (`setPlaybackFocus`/`sessionPlaysHere`): the focused session plays here, and every other session's clip is **held** (bounded, newest kept), surfaced as ready-to-play by `VoicePlayer` and the command palette.
+- Autoplay is additionally focus-driven and global (`setPlaybackFocus`/`sessionPlaysHere`): the focused session plays here, and every other session's clip is **held** (bounded, newest kept), surfaced as ready-to-play by `VoiceReadTab.tsx` and the command palette.
   A held clip is never started by a focus move, is dropped by every stop switch, and is overridden only by a Voice Comms pin (`setPinnedPlaybackSession`).
 - `voice.ts` also keeps the **per-device** half of a clip's state - held, playing, played (heard to the end, never merely started), dismissed - bounded and unpersisted, because a clip played on the phone is unplayed on the desktop and the daemon's row must not claim either. `VoiceReadTab.tsx` renders it over the daemon's `synthesizing`/`ready`/`failed`.
 

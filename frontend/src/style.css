@@ -63,7 +63,9 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 /* Shown only for a fault with no other pane-level surface — a stale observation, a non-local
    boundary, a parser or observation diagnostic. Routine state is deliberately not here. */
 .pane-fault { flex:0 0 auto;color:var(--amber);font-size:10px;cursor:help }
-/* The pane bar's voice-chip group is gone: read-aloud moved to the voice panel's `tts` tab and
+/* The pane bar's voice-chip group is gone, and so is the player strip that hung below it:
+   read-aloud is operated entirely from the voice panel's `tts` tab, and which sessions
+   speak is marked on the sidebar row and the tab (`.row-voice`, `.tab-voice-glyph`).
    `appr:` moved into `.pane-tools`, which left an empty scroller holding the agent header's
    flexible track. The tools group holds that track itself now. */
 .pane-grid { grid-row:1/-1;min-width:0;min-height:0;display:grid;gap:1px;background:#293039 }.pane-grid.count-1 { grid-template-columns:1fr }.pane-grid.count-2 { grid-template-columns:repeat(2,minmax(0,1fr)) }.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr)) }.terminal-pane { position:relative;min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f;box-shadow:inset 0 0 0 1px transparent }.terminal-pane>.pane-bar { grid-row:1 }
@@ -73,7 +75,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
    a fraction of the pane width and resizes the PTY to it, destroying the agent's TUI —
    which no longer reflows back when the overlay closes. Anything else added to this row
    must pin the column too. */
-.terminal-pane>.voice-overlay-anchor,.terminal-pane>.terminal-surface { grid-row:2;grid-column:1 }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #536348 }.terminal-pane.focused>.pane-bar { background:#141a14 }
+.terminal-pane>.terminal-surface { grid-row:2;grid-column:1 }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #536348 }.terminal-pane.focused>.pane-bar { background:#141a14 }
 .pane-grid.zoomed { grid-template-columns:1fr;grid-template-rows:1fr }.pane-grid.zoomed>.terminal-pane:not(.zoom-target) { display:none }
 .empty-stage { grid-row:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background-image:linear-gradient(#ffffff025 1px,transparent 1px),linear-gradient(90deg,#ffffff025 1px,transparent 1px);background-size:32px 32px }.hero-terminal { width:70px;height:54px;border:1px solid #3b4537;border-radius:10px;background:#111610;box-shadow:0 12px 45px #000,0 0 35px #82cf5012;display:flex;align-items:center;justify-content:center;gap:6px;font:20px 'JetBrains Mono';color:var(--green);margin-bottom:24px }.hero-cursor { height:20px;width:2px;background:var(--green);animation:blink 1.1s steps(1) infinite }.empty-stage h1 { font-size:23px;letter-spacing:-.035em;margin:0 0 8px }.empty-stage p { width:min(460px,80%);color:#7d8795;font-size:13px;line-height:1.55;margin:0 0 22px }.empty-stage button,.modal-footer button { height:calc(34px*var(--ui-scale));padding:0 14px;border:1px solid #333a43;background:#171b21;border-radius:7px;margin:0 4px;cursor:pointer;font-size:11px }.primary { background:var(--green)!important;color:#11160e!important;border-color:var(--green)!important;font-weight:700!important }.primary:hover { background:#b3f887!important }
 /* Overlay band. A full-screen dialog must sit above every piece of persistent
@@ -523,6 +525,12 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .tab-session-glyph { display:inline-flex;align-items:center;flex:none;margin:0 -3px 0 -4px;font-size:11px;line-height:1 }
 .tab-session-glyph .provider-mark { width:10px;height:10px;display:block }
 .tab-session-glyph.shell { color:#6d7783;font-size:9px }
+/* The tab's copy of the sidebar row's read-aloud mark, on the same colour rule: accent for
+   `auto`, muted for `on_demand`, absent for `off`. Smaller than the row's, because the tab
+   already spends its width on the state dot, the provider mark, and a capped title. */
+.tab-voice-glyph { display:inline-flex;align-items:center;flex:none;margin-left:1px;color:var(--muted) }
+.tab-voice-glyph.auto { color:var(--green,#8bd450) }
+.tab-voice-glyph svg { width:10px;height:10px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round }
 /* The state dot rides high in the tab rather than centred on the title. Two reasons, and the
    second is the load-bearing one: a strip is scanned by state before it is read by name, and
    a corner mark is found faster than one inline in a row of same-height glyphs; and with the
@@ -694,9 +702,10 @@ body {
 .pane-grid {
   background:var(--line);
 }
-/* Header, then the terminal surface. The voice surfaces share the surface's track instead
-   of adding their own, because they float over it (`.voice-overlay-anchor`) — a pane whose
-   row count changed with a voice toggle resized the PTY under a live agent.
+/* Header, then the terminal surface, and nothing else — the pane carries no voice
+   surface at all now, and anything added here later must float from a zero-height anchor
+   rather than take a track: a pane whose row count changes with a toggle resizes the PTY
+   under a live agent, and the agent's TUI does not reflow back when it closes.
    This declaration wins over the one in the base layer, so the two must list the SAME
    number of tracks: the surface is placed by row index, and a template short one track
    leaves it in an `auto` implicit row while the real `1fr` track stays empty — which
@@ -2755,7 +2764,6 @@ body {
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
   .mobile-unified-active>.terminal-pane>.pane-bar .pane-state,
   .mobile-unified-active>.terminal-pane>.pane-bar .pane-title{max-width:min(45vw,180px)}
-  .mobile-unified-active>.terminal-pane>.voice-overlay-anchor{flex:0 0 auto}
   /* Touch metrics for the draft row. 16px text is deliberate: anything smaller makes
      mobile Safari/Chrome zoom the viewport when the textarea takes focus, which on this
      layout means the pane bar and the terminal both jump. */
@@ -2798,7 +2806,7 @@ body {
    restored inside real content: the terminal, editors, and any input. */
 @media(hover:none){
   .mobile-toolbar,.stack-tabs,.sidebar,.sidebar-rail,.pane-bar,.terminal-action-rail,
-  .voice-strip,.voice-dock>header,.context-menu{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .voice-dock>header,.context-menu{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .sidebar input,.sidebar textarea,.context-menu input,.context-menu textarea,
   .pane-bar input,[contenteditable]{-webkit-user-select:text;user-select:text}
 }
@@ -2869,57 +2877,14 @@ body {
   .project-workspace,.terminal-workspace{width:100%;height:100%;flex:1 1 100%}
 }
 
-/* Read aloud (TTS) stays pane-local. Dictation is a fixed app-level layer. */
 .pending-terminal-pane{grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr)}.pending-terminal-body{min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted);background:radial-gradient(circle at center,color-mix(in srgb,var(--green) 7%,transparent),transparent 42%)}.pending-terminal-body strong{color:var(--text);font-size:12px;font-weight:500}.pending-terminal-body small{font-size:9px}.pending-terminal-spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--green);animation:pending-terminal-spin .75s linear infinite}.pending-terminal-row{cursor:wait}.pending-terminal-tab{cursor:wait;opacity:.82}@keyframes pending-terminal-spin{to{transform:rotate(360deg)}}
-/* The playback strip is the expanded half of the header's voice group: it draws as its own
-   row immediately under the pane bar (hence border-bottom, not border-top) and only exists
-   while read-aloud is on, so the terminal keeps every row it would otherwise have. */
-.voice-strip{display:flex;align-items:center;gap:6px;min-height:26px;padding:2px 8px;border-bottom:1px solid var(--line);background:var(--panel);font:9px 'JetBrains Mono';color:var(--muted);overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none}
-.voice-strip::-webkit-scrollbar{display:none}
-.voice-strip button{flex:none;border:0;background:transparent;border-radius:4px;height:calc(20px*var(--ui-scale));min-width:22px;padding:0 5px;color:var(--muted);cursor:pointer;font:inherit}
-.voice-strip button:hover:not(:disabled){background:#252b32;color:var(--text)}
-.voice-strip button:disabled{opacity:.4;cursor:default}
-.voice-strip .voice-play{font-size:11px;color:var(--text)}
-.voice-strip .voice-seek{flex:1 1 60px;min-width:40px;height:14px;accent-color:var(--green,#8bd450);cursor:pointer}
-.voice-strip .voice-seek:disabled{cursor:default;opacity:.45}
-.voice-strip .voice-time{flex:none;white-space:nowrap}
-.voice-strip .voice-nav{flex:none;display:flex;align-items:center;gap:2px;white-space:nowrap}
-.voice-strip .voice-generate{white-space:nowrap}
 .context-session-info{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:2px 8px 6px;border-bottom:1px solid #292f37;margin-bottom:4px;color:#7d8692;font:9px 'JetBrains Mono'}
 .context-session-info .git-chip{color:#8b939d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
-.voice-strip .voice-autoplay,.voice-strip .voice-content{white-space:nowrap}
-.voice-strip .voice-autoplay.active{color:var(--green,#8bd450)}
-.voice-strip .voice-content.verbatim{color:var(--text)}
-.voice-strip .voice-content.summary{color:var(--green,#8bd450)}
-.voice-strip .voice-flag{flex:none;color:var(--green,#8bd450);border:1px solid currentColor;border-radius:3px;padding:0 3px;line-height:calc(14px*var(--ui-scale))}
-/* Held clips are the one thing on this strip the operator did not ask for and has
-   not heard yet, so it is the only control that reads as an offer rather than a
-   state: filled, in the accent, and it disappears the moment the backlog is played
-   or dismissed. */
-.voice-strip .voice-held{flex:none;white-space:nowrap;color:var(--bg,#11151a);background:var(--green,#8bd450);font-weight:600}
-.voice-strip .voice-held:hover:not(:disabled){background:var(--green,#8bd450);color:var(--bg,#11151a);filter:brightness(1.12)}
-.voice-strip .voice-error{flex:none;color:var(--error,#f07178);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
-/* The gear is the last item on both floating surfaces: the route into everything Voice
-   settings owns that the strip and the panel have no room for. It replaced the header's
-   touch-only `audio…` chip, so it renders on every device. */
-.voice-strip .voice-settings-open,.dictation-actions .dictation-settings{flex:none;font-size:12px;line-height:1}
+/* The gear is the last item in the dock's control rows: the route into everything Voice
+   settings owns that the panel has no room for. It replaced the pane header's touch-only
+   `audio…` chip, so it renders on every device. */
+.dictation-actions .dictation-settings,.voice-read-controls .dictation-settings{flex:none;font-size:12px;line-height:1}
 
-/* The read-aloud player strip floats over the top of its terminal rather than taking a row.
-   The terminal host is the pane's 1fr track, so an in-flow strip would resize the PTY and
-   make the agent's TUI reflow around a transient affordance. The anchor makes that free.
-   It is a real grid/flex item sharing the surface's
-   track, but zero-height, so neither layout gives it any space and the stack hangs from it
-   with `position:absolute`. One rule covers the desktop grid and the mobile flex column,
-   and its stacking context is what lifts the stack over the terminal. Dictation is app-level
-   and does not use this anchor.
-   z-index 11 is deliberate: over the terminal host, under the find bar (12), the scroll
-   buttons (14), and the file-drop overlay (18), each of which must stay reachable.
-   The stack itself is click-through so the gap between two floating cards still belongs to
-   the terminal; only the cards take pointer events. */
-.voice-overlay-anchor{position:relative;z-index:11;height:0}
-.voice-overlay{position:absolute;top:6px;left:6px;right:6px;display:flex;flex-direction:column;gap:5px;pointer-events:none}
-.voice-overlay>*{pointer-events:auto}
-.voice-overlay>.voice-strip{border:1px solid var(--line);box-shadow:4px 5px 0 #0008}
 /* Lit only while capture is running. It wore the green chip in every state before,
    which made the one question a microphone control has to answer - "is this
    listening to me right now?" - unreadable from the button; and with the glyph
@@ -2996,7 +2961,14 @@ body {
 .voice-dock.full.read-mode{max-height:min(60dvh,560px);grid-template-rows:auto minmax(0,1fr)}
 .voice-dock.full.read-mode .voice-dock-read{align-content:stretch;grid-template-rows:auto minmax(0,1fr)}
 .voice-read{min-width:0;min-height:0;display:grid;gap:5px;align-content:start}
-.voice-dock.full.read-mode .voice-read{align-content:stretch;grid-template-rows:auto minmax(0,1fr)}
+/* Flex rather than a two-row grid: the panel's children are conditional (an error line, the
+   transport once something has been loaded), and a fixed `auto minmax(0,1fr)` template gave
+   the flexible row to whichever child happened to be second — so an error message got the
+   panel's whole height and the clip list fell into an implicit auto row that could not
+   scroll. Only the list grows; everything else keeps its natural height. */
+.voice-dock.full.read-mode .voice-read{display:flex;flex-direction:column;gap:5px}
+.voice-dock.full.read-mode .voice-read>*{flex:0 0 auto}
+.voice-dock.full.read-mode .voice-read>.voice-read-clips{flex:1 1 auto;min-height:0}
 .voice-read-controls{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
 .voice-read-session{min-width:0;display:flex;align-items:center;gap:5px;flex:1 1 auto}
 .voice-read-session>span{flex:none;color:var(--muted);font:600 8px 'JetBrains Mono';letter-spacing:.06em;text-transform:uppercase}
@@ -3006,6 +2978,15 @@ body {
 .voice-read-mode.auto,.voice-read-autoplay.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
 .voice-read-held{border-color:var(--amber);color:var(--amber)}
 .voice-read-error{margin:0;color:var(--red)}
+/* The transport, for the clip this device has loaded. One bar above the list rather than a
+   scrubber per row: there is one audio element, and the row that is playing scrolls out of
+   a sixty-clip list. It reads as part of the list's frame — a rule below it, no border box —
+   because it describes the list rather than sitting beside it as another control. */
+.voice-read-now{min-width:0;display:flex;align-items:center;gap:6px;padding:1px 3px 4px;border-bottom:1px solid var(--line)}
+.voice-read-now-play{flex:none;min-height:22px;min-width:26px;padding:0 5px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.voice-read-seek{flex:1 1 80px;min-width:50px;height:14px;accent-color:var(--green,#8bd450);cursor:pointer}
+.voice-read-now-time{flex:none;white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
+.voice-read-now-text{min-width:0;flex:1 1 40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .voice-read-empty{margin:0;color:var(--muted);line-height:1.5}
 .voice-read-clips{min-height:0;overflow:auto;overscroll-behavior:contain;display:grid;gap:2px;align-content:start}
 .voice-read-clip{min-width:0;display:grid;grid-template-columns:auto auto auto minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:2px 3px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
@@ -3214,6 +3195,12 @@ body {
   .voice-read-clip{grid-template-columns:auto auto minmax(0,1fr) auto}
   .voice-read-when{display:none}
   .voice-read-play{min-width:34px;height:calc(30px*var(--ui-scale))}
+  /* Thumb targets for the transport. The clip text is dropped rather than shrunk: the bar
+     has to hold a scrub track wide enough to aim at, and the same text is on the row the
+     clip came from. */
+  .voice-read-now-play{min-width:34px;min-height:calc(30px*var(--ui-scale))}
+  .voice-read-seek{height:calc(20px*var(--ui-scale))}
+  .voice-read-now-text{display:none}
   .dictation-target button{min-width:44px;height:calc(30px*var(--ui-scale));font-size:10px}
   .dictation-actions button{min-width:42px;height:calc(28px*var(--ui-scale))}
   .conversation-history{max-height:min(28dvh,210px)}
@@ -3555,7 +3542,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    has to say "live" without a spinner. The pane bar's own mic and `tts:` chips are gone — the
    voice panel owns them now — so nothing in the header animates on it any more. */
 @keyframes voice-rec-pulse{0%,100%{opacity:1}50%{opacity:.35}}
-@media(max-width:760px){.voice-strip{min-height:30px}.voice-strip button{height:calc(24px*var(--ui-scale));min-width:26px}.voice-strip .voice-seek{height:calc(20px*var(--ui-scale))}}
 .mux-pointer-drag-ghost{position:fixed;left:0;top:0;z-index:9999;max-width:260px;padding:7px 11px;border:1px solid var(--green);background:var(--panel2);color:var(--text);box-shadow:5px 6px 0 #0008;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font:10px 'Cascadia Mono',Consolas,monospace;will-change:transform}
 /* The landing slot: where the row in the air will come down, drawn over the gap it would take.
    It is the ghost's counterpart — the ghost is at the pointer and says *what* is moving, this is
@@ -4959,6 +4945,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    spacing, and the margins that separated them from the title doubled it. */
 .row-line.top .row-section.right .broadcast-flag,
 .row-line.top .row-section.right .activity-badges{margin-left:0}
+/* Read aloud. The one mark on the row whose fact you would otherwise only learn by
+   hearing it, which is why the accent is spent on `auto` — the mode that speaks without
+   being asked — and `on_demand` stays muted: it makes no sound until you press
+   something, so lighting it up would be an alarm for a setting that is doing nothing.
+   Sized in pixels rather than `em` for the reason `railIcons.tsx` gives: at this row's
+   9-10px an em-sized stroke icon is a hairline. */
+.row-voice{display:inline-flex;align-items:center;flex:none;align-self:center;color:var(--muted)}
+.row-voice.auto{color:var(--green,#8bd450)}
+.row-voice svg{width:11px;height:11px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 /* Unsent input: a caret bar, because the fact is that a cursor is sitting in
    text you left behind. Teal rather than any state colour — green, blue, amber,
    and red all already mean something about what the *agent* is doing, and this

@@ -107,7 +107,6 @@ import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
-import { VoicePlayer } from './VoicePlayer'
 import { useConversation, VoiceControl, VoiceDock } from './ConversationControl'
 import {
   canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, isVoicePanelMode,
@@ -115,6 +114,7 @@ import {
   type VoiceDockEvent, type VoiceDockModel, type VoicePanelMode,
 } from './voiceDock'
 import { VoiceReadTab } from './VoiceReadTab'
+import { resolveVoiceMode, voiceModeLabel } from './voiceMode'
 import { AssistantPanel } from './AssistantPanel'
 import {
   ASSISTANT_CLIENT_ID, assistantStatus, cancelAction, confirmAction, ensureDialog,
@@ -225,7 +225,7 @@ import { effectiveApprovalMode } from './approvals'
 import { activityBadges, sessionFaults, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
-import type { DotShape, StandingRender } from './sessionRowConfig'
+import { isFieldPlaced, type DotShape, type StandingRender } from './sessionRowConfig'
 import {
   applySessionDotSize, useRowBudget, useRowClock, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
@@ -303,6 +303,22 @@ const activityGlyphs=(session:Session|undefined,standing:StandingRender)=>{
   return <span class="activity-badges" role="img" aria-label={badges.map(badge=>badge.label).join(', ')}>
     {badges.map((badge,index)=><span key={index} class="activity-badge" title={badge.title}>{badge.glyph}{badge.count&&badge.count>1?<span class="activity-count">{badge.count}</span>:null}</span>)}
   </span>
+}
+
+// The read-aloud mark, for the surfaces that are not the sidebar row.
+//
+// The tab strip picks its marks by hand rather than running the row's token engine, so
+// this exists as a second renderer of one fact - and is gated on the same configured
+// field, because a strip printing what the row beside it is configured not to print is
+// the same fact twice from two different rulebooks. Nothing is drawn for `off`: a mark
+// on every session says nothing, and read aloud is off for a fleet by default.
+const voiceGlyph=(session:Session|undefined,mode:VoiceMode)=>{
+  if(!session||session.pending||mode==='off')return null
+  return <span class={`tab-voice-glyph ${mode}`} role="img"
+    aria-label={`Read aloud: ${voiceModeLabel(mode)}`}
+    title={mode==='auto'
+      ?'Read aloud · every completed reply becomes audio automatically'
+      :'Read aloud · on demand: audio is made when you ask for it'}><SpeakerIcon/></span>
 }
 
 // What a session tab holds, before which one it is. Every other tab kind already carries a
@@ -522,9 +538,21 @@ export function App() {
   // in this browser's own draft composer, which never reaches the PTY. Neither
   // source is a superset of the other.
   const localDrafts=useMemo(()=>mobileTerminalDraftStore.stamps(),[mobileDraftRevision])
+  // Declared here rather than beside the other voice state: the sidebar row's token
+  // context is built at the top of this component and reads the master switch, and a
+  // value a hook depends on cannot be declared after it.
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
+  // Only the two facts a session's stored `voice_mode` resolves against, and never
+  // the whole `VoiceStatus`: that object carries spend, cache size and engine
+  // diagnostics that move on their own, and memoising the fleet's row tokens on it
+  // would rebuild every row each time a clip was synthesized.
+  const rowVoice=useMemo(
+    ()=>({enabled:!!voiceStatus?.enabled,default_mode:voiceStatus?.default_mode||'off'}),
+    [voiceStatus?.enabled,voiceStatus?.default_mode],
+  )
   const rowContext=useMemo(
-    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowBudget,localDrafts),
-    [sessions,rowQueueDepth,rowNow,rowBudget,localDrafts],
+    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowBudget,localDrafts,rowVoice),
+    [sessions,rowQueueDepth,rowNow,rowBudget,localDrafts,rowVoice],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -1140,7 +1168,6 @@ export function App() {
     window.addEventListener('pointerup',stop,{once:true})
     window.addEventListener('pointercancel',stop,{once:true})
   }
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [profiles, setProfiles] = useState<LaunchProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
@@ -4505,11 +4532,20 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
-  const effectiveVoiceMode = (session: Session): VoiceMode => {
-    const mode = session.voice_mode
-    if (mode === 'off' || mode === 'on_demand' || mode === 'auto') return mode
-    return voiceStatus?.enabled ? voiceStatus.default_mode : 'off'
-  }
+  // Delegated rather than reimplemented: the sidebar row and the tab strip resolve
+  // the same question for every session at once (`voiceMode.ts`), and a second copy
+  // here is how the pane and the list end up disagreeing about which sessions speak.
+  const effectiveVoiceMode = (session: Session): VoiceMode => resolveVoiceMode(session, voiceStatus)
+  /**
+   * The mode a tab strip should mark, or `off` when it must not mark one.
+   *
+   * The agent check is not decoration: with a global default of `auto`, a shell would
+   * resolve to `auto` too and wear a speaker it can never use — read aloud reads an agent
+   * transcript. The `voice` row field applies the same rule, and both must, because they
+   * draw the same mark for the same session on one screen.
+   */
+  const tabVoiceMode = (session: Session | undefined): VoiceMode =>
+    session && isAgent(session) && isFieldPlaced(rowConfig, 'voice') ? effectiveVoiceMode(session) : 'off'
   const setVoiceMode = (session: Session, mode: VoiceMode) => {
     // Cut this pane's audio on the click, not when the PATCH lands and not when the
     // current clip happens to end: "off" has to be audible immediately.
@@ -4520,7 +4556,6 @@ export function App() {
     const order: VoiceMode[] = ['off', 'on_demand', 'auto']
     void setVoiceMode(session, order[(order.indexOf(effectiveVoiceMode(session)) + 1) % order.length])
   }
-  const voiceModeLabel = (mode: VoiceMode) => mode === 'on_demand' ? 'on demand' : mode === 'auto' ? 'auto on reply' : 'off'
   const effectiveVoiceContent = (session: Session): VoiceContent =>
     session.voice_content === 'summary' || session.voice_content === 'verbatim'
       ? session.voice_content
@@ -6145,7 +6180,7 @@ export function App() {
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
-          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''} ${session&&isColdSession(session)?'cold':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''} ${session&&isColdSession(session)?'cold':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
         })}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
@@ -6218,34 +6253,17 @@ export function App() {
       :boundaryUnknown?'unavailable':session.runtime_cwd||session.spawn_cwd||session.cwd
     const cwdIsLive=session.runtime_cwd_live&&!nonLocalBoundary
     const openPaneMenu=(event:{clientX:number;clientY:number;preventDefault?:()=>void;stopPropagation?:()=>void})=>{event.preventDefault?.();event.stopPropagation?.();openSessionMenu(session,event.clientX,event.clientY,'pane')}
-    const agentVoice=agentSession
-    const voiceMode=voiceStatus?.enabled&&agentVoice?effectiveVoiceMode(session):'off'
-    const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
-    const voiceStripVisible=voiceAvailable&&voiceMode!=='off'
-    // Read-aloud stays session-scoped in the pane header. The workspace microphone and
-    // dictation draft are rendered once at App level, so changing panes only retargets them.
-    // The playback strip (seek, clip nav, generate) floats directly beneath the header. It
-    // used to lead the bottom Action rail, but that rail is a horizontal scroller the user
-    // pages through to reach terminal keys, so the voice chips were both in the way there and
-    // easy to lose off-screen.
+    // The pane carries no read-aloud surface at all — no chip group, and no player strip.
+    // Both were per-session controls repeated once per *drawn pane*, answering the same
+    // question on whichever panes happened to be on screen, and a split with four agents
+    // drew four of them. Everything they did now lives in one place that follows focus:
+    // the voice panel's `tts` tab (mode, content, on-demand generate, transport, the clip
+    // list), reached from the one voice control in the top bar. The pane's remaining
+    // per-session controls — `appr:`, `queue`, `transcript` — are in the pane tools.
     //
-    // The header no longer carries a voice *chip* group at all. The per-session read-aloud
-    // controls moved to the voice panel's `tts` tab (one surface that follows focus, rather
-    // than one copy per drawn pane), and `appr:` — the last chip standing in that group —
-    // moved into the pane tools beside `queue` and `transcript`, where the pane's other
-    // per-session controls already live. That left the group empty, so the slot and its
-    // scroller are gone with it; the pane keeps its player strip below, which is the local
-    // *view* of this session's clips.
-    const openVoiceSettings=()=>openSettings('Voice')
-    const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} commands={commands} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
-    // The read-aloud strip hangs off a zero-height pane anchor, and is now the only thing
-    // that does. The conversation surface used to move into this stack whenever its sink
-    // had a visible pane, which meant it was mounted in a different parent depending on
-    // focus — every hop remounted the assistant view inside it and reset the set of cards
-    // that device had already spoken. It is one app-level dock now (`voice-dock-anchor`).
-    const voiceOverlayNode=voiceStripNode
-      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}</div></div>
-      :null
+    // What replaced the strip on the pane is *nothing*, deliberately: which sessions speak
+    // is reported by a mark on the sidebar row and the tab (`voice` row field), which costs
+    // no pane space and is legible for every session at once rather than one at a time.
     // The header names the session and nothing else. Its state is on the tab, on the sidebar
     // row, and in the terminal the reader is already looking at, whereas the *name* is the one
     // thing those surfaces crop: a tab is only as wide as the strip allows. The name therefore
@@ -6294,7 +6312,6 @@ export function App() {
             opened is now the drawer's Processes tab, which pins this session's row first, and the
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
-      {voiceOverlayNode}
       {isEndedSession(session)&&<EndedPaneBanner
         session={session}
         onResume={isAgent(session)?()=>void resumeSession(session):undefined}
@@ -6305,7 +6322,7 @@ export function App() {
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -6590,7 +6607,7 @@ export function App() {
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
     const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):leaf.kind==='changemap'?changeMapTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
-    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':leaf.kind==='changemap'?'◈':'◇'}</span>
+    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':leaf.kind==='changemap'?'◈':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
     // hazard next to tab activation. Closing/killing lives in the long-press
     // menu (session menu for terminals, tab menu for resources), which is also

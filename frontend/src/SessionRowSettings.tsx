@@ -52,6 +52,11 @@ const PREVIEW_SESSIONS: Session[] = [
   sample({
     id: 'preview-working', name: 'refactor tokenizer', backend: 'codex', model: 'gpt-5-codex',
     state: 'working', state_detail: 'apply_patch', state_since: NOW - 1320,
+    // The one session in the preview that speaks, so the read-aloud mark has something to
+    // draw. `auto` rather than `on_demand`: the accent belongs to the mode that makes a
+    // sound without being asked, and a preview showing only the muted rendering would
+    // teach the wrong thing about what the mark means.
+    voice_mode: 'auto',
     context_pct: 0.74, context_peak_pct: 0.74,
     git: {
       branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
@@ -108,7 +113,12 @@ const PREVIEW_SESSIONS: Session[] = [
  * — wider than the sidebar can be dragged — so the one behaviour a reader cannot
  * predict from the field list was the one behaviour it never showed.
  */
-const PREVIEW_FLEET = deriveRowContext(PREVIEW_SESSIONS, { 'preview-worktree': 2 }, NOW)
+const PREVIEW_FLEET = deriveRowContext(
+  PREVIEW_SESSIONS, { 'preview-worktree': 2 }, NOW, undefined, undefined,
+  // Read aloud on, with the global default off, so the preview shows exactly what an
+  // opted-in session looks like rather than marking every row.
+  { enabled: true, default_mode: 'off' },
+)
 
 const SHAPES: Array<{ id: DotShape; label: string }> = [
   { id: 'hexagon', label: 'Hexagon' }, { id: 'circle', label: 'Circle' }, { id: 'square', label: 'Square' },

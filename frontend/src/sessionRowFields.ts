@@ -15,7 +15,8 @@ import {
 } from './sessionStatus.ts'
 import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harnessRegistry.ts'
 import { displayModelName } from './modelDisplay.ts'
-import type { Session } from './types'
+import type { Session, VoiceMode } from './types'
+import { VOICE_MODE_OFF, resolveVoiceMode, voiceModeLabel, type VoiceModeDefaults } from './voiceMode.ts'
 import {
   MAX_PIPS, ROW_FIELD_BY_ID, ROW_MIN_CHARS, SEPARATORS,
   type RowAlign, type RowFieldId, type RowLine, type RowSlot, type SessionRowConfig,
@@ -54,6 +55,16 @@ export interface SessionRowContext {
    */
   localDrafts: Record<string, number>
   /**
+   * The global read-aloud switch and its per-session default.
+   *
+   * A session stores `voice_mode` only once somebody has chosen one, so what a
+   * row must report is the *resolved* mode — which depends on two facts the
+   * session record does not carry. They live here rather than on the session for
+   * the same reason every other comparison does: they are one snapshot-wide
+   * answer, not one per row.
+   */
+  voice: VoiceModeDefaults
+  /**
    * Room each line has, in characters of that line's own type.
    *
    * Characters rather than pixels because the bottom line is monospace, so on
@@ -78,7 +89,8 @@ export const EMPTY_ROW_BUDGET: RowBudget = { top: 0, bottom: 0 }
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
   return {
     now, defaultBranch: {}, defaultModel: {}, multiAccount: false,
-    queueDepth: {}, checkoutSessions: {}, localDrafts: {}, budget: EMPTY_ROW_BUDGET,
+    queueDepth: {}, checkoutSessions: {}, localDrafts: {},
+    voice: VOICE_MODE_OFF, budget: EMPTY_ROW_BUDGET,
   }
 }
 
@@ -102,7 +114,7 @@ export function rowBudget(textWidth: number, charPx: { top: number; bottom: numb
 }
 
 export type RowTokenKind =
-  'text' | 'diff' | 'gauge' | 'count' | 'badges' | 'glyph' | 'title' | 'broadcast' | 'draft'
+  'text' | 'diff' | 'gauge' | 'count' | 'badges' | 'glyph' | 'title' | 'broadcast' | 'draft' | 'voice'
 export type RowTone = 'default' | 'muted' | 'warn' | 'add' | 'del'
 
 export interface RowToken {
@@ -131,6 +143,12 @@ export interface RowToken {
   gauge?: { pct: number; peak: number }
   count?: number
   badges?: ActivityBadge[]
+  /**
+   * Which read-aloud participation the mark reports. Kept on the token rather
+   * than re-derived at render, because the two live modes are drawn differently:
+   * `auto` speaks without being asked and is the one that carries the accent.
+   */
+  voice?: VoiceMode
   /**
    * Which rung of the width ladder this token is drawn at.
    *
@@ -540,6 +558,22 @@ function candidateFor(
       return session.broadcast
         ? make({ kind: 'broadcast', text: '⇶', title: 'In the broadcast set — keystrokes mirror here while broadcast input is on' }, true)
         : null
+    case 'voice': {
+      // A pending terminal has no conversation to read from, and a shell has no
+      // replies at all: read aloud is an agent-session fact, so a mark on either
+      // would report a setting that cannot take effect.
+      if (session.pending || !isAgentBackend(session.backend)) return null
+      const mode = resolveVoiceMode(session, context.voice)
+      if (mode === 'off') return null
+      return make({
+        kind: 'voice',
+        text: `read aloud: ${voiceModeLabel(mode)}`,
+        title: mode === 'auto'
+          ? 'Read aloud · every completed reply becomes audio automatically · change it in the voice panel’s tts tab'
+          : 'Read aloud · on demand: audio is made when you ask for it · change it in the voice panel’s tts tab',
+        voice: mode,
+      }, true)
+    }
     case 'badges': {
       // `indicator` moves the same fact onto the state indicator and `off`
       // withdraws it; either way the row must not also print it.
@@ -798,7 +832,7 @@ function tokenCost(token: RowToken, config: SessionRowConfig): number {
       // line's yielding token by construction, and costing it in full would make
       // every long-named row look overfull and start deleting facts that fit.
       return token.minChars
-    case 'glyph': case 'broadcast': case 'draft':
+    case 'glyph': case 'broadcast': case 'draft': case 'voice':
       return MARK_COST
     case 'badges':
       return Math.max(1, token.badges?.length ?? 1) * MARK_COST
@@ -998,6 +1032,7 @@ export function deriveRowContext(
   now: number,
   budget: RowBudget = EMPTY_ROW_BUDGET,
   localDrafts: Record<string, number> = {},
+  voice: VoiceModeDefaults = VOICE_MODE_OFF,
 ): SessionRowContext {
   const byProject = new Map<string, Session[]>()
   for (const session of sessions) {
@@ -1024,6 +1059,6 @@ export function deriveRowContext(
   }
   return {
     now, defaultBranch, defaultModel,
-    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, budget,
+    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, voice, budget,
   }
 }

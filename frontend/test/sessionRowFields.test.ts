@@ -620,7 +620,7 @@ test('the flag strip is pinned to the top line’s right, away from the title', 
   // that clips, so a title long enough to fill the sidebar hid every one of them.
   const base = defaultSessionRowConfig()
   assert.deepEqual(base.top.left.map(slot => slot.id), ['glyph', 'title'])
-  assert.deepEqual(base.top.right.map(slot => slot.id), ['approvals', 'broadcast', 'badges', 'draft'])
+  assert.deepEqual(base.top.right.map(slot => slot.id), ['approvals', 'voice', 'broadcast', 'badges', 'draft'])
 })
 
 test('the approval badge shows only while a grant is actually in force', () => {
@@ -661,7 +661,10 @@ test('no amount of shedding removes a flag', () => {
   // is running at exactly the width that made the row hard to read.
   const config = defaultSessionRowConfig()
   const item = session({ broadcast: true, unsent_input: { since: NOW - 60 }, standing_activity: STANDING })
-  const tokens = buildSessionRowTokens(item, config, { ...context(), shed: 99 })
+  // Through `budget`, which is what actually drives shedding. This used to pass a `shed`
+  // key the context has never had, so the line was fitted against an unmeasured (zero)
+  // budget and nothing was ever shed — the assertion held for the wrong reason.
+  const tokens = buildSessionRowTokens(item, config, { ...context(), budget: { top: 1, bottom: 1 } })
   assert.deepEqual(tokens.top.left.tokens.map(token => token.id), ['glyph', 'title'])
   assert.deepEqual(tokens.top.right.tokens.map(token => token.id), ['broadcast', 'badges', 'draft'])
 })
@@ -672,6 +675,70 @@ test('the identity projection keeps the strip, because a phone is where drafts a
   const tokens = identityRowTokens(item, config, context())
   assert.deepEqual(tokens.top.left.tokens.map(token => token.id), ['glyph', 'title'])
   assert.deepEqual(tokens.top.right.tokens.map(token => token.id), ['draft'])
+})
+
+// --- read aloud --------------------------------------------------------------
+
+test('the read-aloud mark reports the resolved mode, not the stored one', () => {
+  // The fact worth marking is "this session speaks", and a session stores `voice_mode`
+  // only once somebody has chosen one — so a fleet on a global default of `auto` is a
+  // fleet that all speaks, however empty its session records are.
+  const config = defaultSessionRowConfig()
+  const marks = (item: Session, ctx = context()) =>
+    buildSessionRowTokens(item, config, ctx).top.right.tokens
+      .filter(token => token.id === 'voice')
+      .map(token => token.voice)
+
+  const on = context({ voice: { enabled: true, default_mode: 'off' } })
+  assert.deepEqual(marks(session(), on), [], 'the global default is off, so nothing is marked')
+  assert.deepEqual(marks(session({ voice_mode: 'auto' }), on), ['auto'])
+  assert.deepEqual(marks(session({ voice_mode: 'on_demand' }), on), ['on_demand'])
+  assert.deepEqual(
+    marks(session(), context({ voice: { enabled: true, default_mode: 'auto' } })),
+    ['auto'],
+    'an unset session inherits the global default and speaks',
+  )
+  assert.deepEqual(
+    marks(session({ voice_mode: 'off' }), context({ voice: { enabled: true, default_mode: 'auto' } })),
+    [],
+    'an explicit off overrides the default',
+  )
+})
+
+test('the read-aloud mark is off whenever the master switch is', () => {
+  // A stored `auto` on a session is a preference the daemon is currently ignoring, and a
+  // speaker mark on a fleet that cannot make a sound is worse than no mark at all.
+  const config = defaultSessionRowConfig()
+  const item = session({ voice_mode: 'auto' })
+  const marks = (ctx: ReturnType<typeof context>) =>
+    buildSessionRowTokens(item, config, ctx).top.right.tokens.filter(token => token.id === 'voice')
+  assert.equal(marks(context()).length, 0, 'the default context has read aloud off')
+  assert.equal(marks(context({ voice: { enabled: false, default_mode: 'auto' } })).length, 0)
+  assert.equal(marks(context({ voice: { enabled: true, default_mode: 'off' } })).length, 1)
+})
+
+test('read aloud is an agent fact, so a shell and a pending pane carry no mark', () => {
+  const config = defaultSessionRowConfig()
+  const on = context({ voice: { enabled: true, default_mode: 'auto' } })
+  const marks = (item: Session) =>
+    buildSessionRowTokens(item, config, on).top.right.tokens.filter(token => token.id === 'voice')
+  assert.equal(marks(session({ voice_mode: 'auto' })).length, 1)
+  assert.equal(marks(session({ backend: 'shell', voice_mode: 'auto' })).length, 0)
+  assert.equal(marks(session({ pending: true, voice_mode: 'auto' })).length, 0)
+})
+
+test('the read-aloud mark survives shedding and the phone’s identity row', () => {
+  // Same rule as the rest of the flag strip: a mark whose whole content is "this is true"
+  // has nothing to ellipsize, and dropping it at the width that made the row hard to read
+  // deletes the one report that this session is talking.
+  const config = defaultSessionRowConfig()
+  const item = session({ voice_mode: 'auto' })
+  const on = context({ voice: { enabled: true, default_mode: 'off' } })
+  // A one-character budget, which is the narrowest the line can be asked to fit into.
+  const squeezed = { ...on, budget: { top: 1, bottom: 1 } }
+  assert.ok(buildSessionRowTokens(item, config, squeezed)
+    .top.right.tokens.some(token => token.id === 'voice'))
+  assert.ok(identityRowTokens(item, config, on).top.right.tokens.some(token => token.id === 'voice'))
 })
 
 test('a pre-strip layout relocates its flags once and gains the new one', () => {
@@ -686,19 +753,50 @@ test('a pre-strip layout relocates its flags once and gains the new one', () => 
       separator: 'none',
     },
   })
-  assert.equal(config.version, 2)
+  assert.equal(config.version, 3)
   assert.deepEqual(config.top.left.map(slot => slot.id), ['glyph', 'title'])
-  assert.deepEqual(config.top.right.map(slot => slot.id), ['broadcast', 'badges', 'draft'])
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['voice', 'broadcast', 'badges', 'draft'])
 })
 
 test('migration relocates a choice without re-imposing one', () => {
-  // A flag the user had removed is off, and stays off: `draft` arrives placed
-  // because nobody could have declined a field that did not exist.
+  // A flag the user had removed is off, and stays off: `draft` and `voice` arrive placed
+  // because nobody could have declined a field that did not exist yet.
   const config = normalizeSessionRowConfig({
     version: 1,
     top: { left: [{ id: 'glyph', mode: 'always' }, { id: 'title', mode: 'always' }], right: [], separator: 'none' },
   })
-  assert.deepEqual(config.top.right.map(slot => slot.id), ['draft'])
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['voice', 'draft'])
+})
+
+test('a version 2 layout gains the read-aloud flag beside the approval one', () => {
+  // Changing the shipped default reaches nobody who has ever opened the settings panel: a
+  // stored blob is authoritative and an unplaced field is off, so without this step the
+  // mark would ship invisible to exactly the users who configured their rows.
+  const config = normalizeSessionRowConfig({
+    version: 2,
+    top: {
+      left: [{ id: 'glyph', mode: 'always' }, { id: 'title', mode: 'always' }],
+      right: [{ id: 'approvals', mode: 'notable' }, { id: 'draft', mode: 'always' }],
+      separator: 'none',
+    },
+  })
+  assert.equal(config.version, 3)
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['approvals', 'voice', 'draft'])
+  // And version 2's own relocation does not run again on a layout that has had it.
+  assert.deepEqual(config.top.left.map(slot => slot.id), ['glyph', 'title'])
+})
+
+test('a layout that already places read aloud is not given a second copy', () => {
+  const config = normalizeSessionRowConfig({
+    version: 2,
+    top: {
+      left: [{ id: 'title', mode: 'always' }],
+      right: [{ id: 'voice', mode: 'always' }],
+      separator: 'none',
+    },
+  })
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['voice'])
+  assert.equal(config.top.right[0].mode, 'always', 'the stored mode is kept')
 })
 
 test('an already-migrated layout is left exactly as it is', () => {

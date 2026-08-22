@@ -50,7 +50,7 @@ const SESSIONS: Session[] = [
     id: 'standing',
     name: 'background work on the deterministic consumer pipeline and its detectors',
     model: 'opus', last_turn_ms: 9_000, context_pct: 0.2, broadcast: true,
-    unsent_input: { since: NOW - 300 },
+    unsent_input: { since: NOW - 300 }, voice_mode: 'auto',
     standing_activity: [{ kind: 'subagents', source: 'hook', evidence: 'hook:SubagentStart', since: NOW, expires_at: null, count: 2, detail: null }],
   }),
 ]
@@ -81,7 +81,12 @@ const config: SessionRowConfig = layout ? { ...base, bottom: layout } : base
 // The budget the app measures off its own probe. The spec drives the sidebar's
 // width directly, so the harness re-measures on every resize the same way — a
 // fixed budget would let a spec assert on a ladder that never moved.
-const fleet = deriveRowContext(SESSIONS, { working: 2 }, NOW)
+// Read aloud on with the global default off, so the `voice` mark is drawn for the one
+// session that opted in rather than for all three. Its icon is an SVG sized in CSS, which
+// is precisely the kind of mark that renders at zero width or swallows the row when the
+// sizing is wrong, and neither failure is visible to tsc or the unit suite.
+const fleet = deriveRowContext(
+  SESSIONS, { working: 2 }, NOW, undefined, undefined, { enabled: true, default_mode: 'off' })
 const readBudget = () => {
   const copy = document.querySelector<HTMLElement>('[data-metric="copy"]')
   const top = document.querySelector<HTMLElement>('[data-metric="top"]')

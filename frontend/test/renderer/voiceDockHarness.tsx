@@ -103,18 +103,32 @@ const control = <VoiceControl
 />
 
 // A presentational stand-in, like the assistant body: the real panel fetches clips from a
-// daemon this harness does not have. The shapes that matter to layout are the control row
-// and a clip list long enough to scroll.
+// daemon this harness does not have. The shapes that matter to layout are the control row,
+// the transport, and a clip list long enough to scroll.
+//
+// This is read aloud's only control surface now - the per-pane player strip is retired -
+// so the row it grew (`↻ speak`) and the transport it absorbed are mirrored here.
 const readView = <div class="voice-read">
   <div class="voice-read-controls">
     <div class="voice-read-session"><span>session</span><strong>claude-1ee230</strong>
       <button class="voice-read-mode auto">tts:auto</button>
       <button class="voice-read-content verbatim">verbatim</button>
+      <button class="voice-read-speak">↻ speak</button>
     </div>
     <button class="voice-read-autoplay active">🔊 this device</button>
     <button class="voice-read-held">▶ 2 held</button>
     <a class="voice-read-master" href="#">master: on</a>
     <button class="dictation-settings">⚙</button>
+  </div>
+  {/* The transport, drawn because this device has a clip loaded. It is the half of the
+      retired pane strip that had no other home, and the reason the panel is a flex column
+      rather than a two-row grid: with a third conditional child the fixed template gave the
+      flexible row to whichever child happened to be second. */}
+  <div class="voice-read-now" role="group" aria-label="Playback">
+    <button class="voice-read-now-play">⏸</button>
+    <input class="voice-read-seek" type="range" min="0" max="41" step="0.1" value="12" aria-label="Seek within the clip" />
+    <span class="voice-read-now-time">0:12/0:41</span>
+    <span class="voice-read-now-text">The scrollback ring keeps bracketed paste across replay now.</span>
   </div>
   <div class="voice-read-clips" role="list">
     {[
