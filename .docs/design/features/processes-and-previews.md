@@ -521,7 +521,12 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   is what they are. Closing the tab leaves the registration standing; the row reattaches it,
   the same contract a detected server's row has. Because that contract means nothing else
   ever retires one - and unlike a detected preview, no stopped listener will - the row
-  carries the remove control that does, resting hidden and appearing on hover or focus.
+  carries the remove control that does, resting hidden and appearing on hover or focus,
+  with a right-click menu offering the same `Close preview`. Both cover the whole row
+  including the `×`, which sits outside `.sidebar-note-row` and would otherwise let a
+  right-click fall through to the sidebar's background menu. Neither is offered on a
+  session-owned preview row: that one follows its listener and is retired by the listener
+  stopping, so there is nothing for a menu to do.
 
 ## Preview capture
 

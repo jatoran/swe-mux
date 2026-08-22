@@ -354,6 +354,10 @@ type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|
 type ProjectContext = { project: Project; x: number; y: number } | null
 type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
+/** Right-click on a *static* preview's sidebar row. Deliberately not offered on the
+ *  session-owned preview rows: those follow their listener and are retired by it stopping,
+ *  so there is nothing on them for a menu to do. */
+type StaticPreviewContext = { previewId:string;projectId:string;label:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
@@ -541,6 +545,7 @@ export function App() {
   // return to the pane reads it rather than the mark outliving the reason for it.
   const [pinVisits,setPinVisits]=useState<PinVisits>({})
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
+  const [staticPreviewMenu,setStaticPreviewMenu]=useState<StaticPreviewContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
   const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail';tab?:DrawerTabId}|null>(null)
@@ -2839,18 +2844,18 @@ export function App() {
   // it, which also keeps that event from reaching the document's dismiss handler —
   // so opening this menu has to close whatever else was open itself.
   const openSortMenu=(x:number,y:number)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setGroupMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setGroupMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
   }
   const openGroupMenu=(groupId:string,x:number,y:number)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setSortMenu(null);setRunMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setSortMenu(null);setRunMenu(null);setMainMenuOpen(false)
     // Each opening starts from "not asked yet", so a confirm armed on one Group cannot
     // be inherited by the next menu the user opens.
     setConfirmGroupDeleteId(null)
     setGroupMenu({groupId,x,y})
   }
   const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail',tab?:DrawerTabId)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
     setDrawerDisplayMenu({x,y,surface,tab})
   }
   const groupIdFor=(project:Project)=>
@@ -3168,7 +3173,7 @@ export function App() {
   // dismiss level, and the single Escape branch in the `mux:command` effect pops one.
 
   useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen) return
+    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !staticPreviewMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     menuDismissedByPointer.current = false
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.context-menu button:not(:disabled)')?.focus())
@@ -3196,7 +3201,7 @@ export function App() {
       menuDismissedByPointer.current = false
       if (!claimed) previous?.focus()
     }
-  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen])
+  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, staticPreviewMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen])
 
   useEffect(() => {
     if (!confirmKillId) return
@@ -3315,7 +3320,7 @@ export function App() {
   }
 
   const openProjectMenuAt=(project:Project,x:number,y:number)=>{
-    setContextMenu(null);setNoteMenu(null);setTabMenu(null);setSidebarMenu(null);setRunMenu(null);setGroupMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setTabMenu(null);setSidebarMenu(null);setRunMenu(null);setGroupMenu(null);setMainMenuOpen(false)
     setProjectMenu({project,x,y})
   }
 
@@ -5506,6 +5511,7 @@ export function App() {
       setSortMenu(null)
       setGroupMenu(null)
       setNoteMenu(null)
+      setStaticPreviewMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
       setDrawerDisplayMenu(null)
@@ -5561,6 +5567,7 @@ export function App() {
   useDismissLevel(() => setSortMenu(null), !!sortMenu, 'sort-menu')
   useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')
   useDismissLevel(() => setNoteMenu(null), !!noteMenu, 'note-menu')
+  useDismissLevel(() => setStaticPreviewMenu(null), !!staticPreviewMenu, 'static-preview-menu')
   useDismissLevel(() => setTabMenu(null), !!tabMenu, 'tab-menu')
   useDismissLevel(() => setEmptyMenu(null), !!emptyMenu, 'empty-menu')
   useDismissLevel(() => setDrawerDisplayMenu(null), !!drawerDisplayMenu, 'drawer-display-menu')
@@ -6304,7 +6311,15 @@ export function App() {
     const layout=layoutMap[project.id]||parseLayout(project.layout)
     const previewStack=stackForView(layout,preview.id)
     const selected=previewStack?.active_child_id===preview.id
-    return <div key={preview.id} class={`static-preview-entry ${selected?'active':''}`}>
+    // The right-click menu covers the whole entry, `×` included: that button sits outside
+    // `.sidebar-note-row`, so a menu bound to the row alone would let a right-click on the
+    // × fall through to the sidebar's own background menu.
+    return <div key={preview.id} class={`static-preview-entry ${selected?'active':''}`} onContextMenu={event=>{
+      event.preventDefault()
+      event.stopPropagation()
+      if(mobileWorkspace)return
+      openStaticPreviewMenu(preview,event.clientX,event.clientY)
+    }}>
       <button class={`sidebar-note-row preview-row static-preview-row ${selected?'active':''}`} title={`${preview.url} · served from disk by mux`} onClick={event=>{
         event.stopPropagation()
         setProjectId(project.id)
@@ -6325,6 +6340,10 @@ export function App() {
           control that actually retires it. */}
       <button class="static-preview-remove" title={`Remove the ${previewLabel(preview)} preview`} aria-label={`Remove the ${previewLabel(preview)} preview`} onClick={event=>{event.stopPropagation();void removeStaticPreview(preview)}}>×</button>
     </div>
+  }
+  const openStaticPreviewMenu=(preview:Preview,x:number,y:number)=>{
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setGroupMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setRunMenu(null);setMainMenuOpen(false)
+    setStaticPreviewMenu({previewId:preview.id,projectId:preview.project_id,label:previewLabel(preview),x,y})
   }
   const removeStaticPreview=async(preview:Preview)=>{
     try{
@@ -6661,7 +6680,7 @@ export function App() {
       <header class="app-topbar">
         <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
-      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
+      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.static-preview-entry,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
             rows, while only explicit Groups receive their own headers.
             Its five controls are the tree's own: filter, fold, sort, the registry
@@ -7240,6 +7259,17 @@ export function App() {
         <button title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyFileClipboard(noteMenu,'contents')}>Copy file contents</button>
       </>}
       {workspaceNoteIds(noteMenu.projectId).includes(noteMenu.resourceId)&&<><div class="context-rule"/><button onClick={()=>{const target=noteMenu;setNoteMenu(null);void removeWorkspaceNote(target.projectId,target.resourceId)}}>Close resource tab</button></>}
+    </div>}
+
+    {/* Static previews only. A session-owned preview row has no equivalent: it follows its
+        listener and is retired when that stops, so there is nothing here for it to do. */}
+    {staticPreviewMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Preview actions for ${staticPreviewMenu.label}`} style={{left:clampContextMenuLeft(staticPreviewMenu.x,innerWidth),top:Math.max(4,Math.min(staticPreviewMenu.y,innerHeight-90))}}>
+      <div class="context-title"><strong>{staticPreviewMenu.label}</strong></div>
+      <button onClick={()=>{
+        const target=previews[staticPreviewMenu.previewId]
+        setStaticPreviewMenu(null)
+        if(target)void removeStaticPreview(target)
+      }}>Close preview</button>
     </div>}
 
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
