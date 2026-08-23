@@ -646,7 +646,8 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
 
 const TRIGGER_LABEL: Record<RailPadTriggerMode, string> = {
   'enter': 'On entering the wedge',
-  'enter-repeat': 'On entering, repeating while held',
+  'enter-repeat': 'On entering, repeating while held anywhere',
+  'enter-repeat-far': 'On entering, repeating only when pushed out',
   'release': 'Only on release, in this wedge',
 }
 
@@ -706,10 +707,16 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
         onChange={value => onSlot(key, { item: binding.item, mode: (value || undefined) as RailPadTriggerMode | undefined })}
         options={[
           { value: '', label: `Automatic (${TRIGGER_LABEL[auto].toLowerCase()})` },
-          ...RAIL_PAD_TRIGGER_MODES.map(value => ({ value, label: TRIGGER_LABEL[value] })),
+          // Repeat-on-push-out has no meaning on a ringed pad: the outer band is already a
+          // different slot there. Offered only where it can actually happen, rather than
+          // listed and then silently resolved to something else.
+          ...RAIL_PAD_TRIGGER_MODES
+            .filter(value => value !== 'enter-repeat-far' || rings === 1)
+            .map(value => ({ value, label: TRIGGER_LABEL[value] })),
         ]}
       />}
       {binding && mode === 'release' && <small class="rail-pad-cell-note">Fires on release, so dragging back out cancels it.</small>}
+      {binding && mode === 'enter-repeat-far' && <small class="rail-pad-cell-note">One send anywhere in the wedge; push past the outer band for a stream.</small>}
     </div>
   }
 

@@ -48,6 +48,7 @@ function harness(options?: Partial<RailPadPressOptions>) {
   const fired: string[] = []
   const latches: { slot: string | null; armed: boolean }[] = []
   const ends: number[] = []
+  const bands: boolean[] = []
   let now = 0
   const timers: { at: number; run: () => void; id: number }[] = []
   let nextId = 1
@@ -55,6 +56,7 @@ function harness(options?: Partial<RailPadPressOptions>) {
     {
       fire: slot => fired.push(slot),
       latch: (slot, detail) => latches.push({ slot, armed: detail.armed }),
+      band: beyond => { bands.push(beyond) },
       end: () => { ends.push(1) },
     },
     (callback, delayMs) => {
@@ -84,7 +86,7 @@ function harness(options?: Partial<RailPadPressOptions>) {
     slots: THREE,
     ...options,
   })
-  return { gesture, fired, latches, ends, advance, press }
+  return { gesture, fired, latches, ends, bands, advance, press }
 }
 
 /** A point at a distance and an angle, in the gesture's own screen-axis convention. */
@@ -94,7 +96,7 @@ const at = (radius: number, degrees: number) => ({
 })
 
 const shapeOf = (wedges: number, rings: number, scale = 1): RailPadShape =>
-  ({ wedges, rings, bands: railPadBands(rings, scale) })
+  ({ wedges, rings, bands: railPadBands(rings > 1, scale) })
 
 const resolveAt = (shape: RailPadShape, radius: number, degrees: number, current: string | null = null) => {
   const point = at(radius, degrees)
@@ -144,7 +146,7 @@ test('wedges stay thumb-sized at every count the model allows', () => {
   // The complaint the dial replaced was that the targets were too small. Asserted as an arc
   // length rather than an angle, because that is what a finger meets - and it is *not* what
   // caps the wedge count, which is why the ceiling is documented as angular tolerance.
-  const bands = railPadBands(1)
+  const bands = railPadBands(false)
   const radius = bands.dead + (bands.outer - bands.dead) * 0.55
   for (let wedges = 1; wedges <= RAIL_PAD_MAX_WEDGES; wedges += 1) {
     const arc = radius * (RAIL_PAD_FAN_SPAN_DEG / wedges) * Math.PI / 180
@@ -188,12 +190,12 @@ test('a two-ring pad reads near and far in the same wedge', () => {
 })
 
 test('a short pane squeezes the dial, and the gesture squeezes with it', () => {
-  assert.equal(railPadScaleFor(2, Infinity), 1)
-  assert.equal(railPadScaleFor(2, RAIL_PAD_OUTER_PX * 2), 1)
-  assert.equal(railPadScaleFor(2, RAIL_PAD_OUTER_PX / 2), 0.5)
-  assert.equal(railPadScaleFor(2, 0), RAIL_PAD_MIN_SCALE)
-  assert.equal(railPadScaleFor(1, RAIL_PAD_SINGLE_OUTER_PX / 2), 0.5)
-  const squeezed = railPadBands(2, 0.5)
+  assert.equal(railPadScaleFor(true, Infinity), 1)
+  assert.equal(railPadScaleFor(true, RAIL_PAD_OUTER_PX * 2), 1)
+  assert.equal(railPadScaleFor(true, RAIL_PAD_OUTER_PX / 2), 0.5)
+  assert.equal(railPadScaleFor(true, 0), RAIL_PAD_MIN_SCALE)
+  assert.equal(railPadScaleFor(false, RAIL_PAD_SINGLE_OUTER_PX / 2), 0.5)
+  const squeezed = railPadBands(true, 0.5)
   assert.equal(squeezed.ring, RAIL_PAD_RING_PX / 2)
   assert.equal(squeezed.outer, RAIL_PAD_OUTER_PX / 2)
   // The dead radius is not scaled: it is already small, and shrinking it would make the pad
@@ -277,6 +279,127 @@ test('a hold repeats at the shared cadence, and only an enter-repeat slot does',
   assert.equal(fired[afterSwitch - 1], RIGHT)
   advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 5)
   assert.equal(fired.length, afterSwitch)
+  gesture.cancel()
+})
+
+// ---------------------------------------------------------------------------
+// Repeat on push-out
+// ---------------------------------------------------------------------------
+
+const FAR_SLOTS: RailPadPressOptions['slots'] = { [UP]: { mode: 'enter-repeat-far' } }
+/** Comfortably inside the band, and comfortably past it. */
+const INSIDE = RAIL_PAD_RING_PX - 30
+const OUTSIDE = RAIL_PAD_RING_PX + 40
+
+test('a repeat-far slot sends exactly one however long it is held inside', () => {
+  // The whole point of the mode: dwell is a poor statement of "I meant lots of these", and
+  // `enter-repeat` starts spamming after 350ms from a thumb that merely hesitated.
+  const { gesture, fired, advance, press } = harness({ slots: FAR_SLOTS })
+  press(0, 0)
+  gesture.move(1, 0, -INSIDE)
+  assert.deepEqual(fired, [UP])
+  advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 20)
+  assert.deepEqual(fired, [UP], 'still one, twenty intervals later')
+  gesture.release(1)
+  assert.deepEqual(fired, [UP])
+})
+
+test('pushing past the band starts the stream, and fires nothing on the crossing itself', () => {
+  const { gesture, fired, advance, press, bands } = harness({ slots: FAR_SLOTS })
+  press(0, 0)
+  gesture.move(1, 0, -INSIDE)
+  assert.deepEqual(fired, [UP])
+  gesture.move(1, 0, -OUTSIDE)
+  // Crossing selects nothing - it only arms - so the count is unchanged until the delay.
+  assert.deepEqual(fired, [UP])
+  assert.deepEqual(bands, [true])
+  advance(RAIL_PAD_REPEAT_DELAY_MS)
+  assert.deepEqual(fired, [UP, UP])
+  advance(RAIL_PAD_REPEAT_INTERVAL_MS * 3)
+  assert.equal(fired.length, 5)
+  gesture.cancel()
+})
+
+test('coming back inside stops the stream without re-firing, and going out restarts the delay', () => {
+  const { gesture, fired, advance, press, bands } = harness({ slots: FAR_SLOTS })
+  press(0, 0)
+  gesture.move(1, 0, -OUTSIDE)
+  advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS)
+  const streamed = fired.length
+  assert.ok(streamed >= 3)
+
+  gesture.move(1, 0, -INSIDE)
+  assert.equal(fired.length, streamed, 'coming back in fires nothing')
+  advance(RAIL_PAD_REPEAT_INTERVAL_MS * 10)
+  assert.equal(fired.length, streamed, 'and stops the stream')
+
+  // Out again restarts the *delay* rather than resuming mid-stream, so a wiggle across the
+  // boundary cannot machine-gun.
+  gesture.move(1, 0, -OUTSIDE)
+  assert.equal(fired.length, streamed)
+  advance(RAIL_PAD_REPEAT_DELAY_MS - 1)
+  assert.equal(fired.length, streamed)
+  advance(1)
+  assert.equal(fired.length, streamed + 1)
+  assert.deepEqual(bands, [true, false, true])
+  gesture.cancel()
+})
+
+test('the band boundary costs the switch margin in both directions', () => {
+  // Same hysteresis the ring slots use, and for the same reason: a finger resting on the
+  // boundary must not flip a stream on and off.
+  const { gesture, press, bands } = harness({ slots: FAR_SLOTS })
+  press(0, 0)
+  gesture.move(1, 0, -(RAIL_PAD_RING_PX + 2))
+  assert.deepEqual(bands, [], 'just past is not past enough')
+  gesture.move(1, 0, -(RAIL_PAD_RING_PX + RAIL_PAD_SWITCH_MARGIN_PX + 2))
+  assert.deepEqual(bands, [true])
+  gesture.move(1, 0, -(RAIL_PAD_RING_PX - 2))
+  assert.deepEqual(bands, [true], 'and neither is just inside')
+  gesture.move(1, 0, -(RAIL_PAD_RING_PX - RAIL_PAD_SWITCH_MARGIN_PX - 2))
+  assert.deepEqual(bands, [true, false])
+  gesture.cancel()
+})
+
+test('a flick that lands straight in the band still arms the stream', () => {
+  // A fast operator never pauses inside; the stream has to be where the finger is.
+  const { gesture, fired, advance, press } = harness({ slots: FAR_SLOTS })
+  press(0, 0)
+  gesture.move(1, 0, -OUTSIDE)
+  assert.deepEqual(fired, [UP], 'one on entry, as always')
+  advance(RAIL_PAD_REPEAT_DELAY_MS)
+  assert.deepEqual(fired, [UP, UP])
+  gesture.cancel()
+})
+
+test('a repeat-far pad is banded, so the geometry has a boundary to cross', () => {
+  const { gesture, press } = harness({ slots: FAR_SLOTS })
+  press(0, 0)
+  const { bands } = gesture.peek()
+  assert.equal(bands.ring, RAIL_PAD_RING_PX)
+  assert.equal(bands.outer, RAIL_PAD_OUTER_PX)
+  gesture.cancel()
+  // Without such a slot, a one-ring pad has no boundary at all.
+  const plain = harness()
+  plain.press(0, 0)
+  assert.equal(plain.gesture.peek().bands.ring, Infinity)
+  plain.gesture.cancel()
+})
+
+test('switching wedges mid-stream stops it, and the band does not restart it for another mode', () => {
+  const { gesture, fired, advance, press } = harness({
+    slots: { [UP]: { mode: 'enter-repeat-far' }, [RIGHT]: { mode: 'enter' } },
+  })
+  press(0, 0)
+  gesture.move(1, 0, -OUTSIDE)
+  advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 2)
+  const streamed = fired.length
+  // Sideways to the plain `enter` wedge, still out past the band.
+  const sideways = at(OUTSIDE, 0)
+  gesture.move(1, sideways.dx, sideways.dy)
+  assert.equal(fired[fired.length - 1], RIGHT)
+  advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 10)
+  assert.equal(fired.length, streamed + 1, 'an enter slot does not stream just because it is far out')
   gesture.cancel()
 })
 

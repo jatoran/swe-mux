@@ -119,6 +119,11 @@ Ownership rules the rest of the layer relies on:
 - **A slot's mode belongs to the binding, not the Action** - and its default also belongs to the *ring count*.
   `defaultPadTriggerMode` returns `release` for every slot of a two-ring pad, because the near ring is unavoidably transit: reaching the far ring crosses it, so a near slot firing on entry would fire on every pass and again on the way back in.
   A ring you must pass through cannot be a fire-on-entry target. An explicit per-slot mode still wins.
+- **`enter-repeat-far` arms a repeat by distance rather than dwell**, and is what a repeatable Action defaults to on a one-ring pad.
+  It fires once on entry and streams only past `bands.ring`; `setBeyond` starts and stops the timer on band crossings and fires nothing either way, so transit costs nothing and a wiggle restarts the delay rather than resuming.
+  It is a property of one slot rather than a second ring slot holding the same Action - the two-slot spelling fires the near one in transit, so the stream would arrive one send early.
+  On a two-ring pad `railPadSlotMode` resolves it to plain `enter`, because the band there is already a different slot; the editor does not offer it.
+- **`railPadBanded` decides whether a boundary exists at all**, and `railPadBands` is keyed on that rather than on the ring count - a second ring of slots and a push-out repeat want the same radii for different reasons.
 - **Slots are stored canonically**: `normalizeRailPad` rebuilds them in `padSlotKeys` order, which is wedge-major within a ring so `railPadResolve` can address them arithmetically.
   A fork stores a copy of a shipped pad and `planForkReattach` asks whether the copy still equals the definition, so a pad authored in reading order and reloaded in canonical order would report as edited by an operator who changed nothing.
   The shipped pads are run through `normalizeRailPad` at their definition site for that reason, which is also why `RETIRED_RAIL_IDS` sits above `BUILTIN_RAIL` - the canonicalization migrates slot ids while the catalog is still being evaluated.

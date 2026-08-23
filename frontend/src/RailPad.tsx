@@ -18,6 +18,7 @@ import {
   padWedgeCentreDeg,
   padWedgeCount,
   padWedgeName,
+  railPadBanded,
   padWedgeUnit,
   parsePadSlotKey,
   type RailItem,
@@ -76,6 +77,7 @@ export interface RailPadSlotView {
 interface RailPadHandlers {
   fire: (slot: RailPadSlotKey) => void
   latch: (slot: RailPadLatch, detail: { armed: boolean }) => void
+  band: (beyond: boolean) => void
   end: () => void
 }
 
@@ -108,6 +110,7 @@ export function useRailPad(resetKey: string): RailPadController {
       {
         fire: slot => handlersRef.current?.fire(slot),
         latch: (slot, detail) => handlersRef.current?.latch(slot, detail),
+        band: beyond => handlersRef.current?.band(beyond),
         end: () => {
           const handlers = handlersRef.current
           handlersRef.current = null
@@ -166,7 +169,17 @@ export interface RailPadProps {
   modifierPrefix?: string
 }
 
-type Dial = { x: number; y: number; scale: number; latch: RailPadLatch; armed: boolean; visible: boolean } | null
+type Dial = {
+  x: number
+  y: number
+  scale: number
+  banded: boolean
+  latch: RailPadLatch
+  armed: boolean
+  /** Past the outer band, which is what arms an `enter-repeat-far` slot's stream. */
+  beyond: boolean
+  visible: boolean
+} | null
 
 /** A point on the dial, in its own local coordinates: the press is the origin, `angle` is
  *  `railPadAngle` degrees, and `y` is flipped because the fan opens upward. */
@@ -210,6 +223,9 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   const dialTimer = useRef<number | null>(null)
   const wedges = padWedgeCount(item.pad)
   const rings = padRingCount(item.pad)
+  // Drawn with an outer band when a second ring of slots needs one, or when a slot repeats
+  // beyond one. Same radii; the meaning is the slot's.
+  const banded = railPadBanded(rings, slots.map(slot => slot.mode))
   const byKey = new Map(slots.map(slot => [slot.key, slot]))
   const centre = byKey.get(PAD_CENTER)
   /** The field holding the soft keyboard up when this press began, and the dismissal count
@@ -271,6 +287,12 @@ export function RailPad({ controller, item, slots, className, content, modifierP
         if (slot && detail.armed) buzz(HAPTIC_ARM)
         setDial(current => current && { ...current, latch: slot, armed: detail.armed })
       },
+      // A distinct bump on arming the stream, because the finger is past the labels by then
+      // and the only channel left is the one it can feel.
+      band: crossed => {
+        if (crossed) buzz(HAPTIC_ARM)
+        setDial(current => current && { ...current, beyond: crossed })
+      },
       // Torn down here rather than from the chip's own `pointerup`: by the time a real
       // gesture ends the finger is well off the chip, and that event belongs to whatever is
       // under it. The keyboard goes back on the same signal, and on a frame later so it
@@ -290,9 +312,11 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     setDial({
       x: event.clientX,
       y: event.clientY,
-      scale: railPadScaleFor(rings, roomAbove),
+      scale: railPadScaleFor(banded, roomAbove),
+      banded,
       latch: null,
       armed: false,
+      beyond: false,
       visible: false,
     })
     // Cosmetic only. The gesture has been live since the line above; this decides nothing
@@ -339,7 +363,7 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     ...(centre ? [`Centre: ${centre.label}`] : []),
   ].join('. ')
 
-  const bands = railPadBands(rings, dial?.scale ?? 1)
+  const bands = railPadBands(dial?.banded ?? banded, dial?.scale ?? 1)
   const innerOf = (ring: number) => ring > 0 ? bands.ring : bands.dead
   const outerOf = (ring: number) => ring > 0 || !Number.isFinite(bands.ring) ? bands.outer : bands.ring
 
@@ -416,7 +440,12 @@ export function RailPad({ controller, item, slots, className, content, modifierP
           const inner = innerOf(ring)
           const outer = outerOf(ring)
           const active = dial.latch === key
-          const at = polar(inner + (outer - inner) * LABEL_AT, railPadWedgeCentre(wedge, wedges))
+          // A wedge that repeats beyond the band draws its label inside the near part and
+          // marks the outer part separately, because the two halves do different things -
+          // one send, or a stream. Every other wedge fills its whole band.
+          const streams = slot?.mode === 'enter-repeat-far' && Number.isFinite(bands.ring)
+          const labelOuter = streams ? bands.ring : outer
+          const at = polar(inner + (labelOuter - inner) * LABEL_AT, railPadWedgeCentre(wedge, wedges))
           const label = slot ? (modifierPrefix ? `${modifierPrefix}+${slot.label}` : slot.label) : ''
           return <g
             key={key}
@@ -425,7 +454,11 @@ export function RailPad({ controller, item, slots, className, content, modifierP
               + `${!slot || slot.disabled ? ' rail-pad-wedge-off' : ''}`
               + `${slot?.mode === 'release' ? ' rail-pad-wedge-release' : ''}`}
           >
-            <path d={wedgePath(inner, outer, from, to)}/>
+            <path d={wedgePath(inner, labelOuter, from, to)}/>
+            {streams && <path
+              class={`rail-pad-band${active && dial.beyond ? ' rail-pad-band-live' : ''}`}
+              d={wedgePath(bands.ring, outer, from, to)}
+            />}
             {label && <text
               x={at.x}
               y={at.y}
@@ -434,6 +467,15 @@ export function RailPad({ controller, item, slots, className, content, modifierP
               // is the one part of the drawing that mattered.
               transform={`translate(${labelShift(dial.x + at.x, label.length)} 0)`}
             >{label}</text>}
+            {streams && (() => {
+              const mark = polar(bands.ring + (outer - bands.ring) * LABEL_AT, railPadWedgeCentre(wedge, wedges))
+              return <text
+                class="rail-pad-band-mark"
+                x={mark.x}
+                y={mark.y}
+                transform={`translate(${labelShift(dial.x + mark.x, 3)} 0)`}
+              >⋯</text>
+            })()}
           </g>
         })}
         <circle class="rail-pad-dial-hub" r={bands.dead}/>

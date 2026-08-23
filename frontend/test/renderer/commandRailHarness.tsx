@@ -94,6 +94,8 @@ const WEDGE_PAD: RailItem = {
       '0:1': { item: 'up', mode: 'enter-repeat' },
       '0:2': { item: 'kill', mode: 'release' },
       center: { item: 'centre', mode: 'enter' },
+      // Deliberately not `enter-repeat-far`: this pad covers hold-anywhere, and `STREAM_PAD`
+      // covers push-out, so one spec never has to reason about both at once.
     },
   }),
 }
@@ -132,6 +134,23 @@ const RING_PAD: RailItem = {
       '0:1': { item: 'nearLeft' },
       '1:0': { item: 'farRight' },
       '1:1': { item: 'farLeft' },
+    },
+  }),
+}
+// Push-out repeat, which is what the shipped arrows pad defaults to: one send anywhere in
+// the wedge however long you rest there, a stream only once you push past the band.
+const STREAM_PAD: RailItem = {
+  id: 'padStream',
+  type: 'pad',
+  label: 'Flow',
+  className: 'term-key',
+  title: 'Flow',
+  pad: normalizeRailPad({
+    wedges: 2,
+    rings: 1,
+    slots: {
+      '0:0': { item: 'right', mode: 'enter-repeat-far' },
+      '0:1': { item: 'up', mode: 'enter-repeat-far' },
     },
   }),
 }
@@ -180,7 +199,7 @@ function Rail() {
             className="term-key"
           />
         ))}
-        {[WEDGE_PAD, FOUR_PAD, RING_PAD].map(item => (
+        {[WEDGE_PAD, FOUR_PAD, RING_PAD, STREAM_PAD].map(item => (
           <RailPad
             key={item.id}
             controller={padControl}

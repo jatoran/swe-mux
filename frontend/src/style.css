@@ -2671,6 +2671,21 @@ body {
 .rail-pad-wedge-off>path{fill:color-mix(in srgb,var(--panel2) 70%,transparent);stroke:color-mix(in srgb,var(--text) 22%,transparent)}
 .rail-pad-wedge-off>text{fill:var(--muted)}
 .rail-pad-dial-hub{fill:color-mix(in srgb,var(--panel2) 88%,transparent);stroke:var(--line);stroke-width:1.5}
+/* The push-out band of a wedge that streams. Drawn as a separate, dimmer arc so the two
+   halves of the wedge read as the two different things they are - one send inside, a stream
+   beyond - and lit only while the finger is actually out there repeating. */
+/* Selector weight matters here and cost a round trip: the band is a `path` child of the
+   wedge group, so the plain `.rail-pad-wedge-active>path` fill out-ranks any single-class
+   band rule and the band never paints at all. Every band rule therefore carries the wedge
+   class too, which puts it above that. */
+.rail-pad-wedge>path.rail-pad-band{fill:color-mix(in srgb,var(--panel2) 62%,transparent);stroke:color-mix(in srgb,var(--text) 30%,transparent);stroke-width:1.5;stroke-dasharray:5 5}
+.rail-pad-band-mark{fill:color-mix(in srgb,var(--text) 55%,transparent);font:600 17px 'Cascadia Mono',Consolas,monospace;text-anchor:middle;dominant-baseline:middle}
+.rail-pad-wedge-active>path.rail-pad-band{stroke:color-mix(in srgb,var(--green) 55%,transparent)}
+/* Distinctly brighter than the wedge's own active fill, not merely also-green: the two
+   halves do different things - one send, or a stream - and at similar mixes they read as one
+   continuous shape. */
+.rail-pad-wedge-active>path.rail-pad-band-live{fill:color-mix(in srgb,var(--green) 78%,var(--panel2));stroke:var(--green);stroke-width:2.5;stroke-dasharray:none}
+.rail-pad-band-live+.rail-pad-band-mark{fill:var(--panel);font-size:19px}
 /* Sticky modifiers. The phase is a colour and never a label change, so the chip's width
    is identical off, armed and locked and the row's rhythm does not shift as one is used. */
 .terminal-action-rail button.rail-modifier-armed,.rail-overflow-grid button.rail-modifier-armed{border-color:var(--green);color:var(--green)}

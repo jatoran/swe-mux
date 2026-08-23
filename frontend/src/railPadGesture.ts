@@ -50,6 +50,7 @@ import {
   padSlotKey,
   padWedgeUnit,
   parsePadSlotKey,
+  railPadBanded,
   type RailPadSlotKey,
   type RailPadTriggerMode,
 } from './commandRail.ts'
@@ -116,9 +117,16 @@ export interface RailPadBands {
   outer: number
 }
 
-export function railPadBands(rings: number, scale = 1): RailPadBands {
+/**
+ * Keyed on whether the pad has a boundary at all, not on its ring *count*.
+ *
+ * Two different features want the same radii: a second ring of slots, and a slot that
+ * repeats beyond a band. What the boundary *means* is the slot's business
+ * (`railPadSlotMode`); where it sits is only ever this.
+ */
+export function railPadBands(banded: boolean, scale = 1): RailPadBands {
   const clamped = Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, scale))
-  if (rings > 1) {
+  if (banded) {
     return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: RAIL_PAD_RING_PX * clamped, outer: RAIL_PAD_OUTER_PX * clamped }
   }
   return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: Infinity, outer: RAIL_PAD_SINGLE_OUTER_PX * clamped }
@@ -128,13 +136,21 @@ export function railPadBands(rings: number, scale = 1): RailPadBands {
  * How much the dial has to shrink to fit the room above the press.
  *
  * The one direction that can run out, now that the fan opens upward: a pad in a short pane
- * near the top of the window has less than the outer ring's reach above it, and a boundary
- * you cannot travel to is a slot that does not exist.
+ * near the top of the window has less than the outer band's reach above it, and a boundary
+ * you cannot travel to is a slot - or a repeat - that does not exist.
  */
-export function railPadScaleFor(rings: number, roomAbovePx: number): number {
+export function railPadScaleFor(banded: boolean, roomAbovePx: number): number {
   if (!Number.isFinite(roomAbovePx)) return 1
-  const wanted = rings > 1 ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX
+  const wanted = banded ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX
   return Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, Math.max(0, roomAbovePx) / wanted))
+}
+
+/** Whether a radius counts as beyond the band, given where it was last. The same margin the
+ *  ring slots use, and for the same reason: a finger resting on the boundary must not flip
+ *  a repeat on and off. */
+export function railPadBeyond(radius: number, bands: RailPadBands, was: boolean): boolean {
+  if (!Number.isFinite(bands.ring)) return false
+  return radius >= bands.ring + (was ? -RAIL_PAD_SWITCH_MARGIN_PX : RAIL_PAD_SWITCH_MARGIN_PX)
 }
 
 /** Angle of a displacement, in degrees, measured counter-clockwise from due east with up
@@ -242,6 +258,10 @@ export interface RailPadCallbacks {
   /** The latch changed. `armed` marks a `release` slot now waiting for the lift, which is
    *  the state the dial and the haptics render differently. */
   latch(slot: RailPadLatch, detail: { armed: boolean; disabled: boolean }): void
+  /** The press crossed the outer band, in or out. Fires nothing by itself - it only arms or
+   *  disarms an `enter-repeat-far` slot - so it is a separate signal from `latch`, which
+   *  always means "a different thing is now selected". */
+  band(beyond: boolean): void
   /** The press is over, however it ended.
    *
    *  The dial is torn down from here rather than from the chip's own `pointerup`, because by
@@ -284,8 +304,11 @@ export function createRailPadGesture<T>(
   let startX = 0
   let startY = 0
   let options: RailPadPressOptions | null = null
-  let shape: RailPadShape = { wedges: 3, rings: 1, bands: railPadBands(1) }
+  let shape: RailPadShape = { wedges: 3, rings: 1, bands: railPadBands(false) }
   let latched: RailPadLatch = null
+  /** Whether the press is currently past the outer band. Tracked separately from the latch
+   *  because crossing it selects nothing - it only arms or disarms a repeat. */
+  let beyond = false
   let timer: T | null = null
   let releaseClaim: (() => void) | null = null
   let handledClick = false
@@ -313,6 +336,7 @@ export function createRailPadGesture<T>(
     pointer = null
     options = null
     latched = null
+    beyond = false
     leftCentre = false
     axes = { horizontal: false, vertical: false }
     callbacks.end()
@@ -346,6 +370,27 @@ export function createRailPadGesture<T>(
     if (spec.mode === 'release') return
     callbacks.fire(next)
     if (spec.mode === 'enter-repeat') armRepeat(next, RAIL_KEY_REPEAT_DELAY_MS)
+    // Landing *directly* in the outer band - a fast flick that never paused inside - still
+    // arms the stream, because the finger is where the stream lives.
+    else if (spec.mode === 'enter-repeat-far' && beyond) armRepeat(next, RAIL_KEY_REPEAT_DELAY_MS)
+  }
+
+  /**
+   * Crossing the outer band, which fires nothing either way.
+   *
+   * Going out arms an `enter-repeat-far` slot's stream; coming back in cancels it without
+   * re-firing, and going out again restarts the delay rather than resuming mid-stream - so a
+   * wiggle across the boundary cannot machine-gun. Every other mode ignores the band
+   * entirely: `enter-repeat` is already running and `enter` has nothing to run.
+   */
+  const setBeyond = (next: boolean) => {
+    if (next === beyond) return
+    beyond = next
+    callbacks.band(next)
+    const spec = specFor(latched)
+    if (!latched || !spec || spec.disabled || spec.mode !== 'enter-repeat-far') return
+    clearTimer()
+    if (next) armRepeat(latched, RAIL_KEY_REPEAT_DELAY_MS)
   }
 
   return {
@@ -355,14 +400,21 @@ export function createRailPadGesture<T>(
       if (pointer !== null) return false
       pointer = pointerId
       options = next
+      // The band exists if a second ring of slots needs it *or* a slot repeats beyond it.
+      // Same radii either way; what the boundary means is the slot's business.
+      const banded = railPadBanded(
+        next.rings,
+        Object.values(next.slots).flatMap(spec => spec ? [spec.mode] : []),
+      )
       shape = {
         wedges: next.wedges,
         rings: next.rings,
-        bands: railPadBands(next.rings, railPadScaleFor(next.rings, next.roomAbovePx ?? Infinity)),
+        bands: railPadBands(banded, railPadScaleFor(banded, next.roomAbovePx ?? Infinity)),
       }
       startX = x
       startY = y
       latched = null
+      beyond = false
       axes = railPadAxes(Object.keys(next.slots), next.wedges)
       // Nothing to yield to: every axis this pad uses is its own, so the pan and the menu
       // swipe are wrong about this finger from the very first pixel. A pad that leaves an
@@ -390,13 +442,18 @@ export function createRailPadGesture<T>(
       // Recorded on distance alone, before any wedge is resolved: a drag straight down
       // reaches no wedge at all, and it still has to count as having left the hub or the
       // lift would run the centre.
-      if (Math.hypot(dx, dy) >= shape.bands.dead) leftCentre = true
+      const radius = Math.hypot(dx, dy)
+      if (radius >= shape.bands.dead) leftCentre = true
       // Leaving for the centre uses the exit ratio; everything else is `railPadResolve`,
       // which is also what the dial is drawn from.
-      if (latched !== null && Math.hypot(dx, dy) < shape.bands.dead * RAIL_PAD_EXIT_RATIO) {
+      if (latched !== null && radius < shape.bands.dead * RAIL_PAD_EXIT_RATIO) {
+        setBeyond(false)
         setLatch(null)
         return true
       }
+      // The band before the wedge, so a flick that lands directly in the outer band has
+      // `beyond` already true when `setLatch` decides whether to arm the stream.
+      setBeyond(railPadBeyond(radius, shape.bands, beyond))
       setLatch(railPadResolve(dx, dy, shape, latched))
       return true
     },
@@ -438,6 +495,7 @@ export function createRailPadGesture<T>(
         open: pointer !== null,
         latch: latched,
         armed: !!latched && !!spec && !spec.disabled && spec.mode === 'release',
+        beyond,
         bands: shape.bands,
       }
     },

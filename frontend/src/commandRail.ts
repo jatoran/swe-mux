@@ -127,15 +127,31 @@ export function parsePadSlotKey(key: RailPadSlotKey): { ring: number; wedge: num
 /**
  * When a slot fires.
  *
- *  * `enter`        - the instant the press crosses into this wedge, once.
- *  * `enter-repeat` - the same, then repeating while held.
- *  * `release`      - only if the press is *still* latched here when it ends, which
- *                     is what makes dragging back out an escape hatch. The mode for
- *                     anything a mis-flick must not be able to do.
+ *  * `enter`            - the instant the press crosses into this wedge, once.
+ *  * `enter-repeat`     - the same, then repeating while held anywhere in the wedge.
+ *  * `enter-repeat-far` - fires once on entry, and repeats only while held *beyond* the
+ *                         wedge's outer band. Push out for a stream, rest anywhere inside
+ *                         for exactly one however long you stay.
+ *  * `release`          - only if the press is *still* latched here when it ends, which
+ *                         is what makes dragging back out an escape hatch. The mode for
+ *                         anything a mis-flick must not be able to do.
+ *
+ * `enter-repeat-far` exists because dwell is a poor statement of "I meant lots of these".
+ * `enter-repeat` starts after 350ms anywhere in the wedge, so a thumb that hesitates - or a
+ * drag that pauses to read the dial - begins spamming without being asked. Distance says it
+ * deliberately, and it is the same rule the rest of the gesture already runs on: distance
+ * decides, never time. The clock then only sets the cadence of a stream you have already
+ * committed to.
+ *
+ * It is a property of *one* slot rather than a second ring slot holding the same action.
+ * The two-slot spelling would fire the near one in transit on the way out (and again coming
+ * back in), so a push-to-repeat would send one extra before the stream even started, and the
+ * same action would have to be bound twice.
  */
-export type RailPadTriggerMode = 'enter' | 'enter-repeat' | 'release'
+export type RailPadTriggerMode = 'enter' | 'enter-repeat' | 'enter-repeat-far' | 'release'
 
-export const RAIL_PAD_TRIGGER_MODES: readonly RailPadTriggerMode[] = ['enter', 'enter-repeat', 'release']
+export const RAIL_PAD_TRIGGER_MODES: readonly RailPadTriggerMode[] =
+  ['enter', 'enter-repeat', 'enter-repeat-far', 'release']
 
 /**
  * How many wedges a pad may divide its fan into.
@@ -241,21 +257,39 @@ export function padSlotKeys(pad: RailPadConfig | undefined): RailPadSlotKey[] {
 export function defaultPadTriggerMode(item: RailItem | undefined, rings = 1): RailPadTriggerMode {
   if (rings > 1) return 'release'
   if (!item) return 'enter'
-  if (item.repeatable) return 'enter-repeat'
+  // Push-out rather than dwell, for the reason `RailPadTriggerMode` gives: a flick that
+  // hesitates should send one, not a stream.
+  if (item.repeatable) return 'enter-repeat-far'
   if (item.className?.includes('rail-danger')) return 'release'
   return 'enter'
 }
 
 /** The mode a bound slot actually runs at. An explicit mode always wins, including one that
  *  opts a ringed pad's slot back into firing on entry - the transit cost is then the
- *  operator's own choice, made in the editor where it says so. */
+ *  operator's own choice, made in the editor where it says so.
+ *
+ *  The single exception is `enter-repeat-far` on a two-ring pad, which has no meaning there:
+ *  the outer band is already a different slot, so there is no room for it to also mean
+ *  "repeat this one". It resolves to a plain `enter` rather than silently repeating on a
+ *  boundary that belongs to something else. */
 export function railPadSlotMode(
   slot: RailPadSlot | undefined,
   item: RailItem | undefined,
   rings = 1,
 ): RailPadTriggerMode {
-  if (slot?.mode && RAIL_PAD_TRIGGER_MODES.includes(slot.mode)) return slot.mode
-  return defaultPadTriggerMode(item, rings)
+  const mode = slot?.mode && RAIL_PAD_TRIGGER_MODES.includes(slot.mode)
+    ? slot.mode
+    : defaultPadTriggerMode(item, rings)
+  return mode === 'enter-repeat-far' && rings > 1 ? 'enter' : mode
+}
+
+/** Whether a pad draws an outer band at all: because its far ring is a second set of slots,
+ *  or because a slot repeats beyond one. Both want the same radii, and the *meaning* of the
+ *  boundary is the slot's business rather than the geometry's. */
+export function railPadBanded(rings: number, modes: Iterable<RailPadTriggerMode>): boolean {
+  if (rings > 1) return true
+  for (const mode of modes) if (mode === 'enter-repeat-far') return true
+  return false
 }
 
 /**

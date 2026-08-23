@@ -1779,10 +1779,19 @@ Its rules, and what each one is defending:
   Hysteresis is asymmetric, and leaving a latched wedge for its neighbour — or crossing a ring in either direction — costs a further margin, so a finger resting on a boundary cannot chatter between two actions.
   Returning to neutral and crossing out again fires again, so up-back-up is three Ups without lifting.
 - **A slot's trigger mode says when it fires**, and it is a property of the binding rather than of the Action, so the same key may repeat in one pad and not another.
-  `enter` fires on crossing into the wedge; `enter-repeat` then repeats at the rail's shared 350 ms/75 ms cadence; `release` fires only if the press is *still* latched there when it ends.
+  `enter` fires on crossing into the wedge; `enter-repeat` then repeats at the rail's shared 350 ms/75 ms cadence while held anywhere in it; `enter-repeat-far` fires once on entry and repeats **only while pushed past the wedge's outer band**; `release` fires only if the press is *still* latched there when it ends.
   Dragging back out of a `release` slot cancels it, and that escape hatch is the whole value of the mode — so a release slot is drawn outlined while merely armed and filled only when it is not, because "armed" and "run" must never look the same.
   Pulling down into the abort zone, or returning to the centre, runs nothing at all even with a centre bound: an escape hatch that ran the centre instead would be a redirect rather than an escape.
   Modes default from the Action (`defaultPadTriggerMode`), so an arrow arrives already repeating and anything wearing the rail's danger treatment already waiting for release; `release` composes with an Action's own confirm rather than replacing it, which makes ending a session from a pad an arm-then-confirm pair of drags.
+- **Repeating is armed by distance, not by dwell, and that is the arrows' default.**
+  `enter-repeat` starts after 350 ms anywhere in the wedge, so a thumb that hesitates — or a drag that pauses to read the dial — begins spamming without being asked.
+  `enter-repeat-far` instead sends exactly one however long you rest inside the wedge, and starts a stream only once you push past its outer band; coming back in stops the stream without re-firing, and pushing out again restarts the delay rather than resuming, so a wiggle across the boundary cannot machine-gun.
+  It is the same rule the rest of the gesture already runs on — **distance decides, never time** — and the clock is then only the cadence of a stream you have already committed to.
+  Hold-anywhere remains available for anyone who prefers it.
+- **Repeat-on-push-out is a property of one slot, not a second slot holding the same Action.**
+  Binding a key twice across two rings would fire the near one in transit on the way out, and again coming back in, so a push-to-repeat would send one extra before the stream even started.
+  It is refused outright on a two-ring pad, where the outer band is already a different slot and there is no room for it to also mean "repeat this one"; the editor does not offer it there.
+  A wedge that streams draws its label in the near part and marks the band separately, lit only while the stream is actually running, because the two halves do different things.
 - **A ringed pad commits on release throughout, and that is geometry rather than taste.**
   Reaching the far ring means crossing the near one, so a near slot that fired on entry would fire every single time somebody went past it, and again on the way back in.
   A ring you must pass through cannot be a fire-on-entry target, so a two-ring pad defaults every slot to `release` and transit costs nothing.
