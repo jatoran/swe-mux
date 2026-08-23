@@ -146,7 +146,8 @@
 - `status_timeline`: the durable per-session detection timeline — every transition-ledger
   entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
   `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
-  `foreign_conversation_hook_ignored`, `transition_refused`, `reopen_blocked`,
+  `foreign_conversation_hook_ignored`, `foreign_thread_turn_end_ignored`,
+  `transition_refused`, `reopen_blocked`,
   `observer_fault`, `approval_auto_decision`, `approval_mode_set`, `approval_mode_revoked`,
   hook-spool records) keyed `(session_id, agent_run_id, seq)` with `ts`,
   `kind`, and the entry payload verbatim as JSON. Run-keyed so a conversation rollover's

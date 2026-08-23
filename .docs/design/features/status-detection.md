@@ -807,6 +807,32 @@ to the anchor instead (`session_identity_reconciled`, trigger `own_conversation_
 guarded by the retired-run set so a `/clear` can never be un-cleared. Pinned by
 `claude-nested-child-hooks` and `tests/test_conversation_rollover.py`.
 
+## Subagent threads and conversation binding
+
+A nested child CLI is not the only thing that can speak with a session's credentials.
+A harness may run its *own* subagents as separate conversations: Codex 0.149's `collaborationspawn_agent` gives each one its own thread id, its own rollout file, and its own turn-end notify, all fired under the root's hook wiring.
+A subagent-scoped hook says so explicitly (`agent_id`, `isSidechain`), but a turn-end notify names the finishing thread and marks it in no other way, which makes it indistinguishable from the root's own turn ending.
+
+Three rules separate a pane's conversation from the threads it starts, and each answers the question from evidence the session already holds rather than from a new harness capability declaration.
+
+- **Nothing is a rollover until something is bound.**
+  The gate asks `conversation_unbound`, never whether the id it holds merely *looks* like a conversation id.
+  A harness that mints its own conversation id carries the mux session id as a placeholder, and mux session ids are UUIDs too, so a shape test reported every fresh Codex pane as already bound.
+  Its own root `SessionStart` then took the rollover path and was correctly refused there as `foreign_process_startup` - and because a refusal never continues into binding, the pane stayed unbound for the rest of its life: no transcript observer, no tokens, no context reading.
+- **A thread the session's own agent spawned is a subagent, not a foreign conversation.**
+  Every `agent_id` named by a subagent-scoped hook that has already passed the foreign filter is recorded on the session (`note_child_thread`), and a later event naming one of those ids resolves to `scope: "subagent"` (`session_hook_event_scope`).
+  A subagent runs tools before it finishes, so the child is known by the time its notify arrives.
+  It is deliberately *not* counted as a foreign conversation: `foreign_hook_ignored` means something else is wearing this session's credentials, and every pane that runs subagents would otherwise report it continuously.
+- **A turn end may not contradict the conversation root hooks have been naming.**
+  Every root-scoped hook except a turn end records the conversation it names (`witnessed_root_conversation`); a turn end is excluded because it is the one signal a subagent also emits, and letting it witness would let it corroborate itself.
+  A turn end naming a different conversation is refused whole - not merely for identity - because closing the root turn on it is the visible half of the failure, and no later evidence reopens a turn that is over.
+  Refusals are ledgered and counted as `foreign_thread_turn_end_ignored`.
+  With no witness the notify binds and closes exactly as it always did, which is the case the repair path exists for: Codex's `notify` is not a lifecycle hook and is not subject to the CLI's hook trust review, so on a pane whose hooks are off it is the only signal there is.
+
+Measured live 2026-08-23, with the first rule absent and the other two unwritten: a Codex pane sat unbound for twelve minutes, adopted the first subagent thread to finish, closed its root turn on that subagent's notify, and then filtered its own CLI's next 94 hooks - the genuine turn end among them - as a foreign conversation.
+It displayed idle with no context reading while its agent worked for another nine minutes, and could not self-heal, because the heal path listens for the *spawn* conversation and a placeholder never speaks.
+Pinned by `tests/test_codex_subagent_identity.py`.
+
 ## Status-health metrics and bounds
 
 Per session: proven/inferred transition counts, inferred recoveries by source, watchdog
@@ -857,7 +883,8 @@ fact, including for sessions that no longer exist.
   `_mark_ended`, and daemon shutdown drains once more after `sessions.shutdown()`.
 - **Every ledger kind persists** — transitions *and* the non-transition kinds
   (`watchdog_recovery`, `standing_activity`, `cli_state`, `layer_reading`,
-  `screen_classifier_blind`, `foreign_conversation_hook_ignored`, `transition_refused`,
+  `screen_classifier_blind`, `foreign_conversation_hook_ignored`,
+  `foreign_thread_turn_end_ignored`, `transition_refused`,
   `reopen_blocked`, `observer_fault`, hook-spool records) — payloads verbatim. Same-state
   detail churn is deliberately kept (it is the evidence that a session was being
   observed); retention bounds the volume (`status_timeline_retention_days`, default 30,

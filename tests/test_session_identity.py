@@ -212,14 +212,16 @@ async def test_codex_binds_its_conversation_from_its_own_turn_notify() -> None:
     session.record.native_session_id = session.record.id
     events = SimpleNamespace(emit=AsyncMock())
 
-    await _bind_native_id_from_hook(session, {"thread-id": thread}, cast(Any, events))
+    await _bind_native_id_from_hook(
+        session, {"thread-id": thread}, cast(Any, events), event_type="agent-turn-complete"
+    )
 
     assert session.record.native_session_id == thread
     assert session.agent_lifecycle_id == thread
 
     # One-way only: a later hook naming something else must not rekey a bound session.
     await _bind_native_id_from_hook(
-        session, {"thread-id": STOLEN}, cast(Any, events)
+        session, {"thread-id": STOLEN}, cast(Any, events), event_type="agent-turn-complete"
     )
     assert session.record.native_session_id == thread
 

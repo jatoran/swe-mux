@@ -75,7 +75,8 @@ kinds and what each means:
 | `transition_refused` | The terminal latch refused a resurrection: a late hook tried to move an `exited`/`crashed` session. |
 | `reopen_blocked` | The `closed_by_transcript` latch refused a late unordered begin that would have reopened `working` on a finished turn. |
 | `screen_classifier_blind` | A witnessed `working` session's screen read `unknown` continuously for 120 s — the classifier cannot see this CLI generation (marker drift). |
-| `foreign_conversation_hook_ignored` | A nested child CLI's hook was dropped before it could move state (`native_session_id` names the child). |
+| `foreign_conversation_hook_ignored` | A nested child CLI's hook was dropped before it could move state (`native_session_id` names the child). A thread this session's *own* agent spawned is not counted here. |
+| `foreign_thread_turn_end_ignored` | A turn end belonging to another thread was dropped before it could close the root turn or bind identity: `reason` is `child_thread` (a subagent this session spawned) or `contradicts_witnessed_root` (it names a conversation no root hook has). A run of these against a pane that displays idle while its agent works is the subagent-thread failure in `status-detection.md` § Subagent threads and conversation binding. |
 | `observer_fault` | The transcript observer crashed and was restarted (`error`, `restart_count`). |
 | `hook_spool_discarded` / `hook_spool_replay` | Spooled hook fallback activity across daemon restarts (a discarded entry was older than the run/turn floor). |
 

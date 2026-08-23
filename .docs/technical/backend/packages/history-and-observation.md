@@ -58,6 +58,9 @@ It refuses a source that is too large, a cut at byte zero, and an id that alread
 
 Provider hook and transcript normalization, root-turn state, supervisor-resumable 5 s approval stabilization with immediate delivery blocking, first and latest user-request capture, immediate `transcript_message` fanout, and standing-activity evidence including the three carriers one background-task completion rides, closed idempotently per task.
 
+It also owns which conversation a hook speaks for: the payload-only scope rules (`hook_event_scope`) and the session-aware refinement that recognises a thread this session's own agent spawned (`note_child_thread`, `session_hook_event_scope`).
+On that sits the foreign-conversation filter and the turn-end gate that keeps a subagent thread from binding this pane's identity or closing its root turn (`root_conversation_evidence_refusal`).
+
 It applies the approval policy on the hook path, returns the harness decision, and delivers an already-decided approval as a keystroke when the CLI ignores that decision - screen-gated, fingerprint-checked, with the ordinary stabilization timer armed underneath.
 
 **Not:** HTTP routing, title policy, transcript rendering, opening a `background_tasks` annotation from the PTY footer (that tier may only refresh), deciding *what* is approvable (`approvals.py`), any filesystem or database read on the decision path, or writing to a PTY directly.
