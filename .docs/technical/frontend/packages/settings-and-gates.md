@@ -114,6 +114,8 @@ Its price and capacity fields are optional, because a synthesized placeholder fo
 
 `modelPricing.ts` owns the per-token to per-**million** conversion and the four values that are not prices and must never render as one: absent renders as nothing rather than `$0.00`, a wholly zero pair as `free`, negative as `variable`, and below the last printable digit as `<$0.001`.
 Nothing fetches: `OpenRouterClient.models()` already caches `prompt_price`/`completion_price`/`context_length` and `GET /api/automation/provider` serves them verbatim, so pricing is a typing and rendering concern only.
+`modelCachingLabel` reads the catalog's `cache_read_price`/`cache_write_price` for the same reason a provider list is not used: the list goes stale the week a new provider appears and the pricing does not.
+Its three answers are distinct - no read price is "this model does not cache" (so a 0% hit rate on it is correct rather than a fault), a write price above input is a premium that only pays when the prefix is read back, and no write price beside a read price is a free write.
 
 `ModelPicker.tsx` renders name, then id and price on one meta line.
 Its `required` flag suppresses the clear-the-setting row for a **pinned** model the daemon rejects when blank.

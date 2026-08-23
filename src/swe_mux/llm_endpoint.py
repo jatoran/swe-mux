@@ -22,12 +22,12 @@ Three properties are deliberately *not* inferred from a custom endpoint:
   and may still report nothing. `usage.cost` absent means unknown, never zero.
 - **Routing.** `provider: {require_parameters, allow_fallbacks}` is OpenRouter
   vocabulary. Sending it to Ollama asks for a guarantee nobody made.
-- **Caching.** This is the one that would fail silently. `needs_explicit_cache_control`
-  answers from an OpenRouter model id's routing prefix, and its safe direction -
-  "everything I do not recognise caches implicitly" - stops being safe the moment
-  the prefix is a local filename. A custom endpoint's cache behaviour is
-  `unknown`: no breakpoint is sent (an OpenAI-compatible server has no reason to
-  accept Anthropic's content-part extension) and no implicit hit is assumed, so a
+- **Caching.** This is the one that would fail silently. `marks_cache_breakpoints`
+  answers from the endpoint rather than the model, because OpenRouter translates
+  a cache marker into whatever the routed provider understands and a custom
+  server has nothing in front of it doing that. A custom endpoint's cache
+  behaviour is `unknown`: no breakpoint is sent (an OpenAI-compatible server has
+  no reason to accept Anthropic's content-part extension) and no implicit hit is assumed, so a
   zero in the ledger reads as "not reported" rather than as a regression.
 
 **Verification** is the other half. An OpenRouter key is tested at the moment it
@@ -75,8 +75,9 @@ MAX_MODEL_CHARS = 200
 
 #: How this endpoint's provider caches a repeated prompt prefix.
 #:
-#: - ``by_model`` - answerable from the model id, which is what an OpenRouter
-#:   routing prefix is for. `needs_explicit_cache_control` decides per call.
+#: - ``by_model`` - routed through OpenRouter, which normalises cache markers
+#:   across providers, so a breakpoint is understood wherever the call lands
+#:   (`marks_cache_breakpoints`).
 #: - ``unknown`` - not answerable at all. Send no breakpoint, assume no implicit
 #:   hit, and report a zero as unmeasured rather than as a miss.
 CachePolicy = Literal["by_model", "unknown"]

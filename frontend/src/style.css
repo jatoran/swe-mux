@@ -3165,6 +3165,14 @@ body {
 .assistant-message.failed{border-left-color:var(--error,#f07178)}
 .assistant-message>header{color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.06em}
 .assistant-message p{margin:0;color:var(--text);font:10px/1.5 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere}
+/* A resolved action. Deliberately not a bubble: neither party said it, so it
+   reads as a margin note between two turns rather than as a third speaker. */
+.assistant-record{margin:0;padding:3px 7px 3px 9px;border-left:2px solid var(--line);
+  color:var(--muted);font:9px/1.5 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere}
+.assistant-record.executed{border-left-color:var(--green,#8bd450)}
+.assistant-record.cancelled,.assistant-record.expired{border-left-color:var(--muted)}
+.assistant-record.failed{border-left-color:var(--error,#f07178);color:var(--error,#f07178)}
+.assistant-previous .assistant-record{opacity:.65}
 .assistant-thinking{margin:0;color:var(--muted);font:9px/1.4 'JetBrains Mono';animation:voice-rec-pulse 1.4s ease-in-out infinite}
 /* The brainstorm-hold buffer: a live, not-yet-sent user bubble. Dashed to say
    "draft", pulsing header to say "still listening". */

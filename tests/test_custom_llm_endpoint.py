@@ -45,7 +45,7 @@ from swe_mux.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     cache_stable_message,
-    needs_explicit_cache_control,
+    marks_cache_breakpoints,
 )
 
 from .test_openrouter_phase6 import FakeResponse, FakeSession, MemorySecrets
@@ -205,11 +205,12 @@ async def test_a_failing_custom_endpoint_does_not_blame_openrouter() -> None:
 
 
 def test_a_custom_endpoint_never_receives_a_cache_breakpoint() -> None:
-    # The one that would fail silently. The routing-prefix reading only works while the
-    # id *is* an OpenRouter route; a local proxy may legitimately serve a model called
-    # `anthropic/claude-sonnet-4.5` and have never heard of `cache_control`.
-    assert needs_explicit_cache_control("anthropic/claude-sonnet-4.5")
-    assert not needs_explicit_cache_control("anthropic/claude-sonnet-4.5", cache_policy="unknown")
+    # The one that would fail silently. Marking is portable because OpenRouter
+    # translates it; a local proxy has nothing doing that, and may legitimately
+    # serve a model called `anthropic/claude-sonnet-4.5` while having never heard
+    # of `cache_control`.
+    assert marks_cache_breakpoints("anthropic/claude-sonnet-4.5")
+    assert not marks_cache_breakpoints("anthropic/claude-sonnet-4.5", cache_policy="unknown")
     message = {"role": "system", "content": "primer"}
     assert cache_stable_message(
         message, model="anthropic/claude-sonnet-4.5", cache_policy="unknown"
@@ -224,12 +225,10 @@ def test_the_implicit_cache_assumption_is_marked_unknown_rather_than_inherited()
     assert _custom().cache_policy == "unknown"
 
 
-def test_openrouters_caching_behaviour_is_completely_unchanged() -> None:
-    marked = cache_stable_message({"role": "system", "content": "primer"},
-                                  model="anthropic/claude-sonnet-4.5")
-    assert marked["content"][-1]["cache_control"] == {"type": "ephemeral"}
-    plain = {"role": "system", "content": "primer"}
-    assert cache_stable_message(plain, model="openai/gpt-5.6-terra") is plain
+def test_every_openrouter_route_keeps_its_breakpoint() -> None:
+    for model in ("anthropic/claude-sonnet-4.5", "openai/gpt-5.6-terra", "z-ai/glm-5"):
+        marked = cache_stable_message({"role": "system", "content": "primer"}, model=model)
+        assert marked["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 # --- verification, and un-verifying on edit ----------------------------------

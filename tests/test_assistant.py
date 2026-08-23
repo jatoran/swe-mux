@@ -24,13 +24,16 @@ from swe_mux.assistant import (
     AssistantStore,
     action_outcome_line,
     action_snapshot,
+    action_transcript_line,
     apply_note_write,
     note_headings,
     note_outline,
     note_page,
     output_looks_unhealthy,
+    replay_dialog,
     speech_form,
     split_sentences,
+    summarize_command_labels,
 )
 from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
@@ -102,6 +105,8 @@ def tool_turn(
     tool_calls: list[dict[str, Any]] | None = None,
     *,
     cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_discount_usd: float | None = None,
 ) -> OpenRouterToolTurn:
     calls = tool_calls or []
     message: dict[str, Any] = {"role": "assistant", "content": content}
@@ -120,6 +125,8 @@ def tool_turn(
         cost_usd=0.001,
         latency_ms=300,
         cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        cache_discount_usd=cache_discount_usd,
     )
 
 
@@ -370,6 +377,30 @@ def last_tool_result(provider: ToolProviderStub, call: int = 1) -> dict[str, Any
     return cast(dict[str, Any], json.loads(str(tool_messages[-1]["content"])))
 
 
+def message_text(message: dict[str, Any]) -> str:
+    """One prompt message as plain text, marked or not.
+
+    A cache breakpoint turns a message's `content` from a string into a list of
+    content parts, so every assertion about what the prompt *says* has to read
+    through that shape or it starts failing on the marker rather than the text.
+    """
+    content = message.get("content")
+    if isinstance(content, list):
+        return "\n".join(str(part.get("text") or "") for part in content)
+    return str(content or "")
+
+
+def prompt_text(provider: ToolProviderStub, call: int = -1) -> str:
+    """Everything the model was shown on one call, as one searchable string.
+
+    Located by content rather than by index on purpose: the prompt is ordered by
+    volatility and blocks appear and disappear with the fleet (a Project with no
+    note contributes no note message), so a fixed position is an assertion about
+    the layout rather than about what was said.
+    """
+    return "\n".join(message_text(item) for item in provider.calls[call]["messages"])
+
+
 async def run_turn(service: AssistantService, text: str) -> str:
     dialog = await service.store.create_dialog()
     await service.start_turn(dialog["id"], text, {})
@@ -572,8 +603,8 @@ async def test_the_turn_carries_a_numbered_view_of_the_note(tmp_path: Path) -> N
     service.note_read = note_read
     try:
         await run_turn(service, "what is in my notes")
-        provider = cast(Any, service.provider)
-        context = str(provider.calls[-1]["messages"][1]["content"])
+        provider = cast(ToolProviderStub, service.provider)
+        context = prompt_text(provider)
         assert "1: # swe-mux Notes" in context
         assert "Outline: 1: # swe-mux Notes | 3: ## Unsorted | 9: ## Release" in context
         # The tail is addressable rather than truncated into silence.
@@ -630,6 +661,95 @@ async def test_split_sentences_and_speech_form() -> None:
 # --------------------------------------------------------------------------- #
 # Store
 # --------------------------------------------------------------------------- #
+
+
+def test_command_families_fold_into_one_line_each() -> None:
+    """The cross product was the prompt's fastest-growing block and its least
+    informative: 6 harnesses x 23 Projects, ~1,400 tokens a turn, to say two
+    lists the model already holds."""
+    commands = [{"id": "palette.open", "label": "Open command palette"}]
+    for project in ("alpha", "beta", "gamma"):
+        commands.append({"id": f"project.focus:{project}", "label": f"Focus project: {project}"})
+        for backend, display in (("claude", "Claude Code"), ("codex", "Codex")):
+            commands.append({
+                "id": f"session.spawn:{project}:{backend}",
+                "label": f"New {display} in {project}",
+            })
+    lines = summarize_command_labels(commands)
+    spawn = [line for line in lines if "<harness>" in line]
+    assert spawn == ["'New <harness> in <project>', harnesses: Claude Code, Codex (6 available)"]
+    assert "'Focus project: <project>', one per Project (3 available)" in lines
+    # An id outside every known family is never swallowed: a command the client
+    # invents has to keep reaching the model.
+    assert "Open command palette" in lines
+    # And the whole thing is a handful of lines rather than one per entity.
+    assert len(lines) == 3
+
+
+def test_a_small_family_is_left_written_out() -> None:
+    # Three literal labels are shorter than the sentence describing them, and
+    # more precise, so folding starts where it starts paying.
+    commands = [
+        {"id": "session.focus:a", "label": "Focus session: alpha"},
+        {"id": "session.focus:b", "label": "Focus session: beta"},
+    ]
+    assert summarize_command_labels(commands) == ["Focus session: alpha", "Focus session: beta"]
+    assert summarize_command_labels(None) == []
+
+
+def test_replay_folds_actions_into_the_conversation_and_invents_no_role() -> None:
+    """Only `user` and `assistant` may reach the wire.
+
+    A bare `system` message mid-conversation is rewritten or rejected differently
+    by every provider, and replaying the original tool-call pair needs an id
+    pairing some providers police - either turns "run this on a different model"
+    into a compatibility bug rather than a setting.
+    """
+    history = [
+        {"role": "user", "display": "note that", "turn_id": "t1"},
+        {"role": "assistant", "display": "Proposed.", "turn_id": "t1"},
+        {"role": "action", "display": "Done: add to the note", "turn_id": "t1"},
+        {"role": "action", "display": "Done: spawn a session", "turn_id": "t1"},
+        {"role": "user", "display": "and now", "turn_id": "t2"},
+    ]
+    replayed = replay_dialog(history, "t2")
+    assert {item["role"] for item in replayed} <= {"user", "assistant"}
+    assert replayed == [
+        {"role": "user", "content": "note that"},
+        # Folded into the message it followed, and consecutive actions share it.
+        {"role": "assistant",
+         "content": "Proposed.\n[Done: add to the note]\n[Done: spawn a session]"},
+    ]
+
+
+def test_an_action_that_opens_the_window_becomes_its_own_message() -> None:
+    # With no assistant message to fold into - the window slid past it, or the
+    # operator spoke last - the record still has to appear, in order.
+    replayed = replay_dialog(
+        [
+            {"role": "action", "display": "Done: add to the note", "turn_id": "t0"},
+            {"role": "user", "display": "and now", "turn_id": "t1"},
+        ],
+        "t2",
+    )
+    assert replayed == [
+        {"role": "assistant", "content": "[Done: add to the note]"},
+        {"role": "user", "content": "and now"},
+    ]
+
+
+def test_action_transcript_lines_name_the_outcome_first() -> None:
+    assert action_transcript_line("write_project_note", "add to the note", "executed") == (
+        "Done: add to the note"
+    )
+    assert action_transcript_line("spawn_session", "start Codex", "cancelled") == (
+        "Cancelled by the operator: start Codex"
+    )
+    # Expired is not declined, and the difference decides whether the model may
+    # propose the same thing again.
+    assert action_transcript_line("spawn_session", "start Codex", "expired") == (
+        "Expired unanswered: start Codex"
+    )
 
 
 async def test_store_roundtrip_and_restart_expires_pending_actions(tmp_path: Path) -> None:
@@ -1170,7 +1290,9 @@ async def test_context_snapshot_carries_computed_ages(tmp_path: Path) -> None:
         snapshot = await service.fleet_snapshot()
         names = {row["name"] for row in snapshot["sessions"]}
         assert names == {"backend agent", "backend worker"}
-        assert snapshot["projects"][0]["name"] == "pixel lab"
+        # Names, not records: every tool takes a Project by the name it reads
+        # here, so the ids this used to carry addressed nothing.
+        assert snapshot["projects"] == ["pixel lab"]
         worker = next(row for row in snapshot["sessions"] if row["name"] == "backend worker")
         assert worker["state"] == "working"
         assert worker["state_age"] is None  # 0.0 means unknown, never "just now"
@@ -2292,10 +2414,108 @@ async def test_a_repeated_spawn_is_allowed_because_repetition_is_the_ask(
         service.store.close()
 
 
+async def test_a_resolved_action_becomes_a_transcript_row_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """The panel dropped a card the moment it stopped being open, and so did the
+    operator's record of what their yes actually did.
+
+    Exactly-once is enforced in the store rather than by the caller: a scheduled
+    action can be resolved by its own cancel window and by an operator in the
+    same second, and two rows would put one completed write in front of the model
+    twice.
+    """
+    service, emitted, _appended = note_service(
+        tmp_path, [tool_turn("", [note_call()]), tool_turn("Proposed.")]
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "note that", {})
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ][0]
+        action_id = str(card.payload["id"])
+        await service.confirm_action(action_id)
+        # A second resolution attempt is the race, not a hypothetical.
+        await service._finish_action(action_id, status="executed")
+
+        rows = [
+            row for row in await service.store.messages(dialog["id"])
+            if row["role"] == "action"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["action_id"] == action_id
+        assert rows[0]["display"].startswith("Done: add at the top of")
+        records = [event for event in emitted if event.type == "assistant_message"]
+        assert len(records) == 1
+        assert records[0].payload["role"] == "action"
+        assert records[0].payload["action_id"] == action_id
+    finally:
+        service.store.close()
+
+
+async def test_a_cancelled_action_says_so_rather_than_vanishing(tmp_path: Path) -> None:
+    # "Cancelled" and "expired" are different facts and the model may only
+    # re-propose after one of them, so the record states which happened.
+    service, emitted, appended = note_service(
+        tmp_path, [tool_turn("", [note_call()]), tool_turn("Proposed.")]
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        await service.start_turn(dialog["id"], "note that", {})
+        await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        card = [
+            event for event in emitted
+            if event.type == "assistant_action" and event.payload.get("status") == "pending"
+        ][0]
+        await service.cancel_action(str(card.payload["id"]))
+        rows = [
+            row for row in await service.store.messages(dialog["id"])
+            if row["role"] == "action"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["display"].startswith("Cancelled by the operator:")
+        assert appended == []
+    finally:
+        service.store.close()
+
+
+async def test_reads_and_ui_commands_leave_no_transcript_row(tmp_path: Path) -> None:
+    """A read is already in the turn's own tool results and a UI command is
+    steering the operator is watching happen; replaying either would spend a
+    history slot on a fact the model already has."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "session_detail",
+            "arguments": json.dumps({"session": "backend agent"}),
+        },
+    }
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("It is working.")]
+    )
+    try:
+        dialog_id = await run_turn(service, "how is backend agent")
+        rows = [
+            row for row in await service.store.messages(dialog_id)
+            if row["role"] == "action"
+        ]
+        assert rows == []
+    finally:
+        service.store.close()
+
+
 async def test_the_turn_prompt_carries_what_already_happened(tmp_path: Path) -> None:
     """A confirmation is a button or a spoken word, never a turn, so nothing in
-    the message log records that the operator said yes. The action ledger is
-    where the model learns it."""
+    the message log used to record that the operator said yes.
+
+    A resolved action is now a transcript row, replayed in the position it
+    happened in and folded into the assistant message it followed - so the model
+    reads the outcome as part of the conversation rather than as a dated digest
+    bolted onto a system block that cannot be cached."""
     service, emitted, _appended = note_service(
         tmp_path,
         [
@@ -2315,11 +2535,18 @@ async def test_the_turn_prompt_carries_what_already_happened(tmp_path: Path) -> 
         await service.confirm_action(str(card.payload["id"]))
         await service.start_turn(dialog["id"], "did that save?", {})
         await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
-        provider = cast(Any, service.provider)
-        context = str(provider.calls[-1]["messages"][1]["content"])
-        assert "Actions already proposed in this conversation" in context
-        assert "executed" in context
-        assert "add at the top of the pixel lab project's primary note" in context
+        provider = cast(ToolProviderStub, service.provider)
+        context = prompt_text(provider)
+        assert "Done: add at the top of the pixel lab project's primary note" in context
+        # Carried as conversation, not as a system digest: the only thing the
+        # live block still lists is what is *still* waiting on an answer, and
+        # this action is not.
+        assert "Awaiting the operator's answer right now" not in context
+        folded = [
+            item for item in provider.calls[-1]["messages"]
+            if item.get("role") == "assistant" and "[Done:" in message_text(item)
+        ]
+        assert folded, "the outcome reached the model as part of the dialog"
     finally:
         service.store.close()
 
@@ -2516,16 +2743,22 @@ async def test_the_primer_carries_a_cache_breakpoint_for_a_provider_that_needs_o
         service.store.close()
 
 
-async def test_an_implicit_caching_model_still_sends_a_plain_primer(tmp_path: Path) -> None:
-    # The marked shape is only ever sent where it is understood; every other
-    # provider keeps the request it has always received.
+async def test_an_implicit_caching_model_is_marked_too(tmp_path: Path) -> None:
+    """OpenRouter translates the marker, so it is sent for every route it serves.
+
+    Withholding it from implicit cachers was the older reading, and it left them
+    rediscovering unaided a prefix the request already knew where to end. The
+    one place it stays unsent is a custom endpoint, which has nothing in front of
+    it doing the translation (`test_custom_llm_endpoint.py`).
+    """
     service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Done.")])
     try:
         await run_turn(service, "hello")
         provider = cast(ToolProviderStub, service.provider)
         primer = provider.calls[0]["messages"][0]
-        assert isinstance(primer["content"], str)
-        assert primer["content"].startswith("You are Mux")
+        assert isinstance(primer["content"], list)
+        assert primer["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert message_text(primer).startswith("You are Mux")
     finally:
         service.store.close()
 
@@ -2562,6 +2795,135 @@ async def test_cached_prompt_tokens_are_recorded_per_call_in_the_ledger(
         assert [row["input_tokens"] for row in ledger.spend_rows] == [200, 200]
         # The turn's own usage carries the total, so a reader of one turn sees it too.
         assert emitted[-1].payload["usage"]["cached_tokens"] == 180
+    finally:
+        service.store.close()
+
+
+async def test_the_prompt_is_ordered_by_how_often_each_part_changes(
+    tmp_path: Path,
+) -> None:
+    """The rule the whole cache strategy rests on: volatile content goes last.
+
+    A provider can only reuse an unchanged *prefix*, so one line that differs per
+    turn ends the reusable region at that line. The workspace snapshot differs by
+    construction - its ages are recomputed every call - and sitting second it
+    capped every possible hit at the primer, however much identical text came
+    after it.
+    """
+    service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Done.")])
+    try:
+        await run_turn(service, "what needs me")
+        provider = cast(ToolProviderStub, service.provider)
+        messages = provider.calls[0]["messages"]
+        assert message_text(messages[0]).startswith("You are Mux")
+        # The operator's question is last, and the live state sits immediately
+        # above it rather than eight thousand tokens away.
+        assert messages[-1] == {"role": "user", "content": "what needs me"}
+        assert "Workspace snapshot" in message_text(messages[-2])
+        # And nothing volatile is left in the stable region.
+        for item in messages[:-2]:
+            assert "Workspace snapshot" not in message_text(item)
+    finally:
+        service.store.close()
+
+
+async def test_the_stable_prefix_is_byte_identical_between_turns(tmp_path: Path) -> None:
+    """The regression this ordering exists to prevent, asserted directly.
+
+    Two turns of one conversation must send the same opening bytes, or the
+    second turn re-writes the cache the first one paid to create - which on
+    GPT-5.6 and Anthropic is billed at 1.25x input rather than at 0.1x, making a
+    cache that is never read *more* expensive than no cache at all.
+    """
+    service, _emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("First."), tool_turn("Second.")]
+    )
+    try:
+        dialog = await service.store.create_dialog()
+        for text in ("what needs me", "and now"):
+            await service.start_turn(dialog["id"], text, {})
+            await asyncio.wait_for(service._turn_tasks[dialog["id"]], timeout=10)
+        provider = cast(ToolProviderStub, service.provider)
+        first, second = provider.calls[0]["messages"], provider.calls[1]["messages"]
+        stable = [
+            item for item in first
+            if item.get("role") == "system" and "Workspace snapshot" not in message_text(item)
+        ]
+        assert stable, "the prompt has no stable region at all"
+        assert json.dumps(stable) == json.dumps([
+            item for item in second
+            if item.get("role") == "system" and "Workspace snapshot" not in message_text(item)
+        ])
+        # Every stable block is marked, not only the first: Anthropic reads a
+        # cache at a breakpoint and allows four, so a Project switch still hits
+        # through the blocks ahead of the one that changed.
+        assert all(
+            isinstance(item["content"], list)
+            and item["content"][-1]["cache_control"] == {"type": "ephemeral"}
+            for item in stable
+        )
+    finally:
+        service.store.close()
+
+
+async def test_the_dialog_is_the_sticky_routing_key(tmp_path: Path) -> None:
+    """Without it a cache written by one turn is unreachable from the next.
+
+    OpenRouter load-balances across provider instances and a prompt cache lives
+    on the instance that wrote it, so two calls seconds apart inside a turn tend
+    to land together and hit while the next turn lands somewhere cold. The
+    dialog id is what pins them.
+    """
+    service, _emitted, _queue, _effects = make_service(tmp_path, [tool_turn("Done.")])
+    try:
+        dialog_id = await run_turn(service, "hello")
+        provider = cast(ToolProviderStub, service.provider)
+        assert provider.calls[0]["session_id"] == dialog_id
+    finally:
+        service.store.close()
+
+
+async def test_cache_writes_and_the_signed_discount_reach_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """Writes are the half a hit rate cannot show.
+
+    A run that writes on every call and reads on none reports 0% cached and is
+    indistinguishable from a run with no caching - while costing 25% more per
+    prompt token. The write count separates them and the signed discount prices
+    the difference, so a negative total is a placement bug made visible.
+    """
+    ledger = LedgerStub()
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("Done.", cached_tokens=0, cache_write_tokens=6400,
+                   cache_discount_usd=-0.004)],
+        ledger=ledger,
+    )
+    try:
+        await run_turn(service, "hello")
+        assert [row["cache_write_tokens"] for row in ledger.spend_rows] == [6400]
+        assert [row["cache_discount_usd"] for row in ledger.spend_rows] == [-0.004]
+        usage = emitted[-1].payload["usage"]
+        assert usage["cache_write_tokens"] == 6400
+        assert usage["cache_discount_usd"] == -0.004
+    finally:
+        service.store.close()
+
+
+async def test_a_provider_that_reports_no_discount_stays_unmeasured(
+    tmp_path: Path,
+) -> None:
+    # `None` is not zero. Zero says caching changed this turn's price by nothing,
+    # which is a measurement; `None` says the provider never made one.
+    ledger = LedgerStub()
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("Done.")], ledger=ledger
+    )
+    try:
+        await run_turn(service, "hello")
+        assert ledger.spend_rows[0]["cache_discount_usd"] is None
+        assert emitted[-1].payload["usage"]["cache_discount_usd"] is None
     finally:
         service.store.close()
 

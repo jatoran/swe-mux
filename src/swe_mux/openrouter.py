@@ -28,9 +28,12 @@ __all__ = [
     "OpenRouterResult",
     "OpenRouterToolTurn",
     "OpenRouterVerification",
+    "apply_session_routing",
+    "cache_discount_usd",
     "cache_stable_message",
+    "cache_write_prompt_tokens",
     "cached_prompt_tokens",
-    "needs_explicit_cache_control",
+    "marks_cache_breakpoints",
 ]
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -66,12 +69,16 @@ MAX_PROVIDER_ERROR_CHARS = 400
 # put it there. Covers OpenRouter's own `sk-or-v1-…` and the generic `sk-…` an
 # upstream provider might quote back at us.
 SECRET_SHAPED = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE)
-# Routing prefixes whose providers cache a repeated prompt prefix only when the
-# request marks one. Everything absent from this set caches implicitly, so an
-# unknown provider is treated as "send the prompt as it is" rather than as
-# "send a marker it may reject" — the safe direction is a missed hit, never a
-# rejected request.
-EXPLICIT_CACHE_CONTROL_PROVIDERS = frozenset({"anthropic"})
+# Routing prefixes whose providers cache a repeated prompt prefix ONLY when the
+# request marks one. Retained as the reason the marker exists at all, not as the
+# gate on sending it: OpenRouter translates a marker into whatever the routed
+# provider understands, so marking is portable and the gate is the endpoint's
+# `cache_policy` instead (`marks_cache_breakpoints`).
+EXPLICIT_CACHE_CONTROL_PROVIDERS = frozenset({"anthropic", "qwen"})
+# OpenRouter's sticky-routing key, and its documented ceiling. Requests carrying
+# the same value are routed back to the provider endpoint holding the warm cache,
+# which is what makes a cache survive between turns rather than only within one.
+MAX_SESSION_ID_CHARS = 256
 # How much of a verification reply is kept. Enough to read a sentence and spot a
 # chat template leaking its scaffolding; not enough to become a place model output
 # accumulates in the database.
@@ -136,6 +143,8 @@ class OpenRouterResult:
     response_content_type: str | None = None
     response_content_length: int | None = None
     cached_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_discount_usd: float | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -163,6 +172,12 @@ class OpenRouterToolTurn:
     #: Zero is ambiguous by construction - it means "no hit" and "this provider
     #: does not report caching" alike - so it is recorded, never asserted from.
     cached_tokens: int = 0
+    #: Prompt tokens written into the provider's cache, out of `input_tokens`.
+    #: Billed above ordinary input by OpenAI and Anthropic, free elsewhere.
+    cache_write_tokens: int = 0
+    #: Signed price effect of caching on this call: positive saved, negative was
+    #: a write surcharge, `None` unreported.
+    cache_discount_usd: float | None = None
 
 
 class _StreamUnsupported(RuntimeError):
@@ -607,6 +622,16 @@ class OpenRouterClient:
                 "context_length": _integer(item.get("context_length")),
                 "prompt_price": _number(pricing.get("prompt")),
                 "completion_price": _number(pricing.get("completion")),
+                # The caching economics, per model, from the catalog rather than
+                # from a hardcoded list of providers. A read price below the
+                # prompt price says caching pays here; a write price *above* it
+                # says a write is billed at a premium (1.25x on OpenAI and
+                # Anthropic) and only pays if the prefix is read back. Absent
+                # read price means this model does not cache at all, which is a
+                # different answer from "cached nothing this window" and the one
+                # a chooser needs before switching to it.
+                "cache_read_price": _number(pricing.get("input_cache_read")),
+                "cache_write_price": _number(pricing.get("input_cache_write")),
                 "supported_parameters": sorted(supported),
             }
             reasoning = _reasoning_metadata(item.get("reasoning"))
@@ -748,6 +773,8 @@ class OpenRouterClient:
             response_content_type=content_type,
             response_content_length=content_length,
             cached_tokens=cached_prompt_tokens(usage),
+            cache_write_tokens=cache_write_prompt_tokens(usage),
+            cache_discount_usd=cache_discount_usd(usage),
         )
 
     async def complete_tools(
@@ -758,6 +785,7 @@ class OpenRouterClient:
         tools: list[dict[str, Any]],
         max_tokens: int,
         on_content: Callable[[str], Awaitable[None]] | None = None,
+        session_id: str = "",
     ) -> OpenRouterToolTurn:
         """One tool-calling chat completion for the assistant's agentic loop.
 
@@ -773,6 +801,11 @@ class OpenRouterClient:
         the usage the ledger bills against. Without the callback the request
         stays unstreamed, because a buffered response is simpler to retry and
         nothing is waiting on the first token.
+
+        `session_id` groups the calls of one conversation for sticky routing
+        (`apply_session_routing`). A caller that has a stable conversation
+        identity should always pass it: without one, a cache written by this
+        turn is unreachable from the next.
         """
         endpoint = self.endpoint
         model = endpoint.resolve_model(model)
@@ -792,6 +825,7 @@ class OpenRouterClient:
         }
         if endpoint.supports_provider_routing:
             body["provider"] = {"require_parameters": True, "allow_fallbacks": True}
+        apply_session_routing(body, session_id, endpoint=endpoint)
         if on_content is not None:
             payload = await self._stream_tool_completion(
                 dict(body, stream=True, stream_options={"include_usage": True}),
@@ -834,6 +868,8 @@ class OpenRouterClient:
             latency_ms=int((time.monotonic() - started) * 1000),
             provider_name=str(payload.get("provider")) if payload.get("provider") else None,
             cached_tokens=cached_prompt_tokens(usage),
+            cache_write_tokens=cache_write_prompt_tokens(usage),
+            cache_discount_usd=cache_discount_usd(usage),
         )
 
     async def _stream_tool_completion(
@@ -1188,29 +1224,107 @@ def cached_prompt_tokens(usage: Any) -> int:
     return max(0, _integer(usage.get("cached_tokens")))
 
 
-def needs_explicit_cache_control(
+def cache_write_prompt_tokens(usage: Any) -> int:
+    """Prompt tokens the provider wrote *into* its cache, from one usage payload.
+
+    The counterpart to `cached_prompt_tokens`, and not a cosmetic one. GPT-5.6
+    and later bill a cache write at 1.25x ordinary input and Anthropic at 1.25x
+    (5-minute TTL) or 2x (1-hour), so a prompt that writes a cache nothing ever
+    reads back is *more* expensive than one that never cached at all. Reads
+    alone cannot show that: a run whose every call writes and never reads looks
+    identical to a run with no caching, both reporting zero cached tokens.
+
+    Providers that write for free (DeepSeek, Z.AI, Moonshot, xAI) report no such
+    field, and zero is then the true reading rather than a missing one.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and details.get("cache_write_tokens") is not None:
+        return max(0, _integer(details.get("cache_write_tokens")))
+    return max(0, _integer(usage.get("cache_write_tokens")))
+
+
+def cache_discount_usd(usage: Any) -> float | None:
+    """What caching changed about this call's price, as OpenRouter reports it.
+
+    Signed on purpose. Positive is a saving on a cache read; **negative is a
+    surcharge** on a turn that wrote a cache at a premium rate, which is the one
+    reading that tells an operator their breakpoint is placed above something
+    that changes every call. `None` means the provider said nothing, which is
+    not zero: zero is "caching made no difference to this price".
+    """
+    if not isinstance(usage, dict):
+        return None
+    return _number(usage.get("cache_discount"))
+
+
+def apply_session_routing(
+    body: dict[str, Any], session_id: str, *, endpoint: LlmEndpoint
+) -> dict[str, Any]:
+    """Attach one conversation's sticky-routing key to a request body.
+
+    A prompt cache lives on the provider instance that wrote it, and OpenRouter
+    load-balances across instances. Two calls seconds apart inside one turn tend
+    to land together and hit; the first call of the *next* turn, a minute later,
+    lands somewhere cold and re-writes the whole prefix at the write rate. The
+    measured shape of that is a ledger where every second call of a turn reports
+    the full prompt cached and every first call reports zero.
+
+    `session_id` is what closes it: OpenRouter pins requests carrying the same
+    value to the endpoint holding that cache, from the first successful request
+    rather than after a hit is observed, and expires the stickiness after ten
+    idle minutes. It also groups the calls in OpenRouter's own activity view.
+
+    Sent only where it means something. A custom OpenAI-compatible server has no
+    routing layer to steer, and an unknown field is exactly the kind of thing a
+    strict local server rejects outright - so the graceful degradation is to
+    omit it and lose nothing that was ever available.
+
+    Full usage accounting is switched on in the same place and for the same
+    endpoints. Cost is reported without it; `cache_write_tokens` and the signed
+    `cache_discount` are not, and those two are what say whether a breakpoint is
+    earning the premium a write is billed at.
+    """
+    if not endpoint.is_openrouter:
+        return body
+    key = str(session_id or "").strip()[:MAX_SESSION_ID_CHARS]
+    if key:
+        body["session_id"] = key
+    body["usage"] = {"include": True}
+    return body
+
+
+def marks_cache_breakpoints(
     model: str, *, cache_policy: CachePolicy = "by_model"
 ) -> bool:
-    """Whether this model's provider caches only where a breakpoint says to.
+    """Whether a cache breakpoint may be marked in requests for this model.
 
-    Anthropic-routed models cache nothing without an explicit `cache_control`
-    breakpoint in the request; OpenAI-family, DeepSeek, and the other implicit
-    cachers ignore the marker and cache a repeated prefix on their own. The
-    routing prefix of an OpenRouter model id is the whole question - a variant
-    suffix (`:beta`, `:floor`) rides on the same provider.
+    The answer is the *endpoint's*, not the model's, and that is the whole point.
+    OpenRouter normalises cache markers across providers - a block carrying
+    Anthropic-style `cache_control` is sent to a supporting OpenAI model as a
+    `prompt_cache_breakpoint`, and one carrying `prompt_cache_breakpoint` reaches
+    Anthropic or Google as a default-TTL `cache_control` - so a marked prompt is
+    understood everywhere OpenRouter routes it. Anthropic and Qwen are the
+    providers that cache *only* where a marker says to
+    (`EXPLICIT_CACHE_CONTROL_PROVIDERS`); the implicit cachers would find the
+    same prefix unaided, and marking it costs them nothing while pinning the
+    breakpoint where this prompt actually stops being stable.
 
-    That reading only works while the id *is* an OpenRouter route. A custom
-    endpoint's model id is whatever its operator loaded - `qwen2.5-coder:7b`, a
-    filesystem path, or, quite legitimately, `anthropic/claude-sonnet-4.5`
-    proxied by something that has never heard of `cache_control`. So the prefix
-    is not consulted at all under `cache_policy="unknown"`: no breakpoint is
-    sent, and - the half that would otherwise fail silently - no implicit hit is
-    assumed either, so a zero in the ledger reads as unmeasured rather than as a
-    caching regression somebody should go and investigate.
+    Gating on the routing prefix instead was the older, stricter reading, and it
+    left every implicit cacher relying on the provider to rediscover a prefix the
+    request already knew.
+
+    A custom endpoint is the one place the marker stays unsent. Its model id is
+    whatever its operator loaded - `qwen2.5-coder:7b`, a filesystem path, or,
+    quite legitimately, `anthropic/claude-sonnet-4.5` proxied by something that
+    has never heard of `cache_control` - and there is no OpenRouter in front of
+    it to translate. So `cache_policy="unknown"` sends nothing, and - the half
+    that would otherwise fail silently - assumes no implicit hit either, so a
+    zero in the ledger reads as unmeasured rather than as a caching regression
+    somebody should go and investigate.
     """
-    if cache_policy == "unknown":
-        return False
-    return str(model).split("/", 1)[0].strip().lower() in EXPLICIT_CACHE_CONTROL_PROVIDERS
+    return cache_policy != "unknown" and bool(str(model).strip())
 
 
 def cache_stable_message(
@@ -1218,19 +1332,21 @@ def cache_stable_message(
 ) -> dict[str, Any]:
     """Mark one message as the end of the request's cache-stable prefix.
 
-    Returns the message unchanged for providers that cache implicitly and for
-    providers whose caching is unknown, so the marked prompt is only ever sent
-    where it is understood. The breakpoint covers everything *before* it too -
-    for Anthropic that ordering is tools, then system, then messages, so marking
-    the primer caches the tool definitions with it and no second breakpoint is
-    needed for them.
+    Returns the message unchanged only where the marker cannot be understood - a
+    custom endpoint with no OpenRouter in front of it to translate it
+    (`marks_cache_breakpoints`). The breakpoint covers everything *before* it
+    too - for Anthropic that ordering is tools, then system, then messages, so
+    marking the primer caches the tool definitions with it and no second
+    breakpoint is needed for them.
 
     Marking is deliberately the caller's choice rather than this module's: only
     the caller knows which of its messages is stable across calls, and a
     breakpoint placed above something that changes every round is a cache write
-    billed at a premium that is never read back.
+    billed at a premium that is never read back. Anthropic accepts four
+    breakpoints per request, so a caller with two distinct stable regions - one
+    fixed forever, one that turns over slowly - may mark both.
     """
-    if not needs_explicit_cache_control(model, cache_policy=cache_policy):
+    if not marks_cache_breakpoints(model, cache_policy=cache_policy):
         return message
     content = message.get("content")
     if isinstance(content, str) and content:

@@ -118,7 +118,9 @@ export function AssistantPanel({
         const detail = await dialogDetail(id)
         if (cancelled) return
         setDialogId(id)
-        setMessages(detail.messages.filter(item => item.role === 'user' || item.role === 'assistant'))
+        setMessages(detail.messages.filter(
+          item => item.role === 'user' || item.role === 'assistant' || item.role === 'action',
+        ))
         setActions(detail.actions)
         setTurnRunning(detail.turn_running)
       } catch (cause) {
@@ -319,7 +321,7 @@ export function AssistantPanel({
         ? <p class="assistant-thinking">{thinking}</p>
         : latest
           ? <p class="assistant-peek-line" title={latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}>
-            <b>{latest.role === 'user' ? 'you' : 'mux'}</b>
+            <b>{latest.role === 'user' ? 'you' : latest.role === 'action' ? 'done' : 'mux'}</b>
             <span>{latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}</span>
           </p>
           : <p class="assistant-peek-line empty"><span>No conversation yet — expand to start one.</span></p>}
@@ -336,18 +338,26 @@ export function AssistantPanel({
         <summary>
           previous conversation · {previousMessages.length} message{previousMessages.length === 1 ? '' : 's'} · kept, not deleted
         </summary>
-        {previousMessages.map(message => <article key={`previous-${message.id}`} class={`assistant-message ${message.role}`}>
-          <header>{message.role === 'user' ? 'you' : 'mux'}</header>
-          <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
-        </article>)}
+        {previousMessages.map(message => message.role === 'action'
+          ? <p key={`previous-${message.id}`} class={`assistant-record ${message.status}`}>{message.display}</p>
+          : <article key={`previous-${message.id}`} class={`assistant-message ${message.role}`}>
+            <header>{message.role === 'user' ? 'you' : 'mux'}</header>
+            <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
+          </article>)}
       </details>}
       {messages.length === 0 && !thinking && <p class="assistant-empty">
         Ask about the fleet, queue or reword messages, spawn sessions, or navigate — in plain language.
       </p>}
-      {messages.map(message => <article key={message.id} class={`assistant-message ${message.role}${message.status === 'failed' ? ' failed' : ''}`}>
-        <header>{message.role === 'user' ? 'you' : 'mux'}</header>
-        <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
-      </article>)}
+      {messages.map(message => message.role === 'action'
+        // A resolved card, in the position it resolved in. Its own row rather
+        // than a bubble, because it is neither party speaking: it is the record
+        // of what the operator's yes or no actually did, which the panel used to
+        // drop the instant the card stopped being open.
+        ? <p key={message.id} class={`assistant-record ${message.status}`}>{message.display}</p>
+        : <article key={message.id} class={`assistant-message ${message.role}${message.status === 'failed' ? ' failed' : ''}`}>
+          <header>{message.role === 'user' ? 'you' : 'mux'}</header>
+          <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
+        </article>)}
       {pendingSpeech.trim() && <article class="assistant-message user assistant-pending-speech">
         <header>you · {pendingSpeechNote}</header>
         <p>{pendingSpeech}</p>

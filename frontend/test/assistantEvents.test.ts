@@ -110,3 +110,37 @@ test('a failed turn lands as a failed assistant message', () => {
   assert.equal(state.messages[0].status, 'failed')
   assert.equal(state.messages[0].error, 'budget exhausted')
 })
+
+test('a resolved action becomes a transcript row, once per action', () => {
+  // The panel dropped a card the moment it stopped being open, so the operator
+  // lost the record of what their own yes did. Keyed by action id rather than
+  // message id because a re-emitted resolution must update the row it wrote
+  // rather than stack a second copy of the same outcome.
+  const recorded = applyAssistantEvent(empty(), {
+    type: 'assistant_message',
+    payload: payload({
+      message_id: 'm1', action_id: 'a1', role: 'action', status: 'executed',
+      display: 'Done: add at the top of the pixel lab note', created_at: 1000,
+    }),
+  })
+  assert.equal(recorded.messages.length, 1)
+  assert.equal(recorded.messages[0].role, 'action')
+  assert.equal(recorded.messages[0].action_id, 'a1')
+
+  const again = applyAssistantEvent(recorded, {
+    type: 'assistant_message',
+    payload: payload({
+      message_id: 'm2', action_id: 'a1', role: 'action', status: 'executed',
+      display: 'Done: add at the top of the pixel lab note', created_at: 1001,
+    }),
+  })
+  assert.equal(again.messages.length, 1, 'the same action never renders twice')
+})
+
+test('an action row with no text is not a row at all', () => {
+  const state = applyAssistantEvent(empty(), {
+    type: 'assistant_message',
+    payload: payload({ message_id: 'm1', action_id: 'a1', display: '' }),
+  })
+  assert.equal(state.messages.length, 0)
+})

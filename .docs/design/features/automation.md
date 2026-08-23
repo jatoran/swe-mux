@@ -58,12 +58,14 @@ and the declared minimum observation capability.
   - **Routing.** `provider: {require_parameters, allow_fallbacks}` is OpenRouter's vocabulary for
     choosing between hosts of one model. A single-origin server has no hosts to choose between
     and never made that promise, so the block is omitted.
-  - **Caching.** This is the one that would fail invisibly. `needs_explicit_cache_control` reads
-    an OpenRouter routing prefix, and its safe direction - "anything unrecognised caches
-    implicitly" - stops being safe when the prefix is a local filename, or when a proxy
-    legitimately serves a model called `anthropic/claude-sonnet-4.5`. A custom endpoint's policy
-    is `unknown`: no breakpoint is sent, and no implicit hit is assumed either, so a zero in the
-    ledger reads as unmeasured rather than as a caching regression somebody should investigate.
+  - **Caching.** This is the one that would fail invisibly. `marks_cache_breakpoints` gates on the
+    endpoint, not the model: OpenRouter translates a cache marker into whatever the routed
+    provider understands, and a custom server has nothing in front of it doing that - it may also
+    legitimately serve a model called `anthropic/claude-sonnet-4.5` and reject the marker. A
+    custom endpoint's policy is `unknown`: no breakpoint is sent, no sticky-routing `session_id`
+    is sent (an unknown field is exactly what a strict local server refuses), and no implicit hit
+    is assumed either, so a zero in the ledger reads as unmeasured rather than as a caching
+    regression somebody should investigate.
 - A custom endpoint serves **one** model, and every model setting in the app names an OpenRouter
   id it has never heard of, so the client redirects all of them to `custom_llm_model` at the seam.
   That is what lets the assistant, the scan timeline, and the titler work against a local model
@@ -190,6 +192,11 @@ and the declared minimum observation capability.
   `cached_tokens` also reads as `0%`, because the ledger records what the usage payload said
   and nothing more (`assistant.md` for where the breakpoint that earns a nonzero rate is
   placed).
+  Beside the rate sits what caching did to the *bill*, which the rate cannot say: the write
+  count and the signed `cache_discount_usd`. A run writing a cache on every call and reading it
+  on none reports 0% and costs 25% more per prompt token than not caching at all, because
+  GPT-5.6 and Anthropic bill a write at 1.25x input - so a negative discount is flagged as the
+  placement bug it is rather than averaged into a hit rate.
 - **A cost nobody reported is recorded as unmeasured, never as zero.** `cost_known` is the
   column that says so, and `unpriced_calls` is what the spend rows carry beside the money. A
   bring-your-own endpoint reports no `usage.cost` at all, so writing those calls in at `$0.00`

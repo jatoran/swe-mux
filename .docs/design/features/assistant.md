@@ -38,8 +38,10 @@ Asked for something that is coding, it routes: queue a message to an existing se
 `POST /api/assistant/dialogs/{id}/turns` records the user message and returns `202 {turn_id}`; everything else arrives over the ordinary event stream so every connected device renders the same turn:
 
 `assistant_turn_queued` (only when a turn is already running) → `assistant_turn_started` → `assistant_sentence` (per sentence, **dual-form**: `display` and separately paced `speech`) → `assistant_tool_status` / `assistant_action` as tools run → `assistant_turn_done` (full display, `exhausted`, and usage) or `assistant_turn_failed`.
+`assistant_message` is emitted outside that sequence, when an action resolves.
 
-The loop behind it makes at most `MAX_MODEL_CALLS_PER_TURN` model calls per user turn, appending tool results between them; the prompt is the fixed short-response primer, the fleet snapshot plus the client's context (focused session, available UI command labels, bounded), the dialog's action ledger, and the last `assistant_context_messages` dialog messages.
+The loop behind it makes at most `MAX_MODEL_CALLS_PER_TURN` model calls per user turn, appending tool results between them.
+The prompt is ordered by how often each part changes, most stable first, because a provider's cache can only reuse an unchanged prefix: the fixed short-response primer, the device's command vocabulary, the focused Project's note, the last `assistant_context_messages` dialog messages, the live fleet snapshot with any action still awaiting an answer, and the operator's text.
 Interrupt cancels the running task; nothing already executed is undone.
 
 - **The sentence events are the reply, not a preview of it.**
@@ -51,24 +53,41 @@ Interrupt cancels the running task; nothing already executed is undone.
   A tool returning `pending_confirmation` sets the turn's speech suppression: subsequent `assistant_sentence` events carry `speech: ""` and `speech_suppressed: true`, and `assistant_turn_done` carries `speech_suppressed` plus a `speech` field holding only what still needs saying.
   The card is the spoken statement and the model's paraphrase of it is the same sentence twice.
   This is structural rather than prompted, because a model that ignores the instruction still must not double-speak.
-- **The dialog's action ledger rides every turn's context.**
-  A confirmation is a button or a spoken word, never a turn, so the message log alone cannot record that the operator said yes; the model reads its own unanswered "say confirm" and proposes the write again.
-  The ledger states each recent action's kind, restatement, status, and age, and `executed` means done.
+- **A resolved action is a transcript row, and only what is still open rides the context.**
+  A confirmation is a button or a spoken word, never a turn, so the message log alone could not record that the operator said yes; the model read its own unanswered "say confirm" and proposed the write again.
+  Resolution now writes an `action` row into `assistant_messages` (`action_transcript_line`, keyed by `action_id` under a partial unique index, so the race between a cancel window firing and an operator answering it cannot produce two).
+  The panel draws it in the position it resolved in, which is the record the operator lost when a card stopped being open, and `replay_dialog` folds it into the assistant message it followed for the model.
+  The fold is what keeps the dialog portable: only `user` and `assistant` reach the wire, because a bare mid-conversation `system` message is rewritten differently by every provider and a replayed `tool_call`/`tool` pair needs an id pairing some providers police - either would turn "run this on a different model" into a compatibility bug.
+  Read and navigation actions are excluded: a read is already in the turn's own tool results, and a UI command is steering the operator is watching happen.
+  What remains in the live block is only what is *still* awaiting an answer (`_open_action_ledger`), because that is the one thing no transcript row can carry.
 - **A turn has a round budget, the model is told it, and running out is reported.**
   `MAX_MODEL_CALLS_PER_TURN` is a runaway guard, not a work budget, and at six it was smaller than an ordinary multi-target request: "open three sessions and stage a note in each" needs a read, three spawns and a reply, and the turn stopped mid-way having said only "Ready when you are" (measured 2026-08-20).
   Three things changed together, because raising the ceiling alone would only move where it stops silently.
   A trailing system line states the rounds remaining and asks the model to batch independent calls into one response rather than one per round, and not to re-read what a tool already returned; it is replaced each round rather than appended, so exactly one budget is ever in the prompt.
   Below `MODEL_CALL_WARNING_ROUNDS` that line changes to "start no new work and say what is done", so a turn lands on a sentence instead of on the ceiling.
   And exhausting the rounds appends a plain notice to the reply, marks `exhausted` on `assistant_turn_done`, and logs a warning — the notice is spoken even when speech is otherwise suppressed, because a half-finished turn is the one thing the operator must hear.
-- **The prompt is built around a cache-stable prefix, and the hit rate is measured.**
-  Every round of a turn re-sends the primer, the tool definitions, the workspace snapshot, and the dialog window, so up to fourteen rounds pay for the same prefix fourteen times.
-  Anthropic-routed models cache none of that without an explicit `cache_control` breakpoint, and the assistant sent none, so the saving was unavailable rather than merely unmeasured.
-  The breakpoint goes on the primer (`cache_stable_message`, applied only for providers in `EXPLICIT_CACHE_CONTROL_PROVIDERS`), because the primer is the one message identical on every call this assistant ever makes and the provider orders tool definitions ahead of the system prompt - so one breakpoint covers both.
-  Implicit cachers get their plain string back untouched: the marked shape is only ever sent where it is understood.
-  Two placement rules follow and are load-bearing rather than stylistic: nothing may be inserted ahead of the primer and its text may not be interpolated per turn (the workspace snapshot is the *second* message for exactly this reason), and the round-budget line stays trailing.
-  Either change moves the prefix and turns every subsequent call into a cache write billed at a premium and never read back.
-  `cached_tokens` from each call's usage payload lands in the spend ledger beside its input and output counts - per call, not per turn, because the first round writes the cache and the rest read it, and a turn-level figure would average the write into the rate.
-  It is a subset of the input tokens, never added to them, and zero is deliberately ambiguous: it means "no hit" and "this provider reports no caching" alike, which is why it is recorded rather than asserted from.
+- **The prompt is ordered by volatility, and that ordering is the cache strategy.**
+  A provider can only reuse an unchanged *prefix*, so one line that differs per turn ends the reusable region there and re-bills everything below it.
+  The workspace snapshot differs by construction - its ages are recomputed on every call - and sitting second it capped every possible hit at the primer, however much identical text followed.
+  So the order is: primer (identical on every call this assistant makes), the focused Project's note (turns over on a Project switch), the device's command vocabulary (turns over when the fleet or the focused pane does), the dialog window (append-only), the live snapshot plus open actions, and the operator's text.
+  The note precedes the vocabulary because it changes less often - a command's `available` flag flips with the focused pane - so the more frequent event still leaves the note cached.
+  Being last is also where the live snapshot belongs on the merits: it is what the question is about, and it now sits beside the question rather than eight thousand tokens above it.
+  The round-budget line stays trailing for the same reason.
+  Two rules remain load-bearing: nothing may be inserted ahead of the primer, and no stable block's text may be interpolated per turn.
+- **A breakpoint is marked on every stable block, and on every route.**
+  Anthropic and Qwen cache nothing without an explicit `cache_control` marker (`EXPLICIT_CACHE_CONTROL_PROVIDERS`), but OpenRouter *translates* markers across providers - an Anthropic-style block reaches a supporting OpenAI model as a `prompt_cache_breakpoint` - so a marked prompt is understood wherever it routes and `marks_cache_breakpoints` gates on the endpoint rather than on the model.
+  A custom endpoint is the one place nothing is sent, because it has no translation layer in front of it (`cache_policy="unknown"`), and no implicit hit is assumed there either.
+  All three stable blocks are marked rather than only the primer: Anthropic reads a cache at a breakpoint and allows four, so switching Project still hits through the blocks ahead of the one that changed.
+- **A cache is pinned to a provider instance by `session_id`, or it cannot be read back.**
+  OpenRouter load-balances across instances and a cache lives on the instance that wrote it, so two calls seconds apart inside one turn land together and hit while the first call of the next turn lands somewhere cold.
+  Measured before the fix: every second call of a turn reported the full prompt cached, every first call reported zero, forty seconds apart, on a byte-identical 4k prefix.
+  `apply_session_routing` sends the dialog id as OpenRouter's sticky-routing key (documented ceiling 256 chars, stickiness expiring after ten idle minutes) and switches on full usage accounting in the same place, for OpenRouter endpoints only.
+- **Cache reads, cache writes, and the signed discount are all recorded, because reads alone mislead.**
+  `cached_tokens`, `cache_write_tokens`, and `cache_discount_usd` from each call's usage payload land in the spend ledger beside the input and output counts - per call, not per turn, because the first round of a turn writes the cache and the rest read it.
+  Reads and writes are disjoint subsets of the input tokens and neither is added to them.
+  The write count exists because a run that writes on every call and reads on none reports 0% cached and is indistinguishable from a run with no caching at all - while costing 25% *more* per prompt token, since GPT-5.6 and Anthropic bill a write at 1.25x input.
+  The discount is signed for the same reason: negative is that premium, unread.
+  A zero read count stays deliberately ambiguous ("no hit" and "this provider reports no caching" alike), which is why it is recorded rather than asserted from; a `None` discount is unmeasured, which is not the same as zero.
 - **Speech suppression is for a card that *is* the whole turn, not for any turn with a card.**
   Suppressing whenever a card opened also swallowed "I opened two of the three and one needs your confirmation" — information the card cannot carry.
   The rule counts: exactly one card opened and no mutation executed.
@@ -325,7 +344,7 @@ the one that shipped without a control, so the escape hatch it exists to be was 
 
 - `src/swe_mux/assistant.py` — `AssistantService` (turn loop, tool bridge, trust policy, resolution, the duplicate guard and action ledger), `AssistantStore`, `_SentenceStreamer`, `restate_action`/`action_announcement`, the tool definitions, the primer.
 - `src/swe_mux/openrouter.py` — `complete_tools`, the bounded tool-calling completion, and `_ToolStreamAccumulator` behind its optional SSE path;
-  `needs_explicit_cache_control` / `cache_stable_message` (which message a caller marks is the caller's decision, since only it knows what is stable across calls) and `cached_prompt_tokens`, which reads either shape a provider reports the hit in.
+  `marks_cache_breakpoints` / `cache_stable_message` (which message a caller marks is the caller's decision, since only it knows what is stable across calls), `apply_session_routing`, and `cached_prompt_tokens` / `cache_write_prompt_tokens` / `cache_discount_usd`, which read either shape a provider reports its cache figures in.
 - `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/write closures, history search, spawn/interrupt/end operations shared with session control, and the Project Action catalog/preview/run closures over `_start_project_action`).
 - `src/swe_mux/project_actions.py` — `preview_action_run`, the shared resolve-and-refuse used by the assistant preflight.
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.

@@ -32,11 +32,14 @@ export type AssistantMessage = {
   dialog_id: string
   turn_id: string
   created_at: number
-  role: 'user' | 'assistant'
+  /** `action` is a resolved confirmation, not an utterance: nobody said it, it happened.
+   *  It is written once at resolution and carries the `action_id` of the card it closes. */
+  role: 'user' | 'assistant' | 'action'
   display: string
   speech: string
-  status: 'done' | 'failed' | 'streaming'
+  status: 'done' | 'failed' | 'streaming' | AssistantAction['status']
   error?: string | null
+  action_id?: string | null
 }
 
 export type AssistantStatus = {
@@ -386,6 +389,33 @@ export function applyAssistantEvent(
     if (index < 0) actions.push(action)
     else actions[index] = action
     return { ...state, actions }
+  }
+  // A resolved action becoming part of the conversation. It arrives on its own
+  // event rather than riding the `assistant_action` update because it is a
+  // different thing: the card closes, and a line saying what happened stays.
+  // Keyed by `action_id` so a re-emitted resolution updates the row it already
+  // wrote instead of stacking a second copy of the same outcome.
+  if (event.type === 'assistant_message') {
+    const actionId = String(payload.action_id || '')
+    const message: AssistantMessage = {
+      id: String(payload.message_id || actionId),
+      dialog_id: String(payload.dialog_id || ''),
+      turn_id: String(payload.turn_id || ''),
+      created_at: Number(payload.created_at) || Date.now() / 1000,
+      role: 'action',
+      display: String(payload.display || ''),
+      speech: '',
+      status: (String(payload.status || 'done') as AssistantMessage['status']),
+      action_id: actionId || null,
+    }
+    if (!message.display) return state
+    const messages = [...state.messages]
+    const index = messages.findIndex(
+      item => item.id === message.id || (!!actionId && item.action_id === actionId),
+    )
+    if (index < 0) messages.push(message)
+    else messages[index] = message
+    return { ...state, messages }
   }
   if (event.type === 'assistant_turn_done') {
     const id = String(payload.message_id || '')

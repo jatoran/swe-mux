@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  buildSpendRows, cacheHit, cacheHitDetail, callHealth, exactMoney, formatCount, formatDuration,
-  formatMoney, formatPercent, type SpendBreakdown,
+  buildSpendRows, cacheEconomics, cacheEconomicsDetail, cacheHit, cacheHitDetail, callHealth,
+  exactMoney, formatCount, formatDuration, formatMoney, formatPercent, type SpendBreakdown,
 } from '../src/automationCost.ts'
 
 const rule = (overrides: Partial<SpendBreakdown['rules'][number]> & { rule_id: string }) => ({
@@ -145,4 +145,27 @@ test('spend rows carry the cached figures through untouched', () => {
 
   assert.equal(cacheHit(rows[0].input_tokens, rows[0].cached_tokens)?.rate, 0.5)
   assert.equal(cacheHit(rows[0].today_input_tokens, rows[0].today_cached_tokens)?.rate, 0.5)
+})
+
+test('cache economics separate a cold prefix from no caching at all', () => {
+  // Both report a 0% hit rate. Only one of them is also paying 1.25x input for
+  // a write nothing reads back, and that is the one worth acting on.
+  const written = cacheEconomics(-0.004, 8100, 0)
+  assert.ok(written)
+  assert.equal(written.netLoss, true)
+  assert.equal(written.written, 8100)
+  assert.match(cacheEconomicsDetail(written), /write premium not read back/)
+
+  const read = cacheEconomics(0.0162, 0, 8100)
+  assert.ok(read)
+  assert.equal(read.netLoss, false)
+  assert.match(cacheEconomicsDetail(read), /saved/)
+})
+
+test('a provider that reports no cache figures is unmeasured, not zero', () => {
+  // Inventing a $0.00 saving would put a confident number where there is no
+  // measurement, which is the same mistake as pricing an unpriced call at zero.
+  assert.equal(cacheEconomics(undefined, undefined, undefined), null)
+  assert.equal(cacheEconomics(0, 0, 0), null)
+  assert.equal(cacheEconomicsDetail(null), 'this provider reports no cache figures')
 })

@@ -1315,6 +1315,8 @@ async def test_dry_run_is_repeatable_and_writes_no_automation_records(tmp_path: 
         "cost_usd": 0.0,
         "input_tokens": 0,
         "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "cache_discount_usd": 0.0,
         "unpriced_calls": 0,
     }
     store.close()
@@ -2020,6 +2022,94 @@ async def test_the_ledger_records_cached_prompt_tokens_as_a_subset_of_the_input(
         assert breakdown["totals"]["today_cached_tokens"] == 2000
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_ledger_records_cache_writes_and_the_signed_discount(
+    tmp_path: Path,
+) -> None:
+    """A hit rate alone cannot tell "no caching" from "wrote a cache nothing read".
+
+    The second is worse than the first: GPT-5.6 and Anthropic bill a write at
+    1.25x ordinary input, so a prefix that is written every turn and never
+    reached again costs 25% more than not caching at all. The write count and the
+    signed discount are what make that visible instead of reading as a flat 0%.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="builtin:assistant",
+            model="openai/gpt-5.6-terra",
+            input_tokens=8100,
+            output_tokens=19,
+            cached_tokens=0,
+            cache_write_tokens=8100,
+            cache_discount_usd=-0.004,
+            cost_usd=0.0205,
+            call_id="call-1",
+        )
+        await store.add_spend(
+            rule_id="builtin:assistant",
+            model="openai/gpt-5.6-terra",
+            input_tokens=8300,
+            output_tokens=44,
+            cached_tokens=8100,
+            cache_write_tokens=0,
+            cache_discount_usd=0.0162,
+            cost_usd=0.0021,
+            call_id="call-2",
+        )
+
+        today = await store.spend(rule_id="builtin:assistant")
+        assert today["cache_write_tokens"] == 8100
+        assert today["cache_discount_usd"] == pytest.approx(0.0122)
+        # Writes and reads are disjoint subsets of the input, and neither is
+        # added to it.
+        assert today["input_tokens"] == 16400
+
+        breakdown = await store.spend_breakdown(days=7)
+        row = breakdown["rules"][0]
+        assert row["cache_write_tokens"] == 8100
+        assert row["today_cache_write_tokens"] == 8100
+        assert row["cache_discount_usd"] == pytest.approx(0.0122)
+        assert breakdown["totals"]["today_cache_discount_usd"] == pytest.approx(0.0122)
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_an_old_ledger_gains_the_cache_columns_without_losing_its_rows(
+    tmp_path: Path,
+) -> None:
+    # The migration path a running install actually takes. Zero is the true
+    # reading for a historical row: nothing asked OpenRouter for full usage
+    # accounting then, so there is no figure this backfill could be losing.
+    path = tmp_path / "mux.db"
+    store = AutomationStore(path)
+    try:
+        await store.add_spend(
+            rule_id="builtin:assistant",
+            model="openai/gpt-5.6-terra",
+            input_tokens=100,
+            output_tokens=10,
+            cost_usd=0.001,
+            call_id="call-old",
+        )
+    finally:
+        store.close()
+    with sqlite3.connect(path) as db:
+        db.execute("ALTER TABLE automation_budget_ledger DROP COLUMN cache_write_tokens")
+        db.execute("ALTER TABLE automation_budget_ledger DROP COLUMN cache_discount_usd")
+        db.commit()
+
+    migrated = AutomationStore(path)
+    try:
+        today = await migrated.spend(rule_id="builtin:assistant")
+        assert today["input_tokens"] == 100
+        assert today["cache_write_tokens"] == 0
+        assert today["cache_discount_usd"] == 0.0
+    finally:
+        migrated.close()
 
 
 @pytest.mark.asyncio

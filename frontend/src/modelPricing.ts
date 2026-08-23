@@ -40,6 +40,10 @@ export type ModelPricingFacts = {
   prompt_price?: number | null
   /** USD per output token, as OpenRouter reports it. */
   completion_price?: number | null
+  /** USD per cached input token. Absent means this model does not cache at all. */
+  cache_read_price?: number | null
+  /** USD per token written into the cache. Above `prompt_price` is a write premium. */
+  cache_write_price?: number | null
   context_length?: number | null
 }
 
@@ -111,6 +115,39 @@ export function modelMetaLabel(model: ModelPricingFacts): string | null {
 }
 
 /**
+ * What prompt caching costs on this model, stated before it is switched to.
+ *
+ * Read from the catalog's own pricing rather than from a list of providers,
+ * because the list goes stale the week a new one appears and the pricing does
+ * not. Three answers, and they are genuinely different:
+ *
+ *   - no read price - this model does not cache. A 0% hit rate on it is correct
+ *     rather than a fault, which is the reading a spend page cannot give you.
+ *   - a write price above the input price - a write is billed at a premium
+ *     (1.25x on OpenAI and Anthropic), so a prefix that is written and never
+ *     read back costs *more* than not caching at all.
+ *   - no write price beside a read price - writes are free (DeepSeek, Z.AI,
+ *     Moonshot, xAI), so caching is upside with no downside.
+ *
+ * `null` when the catalog said nothing either way, which is not "does not
+ * cache": a bare OpenAI-compatible `/models` carries no pricing at all.
+ */
+export function modelCachingLabel(model: ModelPricingFacts): string | null {
+  const { cache_read_price: read, cache_write_price: write, prompt_price: input } = model
+  if (read === null || read === undefined || !Number.isFinite(read)) {
+    // Only a model with priced input can be *said* to not cache; without any
+    // pricing the catalog simply did not answer.
+    return input === null || input === undefined ? null : 'no prompt caching'
+  }
+  const ratio = input && input > 0 ? read / input : null
+  const readPart = ratio ? `cache reads at ${ratio.toFixed(2)}x input` : 'caches prompts'
+  if (write !== null && write !== undefined && Number.isFinite(write) && input && write > input) {
+    return `${readPart}, writes at ${(write / input).toFixed(2)}x`
+  }
+  return `${readPart}, free writes`
+}
+
+/**
  * The same facts spelled out for a tooltip, because the row itself cannot afford
  * to say which figure is input and which is output. A picker row is the first
  * place most readers meet `$0.08 / $0.30`, and the order is not guessable.
@@ -121,6 +158,8 @@ export function modelMetaTitle(model: ModelPricingFacts): string | null {
   const output = perMillionTokens(model.completion_price)
   if (input !== null) lines.push(`Input ${input} per million tokens`)
   if (output !== null) lines.push(`Output ${output} per million tokens`)
+  const caching = modelCachingLabel(model)
+  if (caching !== null) lines.push(caching)
   const context = formatContextLength(model.context_length)
   if (context !== null) lines.push(`${context} context`)
   return lines.length ? lines.join(' · ') : null

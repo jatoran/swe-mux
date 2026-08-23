@@ -41,8 +41,16 @@ export type SpendRule = {
   /** Prompt tokens the provider served from its cache — a subset of `input_tokens`, never
    *  added to it. */
   cached_tokens?: number
+  /** Prompt tokens written *into* the cache. Also a subset of `input_tokens`, and disjoint
+   *  from `cached_tokens`: a token was either served from the cache or written into it. */
+  cache_write_tokens?: number
+  /** Signed price effect of caching. Positive saved money; negative is the write premium
+   *  (1.25x input on GPT-5.6 and Anthropic) exceeding what was read back. */
+  cache_discount_usd?: number
   today_input_tokens?: number
   today_cached_tokens?: number
+  today_cache_write_tokens?: number
+  today_cache_discount_usd?: number
   /** Calls whose provider reported no cost at all. Their `cost_usd` contribution is 0
    *  because nobody measured it, not because it was free, so a nonzero count here means
    *  the money beside it is a floor. See `src/swe_mux/budget.py`. */
@@ -66,8 +74,12 @@ export type SpendBreakdown = {
     today_cost_usd: number
     input_tokens?: number
     cached_tokens?: number
+    cache_write_tokens?: number
+    cache_discount_usd?: number
     today_input_tokens?: number
     today_cached_tokens?: number
+    today_cache_write_tokens?: number
+    today_cache_discount_usd?: number
     unpriced_calls?: number
     today_unpriced_calls?: number
   }
@@ -164,6 +176,51 @@ export function cacheHit(
 export const cacheHitDetail = (hit: CacheHit | null) =>
   hit ? `${integer.format(hit.cached)} of ${integer.format(hit.prompt)} prompt tokens served from cache`
       : 'no billed prompt tokens in this window'
+
+/** What caching did to the bill, as opposed to how often it hit. */
+export type CacheEconomics = {
+  /** Signed dollars: positive saved, negative is a write premium never read back. */
+  discount: number
+  written: number
+  cached: number
+  /** True when the cache cost more than it returned - the shape of a breakpoint
+   *  sitting above content that changes every call. */
+  netLoss: boolean
+}
+
+/**
+ * The half of prompt caching a hit rate cannot show.
+ *
+ * A run whose every call writes a cache and never reads one reports 0% hit and
+ * looks exactly like a run with no caching at all - while costing 25% more per
+ * prompt token, because GPT-5.6 and Anthropic bill a write at 1.25x input. The
+ * write count is what separates those two, and the signed discount is what
+ * prices the difference.
+ *
+ * `null` when the provider reported neither figure, which is not zero: it means
+ * this endpoint says nothing about caching, and inventing a $0.00 saving for it
+ * would put a confident number where there is no measurement.
+ */
+export function cacheEconomics(
+  discountUsd: number | undefined,
+  writeTokens: number | undefined,
+  cachedTokens: number | undefined,
+): CacheEconomics | null {
+  const discount = Number(discountUsd || 0)
+  const written = Number(writeTokens || 0)
+  const cached = Number(cachedTokens || 0)
+  if (!discount && !written && !cached) return null
+  return { discount, written, cached, netLoss: discount < 0 }
+}
+
+/** The tile's second line: what the cache cost or saved, and how much it wrote. */
+export const cacheEconomicsDetail = (economics: CacheEconomics | null) => {
+  if (!economics) return 'this provider reports no cache figures'
+  const money = economics.discount >= 0
+    ? `${formatMoney(economics.discount)} saved`
+    : `${formatMoney(Math.abs(economics.discount))} of write premium not read back`
+  return `${money} · ${integer.format(economics.written)} tokens written, ${integer.format(economics.cached)} read`
+}
 
 /**
  * Ranked spend rows with each one's share of the window.

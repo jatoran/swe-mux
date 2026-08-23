@@ -2079,9 +2079,13 @@ content: requested and resolved model, generation, provider, finish reason, HTTP
 retryability, token and cost usage, latency, and response content type and length.
 
 It also carries `spend_breakdown`: `{days, today, start_day, totals, rules[]}`, where each rule
-row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cost_usd`,
-`unpriced_calls`, the same six figures scoped to today, the requested models, and `last_at`.
+row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cache_write_tokens`,
+`cache_discount_usd`, `cost_usd`, `unpriced_calls`, the same figures scoped to today, the
+requested models, and `last_at`.
 `cached_tokens` is the prompt-cache hit and is a *subset* of `input_tokens`, never added to it;
+`cache_write_tokens` is the disjoint other subset - tokens written into the cache rather than
+served from it - and `cache_discount_usd` is signed, positive for a saving and negative for a
+write premium that was never read back;
 `input_tokens` rides along because it is the only honest denominator for a hit rate, `tokens`
 being input plus output and output never cacheable.
 `unpriced_calls` counts the calls whose provider reported no cost at all, which a bring-your-own

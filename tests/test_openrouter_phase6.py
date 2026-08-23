@@ -11,16 +11,21 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
+from swe_mux.llm_endpoint import custom_endpoint, openrouter_endpoint
 from swe_mux.openrouter import (
     MAX_RESPONSE_BYTES,
     MAX_RETRY_SLEEP_SECONDS,
+    MAX_SESSION_ID_CHARS,
     RETRY_ATTEMPTS,
     OpenRouterClient,
     OpenRouterError,
     _retry_after,
+    apply_session_routing,
+    cache_discount_usd,
     cache_stable_message,
+    cache_write_prompt_tokens,
     cached_prompt_tokens,
-    needs_explicit_cache_control,
+    marks_cache_breakpoints,
 )
 from swe_mux.secret_store import PlatformSecretStore
 from swe_mux.server import automation_provider_key
@@ -867,17 +872,22 @@ async def test_an_unstreamed_completion_still_takes_the_buffered_path() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_anthropic_routing_is_the_only_family_that_needs_a_breakpoint() -> None:
-    # Anthropic caches nothing without an explicit marker; everything else caches
-    # a repeated prefix on its own and ignores one.
-    assert needs_explicit_cache_control("anthropic/claude-sonnet-4.5")
-    assert needs_explicit_cache_control("anthropic/claude-opus-4.1:beta")
-    assert not needs_explicit_cache_control("openai/gpt-5.6-terra")
-    assert not needs_explicit_cache_control("deepseek/deepseek-chat")
-    # An unknown routing prefix is left unmarked: a missed hit is recoverable,
-    # a rejected request is not.
-    assert not needs_explicit_cache_control("some-new-vendor/model")
-    assert not needs_explicit_cache_control("")
+def test_every_openrouter_route_is_marked_and_only_a_custom_endpoint_is_not() -> None:
+    # OpenRouter translates the marker into whatever the routed provider
+    # understands, so a marked prompt is understood everywhere it routes: an
+    # Anthropic-style block reaches a supporting OpenAI model as a
+    # `prompt_cache_breakpoint`. Anthropic and Qwen are the ones that cache
+    # *only* where a marker says to; the rest would find the prefix unaided and
+    # lose nothing by being told where it ends.
+    assert marks_cache_breakpoints("anthropic/claude-sonnet-4.5")
+    assert marks_cache_breakpoints("anthropic/claude-opus-4.1:beta")
+    assert marks_cache_breakpoints("openai/gpt-5.6-terra")
+    assert marks_cache_breakpoints("deepseek/deepseek-chat")
+    assert marks_cache_breakpoints("some-new-vendor/model")
+    # A custom endpoint has no translation layer in front of it, and an empty id
+    # is not a route at all.
+    assert not marks_cache_breakpoints("anthropic/claude-sonnet-4.5", cache_policy="unknown")
+    assert not marks_cache_breakpoints("")
 
 
 def test_a_marked_message_becomes_one_text_part_carrying_the_breakpoint() -> None:
@@ -892,11 +902,16 @@ def test_a_marked_message_becomes_one_text_part_carrying_the_breakpoint() -> Non
     }
 
 
-def test_an_implicit_caching_model_gets_its_plain_string_back() -> None:
-    # The marked shape is only ever sent where it is understood, so a provider
-    # that caches implicitly keeps the request it has always received.
+def test_only_an_untranslated_endpoint_gets_its_plain_string_back() -> None:
+    # The marked shape is sent wherever OpenRouter can translate it, which is
+    # everywhere it routes. A custom endpoint is the one place it cannot.
     original = {"role": "system", "content": "primer"}
-    assert cache_stable_message(original, model="openai/gpt-5.6-terra") is original
+    assert cache_stable_message(
+        original, model="openai/gpt-5.6-terra", cache_policy="unknown"
+    ) is original
+    marked = cache_stable_message(original, model="openai/gpt-5.6-terra")
+    assert marked is not original
+    assert marked["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_marking_never_mutates_the_message_it_was_handed() -> None:
@@ -997,3 +1012,147 @@ async def test_a_streamed_tool_turn_carries_its_cached_prompt_tokens() -> None:
     deltas: list[str] = []
     turn = await collect(client, deltas)
     assert turn.cached_tokens == 2000
+
+
+def test_cache_write_tokens_read_either_shape_and_default_to_a_true_zero() -> None:
+    # The counterpart to the hit count, and the one that separates "no caching"
+    # from "wrote a cache nothing read" - which costs 25% more than no caching at
+    # all on the providers that bill a write above input.
+    assert cache_write_prompt_tokens(
+        {"prompt_tokens_details": {"cache_write_tokens": 6400}}
+    ) == 6400
+    assert cache_write_prompt_tokens({"cache_write_tokens": 900}) == 900
+    assert cache_write_prompt_tokens(
+        {"cache_write_tokens": 5, "prompt_tokens_details": {"cache_write_tokens": 6400}}
+    ) == 6400
+    # Providers that write for free report nothing, and zero is then the true
+    # reading rather than a missing one.
+    assert cache_write_prompt_tokens({"prompt_tokens": 400}) == 0
+    assert cache_write_prompt_tokens(None) == 0
+
+
+def test_the_cache_discount_is_signed_and_absent_is_not_zero() -> None:
+    assert cache_discount_usd({"cache_discount": 0.0042}) == pytest.approx(0.0042)
+    # Negative is a write turn billed above input. It is the reading that says a
+    # breakpoint sits over content changing every call, so it must survive.
+    assert cache_discount_usd({"cache_discount": -0.0031}) == pytest.approx(-0.0031)
+    # `None` says the provider made no measurement; zero would claim one.
+    assert cache_discount_usd({"prompt_tokens": 10}) is None
+    assert cache_discount_usd(None) is None
+
+
+def test_sticky_routing_is_sent_to_openrouter_and_withheld_from_a_custom_endpoint() -> None:
+    """A cache lives on the instance that wrote it, and OpenRouter balances across
+    instances; the session key is what routes the next turn back to it.
+
+    A custom OpenAI-compatible server has no routing layer to steer and is
+    exactly the kind of thing that rejects an unknown field, so the graceful
+    degradation is to omit it and lose nothing that was ever available.
+    """
+    body: dict[str, Any] = {"model": "openai/gpt-5.6-terra"}
+    apply_session_routing(body, "dialog-1", endpoint=openrouter_endpoint())
+    assert body["session_id"] == "dialog-1"
+    # Full usage accounting rides along: cost is reported without it, the cache
+    # figures are not.
+    assert body["usage"] == {"include": True}
+
+    custom: dict[str, Any] = {"model": "qwen2.5-coder:7b"}
+    apply_session_routing(
+        custom,
+        "dialog-1",
+        endpoint=custom_endpoint(base_url="http://localhost:11434/v1", model="qwen2.5-coder:7b"),
+    )
+    assert "session_id" not in custom
+    assert "usage" not in custom
+
+
+def test_a_session_key_is_clipped_to_the_documented_ceiling() -> None:
+    body: dict[str, Any] = {}
+    apply_session_routing(body, "x" * 400, endpoint=openrouter_endpoint())
+    assert body["session_id"] == "x" * MAX_SESSION_ID_CHARS
+    # Nothing to pin means nothing sent, rather than an empty key that groups
+    # every conversation into one.
+    blank: dict[str, Any] = {}
+    apply_session_routing(blank, "   ", endpoint=openrouter_endpoint())
+    assert "session_id" not in blank
+
+
+async def test_a_tool_turn_carries_its_cache_write_and_discount() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "id": "gen-7",
+                    "model": "openai/gpt-5.6-terra",
+                    "choices": [{"message": {"role": "assistant", "content": "Wrote."}}],
+                    "usage": {
+                        "prompt_tokens": 8100,
+                        "completion_tokens": 19,
+                        "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 8100},
+                        "cache_discount": -0.004,
+                    },
+                },
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    turn = await client.complete_tools(
+        model="openai/gpt-5.6-terra",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        max_tokens=256,
+        session_id="dialog-1",
+    )
+    # The exact shape the ledger showed before sticky routing: everything
+    # written, nothing read, and a negative discount pricing the premium.
+    assert turn.cached_tokens == 0
+    assert turn.cache_write_tokens == 8100
+    assert turn.cache_discount_usd == pytest.approx(-0.004)
+    assert session.requests[-1][2]["json"]["session_id"] == "dialog-1"
+
+
+async def test_the_catalog_carries_each_model_s_caching_economics() -> None:
+    """Read from pricing rather than from a list of providers who cache.
+
+    A provider list goes stale the week a new one appears; the pricing does not,
+    and it answers the question a model chooser actually has before switching:
+    does this model cache at all, and does a write cost extra.
+    """
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "openai/gpt-5.6-terra",
+                            "supported_parameters": ["response_format"],
+                            "architecture": {"modality": "text->text"},
+                            "pricing": {
+                                "prompt": "0.000002",
+                                "completion": "0.000012",
+                                "input_cache_read": "0.0000002",
+                                "input_cache_write": "0.0000025",
+                            },
+                        },
+                        {
+                            "id": "deepseek/deepseek-v4-pro",
+                            "supported_parameters": ["response_format"],
+                            "architecture": {"modality": "text->text"},
+                            # Reads priced, writes free: caching is pure upside.
+                            "pricing": {"prompt": "0.0000004", "input_cache_read": "0.000000033"},
+                        },
+                    ]
+                },
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    catalog = {item["id"]: item for item in await client.models()}
+    assert catalog["openai/gpt-5.6-terra"]["cache_read_price"] == pytest.approx(0.0000002)
+    assert catalog["openai/gpt-5.6-terra"]["cache_write_price"] == pytest.approx(0.0000025)
+    # Absent is not zero: a free write reports nothing, and so does a model that
+    # does not cache, which the read price is what tells apart.
+    assert catalog["deepseek/deepseek-v4-pro"]["cache_write_price"] is None
+    assert catalog["deepseek/deepseek-v4-pro"]["cache_read_price"] == pytest.approx(0.000000033)

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  formatContextLength, formatModelPricing, modelMetaLabel, modelMetaTitle, perMillionTokens,
+  formatContextLength, formatModelPricing, modelCachingLabel, modelMetaLabel, modelMetaTitle,
+  perMillionTokens,
 } from '../src/modelPricing.ts'
 
 test('a per-token price is stated per million tokens', () => {
@@ -71,7 +72,37 @@ test('the row cell states capacity then price, and omits what it does not know',
 test('the tooltip names which figure is which, because the row cannot', () => {
   assert.equal(
     modelMetaTitle({context_length: 128_000, prompt_price: 0.00000008, completion_price: 0.0000003}),
-    'Input $0.08 per million tokens · Output $0.30 per million tokens · 128K context',
+    // A priced model with no cache read price does not cache, and saying so is
+    // the difference between a 0% hit rate that is correct and one that is a fault.
+    'Input $0.08 per million tokens · Output $0.30 per million tokens · no prompt caching'
+    + ' · 128K context',
   )
   assert.equal(modelMetaTitle({}), null)
+})
+
+test('caching economics are read from the catalog, not from a provider list', () => {
+  // A hardcoded list of who caches goes stale the week a new provider appears;
+  // the pricing does not. Three genuinely different answers.
+  assert.equal(
+    modelCachingLabel({prompt_price: 0.000002, cache_read_price: 0.0000002, cache_write_price: 0.0000025}),
+    'cache reads at 0.10x input, writes at 1.25x',
+    'a write above input is a premium that only pays when the prefix is read back',
+  )
+  assert.equal(
+    modelCachingLabel({prompt_price: 0.0000004, cache_read_price: 0.000000033}),
+    'cache reads at 0.08x input, free writes',
+    'no write price means writes are free, so caching is upside with no downside',
+  )
+  // "Does not cache" and "the catalog said nothing" are different: a 0% hit
+  // rate is correct on the first and unexplained on the second.
+  assert.equal(modelCachingLabel({prompt_price: 0.0000006}), 'no prompt caching')
+  assert.equal(modelCachingLabel({}), null)
+})
+
+test('the meta tooltip states caching beside the prices', () => {
+  const title = modelMetaTitle({
+    context_length: 1_050_000, prompt_price: 0.000002, completion_price: 0.000012,
+    cache_read_price: 0.0000002, cache_write_price: 0.0000025,
+  })
+  assert.match(String(title), /cache reads at 0\.10x input, writes at 1\.25x/)
 })

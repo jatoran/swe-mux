@@ -2516,7 +2516,14 @@ export function App() {
     focused_session_id:activeId||null,
     active_project_id:activeProject?.id||null,
     client_id:ASSISTANT_CLIENT_ID,
-    commands:commandRegistryRef.current.filter(item=>item.available).slice(0,400).map(item=>({id:item.id,label:item.label})),
+    // Sent whole rather than clipped at 400. The daemon folds the per-Project
+    // and per-session families into templated lines before they reach the
+    // prompt (`summarize_command_labels`), so the wire payload is the only cost
+    // of sending everything - and a clip here was a truncation of real
+    // capabilities that nothing reported: a 23-Project workspace already offered
+    // 315 labels, and the ones past the cut simply stopped existing as far as
+    // the assistant knew. The remaining bound is a runaway guard, not a budget.
+    commands:commandRegistryRef.current.filter(item=>item.available).slice(0,2000).map(item=>({id:item.id,label:item.label})),
   }
   const assistantClientContext=()=>assistantContextRef.current
   // The dispatch executor below mounts once, so it reaches the launcher through

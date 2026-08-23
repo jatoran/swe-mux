@@ -211,6 +211,14 @@
   cache, a subset of `input_tokens` and never added to it, backfilled to 0 on an existing
   database because every pre-migration row was billed by a request that carried no cache
   breakpoint.
+  Beside it, `cache_write_tokens` and the signed `cache_discount_usd` (schema 12): the tokens
+  written *into* the cache, a disjoint subset of the same input, and what caching did to this
+  call's price.
+  Reads alone are not enough to act on - a run that writes on every call and reads on none
+  reports zero cached and looks exactly like a run with no caching, while costing 25% more per
+  prompt token, since GPT-5.6 and Anthropic bill a write at 1.25x input.
+  Both backfill to 0, which is the true reading: nothing before the migration asked OpenRouter
+  for full usage accounting, so there is no figure the backfill could be losing.
   And `cost_known` (schema 11): whether the provider reported what this call cost.
   A bring-your-own OpenAI-compatible endpoint reports no `usage.cost`, and an absent cost is
   unknown rather than zero — recorded as `$0.00` it would leave every dollar figure, and every

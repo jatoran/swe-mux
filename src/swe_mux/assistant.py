@@ -135,7 +135,20 @@ ACTION_OUTCOME_TAIL_BYTES = 4_096
 MAX_TURN_TEXT_CHARS = 8_000
 MAX_TOOL_RESULT_CHARS = 12_000
 MAX_CONTEXT_SESSIONS = 80
+# How many *distinct* UI command labels reach the prompt, after the per-entity
+# families have been folded into templates (`summarize_command_labels`). Before
+# the folding a device offered 315 labels against a cap of 400, 138 of them one
+# cross product, and the cap was a truncation waiting for the operator to add a
+# dozen more Projects: real capabilities would have fallen off the end of the
+# list with nothing said. Folding removes the growth term, so the cap now bounds
+# a list that does not grow with the fleet.
 MAX_CLIENT_COMMANDS = 400
+
+#: The transcript role a resolved action is stored under. Distinct from `user`
+#: and `assistant` because it is neither: nobody said it, it happened. The panel
+#: renders it as its own row and the model reads it back as fact, not as an
+#: utterance either party can be asked about.
+ROLE_ACTION = "action"
 
 ACTION_CLASS_READ = "read"
 ACTION_CLASS_NAVIGATION = "navigation"
@@ -372,7 +385,8 @@ CREATE TABLE IF NOT EXISTS assistant_messages (
     model TEXT,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL
+    cost_usd REAL,
+    action_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_assistant_messages_dialog
     ON assistant_messages(dialog_id, created_at);
@@ -727,6 +741,142 @@ def note_page(
     }
 
 
+#: UI command families whose membership is one row per Project or per session,
+#: keyed by the id prefix the client mints them under. Each is a cross product
+#: with the fleet, so each grows the prompt without adding information the
+#: snapshot does not already carry.
+_COMMAND_FAMILIES: tuple[tuple[str, str], ...] = (
+    ("session.spawn:", "'New <harness> in <project>'"),
+    ("project.focus:", "'Focus project: <project>'"),
+    ("project.activate(", "'Switch to project <n>: <project>'"),
+    ("session.focus:", "'Focus session: <session>'"),
+    ("session.attach(", "'Attach live session: <session>'"),
+    ("session.requestKill(", "'Kill session: <session>'"),
+)
+#: Below this many members a family is cheaper and more precise written out.
+COMMAND_FAMILY_FOLD_MIN = 3
+_SPAWN_LABEL = re.compile(r"^New (?P<harness>.+?) in ", re.IGNORECASE)
+
+
+def summarize_command_labels(commands: Any) -> list[str]:
+    """The device's available UI commands, with the per-entity families folded.
+
+    A workspace mints one command per Project and per session, and one per
+    (Project x harness) pair for spawning. On a fleet of twenty-three Projects
+    and six harnesses that is 138 spawn labels alone - measured at roughly 1,400
+    prompt tokens, re-sent every turn, to express two lists the model is already
+    holding: the harnesses, and the Projects in the workspace snapshot.
+
+    Folding replaces each such family with one templated line naming its shape.
+    Two things improve at once. The prompt stops growing with the fleet, and the
+    client's flat cap (`MAX_CLIENT_COMMANDS`) stops being a silent truncation of
+    real capabilities - before this, a device offering 315 labels was 85 away
+    from dropping commands off the end of the list with nothing said about it.
+
+    A family below `COMMAND_FAMILY_FOLD_MIN` members is left alone: three
+    literal labels are shorter than the sentence describing them, and more
+    precise. Anything outside a known family passes through verbatim, so a new
+    command the client invents is never silently swallowed by this.
+    """
+    if not isinstance(commands, list):
+        return []
+    families: dict[str, list[str]] = {prefix: [] for prefix, _ in _COMMAND_FAMILIES}
+    passthrough: list[str] = []
+    for item in commands:
+        if not isinstance(item, dict) or not item.get("label"):
+            continue
+        label = str(item["label"])[:80]
+        identifier = str(item.get("id") or "")
+        for prefix, _ in _COMMAND_FAMILIES:
+            if identifier.startswith(prefix):
+                families[prefix].append(label)
+                break
+        else:
+            passthrough.append(label)
+    lines: list[str] = []
+    for prefix, template in _COMMAND_FAMILIES:
+        members = families[prefix]
+        if len(members) < COMMAND_FAMILY_FOLD_MIN:
+            passthrough.extend(members)
+            continue
+        detail = f"{template}, one per {'Project' if 'project' in template else 'session'}"
+        if prefix == "session.spawn:":
+            harnesses = sorted({
+                match.group("harness")
+                for match in (_SPAWN_LABEL.match(member) for member in members)
+                if match
+            })
+            if harnesses:
+                detail = f"{template}, harnesses: {', '.join(harnesses)}"
+        lines.append(f"{detail} ({len(members)} available)")
+    return lines + passthrough[:MAX_CLIENT_COMMANDS]
+
+
+def replay_dialog(history: list[dict[str, Any]], turn_id: str) -> list[dict[str, Any]]:
+    """The stored dialog as wire messages, with resolved actions in position.
+
+    An `action` row is a fact rather than an utterance, and there is no wire role
+    for that. Inventing one is the trap: a bare `system` message mid-conversation
+    is rewritten or rejected differently by every provider, and replaying the
+    original `tool_call`/`tool` pair needs an id pairing that some providers
+    police and others do not - both of which turn "run this dialog on a different
+    model" into a compatibility bug rather than a setting.
+
+    So an action line is folded into the assistant message it follows, which is
+    where it happened: the operator confirmed something the assistant had just
+    proposed. Only when an action opens the window - the dialog's first row, or
+    one following the operator - does it become an assistant message of its own,
+    and consecutive actions merge into that same one. Nothing but `user` and
+    `assistant` ever reaches the wire, so every provider sees a shape it has
+    always seen.
+
+    The turn's own user row is dropped: the caller re-appends the operator's text
+    as the closing message, after the live snapshot.
+    """
+    replayed: list[dict[str, Any]] = []
+    for item in history:
+        role = str(item.get("role") or "")
+        display = str(item.get("display") or "").strip()
+        if not display:
+            continue
+        if role == ROLE_ACTION:
+            if replayed and replayed[-1]["role"] == "assistant":
+                replayed[-1]["content"] = f"{replayed[-1]['content']}\n[{display}]"
+            else:
+                replayed.append({"role": "assistant", "content": f"[{display}]"})
+            continue
+        if role == "user" and str(item.get("turn_id")) == turn_id:
+            continue
+        if role in {"user", "assistant"}:
+            replayed.append({"role": role, "content": display})
+    return replayed
+
+
+def action_transcript_line(kind: str, restatement: str, status: str) -> str:
+    """One resolved action as a line of conversation, for operator and model alike.
+
+    A confirmation is a button or a spoken word, never a turn, so an action's
+    outcome has no natural place in a dialog built from messages - and the panel
+    dropped a card the moment it stopped being open. Both audiences lost the same
+    thing: what actually happened. This is the record, written once at
+    resolution and read back in the position it happened in.
+
+    Wording states the outcome first because that is the part being looked for.
+    `expired` says the window closed rather than that the operator declined -
+    those are different facts and the model proposing again is only correct for
+    one of them.
+    """
+    verdict = {
+        "executed": "Done",
+        "cancelled": "Cancelled by the operator",
+        "expired": "Expired unanswered",
+        "failed": "Failed",
+        "dispatched": "Sent to the operator's device",
+    }.get(str(status), str(status) or "resolved")
+    body = str(restatement or kind or "an action").strip()
+    return f"{verdict}: {body}"
+
+
 class _SentenceStreamer:
     """Turns a stream of model text deltas into complete sentences.
 
@@ -814,6 +964,26 @@ class AssistantStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self._path, self._open)
             self._db.executescript(SCHEMA)
+            # `CREATE TABLE IF NOT EXISTS` cannot add a column to a table an
+            # older daemon already made, and the transcript join needs one.
+            # NULL on every historical row is the true reading: those rows are
+            # prose, and the actions of that era resolved with no transcript
+            # entry to point at.
+            columns = {
+                str(row["name"])
+                for row in self._db.execute("PRAGMA table_info(assistant_messages)")
+            }
+            if columns and "action_id" not in columns:
+                self._db.execute("ALTER TABLE assistant_messages ADD COLUMN action_id TEXT")
+            # Created after the column exists rather than in `SCHEMA`, which runs
+            # against tables an older daemon shaped. Partial, so the NULL every
+            # prose row carries never collides: what it makes exactly-once is an
+            # action's transcript entry, under the race between a cancel window
+            # firing and the operator answering it in the same second.
+            self._db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_messages_action "
+                "ON assistant_messages(action_id) WHERE action_id IS NOT NULL"
+            )
             # A daemon restart killed any in-flight confirmation machinery, so
             # what is still pending in the table can never execute; expire it
             # rather than leaving authority-shaped rows around.
@@ -885,18 +1055,66 @@ class AssistantStore:
         await self._run(op)
 
     async def add_message(self, row: dict[str, Any]) -> None:
+        payload = {"action_id": None, **row}
+
         def op() -> None:
             self._db.execute(
                 "INSERT INTO assistant_messages"
                 "(id,dialog_id,turn_id,created_at,role,display,speech,status,error,"
-                "model,input_tokens,output_tokens,cost_usd) VALUES("
+                "model,input_tokens,output_tokens,cost_usd,action_id) VALUES("
                 ":id,:dialog_id,:turn_id,:created_at,:role,:display,:speech,:status,"
-                ":error,:model,:input_tokens,:output_tokens,:cost_usd)",
-                row,
+                ":error,:model,:input_tokens,:output_tokens,:cost_usd,:action_id)",
+                payload,
             )
             self._db.commit()
 
         await self._run(op)
+
+    async def add_action_message(
+        self, *, dialog_id: str, turn_id: str, action_id: str, display: str, status: str
+    ) -> dict[str, Any] | None:
+        """Record one resolved action as a transcript entry, at most once.
+
+        `INSERT OR IGNORE` against a unique index on `action_id` is the whole
+        idempotency story, and it is load-bearing rather than defensive: a
+        scheduled action can be resolved by its cancel window and by an operator
+        in the same second, and a second row would put the same completed write
+        in front of the model twice - which is how it comes to believe two
+        paragraphs landed.
+
+        Returns the stored row, or `None` when one already existed, so the
+        caller only announces a transition that actually happened.
+        """
+        row = {
+            "id": str(uuid.uuid4()),
+            "dialog_id": dialog_id,
+            "turn_id": turn_id,
+            "created_at": time.time(),
+            "role": ROLE_ACTION,
+            "display": display,
+            "speech": "",
+            "status": status,
+            "error": None,
+            "model": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": None,
+            "action_id": action_id,
+        }
+
+        def op() -> dict[str, Any] | None:
+            cursor = self._db.execute(
+                "INSERT OR IGNORE INTO assistant_messages"
+                "(id,dialog_id,turn_id,created_at,role,display,speech,status,error,"
+                "model,input_tokens,output_tokens,cost_usd,action_id) VALUES("
+                ":id,:dialog_id,:turn_id,:created_at,:role,:display,:speech,:status,"
+                ":error,:model,:input_tokens,:output_tokens,:cost_usd,:action_id)",
+                row,
+            )
+            self._db.commit()
+            return row if cursor.rowcount else None
+
+        return await self._run(op)
 
     async def messages(self, dialog_id: str, limit: int = 200) -> list[dict[str, Any]]:
         def op() -> list[dict[str, Any]]:
@@ -1622,10 +1840,12 @@ class AssistantService:
         here so no freshness claim is ever the model's own.
         """
         now = time.time()
-        projects = [
-            {"name": record.name, "id": record.id}
-            for record in self.projects.ordered_projects()
-        ]
+        # Names only. Every tool parameter that takes a Project takes "the
+        # project's name from the snapshot", and `resolve_project` matches a name
+        # before it ever looks at an id, so the twenty-odd UUIDs this used to
+        # carry were several hundred prompt tokens per turn that nothing could
+        # address anything with.
+        projects = [record.name for record in self.projects.ordered_projects()]
         live = self._live_sessions()
         cold = [
             session
@@ -1665,42 +1885,38 @@ class AssistantService:
                 break
         return {"projects": projects, "sessions": rows, "captured_at": now}
 
-    async def _action_ledger(self, dialog_id: str) -> str:
-        """What this dialog has already proposed and what became of it.
+    async def _open_action_ledger(self, dialog_id: str) -> str:
+        """What this dialog has proposed and is still waiting on an answer for.
 
-        The message log alone cannot answer that: a confirmation is a button or
-        a spoken word, never a turn, so nothing in the transcript records that
-        the operator said yes. Without this the model reads its own last message
-        ("say confirm") as still-unanswered and proposes the write a second
-        time, which for a note means the paragraph lands twice.
+        Everything *resolved* is in the transcript now, written at resolution as
+        an `action` row and replayed in the position it happened in, so listing
+        it here as well would be the same fact twice - once dated and in order,
+        once as an undated digest that costs prompt tokens on every turn and
+        cannot be cached because its ages change.
+
+        What the transcript cannot carry is an action still open, because it has
+        not happened yet. That is the one thing this remains for, and it is also
+        the one the model gets wrong without help: it reads its own unanswered
+        "say confirm" and proposes the write again, which for a note means the
+        paragraph lands twice.
         """
-        # Fetched wider than it is shown, then filtered, then trimmed: reads and
-        # in-flight dispatches are the bulk of a busy dialog's ledger, and
-        # trimming first would leave the mutations the model needs off the end.
         rows = await self.store.actions(dialog_id, limit=CONTEXT_ACTION_LIMIT * 6)
         if not rows:
             return ""
         now = time.time()
-        lines: list[str] = []
-        for row in rows:
-            status = str(row["status"])
-            if status == "dispatched":
-                continue
-            if str(row["class"]) in {ACTION_CLASS_READ, ACTION_CLASS_NAVIGATION}:
-                continue
-            age = max(0, int(now - float(row["created_at"])))
-            detail = str(row["restatement"])[:160]
-            if status in {"pending", "scheduled"}:
-                lines.append(f"- awaiting the operator ({age}s ago): {detail}")
-            else:
-                lines.append(f"- {status} ({age}s ago): {detail}")
+        lines = [
+            f"- {str(row['restatement'])[:160]} "
+            f"(proposed {max(0, int(now - float(row['created_at'])))}s ago)"
+            for row in rows
+            if str(row["status"]) in {"pending", "scheduled"}
+            and str(row["class"]) not in {ACTION_CLASS_READ, ACTION_CLASS_NAVIGATION}
+        ]
         if not lines:
             return ""
         return (
-            "Actions already proposed in this conversation (system-computed; an "
-            "`executed` line means it is done and must not be run again, and an "
-            "`awaiting` line must not be proposed again):\n"
-            + "\n".join(lines[-CONTEXT_ACTION_LIMIT:])
+            "Awaiting the operator's answer right now (system-computed). Do not "
+            "propose any of these again; the conversation already carries what "
+            "was done:\n" + "\n".join(lines[-CONTEXT_ACTION_LIMIT:])
         )
 
     async def _note_context(self, project: Any) -> str:
@@ -1747,49 +1963,71 @@ class AssistantService:
             )
         return "\n".join(lines)
 
-    async def _context_message(
-        self, client_context: dict[str, Any], dialog_id: str = ""
-    ) -> str:
-        snapshot = await self.fleet_snapshot()
+    def _focused_project(self, client_context: dict[str, Any]) -> Any | None:
         focused = str(client_context.get("focused_session_id") or "")
-        focused_name = None
-        focused_project = None
-        if focused:
-            session = self.sessions.sessions.get(focused)
-            if session is not None:
-                names = await self._display_names([session])
-                focused_name = names.get(session.record.id, session.record.name)
-                focused_project = self.projects.projects.get(session.record.project_id)
-        commands = client_context.get("commands")
-        command_lines: list[str] = []
-        if isinstance(commands, list):
-            for item in commands[:MAX_CLIENT_COMMANDS]:
-                if isinstance(item, dict) and item.get("label"):
-                    command_lines.append(str(item["label"])[:80])
+        if not focused:
+            return None
+        session = self.sessions.sessions.get(focused)
+        if session is None:
+            return None
+        return self.projects.projects.get(session.record.project_id)
+
+    async def _focused_session_name(self, client_context: dict[str, Any]) -> str:
+        focused = str(client_context.get("focused_session_id") or "")
+        if not focused:
+            return ""
+        session = self.sessions.sessions.get(focused)
+        if session is None:
+            return ""
+        names = await self._display_names([session])
+        return names.get(session.record.id, session.record.name)
+
+    def _command_context(self, client_context: dict[str, Any]) -> str:
+        """The device's command vocabulary. Turns over when the fleet does, not per turn."""
         parts = [
-            "Workspace snapshot (system-computed, ages relative to now):",
-            json.dumps(snapshot, ensure_ascii=False),
-        ]
-        if focused_name:
-            parts.append(f"The operator's focused session is: {focused_name}")
-        note_view = await self._note_context(focused_project)
-        if note_view:
-            parts.append(note_view)
-        parts.append(
             "run_ui_command executes on the operator's device through the workspace's "
             "deterministic spoken grammar. Reliable command shapes: 'open project "
             "<name>', 'open session <name>' (a name from the snapshot), 'go to next "
             "session', 'open the <Notes|Queue|Git|Transcript|Actions|Insight> tab', "
             "'list voice commands', 'fleet status'. Prefer these shapes over free "
             "paraphrase."
-        )
+        ]
+        command_lines = summarize_command_labels(client_context.get("commands"))
         if command_lines:
             parts.append(
-                "Additional UI command labels available on the operator's device: "
-                + "; ".join(command_lines)
+                "UI commands available on the operator's device. A line naming a "
+                "<placeholder> is one command per matching Project or session, "
+                "addressable by any name in the workspace snapshot:\n"
+                + "\n".join(f"- {line}" for line in command_lines)
             )
+        return "\n".join(parts)
+
+    async def _live_context_message(
+        self, client_context: dict[str, Any], dialog_id: str = ""
+    ) -> str:
+        """Everything that is different this turn from last turn.
+
+        Kept as one block, and kept at the very end of the prompt, because it is
+        the only part that cannot be cached: the snapshot's ages differ by
+        construction on every call. Ahead of it sit the primer, the command
+        vocabulary, the note and the dialog so far, all of which repeat verbatim
+        - and a single volatile line placed among them would end the cacheable
+        prefix at that line and re-bill everything after it as a fresh write.
+
+        Being last also happens to be where it belongs on the merits: the live
+        state of the fleet is what the operator's question is about, and it now
+        sits immediately before that question rather than eight thousand tokens
+        above it.
+        """
+        parts = [
+            "Workspace snapshot (system-computed, ages relative to now):",
+            json.dumps(await self.fleet_snapshot(), ensure_ascii=False),
+        ]
+        focused_name = await self._focused_session_name(client_context)
+        if focused_name:
+            parts.append(f"The operator's focused session is: {focused_name}")
         if dialog_id:
-            ledger = await self._action_ledger(dialog_id)
+            ledger = await self._open_action_ledger(dialog_id)
             if ledger:
                 parts.append(ledger)
         return "\n".join(parts)
@@ -2179,7 +2417,64 @@ class AssistantService:
         row = await self.store.resolve_action(action_id, status=status, result=result)
         if row is not None:
             await self._emit_action(row)
+            await self._record_action_transcript(row)
         return row
+
+    async def _record_action_transcript(self, row: dict[str, Any]) -> None:
+        """Put a resolved action into the dialog, for the panel and the model both.
+
+        Every terminal status passes through here, which is why the hook lives on
+        the one resolution path rather than at each of its six call sites.
+
+        Read and navigation actions are deliberately excluded, and for different
+        reasons. A read is already in the turn's own tool results, so replaying
+        it would be the same fact twice at the cost of a history slot; a UI
+        command is steering the operator is watching happen on their own screen,
+        and one voice session's worth of them would crowd real conversation out
+        of the context window.
+
+        Failure here never fails the action. The action has already executed -
+        losing its transcript line is a reporting gap, and raising would turn it
+        into a failed confirmation for something that actually ran.
+        """
+        if str(row.get("class")) in {ACTION_CLASS_READ, ACTION_CLASS_NAVIGATION}:
+            return
+        try:
+            stored = await self.store.add_action_message(
+                dialog_id=str(row["dialog_id"]),
+                turn_id=str(row["turn_id"]),
+                action_id=str(row["id"]),
+                display=action_transcript_line(
+                    str(row.get("kind") or ""),
+                    str(row.get("restatement") or ""),
+                    str(row.get("status") or ""),
+                ),
+                status=str(row.get("status") or ""),
+            )
+        except Exception:  # noqa: BLE001 - a reporting gap must not fail an action
+            log.warning(
+                "assistant action transcript write failed action=%s", row.get("id"),
+                exc_info=True,
+            )
+            return
+        if stored is None:
+            return
+        log.info(
+            "assistant action recorded in transcript action=%s dialog=%s kind=%s status=%s",
+            row.get("id"), row.get("dialog_id"), row.get("kind"), row.get("status"),
+        )
+        await self.events.emit(
+            "assistant_message",
+            source="assistant",
+            dialog_id=str(row["dialog_id"]),
+            turn_id=str(row["turn_id"]),
+            message_id=str(stored["id"]),
+            role=ROLE_ACTION,
+            display=str(stored["display"]),
+            status=str(stored["status"]),
+            action_id=str(row["id"]),
+            created_at=float(stored["created_at"]),
+        )
 
     # ------------------------------------------------------------ tool running
 
@@ -3428,6 +3723,7 @@ class AssistantService:
         turn_id: str,
         step: int,
         on_content: Callable[[str], Awaitable[None]] | None = None,
+        dialog_id: str = "",
     ) -> Any:
         await self._budget_check()
         model = self.config.assistant_model
@@ -3446,6 +3742,11 @@ class AssistantService:
                 tools=tools,
                 max_tokens=self.config.assistant_max_output_tokens,
                 on_content=on_content,
+                # The dialog is the sticky-routing key. Every call of every turn
+                # in one conversation carries the same prefix, so pinning them to
+                # one provider instance is what lets turn N read the cache turn
+                # N-1 wrote instead of paying to write it again.
+                session_id=dialog_id,
             )
         except asyncio.CancelledError:
             await self.automation_store.observer_finished(
@@ -3476,14 +3777,21 @@ class AssistantService:
             # cache and the rest read it, so a turn-level figure would average the
             # write into the hit rate and hide whether the breakpoint is working.
             cached_tokens=turn.cached_tokens,
+            # The other half of the same reading. A call that wrote 8k and read
+            # none is the signature of a prefix nothing can reach, and it is
+            # indistinguishable from an uncached call by `cached_tokens` alone.
+            cache_write_tokens=turn.cache_write_tokens,
+            cache_discount_usd=turn.cache_discount_usd,
             # `None` is unmeasured, not free: a custom endpoint reports no cost
             # and a zero here would make the daily dollar cap look enforced.
             cost_usd=turn.cost_usd,
             call_id=call_id,
         )
         log.debug(
-            "assistant model call turn=%s step=%d in=%d cached=%d out=%d",
-            turn_id, step, turn.input_tokens, turn.cached_tokens, turn.output_tokens,
+            "assistant model call turn=%s step=%d dialog=%s in=%d cached=%d written=%d "
+            "out=%d discount=%s",
+            turn_id, step, dialog_id, turn.input_tokens, turn.cached_tokens,
+            turn.cache_write_tokens, turn.output_tokens, turn.cache_discount_usd,
         )
         return turn
 
@@ -3494,43 +3802,64 @@ class AssistantService:
         history = await self.store.messages(
             dialog_id, limit=self.config.assistant_context_messages
         )
-        messages: list[dict[str, Any]] = [
-            # The one message that is identical on every call this assistant ever
-            # makes, so it is where the cache breakpoint goes. For a provider that
-            # needs the marker the breakpoint also covers the tool definitions,
-            # which the provider orders ahead of the system prompt; for the rest
-            # `cache_stable_message` hands the plain string straight back.
-            #
-            # Nothing may be inserted ahead of this message, and its text may not
-            # be interpolated per turn: either change moves the prefix and turns
-            # every subsequent call into a cache write. The workspace snapshot is
-            # the *second* message for exactly that reason, and the per-round
-            # budget line stays trailing.
-            cache_stable_message(
-                {"role": "system", "content": SYSTEM_PRIMER},
+        # The prompt is ordered by how often each part changes, most stable
+        # first, because a provider's cache can only reuse an unchanged *prefix*.
+        # One volatile line high up ends that prefix there and re-bills
+        # everything below it as a fresh write - which is what the workspace
+        # snapshot did from position two, capping every hit at the primer no
+        # matter how much identical text followed.
+        #
+        #   1. primer             - identical on every call this assistant makes
+        #   2. note context       - turns over when the focused Project does
+        #   3. command vocabulary - turns over when the fleet or the focus does
+        #   4. dialog so far      - append-only within a window
+        #   5. live snapshot      - different every single turn, so it is last
+        #   6. the operator       - the question, closest to the answer
+        #
+        # The note precedes the vocabulary because it changes less often: a
+        # command's `available` flag flips with the focused pane, while the note
+        # only turns over on a Project switch, so this ordering keeps the note
+        # cached across the more frequent of the two events.
+        #
+        # Each stable block is marked, not just the first: Anthropic reads a
+        # cache only at a breakpoint and allows four, so marking all three gives
+        # a switch of Project a hit through the primer and vocabulary rather
+        # than nothing at all. Implicit cachers ignore the markers and match the
+        # longest prefix themselves.
+        def stable(content: str) -> dict[str, Any]:
+            return cache_stable_message(
+                {"role": "system", "content": content},
                 model=self.config.assistant_model,
-                # A custom endpoint's model id is not an OpenRouter route, so the
-                # prefix cannot answer the caching question and the honest reading
-                # is "unknown" - no breakpoint, and no implicit hit assumed either.
+                # A custom endpoint has no OpenRouter in front of it to translate
+                # the marker, so the honest reading is "unknown" - no breakpoint,
+                # and no implicit hit assumed either.
                 cache_policy=self.provider.endpoint.cache_policy,
-            ),
+            )
+
+        messages: list[dict[str, Any]] = [stable(SYSTEM_PRIMER)]
+        note_view = await self._note_context(self._focused_project(client_context))
+        if note_view:
+            messages.append(stable(note_view))
+        messages.append(stable(self._command_context(client_context)))
+        messages.extend(replay_dialog(history, turn_id))
+        messages.append(
             {
                 "role": "system",
-                "content": await self._context_message(client_context, dialog_id),
-            },
-        ]
-        for item in history:
-            if item["turn_id"] == turn_id and item["role"] == "user":
-                continue  # re-appended below as the closing message
-            if item["role"] in {"user", "assistant"} and str(item["display"]).strip():
-                messages.append({"role": item["role"], "content": str(item["display"])})
+                "content": await self._live_context_message(client_context, dialog_id),
+            }
+        )
         messages.append({"role": "user", "content": text})
         client_id = str(client_context.get("client_id") or "")[:64]
         tools = self._tool_definitions()
-        totals = {
+        totals: dict[str, Any] = {
             "input_tokens": 0,
             "output_tokens": 0,
             "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            # Summed as a signed figure and left `None` while no call in the turn
+            # reported one, so "this provider says nothing about caching" stays
+            # distinguishable from "caching changed this turn's price by zero".
+            "cache_discount_usd": None,
             "cost_usd": 0.0,
             "calls": 0,
         }
@@ -3599,10 +3928,16 @@ class AssistantService:
             turn = await self._model_call(
                 messages, tools, turn_id, step,
                 streamer.feed if self.config.assistant_stream_replies else None,
+                dialog_id=dialog_id,
             )
             totals["input_tokens"] += turn.input_tokens
             totals["output_tokens"] += turn.output_tokens
             totals["cached_tokens"] += turn.cached_tokens
+            totals["cache_write_tokens"] += turn.cache_write_tokens
+            if turn.cache_discount_usd is not None:
+                totals["cache_discount_usd"] = (
+                    float(totals["cache_discount_usd"] or 0.0) + turn.cache_discount_usd
+                )
             totals["cost_usd"] += float(turn.cost_usd or 0)
             totals["calls"] += 1
             if turn.content.strip():
@@ -3780,11 +4115,12 @@ class AssistantService:
         await self.store.touch_dialog(dialog_id)
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
-            "assistant turn complete dialog=%s turn=%s calls=%d in=%d cached=%d out=%d "
-            "cost=%.5f elapsed=%.0fms sentences=%d cards=%d mutations=%d "
-            "suppressed=%s exhausted=%s",
+            "assistant turn complete dialog=%s turn=%s calls=%d in=%d cached=%d "
+            "written=%d out=%d cost=%.5f discount=%s elapsed=%.0fms sentences=%d "
+            "cards=%d mutations=%d suppressed=%s exhausted=%s",
             dialog_id, turn_id, totals["calls"], totals["input_tokens"],
-            totals["cached_tokens"], totals["output_tokens"], totals["cost_usd"], elapsed_ms,
+            totals["cached_tokens"], totals["cache_write_tokens"], totals["output_tokens"],
+            totals["cost_usd"], totals["cache_discount_usd"], elapsed_ms,
             sentence_index, cards_opened, mutations_executed,
             suppress_speech, exhausted,
         )

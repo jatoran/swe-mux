@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 11
+AUTOMATION_SCHEMA_VERSION = 12
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS automation_budget_ledger (
   project_id TEXT, agent_run_id TEXT,
   requested_model TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
   cached_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_discount_usd REAL NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL, cost_known INTEGER NOT NULL DEFAULT 1,
   observer_call_id TEXT, created_at REAL NOT NULL
 );
@@ -386,6 +388,23 @@ class AutomationStore:
             self._db.execute(
                 "ALTER TABLE automation_budget_ledger "
                 "ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0"
+            )
+        if budget_ledger and "cache_write_tokens" not in budget_ledger:
+            # Zero for the same reason `cached_tokens` was: every pre-migration
+            # row was billed by a request that never asked OpenRouter for full
+            # usage accounting, so nothing wrote a figure that this backfill
+            # could be losing.
+            self._db.execute(
+                "ALTER TABLE automation_budget_ledger "
+                "ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0"
+            )
+        if budget_ledger and "cache_discount_usd" not in budget_ledger:
+            # Signed, and zero means "caching changed this call's price by
+            # nothing" - which is the true reading for a historical row, because
+            # the discount was already inside the `cost_usd` beside it.
+            self._db.execute(
+                "ALTER TABLE automation_budget_ledger "
+                "ADD COLUMN cache_discount_usd REAL NOT NULL DEFAULT 0"
             )
         if budget_ledger and "cost_known" not in budget_ledger:
             # Backfilled to 1, which is the opposite direction to `cached_tokens`
@@ -832,6 +851,8 @@ class AutomationStore:
         project_id: str | None = None,
         agent_run_id: str | None = None,
         cached_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        cache_discount_usd: float | None = None,
     ) -> None:
         """Record one call's spend. `cost_usd=None` means *unmeasured*, not free.
 
@@ -849,8 +870,9 @@ class AutomationStore:
             self._db.execute(
                 "INSERT INTO automation_budget_ledger"
                 "(id,day,rule_id,project_id,agent_run_id,requested_model,input_tokens,"
-                "output_tokens,cached_tokens,cost_usd,cost_known,observer_call_id,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "output_tokens,cached_tokens,cache_write_tokens,cache_discount_usd,"
+                "cost_usd,cost_known,observer_call_id,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     str(uuid.uuid4()),
                     time.strftime("%Y-%m-%d", time.gmtime()),
@@ -865,6 +887,11 @@ class AutomationStore:
                     # discount. Summing the two would inflate every token figure
                     # on the page by the amount caching saved.
                     max(0, int(cached_tokens)),
+                    # Also part of `input_tokens`, and disjoint from the cached
+                    # count: a token was either served from the cache or written
+                    # into it on this call, never both.
+                    max(0, int(cache_write_tokens)),
+                    float(cache_discount_usd) if cache_discount_usd is not None else 0.0,
                     float(cost_usd) if cost_usd is not None else 0.0,
                     1 if measured else 0,
                     call_id,
@@ -908,6 +935,8 @@ class AutomationStore:
             "SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
             "COALESCE(SUM(input_tokens),0) input_tokens,"
             "COALESCE(SUM(cached_tokens),0) cached_tokens,"
+            "COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,"
+            "COALESCE(SUM(cache_discount_usd),0) cache_discount,"
             "COALESCE(SUM(cost_usd),0) cost,"
             "COALESCE(SUM(CASE WHEN cost_known=0 THEN 1 ELSE 0 END),0) unpriced "
             "FROM automation_budget_ledger WHERE day=?"
@@ -933,6 +962,11 @@ class AutomationStore:
                 # which was never cacheable.
                 "input_tokens": int(row["input_tokens"]),
                 "cached_tokens": int(row["cached_tokens"]),
+                "cache_write_tokens": int(row["cache_write_tokens"]),
+                # Signed: negative is the write premium exceeding the read
+                # saving, which is what a breakpoint above volatile content
+                # produces and the only figure that makes it visible.
+                "cache_discount_usd": float(row["cache_discount"]),
                 # How many of the calls behind `cost_usd` reported no cost at
                 # all. Nonzero means the dollar figure is a floor, which is what
                 # `budget.py` renders as `cost_blind` and what stops a dollar cap
@@ -1787,6 +1821,8 @@ class AutomationStore:
                 "COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
                 "COALESCE(SUM(input_tokens),0) input_tokens,"
                 "COALESCE(SUM(cached_tokens),0) cached_tokens,"
+                "COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,"
+                "COALESCE(SUM(cache_discount_usd),0) cache_discount_usd,"
                 "COALESCE(SUM(cost_usd),0) cost,"
                 "COALESCE(SUM(CASE WHEN day=? THEN 1 ELSE 0 END),0) today_calls,"
                 "COALESCE(SUM(CASE WHEN day=? THEN input_tokens+output_tokens ELSE 0 END),0)"
@@ -1795,6 +1831,10 @@ class AutomationStore:
                 " today_input_tokens,"
                 "COALESCE(SUM(CASE WHEN day=? THEN cached_tokens ELSE 0 END),0)"
                 " today_cached_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN cache_write_tokens ELSE 0 END),0)"
+                " today_cache_write_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN cache_discount_usd ELSE 0 END),0)"
+                " today_cache_discount_usd,"
                 "COALESCE(SUM(CASE WHEN day=? THEN cost_usd ELSE 0 END),0) today_cost,"
                 "COALESCE(SUM(CASE WHEN cost_known=0 THEN 1 ELSE 0 END),0) unpriced_calls,"
                 "COALESCE(SUM(CASE WHEN day=? AND cost_known=0 THEN 1 ELSE 0 END),0)"
@@ -1802,7 +1842,7 @@ class AutomationStore:
                 "MAX(created_at) last_at "
                 "FROM automation_budget_ledger WHERE day>=? "
                 "GROUP BY rule_id ORDER BY cost DESC,calls DESC",
-                (today, today, today, today, today, today, start),
+                (today, today, today, today, today, today, today, today, start),
             ).fetchall()
             models = self._db.execute(
                 "SELECT rule_id,requested_model,COUNT(*) calls "
@@ -1821,11 +1861,15 @@ class AutomationStore:
                         "tokens": int(row["tokens"]),
                         "input_tokens": int(row["input_tokens"]),
                         "cached_tokens": int(row["cached_tokens"]),
+                        "cache_write_tokens": int(row["cache_write_tokens"]),
+                        "cache_discount_usd": float(row["cache_discount_usd"]),
                         "cost_usd": float(row["cost"]),
                         "today_calls": int(row["today_calls"]),
                         "today_tokens": int(row["today_tokens"]),
                         "today_input_tokens": int(row["today_input_tokens"]),
                         "today_cached_tokens": int(row["today_cached_tokens"]),
+                        "today_cache_write_tokens": int(row["today_cache_write_tokens"]),
+                        "today_cache_discount_usd": float(row["today_cache_discount_usd"]),
                         "today_cost_usd": float(row["today_cost"]),
                         # Calls this rule made whose cost the provider never
                         # reported. A nonzero count is why `cost_usd` beside it
@@ -1847,13 +1891,17 @@ class AutomationStore:
         result["totals"] = {
             key: sum(rule[key] for rule in rules)
             for key in (
-                "calls", "tokens", "input_tokens", "cached_tokens",
+                "calls", "tokens", "input_tokens", "cached_tokens", "cache_write_tokens",
                 "today_calls", "today_tokens", "today_input_tokens", "today_cached_tokens",
+                "today_cache_write_tokens",
                 "unpriced_calls", "today_unpriced_calls",
             )
         } | {
             key: round(sum(rule[key] for rule in rules), 6)
-            for key in ("cost_usd", "today_cost_usd")
+            for key in (
+                "cost_usd", "today_cost_usd",
+                "cache_discount_usd", "today_cache_discount_usd",
+            )
         }
         return result
 
