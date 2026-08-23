@@ -13,6 +13,10 @@ desktop.ini
 .claude/worktrees/
 .agents/worktrees/
 .codex/worktrees/
+# Codex also registers worktrees at the bare path, not only under `.codex/`.
+# An unignored checkout here is not merely noise: it raises this repository's
+# dirty count, which is a precondition the land queue refuses on.
+.worktrees/
 
 # === Node.js ===
 node_modules/
