@@ -134,3 +134,24 @@ The summary is an index, never a second editor: two controls writing one config 
 ## Guided onboarding
 
 `GuidedTutorial.tsx`, `tutorial.ts` - action gates, coach-mark geometry, product-event matching, and device-local completion.
+
+The tour's second-to-last step is a hand-off rather than a lesson: it anchors on the sidebar footer's configurator control and says what pressing it does.
+Two minutes cannot explain an install, and ending on the one surface that can answer the questions the tour did not cover is worth more than one more feature tour stop.
+
+## Configurator launcher
+
+`configurator.ts` - the launcher's presentation logic, and deliberately almost nothing else.
+The daemon resolves which harness, which Project, and what the opening prompt says, because each answer depends on facts the browser does not hold (live CLI detection, whether this install has a source checkout, the current health report).
+
+What is left here is genuinely presentational and is unit-tested for it:
+
+- `launchState` decides whether the control is pressable and what it says. A missing agent CLI and a missing Project are **separate blockers with separate sentences** - one is a prerequisite to install, the other a step to take in the app, and the wrong message sends the operator somewhere that cannot help.
+- A `null` options payload (unanswered or failed) is **pressable with a neutral label**. A launcher that greys itself out because a status request is in flight reads as broken, and the daemon refuses cleanly on the press.
+- `opensChooser` puts the harness menu on right-click / shift / alt, and only when more than one agent is available: a plain press launching the default is the whole value of the control, and a menu offering one row is worse than no menu.
+- `launchBody` omits an unnamed harness rather than sending it blank, so the daemon re-resolves against live detection.
+
+The launch itself reuses `spawnTerminal` in `App.tsx` with only the route swapped.
+The optimistic pane, the focus, and the layout write are identical for every launch, and a second placement path is exactly the thing that drifts.
+It does **not** record the harness as `mux.lastBackend`: the operator picked a conversation about swe-mux, not a launch preference.
+
+Design: `../../../design/features/configurator.md`.

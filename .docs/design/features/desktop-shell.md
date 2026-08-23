@@ -96,6 +96,13 @@ continues to own every terminal.
 - `packaging/build_desktop.py` builds the frontend in `.runtime/`, publishes hashed assets before
   `index.html`, generates the ICO, and runs PyInstaller. It never empties the live static tree;
   locked content-addressed stale assets may remain harmlessly until a later build.
+- **The bundle carries exactly two data trees:** `src/swe_mux/static` and `src/swe_mux/assets`
+  (`packaging/swe_mux.spec`). Anything a runtime feature has to *read* therefore belongs under
+  `assets/`, and `.docs/` is not in the bundle at all. A feature that reads prose from a
+  repository path works on a maintainer's machine and is silently absent in the frozen app,
+  where its whole audience is. The configurator's guides live at
+  `src/swe_mux/assets/configurator/` for this reason, and its test asserts every listed guide
+  has a file (`configurator.md`).
 - **`build_frontend` runs `vite build` directly, so npm's `postbuild` hook never fires and every
   step it performs has to be repeated explicitly.** Forgetting one is silent in the worst way: the
   bundle builds, the daemon starts and reports healthy, and the defect appears only in a browser.

@@ -29,6 +29,8 @@ from swe_mux.mcp import (
     session_summary,
 )
 from swe_mux.mcp_contract import (
+    CONFIGURATOR_READ_TOOL_NAMES,
+    CONFIGURATOR_WRITE_TOOL_NAMES,
     READ_TOOL_NAMES,
     WRITE_TOOL_NAMES,
     claude_read_permissions,
@@ -1392,12 +1394,19 @@ def test_claude_adapter_registers_the_mux_mcp_server(tmp_path: Path) -> None:
     assert server["headers"]["Authorization"] == "Bearer ${MUX_MCP_TOKEN}"
     settings_path = Path(argv[argv.index("--settings") + 1])
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    # Reads are pre-allowed and writes are not, across both families. The
+    # configurator reads are in here even though almost no session can call them:
+    # a permission rule only decides whether the CLI *prompts*, and the daemon
+    # still refuses a caller that is not a configurator, so pre-allowing them
+    # grants nothing. The configurator write stays out for the same reason every
+    # other write does.
     assert settings["permissions"]["allow"] == [
-        f"mcp__mux__{name}" for name in READ_TOOL_NAMES
+        f"mcp__mux__{name}"
+        for name in (*READ_TOOL_NAMES, *CONFIGURATOR_READ_TOOL_NAMES)
     ]
     assert not any(
         f"mcp__mux__{name}" in settings["permissions"]["allow"]
-        for name in WRITE_TOOL_NAMES
+        for name in (*WRITE_TOOL_NAMES, *CONFIGURATOR_WRITE_TOOL_NAMES)
     )
 
 

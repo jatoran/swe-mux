@@ -5,6 +5,10 @@ import {
   allBackendNames, branchesFromMessage, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
   isObservedHarness, setHarnessEnablement, type HarnessRegistryPayload,
 } from './harnessRegistry'
+import {
+  CONFIGURATOR_LAUNCH_PATH, fetchConfiguratorOptions, launchBody, launchState, opensChooser,
+  type ConfiguratorOptions,
+} from './configurator.ts'
 import { BranchPicker } from './BranchPicker'
 import type { BranchRequest } from './branchPoints'
 import { stageBranchSeed } from './branchSeed'
@@ -659,6 +663,22 @@ export function App() {
   // Sound and push channel choices stay intact while the master is muted. Kept in sync
   // through the `mux:settings-changed` event the device-settings cache emits.
   const [alertsEnabled, setAlertsEnabled] = useState(() => alertPreferences().enabled)
+  // What the configurator launcher can offer. Null until the first answer (or
+  // after a failed one), which `launchState` renders as an enabled button with a
+  // neutral label rather than a disabled one - a control greyed out because a
+  // status request is in flight reads as broken, and the daemon refuses cleanly
+  // on the press anyway.
+  const [configuratorOptions,setConfiguratorOptions]=useState<ConfiguratorOptions|null>(null)
+  // Anchor for the harness chooser, opened by the modifier press rather than by
+  // the plain one: a single press launching the default is the whole point of
+  // the control.
+  const [configuratorMenu,setConfiguratorMenu]=useState<{x:number;y:number}|null>(null)
+  // A failed read leaves `null` rather than a stale answer: `launchState` treats
+  // "not known" as pressable, so the button keeps working through an outage and
+  // the daemon is what refuses if it genuinely cannot launch.
+  const loadConfiguratorOptions=()=>void fetchConfiguratorOptions()
+    .then(setConfiguratorOptions).catch(()=>setConfiguratorOptions(null))
+  const configuratorLaunch=useMemo(()=>launchState(configuratorOptions),[configuratorOptions])
   const [railVoiceRevision,setRailVoiceRevision]=useState(0)
   // Processes, bandwidth, storage, and fleet activity are one dialog (`ResourcesModal`).
   // `null` is closed; the value is the segment it opens on, so every entry point that
@@ -1840,6 +1860,11 @@ export function App() {
     } catch { setProcessFleet(null) }
   }
 
+  // Once at boot. Nothing polls it: the two things that move the answer are a
+  // configuration change (handled on the event) and installing a CLI, which is
+  // not something to poll a subprocess probe for every few seconds.
+  useEffect(() => { loadConfiguratorOptions() }, [])
+
   useEffect(() => {
     void loadProcesses()
     const tick = () => { if (!document.hidden) void loadProcesses() }
@@ -2245,6 +2270,9 @@ export function App() {
             // a switch turned on elsewhere leaves this tab's gate standing over a
             // surface that now works.
             window.dispatchEvent(new CustomEvent(INSTALL_CONFIG_CHANGED))
+            // `default_harness` and the per-harness enablement map both live in
+            // the config, so the launcher's resolved default can move here.
+            void loadConfiguratorOptions()
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
           if(event.type==='project_used')applyProjectUse(String(event.payload?.project_id||''),Number(event.payload?.last_used_at||0))
@@ -3352,7 +3380,13 @@ export function App() {
   // the cross-vendor review spawn does. That is deliberately not an inject-then-Enter dance: a
   // freshly spawned TUI is not ready for input for seconds, and anything written before it is
   // would be swallowed.
-  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:string='shell', options?:{argv?:string[];seedText?:string;stageText?:string;model?:string}) => {
+  // `options.configurator` swaps the daemon route for the one that mints a
+  // configurator session, and nothing else: the optimistic pane, the focus, and
+  // the layout write below are the same for every launch, and a second placement
+  // path is exactly the thing that drifts. The prompt, the harness resolution,
+  // and the session's own marker are all the daemon's, which is why the body
+  // carries a Project and at most a harness name.
+  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:string='shell', options?:{argv?:string[];seedText?:string;stageText?:string;model?:string;configurator?:{harness?:string}}) => {
     if (spawning.current) return false
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target){setError('Project is not available yet.');return false}
@@ -3380,31 +3414,37 @@ export function App() {
     // where `sidebarOpen` drives only the mobile drawer (desktop collapse is `sidebarCollapsed`).
     setSidebarOpen(false)
     try {
-      const next = await api<Session>('POST', '/api/sessions', {
-        backend, project_id: targetProject,
-        // A launch profile now exists for agent harnesses too, so this is no longer
-        // gated on `shell`. The daemon refuses a profile whose own backend does not
-        // match the requested one, which is the check the gate used to stand in for.
-        profile_id: profileId || undefined,
-        ...(options?.argv?.length ? { argv: options.argv } : {}),
-        // A first prompt as text the agent RUNS: the daemon inlines short bodies into argv
-        // and stages long ones into the workspace with a reader prompt, so there is no
-        // client-side ceiling.
-        ...(options?.seedText ? { seed_text: options.seedText } : {}),
-        // Text left waiting in the composer, unsent: the daemon waits for readiness and
-        // writes a bracketed paste with no Enter, so no pane involvement is needed.
-        ...(options?.stageText ? { stage_text: options.stageText } : {}),
-        // A model name in the harness's own spelling, never argv: the daemon owns the
-        // per-harness mapping and the refusal, so the browser stays free of both.
-        ...(options?.model ? { model: options.model } : {}),
-      })
+      const [spawnPath, spawnPayload] = options?.configurator
+        ? [CONFIGURATOR_LAUNCH_PATH, launchBody(targetProject, options.configurator.harness)]
+        : ['/api/sessions', {
+            backend, project_id: targetProject,
+            // A launch profile now exists for agent harnesses too, so this is no longer
+            // gated on `shell`. The daemon refuses a profile whose own backend does not
+            // match the requested one, which is the check the gate used to stand in for.
+            profile_id: profileId || undefined,
+            ...(options?.argv?.length ? { argv: options.argv } : {}),
+            // A first prompt as text the agent RUNS: the daemon inlines short bodies into argv
+            // and stages long ones into the workspace with a reader prompt, so there is no
+            // client-side ceiling.
+            ...(options?.seedText ? { seed_text: options.seedText } : {}),
+            // Text left waiting in the composer, unsent: the daemon waits for readiness and
+            // writes a bracketed paste with no Enter, so no pane involvement is needed.
+            ...(options?.stageText ? { stage_text: options.stageText } : {}),
+            // A model name in the harness's own spelling, never argv: the daemon owns the
+            // per-harness mapping and the refusal, so the browser stays free of both.
+            ...(options?.model ? { model: options.model } : {}),
+          }] as const
+      const next = await api<Session>('POST', spawnPath, spawnPayload)
       markProjectRecent(targetProject)
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
       clientStartupTimingValues.current[next.id]=browserTiming
       if (profileId) { localStorage.setItem('mux.lastProfile',profileId); setLauncherProfile(profileId) }
       // Remembered so holding mobile Run repeats the last launch without the menu.
-      localStorage.setItem('mux.lastBackend',backend)
+      // Not for a configurator launch: the operator picked a conversation about
+      // swe-mux, not a harness preference, and recording it here would make the
+      // next held-Run open the wrong thing.
+      if (!options?.configurator) localStorage.setItem('mux.lastBackend',backend)
       pendingSpawns.current[pendingId].resolvedId=next.id
       setSessions(items => [...items.filter(item=>item.id!==pendingId&&item.id!==next.id),mergeSessionSnapshot(items.find(item=>item.id===next.id),next)])
       setActiveId(next.id)
@@ -3433,6 +3473,23 @@ export function App() {
     }
   }
   spawnTerminalRef.current=spawnTerminal
+
+  // The configurator launch, from every entry point. `harness` empty asks the
+  // daemon to resolve one, which is what a plain press does; the chooser passes a
+  // name. The Project is the active one, and the daemon substitutes a sensible
+  // one (its own source checkout, when there is one) if this tab has none - so a
+  // launch from a surface with no Project selected still works rather than
+  // refusing on a detail the operator did not choose.
+  const launchConfigurator = async (harness = '') => {
+    setConfiguratorMenu(null)
+    const target = projectId || projectsRef.current[0]?.id || ''
+    if (!target) { setError('Add a Project before launching the configurator.'); return }
+    // The backend argument only decorates the optimistic pending pane, so the
+    // resolved default is the best guess available before the daemon answers; the
+    // real record replaces it moments later.
+    const optimistic = harness || configuratorOptions?.default_harness || 'shell'
+    await spawnTerminal(target, false, undefined, undefined, 'after', optimistic, { configurator: { harness } })
+  }
 
   const openLauncher = (targetProject = projectId, split: false | SplitDirection = false) => {
     setLauncherProject(targetProject)
@@ -3624,11 +3681,14 @@ export function App() {
     if(step==='accounts'){
       setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(false);openSettings('Accounts');return
     }
-    if(['run','run-choice','workspace','new-tab','tabs','splits','resources','gates','features','feature-menu','ready'].includes(step)){
+    if(['run','run-choice','workspace','new-tab','tabs','splits','resources','gates','features','feature-menu','configurator','ready'].includes(step)){
       setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
       const first=projectsRef.current[0]
       if(first&&!projectsRef.current.some(project=>project.id===projectId))setProjectId(first.id)
-      if(mobileWorkspace&&(step==='resources'||step==='features'||step==='feature-menu'))setSidebarOpen(true)
+      // `configurator` joins the mobile list because its anchor is in the sidebar
+      // footer, which is behind the drawer on a phone: without this the step
+      // spotlights a control the user cannot see.
+      if(mobileWorkspace&&(step==='resources'||step==='features'||step==='feature-menu'||step==='configurator'))setSidebarOpen(true)
     }
   }
 
@@ -5229,6 +5289,11 @@ export function App() {
     { id: 'history.openProject', label: 'Browse selected project’s session history', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => void showHistory(commandProject||null) },
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
+    // The palette is where someone looks who does not yet know the footer button
+    // exists, which is exactly the person this launches something for. The
+    // disabled reason is the same sentence the button's tooltip carries, so the
+    // two entry points never explain the same refusal differently.
+    { id: 'configurator.open', label: 'Ask an agent about swe-mux (settings, diagnostics, how it works)', category: 'view', available: configuratorLaunch.enabled, disabledReason: configuratorLaunch.reason, run: () => void launchConfigurator() },
     { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
     // Two dialogs. The ids are unchanged so keybindings and menu rows that already name a
     // surface keep working and keep landing on it — `usage.open` most of all, which has
@@ -5719,6 +5784,7 @@ export function App() {
       setTabMenu(null)
       setEmptyMenu(null)
       setDrawerDisplayMenu(null)
+      setConfiguratorMenu(null)
       setMainMenuOpen(false)
     }
     window.addEventListener('mux:command', onCommand)
@@ -5768,6 +5834,7 @@ export function App() {
   useDismissLevel(() => setContextMenu(null), !!contextMenu, 'session-menu')
   useDismissLevel(() => setProjectMenu(null), !!projectMenu, 'project-menu')
   useDismissLevel(() => setSidebarMenu(null), !!sidebarMenu, 'sidebar-menu')
+  useDismissLevel(() => setConfiguratorMenu(null), !!configuratorMenu, 'configurator-menu')
   useDismissLevel(() => setSortMenu(null), !!sortMenu, 'sort-menu')
   useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')
   useDismissLevel(() => setNoteMenu(null), !!noteMenu, 'note-menu')
@@ -7171,11 +7238,25 @@ export function App() {
           <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} projects={projects} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
-        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button>{/* Two rows, and both are app-wide switches rather than navigation. The gear
-            that used to sit beside this bell is gone: Settings is one click inside the
-            menu next to it, and a second permanent door to it cost a footer slot for a
-            saving of nothing. The Projects registry left for the PROJECTS header, which
-            is beside the tree it edits. */}</div>
+        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button
+          type="button"
+          class={`configurator-trigger${configuratorLaunch.enabled?'':' off'}`}
+          disabled={!configuratorLaunch.enabled}
+          title={configuratorLaunch.reason}
+          aria-label={configuratorLaunch.reason}
+          onContextMenu={event=>{if(!opensChooser(event,configuratorOptions))return;event.preventDefault();setConfiguratorMenu({x:event.clientX,y:event.clientY})}}
+          onClick={event=>{
+            if(opensChooser(event,configuratorOptions)){setConfiguratorMenu({x:event.clientX,y:event.clientY});return}
+            void launchConfigurator()
+          }}
+        ><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.9M8 12.5v1.9M14.4 8h-1.9M3.5 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/></svg></button>{/* Three controls, and the third is the reason the old rule needed
+            restating. The rule was "app-wide switches, not navigation", which is why
+            the gear that used to sit beside this bell is gone: Settings is one click
+            inside the menu, and a second permanent door to it saved nothing. The
+            configurator button is not a door — it starts an agent session about this
+            install — and the footer is where a control that belongs to the whole app
+            rather than to the tree above it goes. The Projects registry still lives on
+            the PROJECTS header, beside the tree it edits. */}</div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}
@@ -7202,6 +7283,10 @@ export function App() {
             has no room in the 40px rail column, and tab strips no longer carry
             a new-tab button. */}
         <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
+        {/* The footer's configurator button has to exist here too: collapsing the
+            sidebar must not remove a control, and an expand round-trip to ask a
+            question about the app is the round-trip this button exists to avoid. */}
+        <button class="rail-button" disabled={!configuratorLaunch.enabled} aria-label={configuratorLaunch.reason} title={configuratorLaunch.reason} onContextMenu={event=>{if(!opensChooser(event,configuratorOptions))return;event.preventDefault();setConfiguratorMenu({x:event.clientX,y:event.clientY})}} onClick={event=>{if(opensChooser(event,configuratorOptions)){setConfiguratorMenu({x:event.clientX,y:event.clientY});return}void launchConfigurator()}}>⚙</button>
         <button class="rail-button" aria-label="Open swe-mux menu" title="Menu" onClick={()=>setMainMenuOpen(value=>!value)}>:</button>
         <button class="rail-button" aria-label="Manage projects" title="Projects" onClick={()=>openProjectsManager()}>◇</button>
       </nav>}
@@ -7535,6 +7620,22 @@ export function App() {
       <button class="menu-row" title="Rebuild + redeploy app (keep sessions)" onClick={()=>{setSidebarMenu(null);runNamedCommand('app.redeploy')}}><span class="menu-row-icon" aria-hidden="true"><PackageIcon/></span><span class="menu-row-label">Rebuild + redeploy app (keep sessions)</span></button>
     </div>}
 
+    {/* The configurator's harness chooser. Only ever reached by an explicit
+        modifier press, and only when more than one agent is available — a menu
+        offering the single thing a plain press would already have done is worse
+        than no menu. The default is marked rather than reordered so the list
+        stays in the registry's own order between presses. */}
+    {configuratorMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Launch the configurator with" style={{left:clampContextMenuLeft(configuratorMenu.x,innerWidth),top:Math.max(4,Math.min(configuratorMenu.y,innerHeight-200))}}>
+      <div class="context-title"><strong>ASK ABOUT SWE-MUX</strong></div>
+      {(configuratorOptions?.harnesses||[]).map(name=>
+        <button key={name} class="menu-row" onClick={()=>void launchConfigurator(name)}>
+          <span class="menu-row-label">{harnessDisplayName(name)}</span>
+          {name===configuratorOptions?.default_harness&&<span class="menu-row-note">default</span>}
+        </button>)}
+      <div class="context-rule" />
+      <button class="menu-row" onClick={()=>{setConfiguratorMenu(null);openSettings('Harnesses')}}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Choose a default harness…</span></button>
+    </div>}
+
     {/* A Group's own menu: the three things a Group can be told to do, in the place a
         right-click already looks for them. Rename mirrors the header's ✎ and fold mirrors
         clicking the header, so the menu is discoverable rather than exclusive; delete has no
@@ -7800,7 +7901,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 

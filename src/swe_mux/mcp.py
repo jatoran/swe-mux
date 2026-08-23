@@ -69,7 +69,12 @@ from .deterministic_consumers import (
 )
 from .git_projects import ProjectIdentity
 from .harness import agent_harnesses, is_agent_harness
-from .mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
+from .mcp_contract import (
+    CONFIGURATOR_READ_TOOL_NAMES,
+    CONFIGURATOR_WRITE_TOOL_NAMES,
+    READ_TOOL_NAMES,
+    WRITE_TOOL_NAMES,
+)
 from .project_actions import project_actions_schema
 from .project_files import (
     DEFAULT_NOTE_STORAGE_ID,
@@ -1634,21 +1639,132 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+#: The configurator agent's tools, listed only to a session the daemon launched
+#: as one (`SessionRecord.configurator`). Kept as a separate list rather than a
+#: flag on entries in `TOOLS` so that the ordinary surface is still exactly one
+#: readable array, and so nothing has to remember to filter: a session that is
+#: not a configurator sees `TOOLS`, unchanged and unfiltered, as it always did.
+CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "configurator_capabilities",
+        "description": (
+            "This swe-mux install's generated inventory: every install-wide "
+            "setting with its current value, its default, whether changing it "
+            "needs a daemon restart, and the constraint its own validator "
+            "enforces; the harness registry with this machine's live detection; "
+            "the automation dependency graph with each entry's full transitive "
+            "requirement set and whether it can spend money; the MCP surface; "
+            "and whether this install has a source checkout you could edit. "
+            "Every part is derived from the code that enforces it, so it cannot "
+            "drift from the truth - read it instead of guessing what a setting "
+            "is called or what values it accepts. Secrets are reported as "
+            "<set>/<unset> and never by value."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "configurator_guide",
+        "description": (
+            "The guides that ship with this build, explaining how swe-mux is "
+            "meant to be configured and why. Call with no argument for the "
+            "index (id, title, summary); call with an id for that guide's full "
+            "text. Start with `orientation` if the operator is new. These are "
+            "design rationale, not a manual: they are what tells you that an "
+            "empty analysis panel is usually an opt-in nobody has switched on "
+            "rather than a bug."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Guide id from the index; omit to get the index",
+                }
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "configurator_diagnostics",
+        "description": (
+            "This install's health report: prerequisite checks, remote-access "
+            "and firewall state, supervisor and background-loop health, harness "
+            "detection, and the observation-freshness rows that nothing else "
+            "exposes. Each check carries a severity separating an unavailable "
+            "optional feature from a safety-critical failure. Read it before "
+            "agreeing that something is broken, and before proposing a fix for "
+            "a symptom whose cause is listed here."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "configurator_apply_settings",
+        "description": (
+            "Change install-wide settings. Takes a `changes` object of setting "
+            "name to new value, exactly as `configurator_capabilities` names "
+            "them. It runs the same validated path the Settings panel uses: "
+            "every value is checked before anything is written, so an invalid "
+            "batch changes nothing and comes back naming the offending fields. "
+            "The result reports which settings applied immediately and which "
+            "need a daemon restart to take effect - tell the operator which, "
+            "and never restart the daemon on your own initiative. Ask before "
+            "calling this; a settings change is the operator's decision and you "
+            "are advising it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "object",
+                    "description": (
+                        "Setting name to new value. Names and accepted values "
+                        "come from `configurator_capabilities`."
+                    ),
+                }
+            },
+            "required": ["changes"],
+            "additionalProperties": False,
+        },
+    },
+]
+
 _DECLARED_TOOL_NAMES = {str(tool["name"]) for tool in TOOLS}
 assert _DECLARED_TOOL_NAMES == set(READ_TOOL_NAMES) | set(WRITE_TOOL_NAMES)
-for _tool in TOOLS:
+_CONFIGURATOR_TOOL_NAMES = frozenset(CONFIGURATOR_READ_TOOL_NAMES) | frozenset(
+    CONFIGURATOR_WRITE_TOOL_NAMES
+)
+_DECLARED_CONFIGURATOR_NAMES = {str(tool["name"]) for tool in CONFIGURATOR_TOOLS}
+assert _DECLARED_CONFIGURATOR_NAMES == _CONFIGURATOR_TOOL_NAMES
+# The two families must not overlap: a name in both would be gated by whichever
+# check ran first, which is exactly the kind of authority question that must not
+# depend on statement order.
+assert not (_DECLARED_TOOL_NAMES & _CONFIGURATOR_TOOL_NAMES)
+_READ_ONLY_TOOL_NAMES = frozenset(READ_TOOL_NAMES) | frozenset(CONFIGURATOR_READ_TOOL_NAMES)
+for _tool in (*TOOLS, *CONFIGURATOR_TOOLS):
     # The read/write split is the single source for both the Claude permission
     # allowlist and these annotations, so a tool cannot be auto-allowed while
     # advertising itself as a write. `watch_session` is the one entry whose
     # placement needed an argument rather than being obvious; it is recorded in
     # `mcp_contract.py` beside the name.
-    _read_only = str(_tool["name"]) in READ_TOOL_NAMES
+    _read_only = str(_tool["name"]) in _READ_ONLY_TOOL_NAMES
     _tool["annotations"] = {
         "readOnlyHint": _read_only,
         "destructiveHint": False,
         "idempotentHint": _read_only,
         "openWorldHint": False,
     }
+
+
+def tools_for(caller: Any) -> list[dict[str, Any]]:
+    """The tool list this caller is allowed to see.
+
+    Listing is the same gate as calling, deliberately. A tool advertised and then
+    refused teaches an agent that the surface lies to it, and the refusal arrives
+    only after it has already planned around the capability.
+    """
+    if bool(getattr(getattr(caller, "record", None), "configurator", False)):
+        return [*TOOLS, *CONFIGURATOR_TOOLS]
+    return TOOLS
 
 
 class McpAuthError(Exception):
@@ -1707,6 +1823,7 @@ class McpService:
         land_queue: Any = None,
         scan_timeline_service: Any = None,
         session_watch: Any = None,
+        configurator: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -1748,6 +1865,11 @@ class McpService:
         # rather than arming nothing and reporting success - a watch that was
         # never armed is the exact silence the tool exists to remove.
         self.session_watch = session_watch
+        # The configurator family's backing service (`configurator.py`). Absent
+        # it, the tools answer unavailable rather than a fake empty inventory -
+        # an agent told "no settings exist" would confidently advise nonsense,
+        # which is worse than being told the surface is not wired.
+        self.configurator = configurator
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -4483,6 +4605,68 @@ class McpService:
         )
         return dict(result)
 
+    # ------------------------------------------------------- configurator
+
+    def _configurator_service(self) -> Any:
+        if self.configurator is None:
+            raise QueueError(
+                "unavailable",
+                "the configurator surface is not available on this daemon.",
+                status=503,
+            )
+        return self.configurator
+
+    async def configurator_capabilities(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_capabilities`: this install's generated inventory."""
+        return dict(await self._configurator_service().capabilities())
+
+    async def configurator_guide(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.configurator_guide`: the index, or one shipped guide's text.
+
+        Served straight from the module rather than through the service: the
+        guides are files in this build with no runtime state behind them, so a
+        daemon wired without a configurator service can still answer them.
+        """
+        from .configurator import guide_index, read_guide
+
+        requested = str(args.get("id") or "").strip()
+        if not requested:
+            return {"guides": guide_index()}
+        try:
+            text = await asyncio.to_thread(read_guide, requested)
+        except KeyError as exc:
+            raise ValueError(str(exc.args[0] if exc.args else exc)) from exc
+        return {"id": requested, "text": text}
+
+    async def configurator_diagnostics(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_diagnostics`: the daemon's own health report."""
+        return dict(await self._configurator_service().diagnostics())
+
+    async def configurator_apply_settings(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_apply_settings`: a validated install-wide settings write.
+
+        Every bound lives in `update_config`, which is what the Settings panel
+        calls too, so this tool grants no authority the panel does not already
+        have and cannot skip a check by arriving through MCP. The only rules
+        enforced here are the shape of the argument and the refusal to accept an
+        empty batch - a write that changes nothing should say so rather than
+        report a successful save.
+        """
+        service = self._configurator_service()
+        changes = args.get("changes")
+        if not isinstance(changes, dict):
+            raise ValueError("changes must be an object of setting name to new value")
+        if not changes:
+            raise ValueError("changes must name at least one setting")
+        self.writes += 1
+        return dict(await service.apply_settings(dict(changes)))
+
     # ------------------------------------------------------------ protocol
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
@@ -4533,6 +4717,22 @@ class McpService:
             "request_land": self.request_land,
             "request_verify": self.request_verify,
         }
+        if name in _CONFIGURATOR_TOOL_NAMES:
+            # The same gate `tools_for` applies to listing. Phrased as "unknown
+            # tool" rather than "not permitted" because to every session but a
+            # configurator that is the literal truth: the tool was never
+            # advertised, and naming a capability that exists elsewhere would
+            # only invite an agent to look for a way to reach it.
+            if not bool(getattr(getattr(caller, "record", None), "configurator", False)):
+                raise ValueError(f"unknown tool: {name}")
+            handlers.update(
+                {
+                    "configurator_capabilities": self.configurator_capabilities,
+                    "configurator_guide": self.configurator_guide,
+                    "configurator_diagnostics": self.configurator_diagnostics,
+                    "configurator_apply_settings": self.configurator_apply_settings,
+                }
+            )
         handler = handlers.get(name)
         if handler is None:
             raise ValueError(f"unknown tool: {name}")
@@ -4586,13 +4786,28 @@ class McpService:
                             "that has not been delivered), "
                             "and `request_spawn` drafts a new-session request in the "
                             "Fleet Queue for a human to approve. It starts nothing."
+                            + (
+                                " This session was launched as the swe-mux "
+                                "configurator, so it also holds the "
+                                "`configurator_*` tools: a generated inventory of "
+                                "this install's settings, harnesses, and "
+                                "automations, the shipped configuration guides, "
+                                "the health report, and one validated write that "
+                                "changes install-wide settings."
+                                if bool(
+                                    getattr(
+                                        getattr(caller, "record", None), "configurator", False
+                                    )
+                                )
+                                else ""
+                            )
                     ),
                 }
             )
         if method == "ping":
             return ok({})
         if method == "tools/list":
-            return ok({"tools": TOOLS})
+            return ok({"tools": tools_for(caller)})
         if method == "tools/call":
             name = str(params.get("name") or "")
             raw_arguments = params.get("arguments")

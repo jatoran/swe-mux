@@ -565,6 +565,19 @@ class Config:
     # states the boundary; `wsl_bridge.py` explains why loopback cannot serve here.
     wsl_bridge_enabled: bool = False
     default_backend: str = "shell"
+    # Which agent to launch when something needs *an agent* and nobody named one.
+    #
+    # A separate question from `default_backend`, which answers "what does Run
+    # open by default" and legitimately defaults to `shell`. A shell is not an
+    # answer here: it cannot receive a seeded prompt, so a caller that needs an
+    # agent and reads `shell` has to fall through to something, and every such
+    # caller inventing its own fallback is how two launchers end up disagreeing
+    # about which harness is "yours".
+    #
+    # Empty means "resolve by detection", which is the right default because a
+    # machine with exactly one agent installed has no choice to make and should
+    # not be asked. `harness.resolve_default_harness` owns the whole rule.
+    default_harness: str = ""
     shell_exe: str = field(default_factory=lambda: default_shell_executable())
     harness_exe: dict[str, str] = field(default_factory=default_harness_executables)
     harness_args: dict[str, list[str]] = field(default_factory=default_harness_args)
@@ -1313,6 +1326,11 @@ def _validate(config: Config) -> None:
         errors["port"] = "must be between 1 and 65535"
     if config.default_backend != "shell" and not is_agent_harness(config.default_backend):
         errors["default_backend"] = "must be shell or a registered agent"
+    if config.default_harness and not is_agent_harness(config.default_harness):
+        # No `shell` escape hatch here, unlike `default_backend`: this field
+        # exists precisely to answer "which agent", and accepting `shell` would
+        # let it be set to a value that can never satisfy the callers that read it.
+        errors["default_harness"] = "must be empty or a registered agent"
     if config.terminal_renderer not in {"auto", "dom", "webgl"}:
         errors["terminal_renderer"] = "must be auto, dom, or webgl"
     # `bool` is an `int` subclass and `True` would otherwise validate as a 1-column cap.

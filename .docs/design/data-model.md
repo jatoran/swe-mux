@@ -51,6 +51,14 @@
   own and the ordinary process-exit path is what marks the record; `None` leaves the terminal
   path to classify the exit as it always has (`features/sessions.md`).
   Round-tripped through the record snapshot, so supervisor adoption preserves it across a daemon restart.
+- `SessionRecord.configurator`: true only for a session the daemon itself launched as the
+  configurator agent (`features/configurator.md`). It is the whole of that tool family's
+  authority, so it is set in exactly one place - `POST /api/configurator/launch` - and is
+  deliberately **not** a `SpawnRequest` field: were it one, the `request_spawn` MCP tool would
+  be a way for any agent to ask for a session that can rewrite this install's settings, and the
+  approving human would have no reason to read the request as anything but an ordinary spawn.
+  Round-tripped through the record snapshot, because sessions outlive the daemon and a
+  configurator adopted without its tools would look like the feature silently breaking.
 - `SessionRecord.standing_activity`: the standing-engagement annotation axis — a list of
   `StandingActivity {kind: loop|cron|background_tasks|subagents, source, evidence, since,
   expires_at, count, detail}`. Not states: SessionState, `awaiting_reason`, and delivery are

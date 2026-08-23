@@ -17,6 +17,21 @@
   the open enforcement gaps: `development/archive/HARNESS_PARITY_AUDIT_2026-08-11.md`;
   per-candidate parity study for CLIs not yet in the registry, and the sequencing that consumes
   it: `development/HARNESS_EXPANSION_CANDIDATES.md`, `development/ROADMAP.md` Phase 12
+- Changing the configurator agent - its generated inventory, its shipped guides, the gated
+  MCP family, the launcher, or `default_harness`: `design/features/configurator.md`, plus
+  `design/features/mux-mcp.md` for anything touching the tool contract.
+  The rule the split exists to enforce: **nothing structural in that inventory may be
+  hand-written.** Every section is derived from the registry that owns it, and the settings
+  constraints are quoted from `_validate` by probing it rather than transcribed - a
+  hand-maintained table beside a validator is a second validator, and the copy is what drifts.
+  The second rule is packaging: the guides live under `src/swe_mux/assets/` because that is
+  what the wheel and the PyInstaller bundle both carry, and `.docs/` is in neither. A guide
+  moved into `.docs/` reads correctly from source and is silently absent for every user of
+  the frozen app, which is the entire audience.
+- Adding a tool to the mux MCP surface, or changing who may see one: `design/features/mux-mcp.md`,
+  `src/swe_mux/mcp_contract.py`. A tool visible to a subset of sessions is listed *and*
+  dispatched behind the same check (`design/features/configurator.md`, "The gate") - a tool
+  advertised and then refused teaches an agent that the surface lies to it.
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project notes, the global Scratchpad, files, ignores, or watches:
