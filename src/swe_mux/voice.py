@@ -87,10 +87,27 @@ STT_MAX_SECONDS = 35.0
 STT_LATENCY_SAMPLES = 200
 VOICE_APPROVAL_TTL_SECONDS = 20.0
 # The opening clip bound for trusted application speech (the assistant's own
-# voice and the deterministic spoken answers). Synthesis time tracks characters,
-# so this is time-to-first-sound: ~1 s here against the 3-14 s measured when a
-# whole reply is one 420-character clip.
-APPLICATION_FIRST_SEGMENT_CHARS = 140
+# voice and the deterministic spoken answers). This is time-to-first-sound, and
+# it was 140 on the strength of a claim that 140 characters spoke in about a
+# second. Measured, 140 takes 4.1 s and 60 takes 2.0 s, so this halves the
+# silence the operator waits through. It is not lower because 60 characters buy
+# 4.0 s of audio against the ~2 s the next clip needs to synthesize: below about
+# 40 the clip stops covering its successor and the reply starts stalling
+# immediately after its first word (`streaming_segments`).
+APPLICATION_FIRST_SEGMENT_CHARS = 60
+# No clip this module emits is allowed to be shorter than this, because a clip
+# below roughly twelve characters finishes playing before the next one can be
+# made (`streaming_segments` carries the measured curve).
+#
+# Twenty, and the number came down twice under real sentences. The pathology is
+# a THREE-to-FIVE character lead - "Yes.", "Ok.", "Done." - which covers 0.35 and
+# stalls before the reply's second word. Ordinary short sentences are not the
+# problem and must keep leading on their own: "First result is ready." is 22
+# characters and covers ~1.4, "Three sessions are working." is 27 and covers
+# ~1.5. A floor at 40, then 25, glued both to the sentence after them for no
+# gain. Twenty sits above the ~12-character break-even with about 30% margin and
+# leaves a coherent opening sentence alone, which is what it is for.
+MIN_SEGMENT_CHARS = 20
 # An open speech stream with no producer left is dropped after this long. A
 # stream is closed explicitly by whoever opened it; this only reclaims the ones
 # whose tab went away mid-turn.
@@ -534,12 +551,26 @@ def streaming_segments(
     back to word chunks.
 
     `first_max_chars` tightens *only* the opening clip, which is the one the
-    operator waits on in silence. Synthesis is roughly linear in characters, so
-    a 420-character opening clip is measured at 11-14 s on Kokoro before any
-    sound; the same text opened at 140 characters starts speaking in about a
-    second and encodes the rest while it plays. Agent read-aloud keeps the wide
-    bound (coherence of somebody else's prose matters more than the first
-    second); application speech passes `APPLICATION_FIRST_SEGMENT_CHARS`.
+    operator waits on in silence. Agent read-aloud keeps the wide bound
+    (coherence of somebody else's prose matters more than the first second);
+    application speech passes `APPLICATION_FIRST_SEGMENT_CHARS`.
+
+    Measured on the primary host, Kokoro, two passes, natural prose - the numbers
+    every bound here is chosen against, and the reason the previous ones were
+    wrong (this docstring used to claim 140 characters spoke "in about a second";
+    it is 4.1 s):
+
+        chars    3     19     40     60     90    140    280    420
+        synth  578    984   1484   2016   3109   4110   3969   8438   ms
+        audio  200   1267   2667   4000   6000   9333  18667  28000   ms
+
+    Synthesis is *not* linear: about 480 ms of fixed overhead plus 26 ms per
+    character, while speech plays at roughly 15 characters per second. The ratio
+    of those two is what decides whether playback stalls - a clip must play for
+    longer than its successor takes to make. Break-even is near twelve
+    characters, so a clip below that guarantees a gap no matter how fast the
+    machine is, and every clip this function emits is kept above
+    `MIN_SEGMENT_CHARS`.
     """
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
@@ -549,9 +580,59 @@ def streaming_segments(
     if len(cleaned) <= lead:
         return [cleaned]
     first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0]
-    first = _bounded_speech_chunks(first_sentence, lead)[0]
+    if len(first_sentence) >= MIN_SEGMENT_CHARS:
+        # Long enough to stand alone, so lead with the whole sentence: a cut in
+        # the middle of a thought sounds like a second, unrelated reply.
+        first = _bounded_speech_chunks(first_sentence, lead)[0]
+    else:
+        # "Yes." cannot stand alone - 4 characters, `covers=0.27` measured in the
+        # field, a stall guaranteed before the second word of the reply. Run past
+        # the sentence boundary and fill the opening clip by words instead.
+        #
+        # `_bounded_speech_chunks` cannot do this: it accumulates whole *pieces*,
+        # so a 57-character follow-on never joins a 4-character lead under a
+        # 60-character bound and the runt survives. Nor can merging the two
+        # segments afterwards - the second is bounded at `max_chars`, so folding
+        # it in produced a 190-character opening clip and pushed time-to-first-
+        # sound from 2 s to 5.4 s, trading the stall for the wait it exists to
+        # avoid.
+        first = _lead_words(cleaned, lead)
     remainder = cleaned[len(first):].strip()
-    return [first, *_bounded_speech_chunks(remainder, bound)]
+    return _merge_runt_tail([first, *_bounded_speech_chunks(remainder, bound)])
+
+
+def _lead_words(text: str, limit: int) -> str:
+    """As many whole words as fit the opening bound, ignoring sentence ends."""
+    lead = ""
+    for word in text.split():
+        candidate = f"{lead} {word}".strip()
+        if lead and len(candidate) > limit:
+            break
+        lead = candidate
+    return lead
+
+
+def _merge_runt_tail(segments: list[str]) -> list[str]:
+    """Fold a runt final clip into the one before it.
+
+    Greedy chunking always leaves its remainder last, and that is the worst place
+    for one: a ten-character clip costs about 740 ms to synthesize for 660 ms of
+    audio, so it stalls, and it stalls on the last thing the operator hears -
+    a stutter on the way out rather than a pause in the middle.
+
+    Merging can push the final clip past `max_chars`. That is deliberate and
+    strictly better: the bound exists to keep synthesis latency covered by the
+    clip playing ahead of it, and by the last clip there is nothing left to
+    cover. The opening clip is floored at the source instead, because merging
+    there would blow the one bound that *is* time-to-first-sound.
+
+    A lone short segment is the whole reply and is left alone - there is nothing
+    to merge it into, and silence is not an improvement.
+    """
+    if len(segments) < 2 or len(segments[-1]) >= MIN_SEGMENT_CHARS:
+        return segments
+    merged = f"{segments[-2]} {segments[-1]}".strip()
+    return [*segments[:-2], merged]
 
 
 class VoiceStore:
@@ -2327,6 +2408,7 @@ class VoiceService:
         row["text"] = spoken
         destination = self.clip_directory / f"{row['id']}.{row['format']}"
         destination.parent.mkdir(parents=True, exist_ok=True)
+        started = time.perf_counter()
         try:
             async with self._engine_semaphore:
                 await asyncio.wait_for(
@@ -2345,6 +2427,20 @@ class VoiceService:
             wav_duration_seconds(destination) or estimate_duration_seconds(spoken, "+0%")
         )
         row["status"] = "ready"
+        # The one measurement that makes chunk pacing tunable from evidence.
+        # `covers` is the whole game: audio divided by the time it took to make.
+        # Below 1.0 this clip finishes before the next one can exist, so playback
+        # stalls - which is exactly what a one-word opening does (0.35), and what
+        # nothing in this daemon could previously show. Its absence is why
+        # `APPLICATION_FIRST_SEGMENT_CHARS` sat at a value whose own comment was
+        # off by four times.
+        synth_ms = (time.perf_counter() - started) * 1000
+        audio_ms = float(row["duration_hint_s"] or 0.0) * 1000
+        log.info(
+            "voice clip synthesized clip=%s chars=%d synth_ms=%.0f audio_ms=%.0f covers=%.2f",
+            row["id"], len(spoken), synth_ms, audio_ms,
+            (audio_ms / synth_ms) if synth_ms > 0 else 0.0,
+        )
         self.diagnostic = None
 
     async def _spoken_text(

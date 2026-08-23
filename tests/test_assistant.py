@@ -3263,3 +3263,86 @@ async def test_read_transcript_can_be_asked_for_more_of_a_cut_message(
         assert "before" in refused.get("error", "")
     finally:
         service.store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Spoken chunk pacing: no clip may be too short to cover the next one
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_short_opening_sentence_is_spoken_with_the_next_one() -> None:
+    """"Yes." on its own is 200 ms of audio that cost 578 ms to make.
+
+    It has finished speaking before its successor can exist, so the reply stalls
+    on its very first word - the "one word, then a long delay" the operator
+    reported. Leading sentences are coalesced until the opening clip is long
+    enough to pay for the one behind it.
+    """
+    from swe_mux.assistant import MIN_FIRST_SENTENCE_CHARS, _SentenceStreamer
+
+    said: list[str] = []
+
+    async def emit(sentence: str) -> None:
+        said.append(sentence)
+
+    streamer = _SentenceStreamer(emit)
+    await streamer.feed("Yes. ")
+    assert said == [], "a three-character opening must not be released alone"
+    await streamer.feed("The supervisor liveness race is the first recommendation. ")
+    assert len(said) == 1
+    assert said[0].startswith("Yes.")
+    assert len(said[0]) >= MIN_FIRST_SENTENCE_CHARS
+    # Only the OPENING is coalesced. Once the stream is going, an ordinary
+    # sentence is released on its own, because by then a clip is already playing
+    # and covering the synthesis behind it.
+    await streamer.feed("The second is timeouts. ")
+    assert said[-1] == "The second is timeouts."
+
+
+async def test_a_reply_that_is_only_a_short_sentence_is_still_spoken() -> None:
+    # The floor delays the opening; it must never swallow it. A model that says
+    # "Done." and stops has to be heard.
+    from swe_mux.assistant import _SentenceStreamer
+
+    said: list[str] = []
+
+    async def emit(sentence: str) -> None:
+        said.append(sentence)
+
+    streamer = _SentenceStreamer(emit)
+    await streamer.feed("Done. ")
+    assert said == []
+    await streamer.flush()
+    assert said == ["Done."]
+
+
+async def test_unpunctuated_prose_still_bounds_the_wait_for_the_first_word() -> None:
+    # The character backstop is what keeps the coalescing rule from waiting
+    # forever on a model that never writes a terminator.
+    from swe_mux.assistant import STREAM_SENTENCE_MAX_CHARS, _SentenceStreamer
+
+    said: list[str] = []
+
+    async def emit(sentence: str) -> None:
+        said.append(sentence)
+
+    streamer = _SentenceStreamer(emit)
+    await streamer.feed("ok. " + ("filler " * 60))
+    assert said, "the backstop must release something"
+    assert len(said[0]) <= STREAM_SENTENCE_MAX_CHARS
+
+
+async def test_coalescing_never_drops_or_reorders_text() -> None:
+    from swe_mux.assistant import _SentenceStreamer
+
+    said: list[str] = []
+
+    async def emit(sentence: str) -> None:
+        said.append(sentence)
+
+    streamer = _SentenceStreamer(emit)
+    reply = "Yes. No. Maybe. The queue is clear and nothing is waiting on you. All done."
+    for character in reply:
+        await streamer.feed(character)
+    await streamer.flush()
+    assert " ".join(said).split() == reply.split()

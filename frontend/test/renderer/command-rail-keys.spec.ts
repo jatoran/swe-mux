@@ -39,9 +39,9 @@ async function swipeLeftFrom(page: Page, selector: string) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/command-rail-harness.html')
-  // Sixteen keys plus the two pads (`command-rail-pad.spec.ts`), which share this strip
+  // Sixteen keys plus the three pads (`command-rail-pad.spec.ts`), which share this strip
   // precisely because the arbitration is between them and this scroller's pointer capture.
-  await expect(page.locator('.terminal-action-scroll > button')).toHaveCount(18)
+  await expect(page.locator('.terminal-action-scroll > button')).toHaveCount(19)
   // Park the arrows in the middle of the visible window: room to drag towards on the left,
   // room to scroll into on the right. Both are prerequisites for the swipe tests meaning
   // anything, so they are asserted rather than assumed.

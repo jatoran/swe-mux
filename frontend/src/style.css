@@ -2656,16 +2656,9 @@ body {
    through the pointer-drag claim. */
 .terminal-action-rail .rail-pad,.rail-overflow-grid .rail-pad{position:relative;touch-action:none}
 .rail-pad-marks{position:absolute;inset:0;pointer-events:none;color:inherit;opacity:.55}
+/* One tick per populated wedge, placed and rotated inline from the wedge's own angle, so a
+   pad with any number of wedges marks itself correctly without a rule per direction. */
 .rail-pad-mark{position:absolute;width:3px;height:3px;border-top:1px solid currentColor;border-left:1px solid currentColor}
-.rail-pad-mark-up{top:2px;left:50%;transform:translateX(-50%) rotate(45deg)}
-.rail-pad-mark-right{top:50%;right:2px;transform:translateY(-50%) rotate(135deg)}
-.rail-pad-mark-left{top:50%;left:2px;transform:translateY(-50%) rotate(315deg)}
-.rail-pad-mark-upLeft{top:2px;left:2px}
-.rail-pad-mark-upRight{top:2px;right:2px;transform:rotate(90deg)}
-/* The far ring's marks sit inboard of the near ones, which is the only thing on the chip
-   that says a direction has two depths rather than one. */
-.rail-pad-mark-upLeftFar{top:2px;left:9px}
-.rail-pad-mark-upRightFar{top:2px;right:9px;transform:rotate(90deg)}
 .rail-pad-pressed .rail-pad-marks{opacity:1}
 /* The dial: real wedges, at thumb size, over a wash.
    Above the drop-ups (96), because a pad can be pressed from inside the row popover and has
@@ -2703,24 +2696,18 @@ body {
 .terminal-action-rail button.rail-modifier-locked,.rail-overflow-grid button.rail-modifier-locked{border-color:var(--green);background:color-mix(in srgb,var(--green) 22%,var(--panel2));color:var(--green)}
 /* The pad's slot editor: a picture of the pad, because "which action is up" is a question
    about a position and a list of four rows makes you translate every answer back into one. */
-/* Laid out as the fan is: the wedges across the top in the order they are reached, the far
-   ring above the near one because it is further out, and the centre underneath where a tap
-   lands. */
+/* Laid out as the fan is: one row per ring with the wedges across it in the order they are
+   reached, the far ring above the near one because it is further out, and the centre
+   underneath where a tap lands. The column count comes from the pad, inline, because it is
+   the operator's choice. */
 .rail-pad-grid{display:grid;gap:6px;margin-top:8px}
-.rail-pad-grid-cardinal{grid-template-areas:'left up right' 'center center center'}
-.rail-pad-grid-diagonal{grid-template-areas:'upLeftFar upRightFar' 'upLeft upRight' 'center center'}
-.rail-pad-grid>.rail-pad-cell-up{grid-area:up}
-.rail-pad-grid>.rail-pad-cell-right{grid-area:right}
-.rail-pad-grid>.rail-pad-cell-left{grid-area:left}
-.rail-pad-grid>.rail-pad-cell-upLeft{grid-area:upLeft}
-.rail-pad-grid>.rail-pad-cell-upRight{grid-area:upRight}
-.rail-pad-grid>.rail-pad-cell-upLeftFar{grid-area:upLeftFar}
-.rail-pad-grid>.rail-pad-cell-upRightFar{grid-area:upRightFar}
-.rail-pad-grid>.rail-pad-cell-center{grid-area:center}
+.rail-pad-grid-centre{grid-template-columns:minmax(0,1fr)}
 .rail-pad-cell{min-width:0;display:flex;flex-direction:column;gap:3px}
 .rail-pad-cell-name{color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;letter-spacing:.04em;text-transform:uppercase}
 .rail-pad-cell-note{color:var(--muted);font-size:10px}
-@media(max-width:560px){.rail-pad-grid-cardinal,.rail-pad-grid-diagonal{grid-template-areas:none;grid-template-columns:1fr}.rail-pad-grid>*{grid-area:auto}}
+/* Below this the columns are narrower than a dropdown can usefully be, so the picture gives
+   way to a list rather than becoming an unreadable version of itself. */
+@media(max-width:560px){.rail-pad-grid{grid-template-columns:minmax(0,1fr)!important}}
 .action-editor-layer{z-index:82}.action-editor-modal{width:min(1180px,calc(100vw - 24px));height:min(860px,calc(100dvh - 24px));display:grid;grid-template-rows:auto minmax(0,1fr) auto}.action-editor-body{min-height:0;overflow:auto;padding:14px 18px}.action-editor-body>.commandrail-settings>h3{margin-top:0}
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored

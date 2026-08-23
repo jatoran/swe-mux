@@ -17,7 +17,8 @@ import { RailScroller } from '../../src/RailScroller'
 import { RailRepeatKey, useRailKeyRepeat } from '../../src/RailRepeatKey'
 import { RailPad, useRailPad, type RailPadSlotView } from '../../src/RailPad'
 import { pointerDragOwnsPointer } from '../../src/pointerDragClaim'
-import { normalizeRailPad, railPadSlotMode, type RailItem } from '../../src/commandRail'
+import { dismissSoftKeyboard } from '../../src/mobileKeyboard'
+import { normalizeRailPad, padRingCount, padSlotKeys, railPadSlotMode, type RailItem } from '../../src/commandRail'
 import '../../src/style.css'
 
 declare global {
@@ -31,10 +32,15 @@ declare global {
      *  mobile recognizer would otherwise classify the same motion as the rail's
      *  swipe-up-opens-the-menu gesture. Sampling mid-drag is the only way to see it. */
     railClaims: boolean[]
+    /** The production dismissal call, so a spec can put the keyboard away *deliberately*
+     *  mid-gesture. That is the one thing `restoreSoftKeyboard` must not undo, and it is a
+     *  counter rather than an event, so there is no other way to reach it from a page. */
+    railDismissKeyboard: () => void
   }
 }
 window.railSends = []
 window.railClaims = []
+window.railDismissKeyboard = dismissSoftKeyboard
 window.addEventListener('pointermove', () => { window.railClaims.push(pointerDragOwnsPointer()) })
 
 const ARROWS = [
@@ -67,44 +73,65 @@ const PlainKey = ({ id, label, bytes }: { id: string; label: string; bytes: stri
   <button class="term-key" data-key={id} title={label} onClick={() => window.railSends.push(bytes)}>{label}</button>
 )
 
-// Two pads, in the same strip as the arrows they exist to replace, because the arbitration
+// Three pads, in the same strip as the arrows they exist to replace, because the arbitration
 // under test is between the pad and *this* scroller's pointer capture.
 //
-// The cardinal one deliberately mixes every trigger mode: `up` repeats while held, `right`
-// and `down` fire on entry, and `left` waits for the lift so the escape hatch has something
-// real to escape from. Its centre is bound too, so a tap has an answer.
-const CARDINAL_PAD: RailItem = {
-  id: 'padCardinal',
+// The three-wedge one deliberately mixes every trigger mode: `up` repeats while held, `right`
+// fires on entry, and `left` waits for the lift so the escape hatch has something real to
+// escape from. Its centre is bound too, so a tap has an answer - and that is the shape the
+// shipped arrows pad has, where Down is the tap.
+const WEDGE_PAD: RailItem = {
+  id: 'padWedges',
   type: 'pad',
   label: 'Pad',
   className: 'term-key',
   title: 'Pad',
   pad: normalizeRailPad({
-    orientation: 'cardinal',
+    wedges: 3,
+    rings: 1,
     slots: {
-      up: { item: 'up', mode: 'enter-repeat' },
-      right: { item: 'right', mode: 'enter' },
-      left: { item: 'kill', mode: 'release' },
+      '0:0': { item: 'right', mode: 'enter' },
+      '0:1': { item: 'up', mode: 'enter-repeat' },
+      '0:2': { item: 'kill', mode: 'release' },
       center: { item: 'centre', mode: 'enter' },
     },
   }),
 }
-const DIAGONAL_PAD: RailItem = {
-  id: 'padDiagonal',
+// Four wedges of one ring, which is what the shipped Jump and Pick pads are: every wedge
+// fires the instant you cross in, because a single ring has no transit to pay for.
+const FOUR_PAD: RailItem = {
+  id: 'padFour',
   type: 'pad',
   label: 'Jump',
   className: 'term-key',
   title: 'Jump',
-  // No explicit modes: a two-ring pad defaults to release throughout, because reaching the
-  // far ring means crossing the near one and a transit fire is never what anybody wanted.
-  // The shipped Jump and Pick pads are exactly this, so the harness is too.
   pad: normalizeRailPad({
-    orientation: 'diagonal',
+    wedges: 4,
+    rings: 1,
     slots: {
-      upLeft: { item: 'home' },
-      upRight: { item: 'ctrlHome' },
-      upLeftFar: { item: 'end' },
-      upRightFar: { item: 'ctrlEnd' },
+      '0:0': { item: 'ctrlEnd' },
+      '0:1': { item: 'end' },
+      '0:2': { item: 'home' },
+      '0:3': { item: 'ctrlHome' },
+    },
+  }),
+}
+// The two-ring shape, kept so the transit rule stays covered by a real gesture: no explicit
+// modes, so every slot defaults to release.
+const RING_PAD: RailItem = {
+  id: 'padRings',
+  type: 'pad',
+  label: 'Ring',
+  className: 'term-key',
+  title: 'Ring',
+  pad: normalizeRailPad({
+    wedges: 2,
+    rings: 2,
+    slots: {
+      '0:0': { item: 'nearRight' },
+      '0:1': { item: 'nearLeft' },
+      '1:0': { item: 'farRight' },
+      '1:1': { item: 'farLeft' },
     },
   }),
 }
@@ -112,14 +139,15 @@ const PAD_BYTES: Record<string, string> = {
   up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
   home: '\x1b[H', end: '\x1b[F', ctrlHome: '\x1b[1;5H', ctrlEnd: '\x1b[1;5F',
   kill: 'KILL', centre: 'CENTRE', dead: 'DEAD',
+  nearLeft: 'NEAR-L', nearRight: 'NEAR-R', farLeft: 'FAR-L', farRight: 'FAR-R',
 }
 
 function padSlots(item: RailItem): RailPadSlotView[] {
   const pad = item.pad!
-  return (Object.keys(pad.slots) as (keyof typeof pad.slots)[]).map(key => {
-    const slot = pad.slots[key]!
-    // One slot is disabled on purpose: a dead direction has to stay where it is and let
-    // nothing through, rather than the others sliding over to fill the gap.
+  return padSlotKeys(pad).filter(key => pad.slots[key]).map(key => {
+    const slot = pad.slots[key]
+    // One slot is disabled on purpose: a dead wedge has to stay where it is and let nothing
+    // through, rather than the others sliding over to fill the gap.
     const disabled = slot.item === 'dead'
     return {
       key,
@@ -128,7 +156,7 @@ function padSlots(item: RailItem): RailPadSlotView[] {
       title: slot.item,
       // Through the production resolver, so the harness inherits the ringed-pad rule rather
       // than restating it and drifting from what a real pane would do.
-      mode: railPadSlotMode(slot, undefined, pad.orientation),
+      mode: railPadSlotMode(slot, undefined, padRingCount(pad)),
       disabled,
       run: () => { window.railSends.push(PAD_BYTES[slot.item] || slot.item) },
     }
@@ -152,7 +180,7 @@ function Rail() {
             className="term-key"
           />
         ))}
-        {[CARDINAL_PAD, DIAGONAL_PAD].map(item => (
+        {[WEDGE_PAD, FOUR_PAD, RING_PAD].map(item => (
           <RailPad
             key={item.id}
             controller={padControl}

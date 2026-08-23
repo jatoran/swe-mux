@@ -1,17 +1,24 @@
-// Pointer behaviour for a command-rail pad: one chip holding three or four actions plus a
-// centre, each reached by dragging a direction off it.
+// Pointer behaviour for a command-rail pad: one chip holding several actions plus a centre,
+// each reached by dragging a direction off it.
 //
-// **The pad is a fan that opens upward, and it has no downward slot at all.** The rail sits
+// **The pad is a fan that opens upward, and it has no downward wedge at all.** The rail sits
 // at the bottom of its pane, and on a phone that is the bottom of the screen - so a
-// downward wedge is drawn off the glass, dragged into a place the finger cannot reach, and
-// competes with the system's own bottom-edge gesture. Rather than squeeze it, there is no
-// south: the 180° above the finger is divided instead, and the whole lower half becomes the
-// abort zone. Pulling down cancels, which is a gesture that always has room.
+// downward wedge is drawn off the glass and competes with the system's own bottom-edge
+// gesture. Rather than squeeze it, there is no south: the 180° above the finger is divided
+// instead, and the whole lower half becomes the abort zone. Pulling down cancels, which is
+// the one gesture a bottom-edge rail can always complete. An action with no direction of its
+// own - Down, on the arrows pad - goes in the centre, where a tap lands.
 //
-// Four slots still fit, because the fan is divided **twice**: by angle into wedges, and by
-// distance into rings. A `cardinal` pad is three wedges of one ring (left, up, right). A
-// `diagonal` pad is two wedges of two rings (up-left and up-right, near and far), which is
-// what a 2x2 of two independent binary choices wants - one choice per division.
+// The fan can be divided **two ways**, and they cost different things:
+//
+//  * by **angle**, into 1..5 wedges. Costs angular tolerance and nothing else. Five is the
+//    ceiling because five is ±22°, the same slop that made an eight-way circle a poor
+//    control; arc length is still comfortable well past it, so tolerance is what runs out.
+//  * by **distance**, into 1 or 2 rings. Costs *fire-on-entry*: reaching the far ring means
+//    crossing the near one, so a ringed pad's slots default to `release`
+//    (`defaultPadTriggerMode`). A ring buys a slot per wedge without spending any angle.
+//
+// Wedges are therefore the cheaper axis to grow on, and the shipped pads use one ring.
 //
 // The rule the whole thing is built on: **the only threshold is distance, never time.** A
 // press is live from the first pixel, a direction commits the instant travel crosses the
@@ -39,13 +46,10 @@
 // listeners, the dial and the haptics.
 
 import {
-  padDirectionUnit,
-  padDirections,
-  padRingOf,
-  padSectorCount,
-  type RailPadDirection,
-  type RailPadOrientation,
-  type RailPadRing,
+  PAD_CENTER,
+  padSlotKey,
+  padWedgeUnit,
+  parsePadSlotKey,
   type RailPadSlotKey,
   type RailPadTriggerMode,
 } from './commandRail.ts'
@@ -88,31 +92,33 @@ export const RAIL_PAD_FAN_SPAN_DEG = 180 + RAIL_PAD_SKIRT_DEG * 2
 /** Which axes a pad's populated wedges span. */
 export interface RailPadAxes { horizontal: boolean; vertical: boolean }
 
-export function railPadAxes(directions: readonly RailPadDirection[]): RailPadAxes {
+export function railPadAxes(slots: Iterable<RailPadSlotKey>, wedges: number): RailPadAxes {
   let horizontal = false
   let vertical = false
-  for (const direction of directions) {
-    const unit = padDirectionUnit(direction)
+  for (const key of slots) {
+    const at = parsePadSlotKey(key)
+    if (!at) continue
+    const unit = padWedgeUnit(at.wedge, wedges)
     if (Math.abs(unit.x) > 0.01) horizontal = true
     if (Math.abs(unit.y) > 0.01) vertical = true
   }
   return { horizontal, vertical }
 }
 
-/** The radii one orientation's rings occupy, at a given squeeze. Shared by the gesture and
- *  the drawing, which is what stops the dial describing a boundary it does not have. */
+/** The radii a pad's rings occupy, at a given squeeze. Shared by the gesture and the
+ *  drawing, which is what stops the dial describing a boundary it does not have. */
 export interface RailPadBands {
   /** Inner hole: below this the press is at the centre. */
   dead: number
-  /** Near/far boundary, or `Infinity` where there is only one ring. */
+  /** Near/far boundary, or `Infinity` on a one-ring pad. */
   ring: number
   /** Outer drawn edge. */
   outer: number
 }
 
-export function railPadBands(orientation: RailPadOrientation, scale = 1): RailPadBands {
+export function railPadBands(rings: number, scale = 1): RailPadBands {
   const clamped = Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, scale))
-  if (orientation === 'diagonal') {
+  if (rings > 1) {
     return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: RAIL_PAD_RING_PX * clamped, outer: RAIL_PAD_OUTER_PX * clamped }
   }
   return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: Infinity, outer: RAIL_PAD_SINGLE_OUTER_PX * clamped }
@@ -121,13 +127,13 @@ export function railPadBands(orientation: RailPadOrientation, scale = 1): RailPa
 /**
  * How much the dial has to shrink to fit the room above the press.
  *
- * The one direction that can run out now, and the mirror of the downward squeeze this
- * replaced: a pad in a short pane near the top of the window has less than the far ring's
- * reach above it, and a boundary you cannot travel to is a slot that does not exist.
+ * The one direction that can run out, now that the fan opens upward: a pad in a short pane
+ * near the top of the window has less than the outer ring's reach above it, and a boundary
+ * you cannot travel to is a slot that does not exist.
  */
-export function railPadScaleFor(orientation: RailPadOrientation, roomAbovePx: number): number {
+export function railPadScaleFor(rings: number, roomAbovePx: number): number {
   if (!Number.isFinite(roomAbovePx)) return 1
-  const wanted = orientation === 'diagonal' ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX
+  const wanted = rings > 1 ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX
   return Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, Math.max(0, roomAbovePx) / wanted))
 }
 
@@ -139,67 +145,63 @@ export function railPadAngle(dx: number, dy: number): number {
 }
 
 /** Half-open angular bounds of one wedge, in `railPadAngle` degrees. */
-export function railPadWedgeBounds(orientation: RailPadOrientation, index: number): { from: number; to: number } {
-  const width = RAIL_PAD_FAN_SPAN_DEG / padSectorCount(orientation)
-  const from = RAIL_PAD_FAN_START_DEG + index * width
+export function railPadWedgeBounds(wedge: number, wedges: number): { from: number; to: number } {
+  const width = RAIL_PAD_FAN_SPAN_DEG / Math.max(1, wedges)
+  const from = RAIL_PAD_FAN_START_DEG + wedge * width
   return { from, to: from + width }
 }
 
-/** Centre angle of a wedge. Where its label sits, and the direction its unit vector points. */
-export const railPadWedgeCentre = (orientation: RailPadOrientation, index: number): number => {
-  const { from, to } = railPadWedgeBounds(orientation, index)
+/** Centre angle of a wedge. Where its label sits, and the way its unit vector points. */
+export const railPadWedgeCentre = (wedge: number, wedges: number): number => {
+  const { from, to } = railPadWedgeBounds(wedge, wedges)
   return (from + to) / 2
 }
 
 /** Which wedge an angle falls in, or `null` for the abort zone below the fan. */
-export function railPadWedgeIndex(orientation: RailPadOrientation, angle: number): number | null {
+export function railPadWedgeIndex(angle: number, wedges: number): number | null {
   const end = RAIL_PAD_FAN_START_DEG + RAIL_PAD_FAN_SPAN_DEG
   if (angle < RAIL_PAD_FAN_START_DEG || angle >= end) return null
-  const width = RAIL_PAD_FAN_SPAN_DEG / padSectorCount(orientation)
-  return Math.min(padSectorCount(orientation) - 1, Math.floor((angle - RAIL_PAD_FAN_START_DEG) / width))
-}
-
-/** The direction at one wedge and ring. `padDirections` order is wedge-major within a ring. */
-export function railPadDirectionAt(
-  orientation: RailPadOrientation,
-  index: number,
-  ring: RailPadRing,
-): RailPadDirection | null {
-  const sectors = padSectorCount(orientation)
-  const offset = ring === 'far' ? sectors : 0
-  return padDirections(orientation)[index + offset] ?? null
+  const count = Math.max(1, wedges)
+  const width = RAIL_PAD_FAN_SPAN_DEG / count
+  return Math.min(count - 1, Math.floor((angle - RAIL_PAD_FAN_START_DEG) / width))
 }
 
 /** What the pad decides a press is currently pointing at. `null` is the centre or the abort
  *  zone, which behave identically: neither fires anything on the way through. */
-export type RailPadLatch = RailPadDirection | null
+export type RailPadLatch = RailPadSlotKey | null
+
+/** The shape a press is resolved against: how the fan is divided, and where its bands sit. */
+export interface RailPadShape {
+  wedges: number
+  rings: number
+  bands: RailPadBands
+}
 
 /**
  * The wedge and ring a displacement resolves to, biased towards one already latched.
  *
- * The bias is the whole hysteresis, and it is applied in the plane rather than to whichever
- * coordinate happens to be a boundary - so one expression covers the angular boundaries
- * between wedges and the radial one between rings, even though they are different kinds of
- * edge. Leaving a latched direction costs `RAIL_PAD_SWITCH_MARGIN_PX` of travel past it.
+ * The angular bias is the hysteresis for the wedge boundaries, applied in the plane along
+ * the latched wedge's own centre line so one expression covers every boundary whatever the
+ * wedge count.
  */
 export function railPadResolve(
   dx: number,
   dy: number,
-  orientation: RailPadOrientation,
-  bands: RailPadBands,
+  shape: RailPadShape,
   current: RailPadLatch = null,
 ): RailPadLatch {
+  const at = current ? parsePadSlotKey(current) : null
   let x = dx
   let y = dy
-  if (current) {
-    const unit = padDirectionUnit(current)
+  if (at) {
+    const unit = padWedgeUnit(at.wedge, shape.wedges)
     x += unit.x * RAIL_PAD_SWITCH_MARGIN_PX
     y += unit.y * RAIL_PAD_SWITCH_MARGIN_PX
   }
-  const distance = Math.hypot(x, y)
-  if (distance < bands.dead) return null
-  const index = railPadWedgeIndex(orientation, railPadAngle(x, y))
-  if (index === null) return null
+  if (Math.hypot(x, y) < shape.bands.dead) return null
+  const wedge = railPadWedgeIndex(railPadAngle(x, y), shape.wedges)
+  if (wedge === null) return null
+  if (shape.rings <= 1) return padSlotKey(0, wedge)
   // The radial boundary gets the same margin the angular ones do, but measured on the raw
   // radius rather than through the biased point: the plane bias points along the wedge's
   // *centre*, which is a direction, and a ring is a distance - so it would move the ring
@@ -208,10 +210,9 @@ export function railPadResolve(
   // It has to move both ways. A near latch pushes the boundary out and a far latch pulls it
   // in, so a finger resting on the ring cannot flip between two actions; a one-sided version
   // makes crossing outward free, which is the direction it happens by accident.
-  const currentRing = current ? padRingOf(current) : null
-  const boundary = bands.ring
-    + (currentRing === 'far' ? -RAIL_PAD_SWITCH_MARGIN_PX : currentRing === 'near' ? RAIL_PAD_SWITCH_MARGIN_PX : 0)
-  return railPadDirectionAt(orientation, index, Math.hypot(dx, dy) >= boundary ? 'far' : 'near')
+  const margin = at ? (at.ring > 0 ? -RAIL_PAD_SWITCH_MARGIN_PX : RAIL_PAD_SWITCH_MARGIN_PX) : 0
+  const ring = Math.hypot(dx, dy) >= shape.bands.ring + margin ? 1 : 0
+  return padSlotKey(ring, wedge)
 }
 
 /** Everything the engine needs to know about one slot. Supplied per press, because a slot's
@@ -225,8 +226,11 @@ export interface RailPadSlotSpec {
 }
 
 export interface RailPadPressOptions {
-  orientation: RailPadOrientation
-  /** Only the keys present here are live; everything else is a dead direction. */
+  /** Angular divisions of the fan. */
+  wedges: number
+  /** Radial bands, 1 or 2. */
+  rings: number
+  /** Only the keys present here are live; everything else is a dead wedge. */
   slots: Partial<Record<RailPadSlotKey, RailPadSlotSpec>>
   /** Room above the press, in CSS pixels. Squeezes the dial when a pane is short. */
   roomAbovePx?: number
@@ -280,7 +284,7 @@ export function createRailPadGesture<T>(
   let startX = 0
   let startY = 0
   let options: RailPadPressOptions | null = null
-  let bands = railPadBands('cardinal')
+  let shape: RailPadShape = { wedges: 3, rings: 1, bands: railPadBands(1) }
   let latched: RailPadLatch = null
   let timer: T | null = null
   let releaseClaim: (() => void) | null = null
@@ -314,7 +318,7 @@ export function createRailPadGesture<T>(
     callbacks.end()
   }
 
-  const specFor = (slot: RailPadLatch): RailPadSlotSpec | undefined => options?.slots[slot ?? 'center']
+  const specFor = (slot: RailPadLatch): RailPadSlotSpec | undefined => options?.slots[slot ?? PAD_CENTER]
 
   const armRepeat = (slot: RailPadSlotKey, delayMs: number) => {
     timer = schedule(() => {
@@ -351,13 +355,15 @@ export function createRailPadGesture<T>(
       if (pointer !== null) return false
       pointer = pointerId
       options = next
-      bands = railPadBands(next.orientation, railPadScaleFor(next.orientation, next.roomAbovePx ?? Infinity))
+      shape = {
+        wedges: next.wedges,
+        rings: next.rings,
+        bands: railPadBands(next.rings, railPadScaleFor(next.rings, next.roomAbovePx ?? Infinity)),
+      }
       startX = x
       startY = y
       latched = null
-      const live = (Object.keys(next.slots) as RailPadSlotKey[])
-        .filter((key): key is RailPadDirection => key !== 'center')
-      axes = railPadAxes(live)
+      axes = railPadAxes(Object.keys(next.slots), next.wedges)
       // Nothing to yield to: every axis this pad uses is its own, so the pan and the menu
       // swipe are wrong about this finger from the very first pixel. A pad that leaves an
       // axis free waits instead, and decides at the pan's own slop.
@@ -384,19 +390,19 @@ export function createRailPadGesture<T>(
       // Recorded on distance alone, before any wedge is resolved: a drag straight down
       // reaches no wedge at all, and it still has to count as having left the hub or the
       // lift would run the centre.
-      if (Math.hypot(dx, dy) >= bands.dead) leftCentre = true
+      if (Math.hypot(dx, dy) >= shape.bands.dead) leftCentre = true
       // Leaving for the centre uses the exit ratio; everything else is `railPadResolve`,
       // which is also what the dial is drawn from.
-      if (latched !== null && Math.hypot(dx, dy) < bands.dead * RAIL_PAD_EXIT_RATIO) {
+      if (latched !== null && Math.hypot(dx, dy) < shape.bands.dead * RAIL_PAD_EXIT_RATIO) {
         setLatch(null)
         return true
       }
-      setLatch(railPadResolve(dx, dy, options.orientation, bands, latched))
+      setLatch(railPadResolve(dx, dy, shape, latched))
       return true
     },
     release(pointerId) {
       if (pointer !== pointerId) return false
-      const slot: RailPadSlotKey = latched ?? 'center'
+      const slot: RailPadSlotKey = latched ?? PAD_CENTER
       const spec = specFor(latched)
       // A latched direction fires only if it was waiting for exactly this. Every other mode
       // already fired on the way in, and a `release` slot the finger has since left is no
@@ -432,7 +438,7 @@ export function createRailPadGesture<T>(
         open: pointer !== null,
         latch: latched,
         armed: !!latched && !!spec && !spec.disabled && spec.mode === 'release',
-        bands,
+        bands: shape.bands,
       }
     },
     consumeHandledClick() {

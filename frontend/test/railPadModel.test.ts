@@ -4,18 +4,21 @@ import test from 'node:test'
 
 import {
   BUILTIN_RAIL,
-  CARDINAL_PAD_DIRECTIONS,
   DEFAULT_RAIL_ORDER,
-  DIAGONAL_PAD_DIRECTIONS,
+  PAD_CENTER,
+  RAIL_PAD_MAX_RINGS,
+  RAIL_PAD_MAX_WEDGES,
   defaultPadTriggerMode,
   defaultRailConfig,
   normalizeRailConfig,
   normalizeRailPad,
-  padDirectionUnit,
-  padDirections,
-  padRingOf,
-  padSectorCount,
+  padRingCount,
+  padSlotKey,
   padSlotKeys,
+  padWedgeCount,
+  padWedgeName,
+  padWedgeUnit,
+  parsePadSlotKey,
   railConfigFromBlob,
   railPadSlotItemIds,
   railPadSlotLabel,
@@ -23,40 +26,59 @@ import {
   writeRailConfigBlob,
   type RailItem,
 } from '../src/commandRail.ts'
-import { setRailPadOrientation, updateRailPadSlot } from '../src/railLayout.ts'
+import { setRailPadShape, updateRailPadSlot } from '../src/railLayout.ts'
 import { isRepeatableRailKey } from '../src/railKeyRepeat.ts'
 import { resolveRailVoiceEntries } from '../src/railVoice.ts'
 
 const padOf = (config: { items: RailItem[] }, id: string): RailItem =>
   config.items.find(item => item.id === id)!
 
-test('an orientation is three wedges of one ring, or two of two', () => {
-  assert.deepEqual(padDirections('cardinal'), CARDINAL_PAD_DIRECTIONS)
-  assert.deepEqual(padDirections('diagonal'), DIAGONAL_PAD_DIRECTIONS)
-  assert.equal(padSectorCount('cardinal'), 3)
-  assert.equal(padSectorCount('diagonal'), 2)
-  // Both offer four addressable slots counting the centre; the diagonal one gets a fifth
-  // because its second ring buys a direction without buying an angle.
-  assert.equal(padSlotKeys('cardinal').length, 4)
-  assert.equal(padSlotKeys('diagonal').length, 5)
-  assert.equal(padSlotKeys('diagonal').at(-1), 'center')
+test('a slot key is a position, and the centre is not one', () => {
+  assert.deepEqual(parsePadSlotKey(padSlotKey(1, 2)), { ring: 1, wedge: 2 })
+  assert.equal(parsePadSlotKey(PAD_CENTER), null)
+  assert.equal(parsePadSlotKey('up'), null, 'the old compass names are not positions')
 })
 
-test('no direction points downward, in either orientation', () => {
-  // The whole reason the fan gave up its lower half: the rail sits on the bottom edge of a
-  // phone, so a downward wedge is drawn off the glass and dragged where a thumb cannot go.
-  for (const direction of [...CARDINAL_PAD_DIRECTIONS, ...DIAGONAL_PAD_DIRECTIONS]) {
-    assert.ok(padDirectionUnit(direction).y <= 0.001, `${direction} points down`)
+test('a pad offers wedges times rings, plus a centre', () => {
+  for (let wedges = 1; wedges <= RAIL_PAD_MAX_WEDGES; wedges += 1) {
+    for (let rings = 1; rings <= RAIL_PAD_MAX_RINGS; rings += 1) {
+      const keys = padSlotKeys({ wedges, rings, slots: {} })
+      assert.equal(keys.length, wedges * rings + 1)
+      assert.equal(keys.at(-1), PAD_CENTER)
+      // Wedge-major within a ring, which is the order `railPadResolve` and the dial both
+      // index into.
+      assert.equal(keys[0], padSlotKey(0, 0))
+      if (rings > 1) assert.equal(keys[wedges], padSlotKey(1, 0))
+    }
   }
 })
 
-test('the far ring is exactly the two Far directions', () => {
-  assert.deepEqual(CARDINAL_PAD_DIRECTIONS.map(padRingOf), ['near', 'near', 'near'])
-  assert.deepEqual(DIAGONAL_PAD_DIRECTIONS.map(padRingOf), ['near', 'near', 'far', 'far'])
-  // A far direction shares its wedge's angle and differs only in distance, which is what
-  // makes the ring a second division rather than four cramped wedges.
-  assert.deepEqual(padDirectionUnit('upLeftFar'), padDirectionUnit('upLeft'))
-  assert.deepEqual(padDirectionUnit('upRightFar'), padDirectionUnit('upRight'))
+test('the counts are clamped, so a stored nonsense shape is still a usable pad', () => {
+  assert.equal(padWedgeCount({ wedges: 99, rings: 1, slots: {} }), RAIL_PAD_MAX_WEDGES)
+  assert.equal(padWedgeCount({ wedges: 0, rings: 1, slots: {} }), 1)
+  assert.equal(padWedgeCount(undefined), 3)
+  assert.equal(padRingCount({ wedges: 3, rings: 9, slots: {} }), RAIL_PAD_MAX_RINGS)
+  assert.equal(padRingCount(undefined), 1)
+})
+
+test('no wedge points downward, at any count', () => {
+  // The whole reason the fan gave up its lower half: the rail sits on the bottom edge of a
+  // phone, so a downward wedge is drawn off the glass and dragged where a thumb cannot go.
+  for (let wedges = 1; wedges <= RAIL_PAD_MAX_WEDGES; wedges += 1) {
+    for (let wedge = 0; wedge < wedges; wedge += 1) {
+      assert.ok(padWedgeUnit(wedge, wedges).y <= 0.001, `${wedge}/${wedges} points down`)
+    }
+  }
+})
+
+test('a wedge is named for where it points, not for its index', () => {
+  // Three wedges and five wedges do not have the same "up-left", which is exactly why the
+  // name is derived rather than tabulated.
+  assert.equal(padWedgeName(1, 3), 'Up')
+  assert.equal(padWedgeName(0, 3), 'Right')
+  assert.equal(padWedgeName(2, 3), 'Left')
+  assert.equal(padWedgeName(0, 1), 'Up', 'a single wedge is the whole fan, so it is Up')
+  assert.equal(padWedgeName(1, 2, 1), 'Up-left, far')
 })
 
 test('a slot mode defaults from the action, so a binding arrives already safe', () => {
@@ -76,24 +98,25 @@ test('a ringed pad commits on release, because its near ring is transit', () => 
   // firing on entry would fire every time somebody went past it - and again on the way back
   // in. A ring you must pass through cannot be a fire-on-entry target.
   const arrow = BUILTIN_RAIL.find(item => item.id === 'up')
-  assert.equal(defaultPadTriggerMode(arrow, 'diagonal'), 'release')
-  assert.equal(defaultPadTriggerMode(undefined, 'diagonal'), 'release')
-  // The one-ring pad has no transit and keeps entry-firing, which is what makes it fast.
-  assert.equal(defaultPadTriggerMode(arrow, 'cardinal'), 'enter-repeat')
-  // An explicit mode still wins, so the trade stays available to anyone who wants it.
-  assert.equal(railPadSlotMode({ item: 'up', mode: 'enter' }, arrow, 'diagonal'), 'enter')
-  assert.equal(railPadSlotMode({ item: 'up' }, arrow, 'diagonal'), 'release')
+  assert.equal(defaultPadTriggerMode(arrow, 2), 'release')
+  assert.equal(defaultPadTriggerMode(undefined, 2), 'release')
+  // A one-ring pad has no transit and keeps entry-firing, which is what makes it fast - and
+  // is why the shipped pads grew a fourth *wedge* rather than a second ring.
+  assert.equal(defaultPadTriggerMode(arrow, 1), 'enter-repeat')
+  assert.equal(railPadSlotMode({ item: 'up', mode: 'enter' }, arrow, 2), 'enter')
+  assert.equal(railPadSlotMode({ item: 'up' }, arrow, 2), 'release')
 })
 
-test('every slot of every shipped ringed pad waits for the lift', () => {
+test('every shipped pad is one ring, so every shipped wedge fires as you cross in', () => {
   const config = defaultRailConfig()
   for (const item of config.items) {
-    if (item.type !== 'pad' || item.pad?.orientation !== 'diagonal') continue
-    for (const key of padSlotKeys('diagonal')) {
-      const binding = item.pad.slots[key]
+    if (item.type !== 'pad') continue
+    assert.equal(padRingCount(item.pad), 1, `${item.id} would make its own near ring transit`)
+    for (const key of padSlotKeys(item.pad)) {
+      const binding = item.pad?.slots[key]
       if (!binding) continue
       const target = config.items.find(entry => entry.id === binding.item)
-      assert.equal(railPadSlotMode(binding, target, 'diagonal'), 'release', `${item.id}.${key}`)
+      assert.notEqual(railPadSlotMode(binding, target, 1), 'release', `${item.id}.${key}`)
     }
   }
 })
@@ -111,15 +134,16 @@ test('the repeatable flag is one fact: the standalone chip and the pad slot read
 
 test('the four shipped pads hold what they say they hold', () => {
   const config = defaultRailConfig()
-  // Three arrows, not four: Down has no wedge in an upward fan and keeps a chip of its own.
-  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padArrows')), ['right', 'up', 'left'])
-  assert.equal(padOf(config, 'padArrows').pad?.orientation, 'cardinal')
-  // Two wedges over two rings: left/right is the scope, near/far is which end.
-  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padJump')), ['ctrlHome', 'home', 'ctrlEnd', 'end'])
-  assert.equal(padOf(config, 'padJump').pad?.orientation, 'diagonal')
+  // Three wedges and a centre. Down has no wedge in an upward fan, so it is the tap - the
+  // one non-spatial mapping in the design, and what keeps the arrow pair on one chip.
+  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padArrows')), ['right', 'up', 'left', 'down'])
+  assert.equal(padOf(config, 'padArrows').pad?.slots[PAD_CENTER]?.item, 'down')
+  assert.equal(padWedgeCount(padOf(config, 'padArrows').pad), 3)
+  // Four wedges, reading left to right as document-start, line-start, line-end, document-end.
+  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padJump')), ['ctrlEnd', 'end', 'home', 'ctrlHome'])
+  assert.equal(padWedgeCount(padOf(config, 'padJump').pad), 4)
   assert.deepEqual(railPadSlotItemIds(padOf(config, 'padCopy')), ['copyResume', 'copyInput', 'copyReply'])
-  // Diagonal purely to keep all four pickers in one chip.
-  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padPickers')), ['prompts', 'clipboardHistory', 'actionsDrawer', 'skills'])
+  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padPickers')), ['actionsDrawer', 'prompts', 'skills', 'clipboardHistory'])
   assert.deepEqual(railPadSlotItemIds(BUILTIN_RAIL.find(item => item.id === 'esc')!), [])
 })
 
@@ -140,27 +164,17 @@ test('a wedge label is a label, never a title', () => {
 })
 
 test('the pane resolves a wedge label through the helper rather than its own chain', () => {
-  // The helper can only hold the rule for callers that use it, and the bug was at the call
-  // site: `view?.padLabel || view?.title || …`. So the call site is pinned too, the same way
-  // `railDensity.test.ts` pins where `rail-text` is applied.
   const pane = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
   const slots = pane.slice(pane.indexOf('const railPadSlots='), pane.indexOf('const renderRailItem='))
   assert.ok(slots.includes('railPadSlotLabel('), 'the pad slot label must come from the helper')
-  assert.equal(
-    /label\s*[:=][^\n]*view\?\.title/.test(slots),
-    false,
-    'a wedge label must never fall through to a tooltip',
-  )
+  assert.equal(/label\s*[:=][^\n]*view\?\.title/.test(slots), false, 'a wedge label must never fall through to a tooltip')
 })
 
 test('the wedge label chain cannot land on a sentence', () => {
   const skills = BUILTIN_RAIL.find(item => item.id === 'skills')!
-  // The item whose title is longest, resolved by every route into this helper.
   assert.equal(railPadSlotLabel(undefined, skills, 'skills'), 'Skills')
   assert.equal(railPadSlotLabel('Pick', skills, 'skills'), 'Pick', 'an explicit short override wins')
   assert.equal(railPadSlotLabel('   ', skills, 'skills'), 'Skills', 'and a blank one does not')
-  // A slot naming something this resolution cannot see shows the id rather than nothing:
-  // a wedge with no face reads as a bug, and the id says which binding to go and fix.
   assert.equal(railPadSlotLabel(undefined, undefined, 'custom:skill:ship'), 'custom:skill:ship')
 })
 
@@ -180,19 +194,17 @@ test('the default order names only real built-ins, and every entry is placed', (
   for (const id of DEFAULT_RAIL_ORDER) assert.ok(known.has(id), `${id} is not a built-in`)
   assert.equal(new Set(DEFAULT_RAIL_ORDER).size, DEFAULT_RAIL_ORDER.length, 'no duplicates')
   assert.deepEqual(defaultRailConfig().layouts.desktop.strip[0].items, [...DEFAULT_RAIL_ORDER])
-  // Down is on the rail as its own chip, next to the pad holding the other three arrows.
-  assert.equal(DEFAULT_RAIL_ORDER.indexOf('down'), DEFAULT_RAIL_ORDER.indexOf('padArrows') + 1)
+  // Down is inside the arrows pad now, so it is not also a chip of its own.
+  assert.equal(DEFAULT_RAIL_ORDER.includes('down'), false)
 })
 
 test('a stored pad is canonicalized, so an untouched copy still equals the shipped one', () => {
-  // The failure this prevents: a fork stores a copy of a shipped pad, reattach asks whether
-  // the copy still equals the definition, and a slot map written in reading order compares
-  // unequal to one rebuilt in canonical order - reporting an edit nobody made.
   const written = normalizeRailPad({
-    orientation: 'cardinal',
-    slots: { left: { item: 'left' }, up: { item: 'up' }, right: { item: 'right' } },
+    wedges: 3,
+    rings: 1,
+    slots: { '0:2': { item: 'left' }, '0:0': { item: 'right' }, '0:1': { item: 'up' } },
   })
-  assert.deepEqual(Object.keys(written.slots), ['right', 'up', 'left'])
+  assert.deepEqual(Object.keys(written.slots), ['0:0', '0:1', '0:2'])
   assert.deepEqual(written, normalizeRailPad(written))
   for (const item of BUILTIN_RAIL) {
     if (item.type !== 'pad') continue
@@ -200,70 +212,110 @@ test('a stored pad is canonicalized, so an untouched copy still equals the shipp
   }
 })
 
-test('normalization keeps an unresolvable slot and drops an unreachable one', () => {
-  const pad = normalizeRailPad({
+test('a pre-positional save is read through its compass names, forever', () => {
+  // The first shipped pads addressed slots by name. A layout is device-local, per-Project and
+  // arbitrarily old, so an unrecognised key is silently a binding the operator loses - the
+  // same durability rule `RETIRED_RAIL_IDS` exists for.
+  const cardinal = normalizeRailPad({
     orientation: 'cardinal',
+    slots: { right: { item: 'right' }, up: { item: 'up' }, left: { item: 'left' } },
+  })
+  assert.equal(cardinal.wedges, 3)
+  assert.equal(cardinal.rings, 1)
+  assert.deepEqual(cardinal.slots, { '0:0': { item: 'right' }, '0:1': { item: 'up' }, '0:2': { item: 'left' } })
+
+  const diagonal = normalizeRailPad({
+    orientation: 'diagonal',
     slots: {
-      // Kept: the action may simply be missing from *this* resolution.
-      up: { item: 'custom:skill:ship' },
-      // Dropped: `upLeft` and `down` cannot be reached at all on a three-wedge cardinal pad.
-      // `down` in particular is how a config written before the fan lost its lower half
-      // loses that binding, which is correct - there is nowhere to put it.
-      upLeft: { item: 'esc' },
-      down: { item: 'down' },
-      sideways: { item: 'esc' },
-      right: { item: 'nope', mode: 'garbage' },
-      left: 'not an object',
+      upRight: { item: 'ctrlHome' },
+      upLeft: { item: 'home' },
+      upRightFar: { item: 'ctrlEnd', mode: 'release' },
+      upLeftFar: { item: 'end' },
     },
   })
-  assert.deepEqual(Object.keys(pad.slots), ['right', 'up'])
-  assert.deepEqual(pad.slots.up, { item: 'custom:skill:ship' })
-  assert.deepEqual(pad.slots.right, { item: 'nope' }, 'a bad mode falls back to the default rather than sticking')
-  const migrated = normalizeRailPad({ orientation: 'cardinal', slots: { up: { item: 'clearInput' } } })
-  assert.equal(migrated.slots.up?.item, 'ctrlU')
-  assert.equal(normalizeRailPad({ orientation: 'sideways' }).orientation, 'cardinal')
-  assert.equal(normalizeRailPad(undefined).orientation, 'cardinal')
+  assert.equal(diagonal.wedges, 2)
+  assert.equal(diagonal.rings, 2)
+  assert.equal(diagonal.slots['1:0']?.item, 'ctrlEnd')
+  assert.equal(diagonal.slots['1:0']?.mode, 'release', 'an explicit mode survives the move')
+  assert.equal(diagonal.slots['0:1']?.item, 'home')
+  // A stored `down` from before the fan lost its lower half has nowhere to go, which is
+  // correct - there is no south to put it in.
+  const dropped = normalizeRailPad({ orientation: 'cardinal', slots: { down: { item: 'down' } } })
+  assert.deepEqual(dropped.slots, {})
+})
+
+test('normalization keeps an unresolvable slot and drops an unreachable one', () => {
+  const pad = normalizeRailPad({
+    wedges: 2,
+    rings: 1,
+    slots: {
+      // Kept: the action may simply be missing from *this* resolution.
+      '0:0': { item: 'custom:skill:ship' },
+      // Dropped: no such position on a two-wedge, one-ring pad.
+      '0:4': { item: 'esc' },
+      '1:0': { item: 'esc' },
+      sideways: { item: 'esc' },
+      '0:1': { item: 'nope', mode: 'garbage' },
+    },
+  })
+  assert.deepEqual(Object.keys(pad.slots), ['0:0', '0:1'])
+  assert.deepEqual(pad.slots['0:0'], { item: 'custom:skill:ship' })
+  assert.deepEqual(pad.slots['0:1'], { item: 'nope' }, 'a bad mode falls back to the default rather than sticking')
+  const migrated = normalizeRailPad({ wedges: 1, rings: 1, slots: { '0:0': { item: 'clearInput' } } })
+  assert.equal(migrated.slots['0:0']?.item, 'ctrlU')
+  assert.equal(normalizeRailPad(undefined).wedges, 3)
 })
 
 test('a saved pad override survives a round trip through the blob', () => {
   const config = defaultRailConfig()
-  const next = updateRailPadSlot(config, 'padArrows', 'up', { item: 'esc', mode: 'release' })
+  const next = updateRailPadSlot(config, 'padArrows', padSlotKey(0, 1), { item: 'esc', mode: 'release' })
   const blob = writeRailConfigBlob(undefined, next)
   const reloaded = railConfigFromBlob(blob)
-  assert.deepEqual(padOf(reloaded, 'padArrows').pad?.slots.up, { item: 'esc', mode: 'release' })
+  assert.deepEqual(padOf(reloaded, 'padArrows').pad?.slots['0:1'], { item: 'esc', mode: 'release' })
   // The rest of the pad is untouched, and the shipped definition still supplies it.
-  assert.equal(padOf(reloaded, 'padArrows').pad?.slots.left?.item, 'left')
+  assert.equal(padOf(reloaded, 'padArrows').pad?.slots['0:2']?.item, 'left')
 })
 
 test('clearing a slot leaves a dead wedge rather than shuffling the others', () => {
-  const cleared = updateRailPadSlot(defaultRailConfig(), 'padArrows', 'left', { item: null })
+  const cleared = updateRailPadSlot(defaultRailConfig(), 'padArrows', padSlotKey(0, 2), { item: null })
   const pad = padOf(cleared, 'padArrows').pad!
-  assert.equal(pad.slots.left, undefined)
-  assert.equal(pad.slots.right?.item, 'right', 'right did not slide into the gap')
-  assert.deepEqual(railPadSlotItemIds(padOf(cleared, 'padArrows')), ['right', 'up'])
+  assert.equal(pad.slots['0:2'], undefined)
+  assert.equal(pad.slots['0:0']?.item, 'right', 'right did not slide into the gap')
 })
 
 test('a pad slot edit refuses anything that is not a pad', () => {
   const config = defaultRailConfig()
-  assert.equal(updateRailPadSlot(config, 'esc', 'up', { item: 'enter' }), config)
-  assert.equal(updateRailPadSlot(config, 'nope', 'up', { item: 'enter' }), config)
-  assert.equal(setRailPadOrientation(config, 'esc', 'diagonal'), config)
-  assert.equal(setRailPadOrientation(config, 'padArrows', 'cardinal'), config, 'already there')
+  assert.equal(updateRailPadSlot(config, 'esc', padSlotKey(0, 0), { item: 'enter' }), config)
+  assert.equal(updateRailPadSlot(config, 'nope', padSlotKey(0, 0), { item: 'enter' }), config)
+  assert.equal(setRailPadShape(config, 'esc', { wedges: 4 }), config)
+  assert.equal(setRailPadShape(config, 'padArrows', { wedges: 3 }), config, 'already there')
 })
 
-test('turning a pad carries what fits and drops what does not, position for position', () => {
-  const turned = setRailPadOrientation(defaultRailConfig(), 'padArrows', 'diagonal')
-  const pad = padOf(turned, 'padArrows').pad!
-  assert.equal(pad.orientation, 'diagonal')
-  // Three positions into four: all of them fit, and the third lands on the far ring.
-  assert.equal(pad.slots.upRight?.item, 'right')
-  assert.equal(pad.slots.upLeft?.item, 'up')
-  assert.equal(pad.slots.upRightFar?.item, 'left')
-  assert.deepEqual(railPadSlotItemIds(padOf(turned, 'padArrows')), ['right', 'up', 'left'])
+test('growing a pad keeps every binding; shrinking drops what no longer has a position', () => {
+  const grown = setRailPadShape(defaultRailConfig(), 'padArrows', { wedges: 5 })
+  assert.equal(padWedgeCount(padOf(grown, 'padArrows').pad), 5)
+  // Position for position, and the two new wedges are empty.
+  assert.deepEqual(railPadSlotItemIds(padOf(grown, 'padArrows')), ['right', 'up', 'left', 'down'])
+  assert.equal(padOf(grown, 'padArrows').pad?.slots['0:2']?.item, 'left')
 
-  // The other way round, three of the four fit and the fourth is the one left behind.
-  const flattened = setRailPadOrientation(defaultRailConfig(), 'padJump', 'cardinal')
-  assert.deepEqual(railPadSlotItemIds(padOf(flattened, 'padJump')), ['ctrlHome', 'home', 'ctrlEnd'])
+  const shrunk = setRailPadShape(defaultRailConfig(), 'padJump', { wedges: 2 })
+  // Four wedges into two: the outer two have nowhere to go, and dropping them beats
+  // stacking two actions on one wedge.
+  assert.deepEqual(railPadSlotItemIds(padOf(shrunk, 'padJump')), ['ctrlEnd', 'end'])
+
+  // The centre survives every reshape, because it has no wedge or ring to lose.
+  const reshaped = setRailPadShape(defaultRailConfig(), 'padArrows', { wedges: 1 })
+  assert.equal(padOf(reshaped, 'padArrows').pad?.slots[PAD_CENTER]?.item, 'down')
+})
+
+test('adding a ring keeps the near ring and offers an empty far one', () => {
+  const ringed = setRailPadShape(defaultRailConfig(), 'padCopy', { rings: 2 })
+  assert.equal(padRingCount(padOf(ringed, 'padCopy').pad), 2)
+  assert.deepEqual(railPadSlotItemIds(padOf(ringed, 'padCopy')), ['copyResume', 'copyInput', 'copyReply'])
+  assert.equal(padOf(ringed, 'padCopy').pad?.slots['1:0'], undefined)
+  // And everything on it now waits for the lift, because the near ring became transit.
+  const target = ringed.items.find(entry => entry.id === 'copyReply')
+  assert.equal(railPadSlotMode(padOf(ringed, 'padCopy').pad?.slots['0:2'], target, 2), 'release')
 })
 
 test('a custom pad survives normalization; a saved pad naming no slots is inert, not dropped', () => {
@@ -271,29 +323,28 @@ test('a custom pad survives normalization; a saved pad naming no slots is inert,
     version: 3,
     items: [
       ...defaultRailConfig().items,
-      { id: 'custom:pad:mine', type: 'pad', label: 'Mine', pad: { orientation: 'diagonal', slots: { upLeftFar: { item: 'esc' } } } },
+      { id: 'custom:pad:mine', type: 'pad', label: 'Mine', pad: { wedges: 5, rings: 2, slots: { '1:4': { item: 'esc' } } } },
       { id: 'custom:pad:empty', type: 'pad', label: 'Empty' },
     ],
     layouts: defaultRailConfig().layouts,
   }
   const config = normalizeRailConfig(saved)
   assert.deepEqual(railPadSlotItemIds(padOf(config, 'custom:pad:mine')), ['esc'])
-  assert.equal(padOf(config, 'custom:pad:mine').pad?.orientation, 'diagonal')
+  assert.equal(padWedgeCount(padOf(config, 'custom:pad:mine').pad), 5)
   // A half-built pad is what the editor produces the moment it is created, so it has to
   // load rather than vanish on the next read.
-  assert.deepEqual(padOf(config, 'custom:pad:empty').pad, { orientation: 'cardinal', slots: {} })
+  assert.deepEqual(padOf(config, 'custom:pad:empty').pad, { wedges: 3, rings: 1, slots: {} })
 })
 
 test('a padded key keeps its spoken alias, because a pad is a placement', () => {
   const config = defaultRailConfig()
   const phrases = resolveRailVoiceEntries(config, { device: 'desktop', backend: 'claude' })
     .flatMap(entry => entry.phrases)
-  // `up` is only reachable through `padArrows` on the default rail. Folding it into a pad
-  // must not silently retire "press up" as a spoken command.
+  // The arrows are reachable only through `padArrows` on the default rail, Down by its
+  // centre. Folding them into a pad must not retire "press up" as a spoken command.
   assert.ok(phrases.includes('press up'), 'the arrow inside the pad is still voiced')
+  assert.ok(phrases.includes('press down'), 'including the one in the centre')
   assert.ok(phrases.includes('home key'))
-  // Down is its own chip again, and is voiced from there.
-  assert.ok(phrases.includes('press down'))
   // The pad chip itself is a container with no behaviour, so it is never voiced.
   const voicedIds = resolveRailVoiceEntries(config, { device: 'desktop', backend: 'claude' }).map(entry => entry.item.id)
   assert.equal(voicedIds.includes('padArrows'), false)
@@ -303,8 +354,9 @@ test('a padded key keeps its spoken alias, because a pad is a placement', () => 
 test('an unplaced pad does not voice what it holds', () => {
   const config = defaultRailConfig()
   config.layouts.desktop.strip[0].items = config.layouts.desktop.strip[0].items
-    .filter(id => id !== 'padJump')
+    .filter(id => id !== 'padArrows')
   const phrases = resolveRailVoiceEntries(config, { device: 'desktop', backend: 'claude' })
     .flatMap(entry => entry.phrases)
-  assert.equal(phrases.includes('home key'), false)
+  assert.equal(phrases.includes('press up'), false)
+  assert.equal(phrases.includes('press down'), false)
 })
