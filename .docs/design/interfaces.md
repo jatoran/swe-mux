@@ -1349,6 +1349,7 @@ GET    /assistant                          enabled, model, budget, spend, trust,
 GET    /assistant/dialogs[?limit=]
 POST   /assistant/dialogs                  {title?}
 GET    /assistant/dialogs/{id}             messages, actions, turn_running
+POST   /assistant/dialogs/{id}/interrupt   stop the running turn; {interrupted: bool}
 POST   /assistant/dialogs/{id}/turns       {text, client_context?} -> 202 {turn_id, queued}
 POST   /assistant/dialogs/{id}/interrupt
 POST   /assistant/actions/{id}/confirm
@@ -1380,6 +1381,13 @@ The queued and started events share one message id per turn, so a client renders
 words once and updates them in place.
 Refusing instead left the client holding text with nowhere to put it, which is how speaking over
 the assistant lost what was said and how one sentence ended up split across two dialogs.
+
+`interrupted: false` is not a failure - it is the daemon saying nothing was running, which
+means the caller's view is stale. A client must act on it rather than discard it: clear the
+local turn state and refetch the dialog. Discarding it made a stop press with nothing to stop
+byte-identical to one that worked (HTTP 200, no state change), and six presses in a row got six
+200s and changed nothing (2026-08-23). That refetch is also the only recovery there is for a
+terminal event the client missed, because the live handler drops replayed events on purpose.
 
 `assistant_turn_done` carries `exhausted`, true when the turn stopped on
 `MAX_MODEL_CALLS_PER_TURN` with work still outstanding. The reply then ends with a plain notice

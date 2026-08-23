@@ -246,6 +246,37 @@ export function AssistantPanel({
     return () => window.removeEventListener('mux:assistant-event', handler)
   }, [])
 
+  /**
+   * Press stop, and believe the answer.
+   *
+   * `interrupt` returns `{interrupted: false}` when the daemon has no running
+   * turn, and that used to be discarded: a stop press with nothing to stop was
+   * byte-identical to one that worked - HTTP 200, no state change, spinner still
+   * turning. Six presses in a row got six 200s and changed nothing (2026-08-23).
+   *
+   * `false` is not a failure, it is the daemon saying "there is nothing running",
+   * which means this view is stale. So the local turn state is cleared and the
+   * dialog is refetched, which is also the only recovery path there is for a
+   * terminal event that never arrived - the live handler drops replayed events
+   * on purpose, so nothing else ever un-sticks a missed `assistant_turn_done`.
+   */
+  const stopTurn = async (id: string) => {
+    try {
+      const verdict = await interruptTurn(id)
+      if (verdict?.interrupted) return
+      setTurnRunning(false)
+      setThinking(null)
+      const detail = await dialogDetail(id)
+      setMessages(detail.messages.filter(
+        item => item.role === 'user' || item.role === 'assistant' || item.role === 'action',
+      ))
+      setActions(detail.actions)
+      setTurnRunning(detail.turn_running)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   // One reset path for both surfaces. The `new` button and the voice alias both
   // call `startNewDialog`, which announces here; the panel never clears itself
   // directly, so a conversation started by voice and one started by the button
@@ -258,7 +289,11 @@ export function AssistantPanel({
       // which is the whole reason clearing needs no confirmation. An empty one
       // must not displace a real previous conversation.
       if (messagesRef.current.length) { setPreviousMessages(messagesRef.current); setPreviousOpen(false) }
-      setMessages([]); setActions([]); setThinking(null); setError(null)
+      // `turnRunning` goes with them. It used to survive the reset, so a view
+      // left stale by a missed completion event stayed stale through the one
+      // gesture an operator reaches for to escape it - the composer disabled and
+      // the stop button offering to interrupt a turn that had ended long ago.
+      setMessages([]); setActions([]); setThinking(null); setError(null); setTurnRunning(false)
       setDialogId(id)
     }
     window.addEventListener(ASSISTANT_DIALOG_RESET_EVENT, handler)
@@ -379,7 +414,7 @@ export function AssistantPanel({
         }}
       />
       {turnRunning
-        ? <button class="assistant-stop" title="Interrupt the running turn" onClick={() => { if (dialogId) void interruptTurn(dialogId) }}>stop</button>
+        ? <button class="assistant-stop" title="Interrupt the running turn" onClick={() => { if (dialogId) void stopTurn(dialogId) }}>stop</button>
         : <button class="assistant-send" disabled={!input.trim()} onClick={() => void submit()}>send</button>}
       <button class="assistant-new" title="Start a fresh conversation. The current one is kept, not deleted." onClick={() => void newDialog()}>new</button>
     </footer>

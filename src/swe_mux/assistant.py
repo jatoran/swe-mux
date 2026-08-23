@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from . import budget
 from .config import Config
 from .event_bus import EventBus
+from .history import HistorySearchBudgetExceeded
 from .leaf_names import suggest_folder_name, validate_leaf_name
 from .openrouter import OpenRouterClient, OpenRouterError, cache_stable_message
 from .path_identity import same_path
@@ -2072,9 +2073,24 @@ class AssistantService:
             ),
             tool(
                 "search_history",
-                "Search every archived conversation across all harnesses.",
+                # The description is the cheap half of the fix that matters. The
+                # budget stops this hanging the daemon; saying what the tool is
+                # FOR stops it being reached for at all when a named session was
+                # the actual question - which is what happened when "summarize
+                # the audit session's latest response" became a full-archive
+                # search instead of a read of that session.
+                "Find an archived conversation you cannot already name, by searching "
+                "every harness's history. This is the widest and slowest read available "
+                "and it scans the whole archive, so use it only to LOCATE a session. "
+                "When the operator names a session, or one is in the workspace snapshot, "
+                "use session_detail or read_transcript instead - those read one "
+                "conversation and are far cheaper. Give a specific phrase; a vague query "
+                "matches everything and answers nothing.",
                 {
-                    "query": {"type": "string"},
+                    "query": {
+                        "type": "string",
+                        "description": "A specific phrase to look for. Required and non-empty.",
+                    },
                     "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 ["query"],
@@ -3431,10 +3447,31 @@ class AssistantService:
         if kind == "search_history":
             if self.history_search is None:
                 return {"error": "history search is not wired on this daemon"}
-            page = await self.history_search(
-                query=str(arguments.get("query") or ""),
-                limit=max(1, min(int(arguments.get("limit") or 5), 10)),
-            )
+            search_query = str(arguments.get("query") or "").strip()
+            # An empty query asks the archive for everything and sorts it, which
+            # is the most expensive thing this tool can do and never what the
+            # operator meant. Refused here rather than bounded, because there is
+            # no useful answer to narrow down to.
+            if not search_query:
+                return {
+                    "error": "search_history needs a query",
+                    "hint": "name what to look for - a phrase, a file, a session name",
+                }
+            try:
+                page = await self.history_search(
+                    query=search_query,
+                    limit=max(1, min(int(arguments.get("limit") or 5), 10)),
+                )
+            except HistorySearchBudgetExceeded as exc:
+                # A tool result, not a failed turn: the model can narrow and
+                # retry, or tell the operator plainly. A raised exception here
+                # would end the turn and leave the operator with a spinner and
+                # no explanation, which is the failure this replaces.
+                log.info("assistant search_history exceeded its budget query=%r", search_query[:80])
+                return {
+                    "error": str(exc),
+                    "retry_with": "a narrower phrase, or ask the operator which project to look in",
+                }
             items = [
                 {
                     "name": item.get("name"),

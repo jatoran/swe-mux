@@ -390,6 +390,12 @@ from .wsl_bridge import install_bridge as install_wsl_bridge
 from .wsl_bridge import setup_status as wsl_setup_status
 
 log = logging.getLogger(__name__)
+
+#: Wall-clock ceiling on the assistant's own archive search.
+#: Generous for an indexed FTS hit and far short of the minutes an unindexed
+#: LIKE scan over a multi-gigabyte database takes. The point is not speed, it is
+#: that the failure is a tool result the model can read instead of a wedged app.
+ASSISTANT_HISTORY_SEARCH_BUDGET_MS = 4_000
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 PREVIEW_HTTP_CONCURRENCY = 32
 PREVIEW_WS_CONCURRENCY = 16
@@ -2052,7 +2058,21 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         return result
 
     async def _assistant_history_search(*, query: str, limit: int) -> dict[str, Any]:
-        return await history.history_page(query=query, search_scope="all", limit=limit)
+        """The assistant's archive search, bounded in a way an operator's is not.
+
+        A human running this watches a spinner and can give up; a tool call has
+        nobody to give up, and this one holds the single history executor thread
+        while it runs, so an unbounded search takes every other history read down
+        with it. Measured 2026-08-23 on a 2.79 GB database: minutes of pinned
+        thread, `/api/sessions` timing out, and a chat stuck on
+        "running search_history" with no way to stop it.
+        """
+        return await history.history_page(
+            query=query,
+            search_scope="all",
+            limit=limit,
+            budget_ms=ASSISTANT_HISTORY_SEARCH_BUDGET_MS,
+        )
 
     async def _assistant_create_project(arguments: dict[str, Any]) -> dict[str, Any]:
         """The assistant's create_project execution: the ordinary registration path.

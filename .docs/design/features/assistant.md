@@ -20,6 +20,18 @@ Asked for something that is coding, it routes: queue a message to an existing se
   `NON_OVERRIDABLE_REASONS` and the approval floor therefore bind structurally, not by prompt.
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
+    **A read executing silently still has to be bounded.** `search_history` scans the whole
+    archive and holds the single history executor thread while it does, so an unbounded one
+    starves every other history read: measured 2026-08-23 on a 2.79 GB database, minutes of
+    pinned thread with `/api/sessions` timing out while `/api/health` still answered instantly -
+    the event loop was fine, the database thread was not. It now runs under a wall-clock budget
+    (`ASSISTANT_HISTORY_SEARCH_BUDGET_MS`) enforced *inside* SQLite by a progress handler, which
+    is the only lever that reaches a statement already running; exceeding it returns a tool
+    result the model can narrow and retry from, never a raised turn. An empty query is refused
+    outright rather than bounded, because there is no useful answer to narrow towards. The tool
+    description says what the tool is *for* - locating a conversation you cannot already name -
+    because the incident began with "summarize the audit session's latest response" becoming a
+    full-archive search instead of a `read_transcript` on the session the operator had named.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
   - *reversible* (queue an inert draft, write to a project note — `write_project_note`, below — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
   - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send — and `run_project_action`, because a build or a deploy is not taken back): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
