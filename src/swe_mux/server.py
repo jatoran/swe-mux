@@ -185,8 +185,8 @@ from .observation import (
     cancel_pending_approval,
     conversation_rollover_decision,
     foreign_conversation_hook_id,
-    hook_event_scope,
     note_interrupt_intent,
+    session_hook_event_scope,
 )
 from .openrouter import OpenRouterClient, OpenRouterError, cache_saving_usd
 from .operational_telemetry import OperationalTelemetryStore
@@ -14146,7 +14146,10 @@ async def hook_ingress(request: web.Request) -> web.Response:
     elif descriptor(session.record.backend).hook_ordering_guarantee:
         raise ValueError("this harness requires sequenced hook events")
     event_payload = hook_event_payload(payload)
-    scope = hook_event_scope(event_type, payload)
+    # Session-aware: a harness that runs subagents as separate threads emits
+    # events that only *name* a child thread, and the payload alone cannot tell
+    # one of those from the root's own.
+    scope = session_hook_event_scope(session, event_type, payload)
     # An in-CLI `/clear` replaces the conversation under a live PTY: the CLI
     # reports its new id here, and that ends the current agent run. Rolled before
     # the observation below so the SessionStart transition lands on the new run.

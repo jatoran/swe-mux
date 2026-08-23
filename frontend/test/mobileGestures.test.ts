@@ -10,12 +10,14 @@ import {
   surfaceGestureFor,
   surfaceGesturesEnabled,
   defaultMobileGestureSettings,
+  GESTURE_SHADOWING_SELECTORS,
   GESTURE_SLOTS,
   gestureOverlayDepth,
   mobileGestureSettings,
   overlayBackEnabled,
   pathOwnsHorizontalScroll,
   pathOwnsRailGesture,
+  pathShadowsGesture,
   resolveGestureCommand,
   swipeAwayCloseEnabled,
 } from '../src/mobileGestures.ts'
@@ -155,6 +157,25 @@ test('each region is recognized from the composed path, and everything else is n
   assert.equal(regionForPath(region('.drawer-tabs')), null)
   assert.equal(regionForPath(region('.stack-tabs')), null)
   assert.equal(regionForPath([]), null)
+})
+
+test('an overlay drawn over a region shadows it, and takes the whole touch', () => {
+  const only = (selector: string) => ({ matches: (query: string) => query === selector })
+  // The overflow popover is a DOM child of `.rail-row`, so the rail is genuinely in the
+  // path behind it — and its chip grid scrolls vertically, which is the rail's own swipe.
+  const inPopover = [only('.rail-overflow-grid'), only('.rail-overflow-popover'), only('.terminal-action-rail')]
+  const onRail = [only('.term-key'), only('.terminal-action-rail')]
+
+  assert.equal(regionForPath(inPopover), null)
+  assert.equal(pathShadowsGesture(inPopover), true)
+  // Shadowing is not "no region": the recognizer has to drop the sequence outright, or a
+  // sideways drag across the panel resolves the workspace slots and changes tabs behind it.
+  assert.equal(pathShadowsGesture(onRail), false)
+  assert.equal(regionForPath(onRail), 'commandRail')
+  assert.equal(pathShadowsGesture([]), false)
+  // Drop-ups mount under `.terminal-surface`, outside the rail, so no region matches them
+  // in the first place and they need no entry here.
+  assert.equal(GESTURE_SHADOWING_SELECTORS.includes('.rail-dropup'), false)
 })
 
 test('the top bar opens downward, and only the mic can be put away again', () => {

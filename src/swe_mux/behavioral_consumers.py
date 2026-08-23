@@ -21,6 +21,7 @@ moves on routine progress is not one.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -63,10 +64,14 @@ _UNKNOWN_PHASE = "unknown"
 RETITLE_COOLDOWN_SECONDS = 120.0
 RETITLE_MIN_RECORDS = 2
 
+# `required` lists every property deliberately: a `strict` json_schema response
+# format is rejected outright ("'required' ... to be an array including every key
+# in properties") when one is left optional, so an omission here is not a looser
+# schema but a call that can never succeed. `test_llm_schemas.py` guards the rule.
 TITLE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["title"],
+    "required": ["title", "confidence"],
     "properties": {
         "title": {"type": "string", "maxLength": 80},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -79,8 +84,8 @@ TITLE_SYSTEM_PROMPT = (
     "summary) for THIS run only. Keep the current title UNCHANGED unless the run's "
     "subject has materially changed. When in doubt, return the current title "
     "verbatim - 'no change' is the common, correct answer. Prefer broadening the "
-    "existing handle over inventing a new one (for example 'Phase 7' becomes "
-    "'Phase 7 + diagnostics' once the scope widens). Emit a compact task label of "
+    "existing handle over inventing a new one (for example 'auth refactor' becomes "
+    "'auth refactor + tests' once the scope widens). Emit a compact task label of "
     "2-5 words. Never prefix with Terminal Session, Session, Claude, Codex, User, "
     "or Conversation. Return only the schema."
 )
@@ -448,11 +453,17 @@ class BehavioralConsumerService:
         """One cheap-model synthesis call, budget-guarded and fully accounted."""
         model = str(getattr(self.config, "openrouter_cheap_model", "") or "")
         if not model:
+            # Logged rather than skipped silently: a pivot was detected and then
+            # deliberately not acted on, which reads from the outside exactly like
+            # a titler that never fires. These are the only two paths that decline
+            # before an observer row exists to record the decision.
+            log.info("adaptive title skipped for run=%s: no cheap model configured", run_id)
             return None
         global_spend = await self.store.spend()
         if budget.spent_out(
             self.config.automation_daily_budget, global_spend, label="the global daily automation"
         ).exhausted:
+            log.info("adaptive title skipped for run=%s: daily automation budget spent", run_id)
             return None
         recent = [
             {
@@ -488,7 +499,15 @@ class BehavioralConsumerService:
                 max_tokens=64,
                 reasoning_enabled=False,
             )
+        except asyncio.CancelledError:
+            # A cancelled call still has to leave a terminal row: the shutdown that
+            # cancels it is exactly when a `running` row would be stranded forever.
+            await self.store.observer_finished(call_id, status="cancelled", error="cancelled")
+            raise
         except OpenRouterError as exc:
+            # The whole diagnostic point of the ledger is that a failed call can be
+            # read back without replaying it, so record what the failure *was* -
+            # status and retryability above all - and not only that one happened.
             await self.store.observer_finished(
                 call_id,
                 status="failed",
@@ -497,6 +516,13 @@ class BehavioralConsumerService:
                 input_tokens=exc.input_tokens,
                 output_tokens=exc.output_tokens,
                 cost_usd=exc.cost_usd,
+                latency_ms=exc.latency_ms,
+                provider_name=exc.provider_name,
+                finish_reason=exc.finish_reason,
+                response_content_type=exc.response_content_type,
+                response_content_length=exc.response_content_length,
+                http_status=exc.status,
+                retryable=exc.retryable,
                 error=str(exc)[:1000],
             )
             if exc.generation_id or exc.input_tokens or exc.output_tokens or exc.cost_usd:
@@ -510,6 +536,16 @@ class BehavioralConsumerService:
                     project_id=project_id,
                     agent_run_id=run_id,
                 )
+            log.warning("adaptive title synthesis failed for run=%s: %s", run_id, exc)
+            return None
+        except Exception as exc:  # noqa: BLE001 - titling must never break scanning
+            # Anything the provider layer did not wrap (a serialization fault, a
+            # store error) would otherwise leave the row `running` and the failure
+            # invisible, which is how this consumer stayed broken unnoticed.
+            await self.store.observer_finished(
+                call_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:1000]
+            )
+            log.warning("adaptive title synthesis failed for run=%s: %s", run_id, exc)
             return None
         await self.store.observer_finished(
             call_id,

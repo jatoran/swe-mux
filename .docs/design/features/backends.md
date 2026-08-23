@@ -177,8 +177,13 @@ The descriptor is the source of truth for all generic surfaces.
   The last two are both derived from `screen == "alternate"` and are deliberately separate names rather than one: they fire on different events (a settled geometry change against an attach), and merging them would put a single docstring in charge of two failures that a future harness could exhibit independently.
   None of the three is a general WebGL-safety claim, which is `webgl_unsafe`: Claude does not repaint scrollback but is still WebGL-unsafe, because its retained alternate-screen surface has a separate live-context corruption mode with no override.
   The same flag gates the daemon's answer to a client `repaint` frame, because a harness that floods the ring with live-region repaint traffic is both the only one whose replay can parse to nothing and the only one that restates its transcript when pulsed (`features/sessions.md`).
-- Every harness declares its terminal surface traits: `webgl_unsafe`, `owns_scroll_viewport`, `applies_width_envelope`, `min_desktop_columns`, and `suppresses_late_color_response`.
+- Every harness declares its terminal surface traits: `webgl_unsafe`, `owns_scroll_viewport`, `applies_width_envelope`, `min_desktop_columns`, `suppresses_late_color_response`, `touch_scroll_rows_per_report`, and `app_tail_reset`.
   These are published to the browser, because a per-harness fact compiled into a frontend module is a second copy of a daemon-owned fact and drifts from it.
+- `app_tail_reset` says what returns a TUI's *own* scroll viewport to its newest output other than the scroll the browser forwards, which is the only movement the browser can count (`features/ui.md` carries the estimate it corrects).
+  It is `none`, `submit`, or `input`, and the three are ordered by how much has been established rather than by preference.
+  Claude declares `submit`: a submitted prompt appends to the conversation and the CLI follows its own newest output, while nothing has established that an ordinary keystroke does the same, so the declaration stops where the evidence does.
+  Every other harness declares `none`, which is also what a payload predating the field means, and `none` preserves the estimate exactly as it behaved before.
+  Declaring too little costs one tap on a chip that outstayed its scroll; declaring too much withdraws that chip from a reader who is still scrolled up and leaves them no way back, so an unmeasured composer is `none`.
 - Every harness declares its CLI grammar: `spawn_id_argv`, `resume_argv`, `skill_invocation_prefix`, `composer_clear_keys`, `instruction_file_name` with `global_instruction_parts`, and `npm_entrypoint` when it ships as an npm package.
   `composer_clear_keys` is the newest of these and exists for the usual reason: the browser's own guess was wrong.
   Ctrl+U is a *line* kill in Claude Code, not a composer clear (measured against v2.1.238 on a four-line draft), so a rail button sending it cleared one line and reported a clear, and the daemon's unsent-input estimate read the same write as "now empty".
@@ -527,6 +532,15 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   (`transcript_binding_discarded`) and the observer re-derives by exact match, which exists from
   that moment on. Nothing durable was written under the guess, so the discard is complete.
   `GET /api/sessions/{sid}/state-log` reports `transcript_provisional`.
+- Neither path may bind a **subagent thread**. Codex 0.149 runs subagents as separate
+  conversations (`collaborationspawn_agent`: its own thread id, its own rollout, its own
+  `agent-turn-complete`, all under the root's hook wiring), so the repair path's own signal is
+  emitted by threads that are not this pane. A turn end therefore binds only what nothing
+  contradicts: never a thread already seen as a subagent's `agent_id`, and never a conversation
+  different from the one root-scoped hooks have been naming
+  (`status-detection.md` § Subagent threads and conversation binding). With neither
+  contradiction available - hooks disabled or untrusted, which is exactly when this path is the
+  only signal - it binds as before.
 - When even that guess is unavailable, the PTY screen drives the first turn on its own
   (`status-detection.md` § the unwitnessed session).
 - **Every interactive PowerShell session re-asserts the shim directory at the front of PATH
@@ -589,7 +603,11 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   Nothing measured on the retired conversation carries forward.
 - One trigger per backend, by evidence the backend can actually give. **Claude's own
   `SessionStart` hook** arrives over the session's loopback ingress with the session's own
-  secret and names the conversation the CLI is now writing. A reported id that differs from
+  secret and names the conversation the CLI is now writing. A reported id is a rollover only
+  once something is **bound** - asked through `conversation_unbound`, never by testing the
+  id's shape, because a harness that mints its own conversation id carries the mux session
+  id as a placeholder and mux session ids are UUIDs too; on an unbound session this is the
+  bind path's job, not a rollover. A reported id that differs from
   the bound one is a rollover **only when it can be this PTY replacing its own
   conversation**: the ingress and the secret authenticate the *session*, not the process,
   and a nested `claude` launched by the session's own tool call inherits the hook wiring

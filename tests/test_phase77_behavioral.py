@@ -17,6 +17,7 @@ from swe_mux.behavioral_consumers import (
 )
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
+from swe_mux.openrouter import OpenRouterError
 from swe_mux.scan_consumers import (
     catch_me_up,
     handoff_progress,
@@ -365,6 +366,89 @@ async def test_stable_subject_run_measures_zero_retitles(tmp_path: Path) -> None
     assert await store.recent_annotation("run-1", "title", 0) is None
     state = await store.checkpoint(f"{ADAPTIVE_TITLE_CHECKPOINT_PREFIX}run-1")
     assert int((state or {}).get("retitle_count") or 0) == 0
+    store.close()
+
+
+class _FailingProvider:
+    """A provider whose call always fails, the way a rejected request does."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.calls = 0
+
+    async def complete_json(self, **_kwargs: Any) -> Any:
+        self.calls += 1
+        raise self.error
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_synthesis_records_what_the_failure_was(tmp_path: Path) -> None:
+    """A failed call must be diagnosable from its ledger row alone.
+
+    `builtin:adaptive-title` failed 100% of its live calls on a schema the
+    provider rejected, and the row said only "request failed with HTTP 400": no
+    status, no retryability, nothing to act on. A rejected call bills nothing, so
+    the ledger row is the *only* trace it leaves - the spend table cannot show a
+    call that was never charged.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = _FailingProvider(
+        OpenRouterError(
+            "OpenRouter request failed with HTTP 400: invalid_json_schema",
+            status=400,
+            retryable=False,
+            resolved_model="vendor/cheap",
+            provider_name="Azure",
+        )
+    )
+    config = Config(data_dir=tmp_path, openrouter_cheap_model="vendor/cheap")
+    service = BehavioralConsumerService(
+        store=store,
+        sessions=SimpleNamespace(sessions={}),
+        config=config,
+        provider=provider,
+        events=EventBus(),
+    )
+    await _feed_run(service, _context(), _session())
+
+    assert provider.calls == 1
+    # The pivot fired, so the title simply stays put rather than being rewritten.
+    assert await store.recent_annotation("run-1", "title", 0) is None
+    calls = await store.observer_calls()
+    assert len(calls) == 1
+    row = calls[0]
+    assert row["status"] == "failed"
+    assert row["http_status"] == 400
+    assert not row["retryable"]
+    assert row["provider_name"] == "Azure"
+    assert "invalid_json_schema" in row["error"]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_synthesis_fault_leaves_no_running_row(tmp_path: Path) -> None:
+    """Anything the provider layer did not wrap must still close its row.
+
+    A call left `running` is worse than one marked failed: it reads as in flight
+    forever, and the automation looks idle rather than broken.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = _FailingProvider(ValueError("unserializable prompt"))
+    config = Config(data_dir=tmp_path, openrouter_cheap_model="vendor/cheap")
+    service = BehavioralConsumerService(
+        store=store,
+        sessions=SimpleNamespace(sessions={}),
+        config=config,
+        provider=provider,
+        events=EventBus(),
+    )
+    await _feed_run(service, _context(), _session())
+
+    assert provider.calls == 1
+    calls = await store.observer_calls()
+    assert [row["status"] for row in calls] == ["failed"]
+    assert "ValueError" in calls[0]["error"]
+    assert await store.recent_annotation("run-1", "title", 0) is None
     store.close()
 
 

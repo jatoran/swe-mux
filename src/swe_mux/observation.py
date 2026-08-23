@@ -2227,6 +2227,31 @@ async def _complete_empty_hook_turn(session: Session, events: EventBus) -> None:
     )
 
 
+#: Hook events that report a turn *ending*. Codex's `notify` program fires
+#: `agent-turn-complete` for every thread the CLI runs, subagent threads included,
+#: and that payload names the finishing thread while carrying no `agent_id`. A
+#: turn-end is therefore the weakest identity evidence a hook can offer, which is
+#: why `_bind_native_id_from_hook` gates it rather than trusting it.
+TURN_END_HOOK_EVENTS = frozenset({"Stop", "turn_ended", "agent-turn-complete", "task_complete"})
+
+
+def hook_conversation_id(payload: dict[str, Any]) -> str:
+    """The conversation a hook payload names, in whichever spelling it uses.
+
+    One reader for the four spellings in circulation, because every consumer of
+    this value has to agree on it: a caller that read only `session_id` would see
+    an unnamed conversation on a harness that says `thread_id` and treat a foreign
+    thread as this session's own.
+    """
+    return str(
+        payload.get("session_id")
+        or payload.get("sessionId")
+        or payload.get("thread-id")
+        or payload.get("thread_id")
+        or ""
+    )
+
+
 def hook_event_scope(event_type: str, payload: dict[str, Any]) -> str:
     if event_type in {"SubagentStart", "SubagentStop"}:
         return "subagent"
@@ -2235,6 +2260,76 @@ def hook_event_scope(event_type: str, payload: dict[str, Any]) -> str:
     if payload.get("agent_id") and event_type not in {"SessionStart", "SessionEnd"}:
         return "subagent"
     return "root"
+
+
+def child_thread_ids(session: Session) -> set[str]:
+    """Conversation ids belonging to threads this session's own agent spawned.
+
+    Run-scoped, like the rest of `observation_state`: a child belongs to the run
+    that spawned it, and a rollover retires both together.
+    """
+    state = _observation_state(session)
+    known = state.get("child_thread_ids")
+    if not isinstance(known, set):
+        known = set()
+        state["child_thread_ids"] = known
+    return known
+
+
+def note_child_thread(session: Session, payload: dict[str, Any]) -> None:
+    """Remember a child thread named by a hook that speaks for this session.
+
+    Codex 0.149 made subagents first-class *threads*: each gets its own id, its
+    own rollout file, and its own `agent-turn-complete` notify. That notify names
+    the child and carries nothing to mark it as one, so on its own it is
+    indistinguishable from the root's turn ending. Measured 2026-08-23: a pane
+    adopted a subagent thread as its conversation the moment that subagent
+    finished, then filtered its own CLI's next 94 hooks - the real turn end among
+    them - as foreign, and sat green with no context reading while the root agent
+    worked for another nine minutes.
+
+    A subagent-*scoped* hook does name the child explicitly (`agent_id`), and it
+    arrives first, because a subagent runs tools before it finishes. Recording it
+    here is what lets the later notify be recognised for what it is. Called only
+    for a payload that has already passed the foreign-conversation filter, so a
+    nested foreign CLI cannot seed this set with its own fleet.
+    """
+    agent_id = str(payload.get("agent_id") or "")
+    if not agent_id or agent_id == (session.record.native_session_id or ""):
+        # Never file this session's own conversation as a child of itself: that
+        # would make every one of its own hooks read as subagent traffic.
+        return
+    child_thread_ids(session).add(agent_id)
+
+
+def session_hook_event_scope(
+    session: Session, event_type: str, payload: dict[str, Any]
+) -> str:
+    """`hook_event_scope`, refined by what this session has learned about its children.
+
+    The payload rules are everything a single event can prove about itself. A
+    harness that runs subagents as separate threads also emits events that merely
+    *name* a child thread, and only the session knows that id belongs to a child.
+    """
+    scope = hook_event_scope(event_type, payload)
+    if scope != "root":
+        return scope
+    if hook_conversation_id(payload) in child_thread_ids(session):
+        return "subagent"
+    return scope
+
+
+def note_witnessed_root_conversation(session: Session, payload: dict[str, Any]) -> None:
+    """Record the conversation a root-scoped hook says this session is running.
+
+    The last root-scoped hook wins, so an in-place conversation replacement moves
+    it. Deliberately never set from a turn-end event: that is the one signal a
+    subagent thread can fake, and letting it witness would make it corroborate
+    itself in `_bind_native_id_from_hook`.
+    """
+    conversation = hook_conversation_id(payload)
+    if conversation and native_id_matches(session.record.backend, conversation):
+        _observation_state(session)["witnessed_root_conversation"] = conversation
 
 
 def _hook_turn_outcome(payload: dict[str, Any]) -> str:
@@ -2914,8 +3009,62 @@ def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
             session.first_user_prompt = session.last_user_prompt
 
 
+def root_conversation_evidence_refusal(
+    session: Session, payload: dict[str, Any], event_type: str
+) -> str | None:
+    """Why this event provably does not speak for the conversation this pane runs.
+
+    Returns a reason string, or None when nothing contradicts it - including when
+    the payload names no conversation at all, which is most harnesses' turn-end
+    and is not evidence either way. Both rules answer the same question, "is this
+    the root, or a thread the root started?", from evidence the session already
+    holds: neither costs a read and neither needs the harness registry to grow a
+    capability declaration.
+    """
+    native_id = hook_conversation_id(payload)
+    if not native_id or not native_id_matches(session.record.backend, native_id):
+        return None
+    if native_id in child_thread_ids(session):
+        return "child_thread"
+    if event_type in TURN_END_HOOK_EVENTS:
+        witnessed = _observation_state(session).get("witnessed_root_conversation")
+        if isinstance(witnessed, str) and witnessed and witnessed != native_id:
+            return "contradicts_witnessed_root"
+    return None
+
+
+def _note_root_evidence_refusal(
+    session: Session, payload: dict[str, Any], event_type: str, reason: str
+) -> None:
+    """Put a refused turn-end in the ledger the status endpoint already publishes.
+
+    A turn that silently does not close, or a binding that silently does not
+    happen, looks exactly like a hook that never arrived, and those need
+    different fixes. Recorded where the refusals it sits beside are
+    (`conversation_rollover_refused`, `foreign_conversation_hook_ignored`), so
+    one read of the state log tells the whole identity story.
+    """
+    native_id = hook_conversation_id(payload)
+    counters = getattr(session, "status_health_counters", None)
+    if isinstance(counters, dict):
+        counters["foreign_thread_turn_end_ignored"] = (
+            counters.get("foreign_thread_turn_end_ignored", 0) + 1
+        )
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is not None:
+        transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "foreign_thread_turn_end_ignored",
+                "event": event_type,
+                "native_session_id": native_id,
+                "reason": reason,
+            }
+        )
+
+
 async def _bind_native_id_from_hook(
-    session: Session, payload: dict[str, Any], events: EventBus
+    session: Session, payload: dict[str, Any], events: EventBus, *, event_type: str
 ) -> None:
     """Adopt the conversation id the CLI reports for itself, when we have none.
 
@@ -2935,22 +3084,30 @@ async def _bind_native_id_from_hook(
 
     Deliberately one-way: it only fills an *unknown* id and never overwrites one
     the daemon already established, so a hook cannot rekey a bound session.
+
+    A turn-end is admitted on sufferance, never on its own authority. It is the
+    one event a *subagent* thread also emits under the root's credentials, so it
+    may bind only what nothing else contradicts: never a thread already known to
+    be a child, and never a conversation different from the one root-scoped hooks
+    have been naming. Where lifecycle hooks are off there is no such witness and
+    the repair path binds exactly as it always did, which is the case it exists
+    for.
     """
     if not reports_lifecycle_hooks(session.record.backend):
         return
     if not conversation_unbound(session):
         return
-    native_id = str(
-        payload.get("session_id")
-        or payload.get("sessionId")
-        or payload.get("thread-id")
-        or payload.get("thread_id")
-        or ""
-    )
+    native_id = hook_conversation_id(payload)
     if not native_id_matches(session.record.backend, native_id):
         return
     if native_id == session.record.id:
         # The placeholder echoed back is not evidence of anything.
+        return
+    if root_conversation_evidence_refusal(session, payload, event_type) is not None:
+        # Already ledgered by the gate in `apply_hook_observation`, which refuses
+        # the whole event rather than only its identity claim. Re-checked here
+        # because this is the function that hands a session its identity, and it
+        # must be safe to call from anywhere.
         return
     session.record.native_session_id = native_id
     if not session.agent_lifecycle_id:
@@ -3033,13 +3190,27 @@ def conversation_rollover_decision(
     is a lifecycle transition (a new agent run), not a rebind.
     """
     nothing = RolloverDecision()
-    if event_type != "SessionStart" or hook_event_scope(event_type, payload) != "root":
+    if event_type != "SessionStart":
+        return nothing
+    if session_hook_event_scope(session, event_type, payload) != "root":
         return nothing
     if not reports_lifecycle_hooks(session.record.backend):
         return nothing
     current = session.record.native_session_id or ""
-    if not native_id_matches(session.record.backend, current):
+    if conversation_unbound(session):
         # Nothing bound yet: that is the bind path's job, not a rollover.
+        #
+        # Asked through `conversation_unbound` rather than by testing the *shape*
+        # of the current id, which is the trap that function exists to close: a
+        # harness that mints its own conversation id carries the mux session id
+        # as a placeholder, and mux session ids are UUIDs too. Shape-testing it
+        # reported every fresh Codex pane as already bound, so the pane's own
+        # root SessionStart took the rollover path below and was refused there as
+        # `foreign_process_startup` - and, because a refusal never continues into
+        # binding, the pane stayed unbound. Measured 2026-08-23: no transcript
+        # observer and no context reading for the session's whole life, until a
+        # later turn-end bound it to a subagent thread and left it green while
+        # its agent worked.
         return nothing
     native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
     if not native_id_matches(session.record.backend, native_id) or native_id == current:
@@ -3077,23 +3248,24 @@ def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> s
     (`record.id`, minted via ``--session-id``) is deliberately never foreign:
     it speaking while the session is bound elsewhere is identity-corruption
     evidence, which the heal path acts on rather than discarding.
+
+    A thread this session's own agent spawned is likewise not foreign. It is this
+    session's subagent, and the scope rules route it; counting it here would bury
+    the identity-corruption signal this counter exists for under the ordinary
+    traffic of every pane that runs subagents.
     """
     if not reports_lifecycle_hooks(session.record.backend):
         return None
     if conversation_unbound(session):
         return None
-    native_id = str(
-        payload.get("session_id")
-        or payload.get("sessionId")
-        or payload.get("thread-id")
-        or payload.get("thread_id")
-        or ""
-    )
+    native_id = hook_conversation_id(payload)
     if not native_id_matches(session.record.backend, native_id):
         return None
     if native_id == (session.record.native_session_id or ""):
         return None
     if native_id == session.record.id:
+        return None
+    if native_id in child_thread_ids(session):
         return None
     return native_id
 
@@ -3696,7 +3868,7 @@ async def apply_hook_observation(
     shim prints. Every other path returns None, which the CLI reads as "no
     opinion" and resolves the way it would with no hook installed.
     """
-    scope = hook_event_scope(event_type, payload)
+    scope = session_hook_event_scope(session, event_type, payload)
     # A foreign conversation's hook must not move this session's state — its
     # PermissionRequest raises an "awaiting approval" for a dialog that is not on
     # this screen and that nothing here can ever answer. Checked after the caller
@@ -3726,6 +3898,10 @@ async def apply_hook_observation(
             native_session_id=foreign_id,
         )
         return None
+    # Only now, past the foreign filter: a nested foreign CLI inherits the hook
+    # wiring, and letting its fleet register here would teach this session that
+    # someone else's threads are its own children.
+    note_child_thread(session, payload)
     if scope == "subagent":
         # Lifecycle hooks manage the `subagents` annotation before the scope
         # early-return; the foreign-conversation filter above has already run,
@@ -3739,6 +3915,31 @@ async def apply_hook_observation(
             kind=event_type,
         )
         return None
+    if event_type not in TURN_END_HOOK_EVENTS:
+        # Everything root-scoped except a turn end names the conversation this
+        # pane is running, and says so before any subagent has finished. A turn
+        # end is excluded because it is the signal a subagent thread also emits:
+        # letting it witness would let it corroborate itself below.
+        note_witnessed_root_conversation(session, payload)
+    else:
+        refusal = root_conversation_evidence_refusal(session, payload, event_type)
+        if refusal is not None:
+            # A turn end belonging to some other thread. Refused whole, not just
+            # for identity: closing the root turn on it is the visible half of
+            # the failure - the pane goes green and stays there while its agent
+            # keeps working, and no later evidence reopens a turn that is over.
+            _note_root_evidence_refusal(session, payload, event_type, refusal)
+            await events.emit(
+                "foreign_thread_turn_end_ignored",
+                session_id=session.record.id,
+                source="hook",
+                scope="root",
+                backend=session.record.backend,
+                native_session_id=hook_conversation_id(payload),
+                kind=event_type,
+                reason=refusal,
+            )
+            return None
 
     # Tool-activity and turn-start hooks only drive state as a fallback: when the
     # transcript observer is authoritative it already records the same boundaries
@@ -3746,7 +3947,7 @@ async def apply_hook_observation(
     # turn as "working"). Turn-end, approval, and notification hooks below stay
     # live because they carry signals the transcript lacks or delivers later.
     if event_type == "SessionStart":
-        await _bind_native_id_from_hook(session, payload, events)
+        await _bind_native_id_from_hook(session, payload, events, event_type=event_type)
         # The CLI announcing its own start is the only positive evidence a session
         # that has never run a turn can offer, and delivery readiness needs it:
         # everything else it reads is about *completing* a turn. Recorded as a
@@ -4084,7 +4285,7 @@ async def apply_hook_observation(
         # notify remains a compatibility/repair path when lifecycle hooks are
         # disabled, untrusted, or unavailable. Bind before closing the turn so the
         # transcript can be exact-matched and catch-up replays the turn that just ran.
-        await _bind_native_id_from_hook(session, payload, events)
+        await _bind_native_id_from_hook(session, payload, events, event_type=event_type)
         await _finish_root_turn(
             session,
             events,

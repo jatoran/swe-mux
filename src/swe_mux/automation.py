@@ -197,7 +197,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.stalled-triage",
         "name": "Stalled run triage",
-        "setting_key": "phase7_observers_enabled",
+        "setting_key": "attention_observers_enabled",
         "setting_label": "Attention observers",
         "trigger": "stalled",
         "input": "Recent summary chain",
@@ -208,7 +208,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.approval_needed-triage",
         "name": "Approval request triage",
-        "setting_key": "phase7_observers_enabled",
+        "setting_key": "attention_observers_enabled",
         "setting_label": "Attention observers",
         "trigger": "approval_needed",
         "input": "Last completed turn",
@@ -219,7 +219,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.context-handoff",
         "name": "Context handoff suggestion",
-        "setting_key": "phase7_observers_enabled",
+        "setting_key": "attention_observers_enabled",
         "setting_label": "Attention observers",
         "trigger": "context_pressure",
         "input": "Last 18 transcript messages",
@@ -2368,7 +2368,7 @@ class AutomationEngine:
         cache_key = (
             event.type,
             self.config.observer_titler_enabled,
-            self.config.phase7_observers_enabled,
+            self.config.attention_observers_enabled,
         )
         cached = self._builtin_rule_cache.get(cache_key)
         if cached is not None:
@@ -2464,7 +2464,7 @@ class AutomationEngine:
                     ],
                 }
             )
-        if self.config.phase7_observers_enabled and event.type in {
+        if self.config.attention_observers_enabled and event.type in {
             "stalled",
             "approval_needed",
         }:
@@ -2501,7 +2501,7 @@ class AutomationEngine:
                     ],
                 }
             )
-        if self.config.phase7_observers_enabled and event.type == "context_pressure":
+        if self.config.attention_observers_enabled and event.type == "context_pressure":
             raw.append(
                 {
                     "id": "builtin.context-handoff",

@@ -202,3 +202,62 @@ test('the budget control is a row of chips on a phone, not a stack of form rows'
   })
   expect(stacked).toBe(true)
 })
+
+test('the mode radio is a dot, and its word fits in the chip', async ({ page }) => {
+  await open(page)
+  await page.setViewportSize({ width: 390, height: 780 })
+  const budget = page.locator('.budget-control[data-setting="tts_daily_budget"]')
+  await expect(budget).toBeVisible()
+
+  // The assertions above passed while this was broken, which is why they are not enough:
+  // `.settings-panel input:not([type=checkbox])` and its `.settings-content` twin excluded
+  // the checkbox and not the radio, so every dot took `width:100%` and a 31px field height
+  // and rendered 77x31. The chip stayed one row and under 40px tall - it simply had no room
+  // left for its own word, which spilled past the border ("F...", "T...", "Dollars" adrift).
+  // Both numbers below are what the shared `--check-size` promises, measured rather than
+  // asserted as CSS text: 14px on this fine-pointer viewport, 18px on a coarse one.
+  const chips = await budget.evaluate(node => {
+    const size = getComputedStyle(document.documentElement).getPropertyValue('--check-size').trim()
+    return [...node.querySelectorAll<HTMLElement>('.budget-mode')].map(chip => {
+      const dot = chip.querySelector<HTMLInputElement>('input')!.getBoundingClientRect()
+      return {
+        checkSize: parseFloat(size),
+        dot: { w: Math.round(dot.width), h: Math.round(dot.height) },
+        // A chip that has to scroll to show its label is a chip with a clipped label.
+        clipped: chip.scrollWidth > Math.ceil(chip.getBoundingClientRect().width),
+      }
+    })
+  })
+  for (const chip of chips) {
+    expect(chip.dot).toEqual({ w: chip.checkSize, h: chip.checkSize })
+    expect(chip.clipped).toBe(false)
+  }
+})
+
+test('the two axes stay side by side on a phone', async ({ page }) => {
+  await open(page)
+  await page.setViewportSize({ width: 390, height: 780 })
+  const budget = page.locator('.budget-control[data-setting="tts_daily_budget"]')
+  await expect(budget).toBeVisible()
+
+  // Tokens and dollars are one field counted two ways, and the narrow layout used to stack
+  // them: ~50px of a phone's screen spent putting the dollar figure under the fold, directly
+  // below the chips that were choosing between the two. They share a row, they line up at the
+  // top (the unenforced axis carries a note the other does not), and the fieldset stays short.
+  const pair = await budget.evaluate(node => {
+    const axes = [...node.querySelectorAll<HTMLElement>('.budget-axis')]
+    const rects = axes.map(axis => axis.getBoundingClientRect())
+    const inputs = axes.map(axis => axis.querySelector<HTMLElement>('input')!.getBoundingClientRect())
+    return {
+      columns: getComputedStyle(node.querySelector<HTMLElement>('.budget-axes')!)
+        .gridTemplateColumns.split(' ').length,
+      tops: rects.map(rect => Math.round(rect.top)),
+      inputTops: inputs.map(rect => Math.round(rect.top)),
+      height: Math.round(node.getBoundingClientRect().height),
+    }
+  })
+  expect(pair.columns).toBe(2)
+  expect(new Set(pair.tops).size).toBe(1)
+  expect(new Set(pair.inputTops).size).toBe(1)
+  expect(pair.height).toBeLessThan(215)
+})

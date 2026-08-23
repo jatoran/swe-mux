@@ -59,7 +59,7 @@ def test_every_switch_has_one_owner_settings_global_dashboard_per_rule() -> None
     assert "updateBuiltin" in dashboard
     assert "change('observer_titler_enabled'" not in settings
     assert "change('observer_summarizer_enabled'" not in settings
-    assert "change('phase7_observers_enabled'" not in settings
+    assert "change('attention_observers_enabled'" not in settings
 
 
 def test_the_rules_editor_lives_on_the_dashboard_not_in_the_settings_save() -> None:

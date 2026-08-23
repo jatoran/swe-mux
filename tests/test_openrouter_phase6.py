@@ -562,6 +562,38 @@ async def test_openrouter_rejects_oversized_and_redacts_http_error_body() -> Non
     assert "401" in str(captured.value)
 
 
+async def test_a_rejected_request_carries_the_reason_it_was_rejected() -> None:
+    """A 400 is the provider naming the part of our request it would not accept.
+
+    Without the body every malformed schema, unsupported parameter, and over-long
+    prompt persists as the same string, "request failed with HTTP 400", which
+    cannot be acted on: `builtin:adaptive-title` failed every call it ever made on
+    a `strict` schema missing one key from `required`, and the ledger row could not
+    say so. A 400 is a request error, not an auth error, so its body is safe to
+    keep - and key-shaped text is scrubbed from it regardless.
+    """
+    body = {
+        "error": {
+            "message": "Provider returned error",
+            "metadata": {
+                "raw": "Invalid schema for response_format: Missing 'confidence'.",
+                "provider_name": "Azure",
+            },
+        }
+    }
+    session = FakeSession([FakeResponse(400, body)])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.test_key()
+
+    assert "Missing 'confidence'" in str(captured.value)
+    assert "Azure" in str(captured.value)
+    assert captured.value.status == 400
+    # A malformed request fails identically forever; retrying only spends budget.
+    assert captured.value.retryable is False
+
+
 async def test_model_refresh_error_preserves_last_success_timestamp(tmp_path: Path) -> None:
     store = AutomationStore(tmp_path / "mux.db")
     await store.cache_models([{"id": "vendor/model"}])

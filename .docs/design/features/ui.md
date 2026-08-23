@@ -952,6 +952,16 @@ Its rules, and what each one is defending:
       still is what keeps a larger interface from also becoming a sparser one. Nor do
       panel *maxima* (`height:min(760px, 100dvh - 42px)`) — those are viewport-bound — or
       widths the user already drags (the sidebar, the docked drawer).
+    - A tick or a dot is glyph-sized rather than type-derived, so both take their size from
+      one rule (`--check-size`, 14px, 18px on a coarse pointer) and neither scales.
+      The corollary is a rule about *other* rules: a container rule that stretches its inputs
+      (`<panel> input { width:100%;height:... }`) has to exclude **both** `[type=checkbox]` and
+      `[type=radio]`, because a dot stretched to a field's width and height is not a dot.
+      Excluding only the checkbox is the version of this that keeps shipping: it rendered every
+      budget-mode radio in Settings as a 77x31 blob and pushed the word beside it out of its own
+      chip, on desktop exactly as much as on a phone.
+      `frontend/test/styleInvariants.test.ts` scans `style.css` and fails on a selector that
+      spares one and not the other, which is cheaper than a renderer test per panel.
     - The steps stop at 1.4 because past it the fixed values start to crowd.
   - **The terminal follows the scale too, but not through CSS.** xterm owns its font and
     derives the cell grid from it, so `TerminalPane` is handed the scale as a number and
@@ -1265,6 +1275,16 @@ Its rules, and what each one is defending:
   That last rule exists because the overflow veto is *conditional* - a strip that scrolls only
   when full would otherwise make a gesture beside it work half the time, which is worse than not
   having it.
+  **A surface drawn over a region takes its touches whole** (`GESTURE_SHADOWING_SELECTORS`).
+  A region claims a channel because that channel is dead there, and an overlay opened from the
+  region can break that premise while still living inside it: the command rail's overflow popover
+  is a DOM child of the rail row and scrolls vertically, so scrolling its chips *was* the rail's
+  upward swipe and opened the app menu. The veto is on surface identity, not on scroll state - a
+  short panel that does not overflow is no more a place to open the app menu than a tall one - and
+  it drops the sequence outright rather than merely declining to call it a region gesture, since
+  a path that is only "not a region" still resolves the workspace slots and a sideways drag across
+  the panel would change tabs behind it. Drop-ups need no entry: they mount outside the rail, so
+  no region matches them to begin with.
 - **Only the command rail's swipe is a rebindable slot** (`rail_swipe_up`, default `menu.toggle`),
   because it is the only one whose action is not about the surface it starts on - it opens the app
   menu, and any command would make sense there.
@@ -1451,14 +1471,27 @@ Its rules, and what each one is defending:
   touch event.
   The total is clamped at zero because the application clamps at its own tail: banking credit
   for scrolls that moved nothing would delay the next chip by exactly that credit.
-- The estimate is reset outright, rather than spent down, by the four events that make it
+- The estimate is reset outright, rather than spent down, by the five events that make it
   meaningless: taking the jump, the Action rail's `^End`, a session switch in a reused pane,
-  and an alternate-screen switch (the application that owned the tracked viewport starting or
-  exiting, after which `offTail` answers for whatever replaced it).
+  an alternate-screen switch (the application that owned the tracked viewport starting or
+  exiting, after which `offTail` answers for whatever replaced it), and a **submission** to a
+  harness declaring `app_tail_reset` (`features/backends.md`).
+  The submission is the one of the five that is not about the pane at all.
+  Sending a prompt moves the application's own viewport to its newest output with nothing
+  forwarded for the pane to total, so the running estimate describes a position the reader has
+  already left - which is what kept a chip up over a viewport sitting exactly where its own tap
+  would have sent them, on the most common thing anyone does after reading back.
+  It is decided by `inputResetsAppTail` at the single `onData` chokepoint, beside the peek
+  pan's identical reset, and reads the harness's declaration rather than the harness's name.
+  Three things are deliberately not submissions: the declared `composer_newline`, which is the
+  one CR-bearing sequence that keeps a composer open and is what a phone's Enter key sends; the
+  payload of a bracketed paste, except the leading newline on a harness declaring
+  `paste_leading_newline_submits`; and anything at all on a harness declaring `none`.
 - Two things pull the estimate off the truth, in opposite directions, and the pane can observe
   neither.
   Dragging past the top of the application's own history totals distance nothing travelled, so
-  a drag that did reach the newest output can leave the chip up, and its tap is the answer.
+  a drag that did reach the newest output can leave the chip up, and its tap is the answer -
+  as is the next submission, which drops the whole overcount rather than spending it.
   Output arriving while the reader is scrolled up moves the tail with no gesture to total, so
   the chip can leave early, and the drag already in progress is the answer - any drag back
   through the history puts it straight back.
@@ -1670,13 +1703,20 @@ Its rules, and what each one is defending:
   After the pads, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
+  A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because it appeared beside them.
+  With nothing to say it renders nothing at all, rather than an empty element holding its own padding: that width belongs to the chips, and the row carrying the readout is the busiest one.
+  It carries the selection readout alone, which is a state and belongs beside the keys that act on it, so most of the time it has nothing to say and the row is all chips.
+  A momentary copy/paste confirmation is not a state and is drawn over the terminal instead (`.terminal-clip-toast`): flush on the rail's top edge, right-aligned with the jump-to-latest cluster, in the terminal's own grid cell so it stacks rather than displaces.
+  It draws *over* the jump-to-latest and peek chips rather than dodging them, because a message that moves depending on which chips happen to be up is harder to read than one that is always in the same place, and it takes no pointer events, so their taps stay theirs.
+  It is mounted only while it has something to say, for the same reason the readout is.
   The strip itself carries no customize gear.
   Every row instead keeps one fixed drawer control outside its scroller, including empty rows and rows whose buttons all fit.
 - **Every row answers overflow twice: it scrolls end to end, and its permanent drawer opens the complete row.**
   Every configured chip remains in the scroller for direct pan, wheel, touch-drag, and focus reveal.
   Passive left and right glow wedges appear only while content exists in that direction.
-  The wedges consume no layout space, accept no input, and align to the same row-relative edges across stacked rails.
+  The wedges consume no layout space, accept no input, and sit on the edges of **their own strip**.
+  A wedge is a claim about where this row's content is cut, so it is positioned from the strip rather than from the row: a row's trailing furniture is not one width, and one aligned across rows from the row's edge stood off the end of the strip on any row whose furniture was wider, drawing its glow over the flat panel and marking a spot no tap could reach.
+  Rows whose furniture does match still line up, which is nearly always, since an empty status readout now takes no width.
   The drawer control uses the rail's ordinary neutral button treatment with a slightly heavier outline and drawer mark.
   Its small bottom-right count is the row's total action count, not an overflow calculation, so it remains stable across resizing.
   The fixed trailing cluster gives the drawer one position on every row and anchors the panel to the rail's trailing edge.
