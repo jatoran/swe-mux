@@ -298,9 +298,11 @@ export function updateRailPadSlot(
 /**
  * Turn a pad between cardinal and diagonal.
  *
- * The four bindings are carried across in order rather than dropped, because the two
- * orientations are the same four choices carved differently and losing them would make
- * the toggle a destructive control nobody would touch twice.
+ * Bindings are carried across **position for position**, as far as the new orientation has
+ * positions: a three-wedge pad and a two-wedge-two-ring one do not hold the same number of
+ * things, so one direction of the toggle always leaves one behind. Carrying what fits beats
+ * dropping everything, which would make the control something nobody touches twice, and it
+ * beats stacking two actions on one wedge, which would be a silent conflict.
  */
 export function setRailPadOrientation(
   config: RailConfig,
@@ -316,8 +318,9 @@ export function setRailPadOrientation(
   const to = padDirections(orientation)
   const slots: RailPadConfig['slots'] = {}
   from.forEach((direction, position) => {
+    const target = to[position]
     const binding = pad.slots[direction]
-    if (binding) slots[to[position]] = binding
+    if (target && binding) slots[target] = binding
   })
   if (pad.slots.center) slots.center = pad.slots.center
   const next = cloneConfig(config)

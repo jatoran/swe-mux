@@ -2640,42 +2640,63 @@ body {
 .rail-pad-mark{position:absolute;width:3px;height:3px;border-top:1px solid currentColor;border-left:1px solid currentColor}
 .rail-pad-mark-up{top:2px;left:50%;transform:translateX(-50%) rotate(45deg)}
 .rail-pad-mark-right{top:50%;right:2px;transform:translateY(-50%) rotate(135deg)}
-.rail-pad-mark-down{bottom:2px;left:50%;transform:translateX(-50%) rotate(225deg)}
 .rail-pad-mark-left{top:50%;left:2px;transform:translateY(-50%) rotate(315deg)}
 .rail-pad-mark-upLeft{top:2px;left:2px}
 .rail-pad-mark-upRight{top:2px;right:2px;transform:rotate(90deg)}
-.rail-pad-mark-downRight{bottom:2px;right:2px;transform:rotate(180deg)}
-.rail-pad-mark-downLeft{bottom:2px;left:2px;transform:rotate(270deg)}
+/* The far ring's marks sit inboard of the near ones, which is the only thing on the chip
+   that says a direction has two depths rather than one. */
+.rail-pad-mark-upLeftFar{top:2px;left:9px}
+.rail-pad-mark-upRightFar{top:2px;right:9px;transform:rotate(90deg)}
 .rail-pad-pressed .rail-pad-marks{opacity:1}
-/* Above the drop-ups (96), because a pad can be pressed from inside the row popover and
-   its labels have to be readable over whatever is already open. */
-.rail-pad-petals{position:fixed;z-index:98;width:0;height:0;pointer-events:none;opacity:0;transition:opacity .09s ease-out}
-.rail-pad-petals-shown{opacity:1}
-@media(prefers-reduced-motion:reduce){.rail-pad-petals{transition:none}}
-.rail-pad-petal{position:absolute;left:0;top:0;max-width:96px;padding:2px 6px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rail-pad-petal-active{border-color:var(--green);background:color-mix(in srgb,var(--green) 26%,var(--panel2));color:var(--green)}
-/* A release slot is outlined rather than filled while merely latched: the press has armed
-   it and not run it, and those two must never look the same. */
-.rail-pad-petal-release{border-style:dashed}
-.rail-pad-petal-armed{border-style:solid;border-color:var(--amber,var(--green));background:color-mix(in srgb,var(--amber,var(--green)) 26%,var(--panel2));color:var(--amber,var(--green))}
-.rail-pad-petal-off{opacity:.4}
+/* The dial: real wedges, at thumb size, over a wash.
+   Above the drop-ups (96), because a pad can be pressed from inside the row popover and has
+   to be readable over whatever is already open. Nothing here takes pointer events - the
+   gesture is resolved from coordinates, and a dial that could intercept its own drag would
+   be the one way to break it. */
+.rail-pad-dial{position:fixed;inset:0;z-index:98;pointer-events:none;opacity:0;transition:opacity .1s ease-out}
+.rail-pad-dial-shown{opacity:1}
+@media(prefers-reduced-motion:reduce){.rail-pad-dial{transition:none}}
+.rail-pad-dial-scrim{position:absolute;inset:0;background:color-mix(in srgb,#000 38%,transparent);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+/* Centred on the press point by its own translate, so the SVG's own origin is the finger
+   and every radius in it is the radius the gesture uses. */
+.rail-pad-dial-svg{position:absolute;transform:translate(-50%,-50%);overflow:visible}
+/* One wedge. The path *is* the hitbox the gesture resolves, drawn from the same radii and
+   angles, so the dial cannot describe a boundary the gesture does not have. */
+/* Lifted off the panel colour rather than being it: the wedges sit over a terminal that is
+   usually near-black, and a fill of `--panel` on top of that is a shape you cannot see.
+   The stroke carries the same job at the edges, so an unselected wedge still reads as a
+   target rather than as a hint that one might be there. */
+.rail-pad-wedge>path{fill:color-mix(in srgb,color-mix(in srgb,var(--text) 14%,var(--panel2)) 92%,transparent);stroke:color-mix(in srgb,var(--text) 55%,transparent);stroke-width:2}
+.rail-pad-wedge>text{fill:var(--text);font:600 15px 'Cascadia Mono',Consolas,monospace;text-anchor:middle;dominant-baseline:middle;paint-order:stroke;stroke:color-mix(in srgb,#000 70%,transparent);stroke-width:3px}
+.rail-pad-wedge-active>path{fill:color-mix(in srgb,var(--green) 46%,var(--panel2));stroke:var(--green);stroke-width:2.5}
+.rail-pad-wedge-active>text{fill:var(--green)}
+/* A release slot is outlined rather than filled while merely armed: the press has armed it
+   and not run it, and those two must never look the same. */
+.rail-pad-wedge-release>path{stroke-dasharray:7 5}
+.rail-pad-wedge-armed>path{fill:color-mix(in srgb,var(--amber) 46%,var(--panel2));stroke:var(--amber);stroke-dasharray:none}
+.rail-pad-wedge-armed>text{fill:var(--amber)}
+.rail-pad-wedge-off>path{fill:color-mix(in srgb,var(--panel2) 70%,transparent);stroke:color-mix(in srgb,var(--text) 22%,transparent)}
+.rail-pad-wedge-off>text{fill:var(--muted)}
+.rail-pad-dial-hub{fill:color-mix(in srgb,var(--panel2) 88%,transparent);stroke:var(--line);stroke-width:1.5}
 /* Sticky modifiers. The phase is a colour and never a label change, so the chip's width
    is identical off, armed and locked and the row's rhythm does not shift as one is used. */
 .terminal-action-rail button.rail-modifier-armed,.rail-overflow-grid button.rail-modifier-armed{border-color:var(--green);color:var(--green)}
 .terminal-action-rail button.rail-modifier-locked,.rail-overflow-grid button.rail-modifier-locked{border-color:var(--green);background:color-mix(in srgb,var(--green) 22%,var(--panel2));color:var(--green)}
 /* The pad's slot editor: a picture of the pad, because "which action is up" is a question
    about a position and a list of four rows makes you translate every answer back into one. */
+/* Laid out as the fan is: the wedges across the top in the order they are reached, the far
+   ring above the near one because it is further out, and the centre underneath where a tap
+   lands. */
 .rail-pad-grid{display:grid;gap:6px;margin-top:8px}
-.rail-pad-grid-cardinal{grid-template-areas:'. up .' 'left center right' '. down .'}
-.rail-pad-grid-diagonal{grid-template-areas:'upLeft . upRight' '. center .' 'downLeft . downRight'}
+.rail-pad-grid-cardinal{grid-template-areas:'left up right' 'center center center'}
+.rail-pad-grid-diagonal{grid-template-areas:'upLeftFar upRightFar' 'upLeft upRight' 'center center'}
 .rail-pad-grid>.rail-pad-cell-up{grid-area:up}
 .rail-pad-grid>.rail-pad-cell-right{grid-area:right}
-.rail-pad-grid>.rail-pad-cell-down{grid-area:down}
 .rail-pad-grid>.rail-pad-cell-left{grid-area:left}
 .rail-pad-grid>.rail-pad-cell-upLeft{grid-area:upLeft}
 .rail-pad-grid>.rail-pad-cell-upRight{grid-area:upRight}
-.rail-pad-grid>.rail-pad-cell-downRight{grid-area:downRight}
-.rail-pad-grid>.rail-pad-cell-downLeft{grid-area:downLeft}
+.rail-pad-grid>.rail-pad-cell-upLeftFar{grid-area:upLeftFar}
+.rail-pad-grid>.rail-pad-cell-upRightFar{grid-area:upRightFar}
 .rail-pad-grid>.rail-pad-cell-center{grid-area:center}
 .rail-pad-cell{min-width:0;display:flex;flex-direction:column;gap:3px}
 .rail-pad-cell-name{color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;letter-spacing:.04em;text-transform:uppercase}

@@ -685,8 +685,8 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onOrientation, onSlot }
   const slotCell = (key: RailPadSlotKey) => {
     const binding = pad.slots[key]
     const target = binding ? items.find(entry => entry.id === binding.item) : undefined
-    const mode = railPadSlotMode(binding, target)
-    const auto = defaultPadTriggerMode(target)
+    const mode = railPadSlotMode(binding, target, pad.orientation)
+    const auto = defaultPadTriggerMode(target, pad.orientation)
     return <div class={`rail-pad-cell rail-pad-cell-${key}`} key={key}>
       <span class="rail-pad-cell-name">{key === 'center' ? 'Centre (tap)' : RAIL_PAD_DIRECTION_LABELS[key]}</span>
       <Dropdown

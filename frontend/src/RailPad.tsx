@@ -1,19 +1,19 @@
-// The command rail's pad chip: the element, its pointer listeners, the petals it draws
-// while pressed, and the haptics. The rules it obeys live in `railPad.ts`.
+// The command rail's pad chip: the element, its pointer listeners, the dial it draws while
+// pressed, and the haptics. The rules it obeys live in `railPadGesture.ts`.
 //
 // Its own module rather than JSX inside TerminalPane for the same reason `RailRepeatKey`
-// is: the gesture *is* this button, and a gesture is only worth trusting once real
-// touches have been driven at it through a real rail
-// (`test/renderer/command-rail-pad.spec.ts`). A harness that re-implemented the button
-// would be testing a copy of the thing that can break.
+// is: the gesture *is* this button, and a gesture is only worth trusting once real touches
+// have been driven at it through a real rail (`test/renderer/command-rail-pad.spec.ts`). A
+// harness that re-implemented the button would be testing a copy of the thing that can break.
 
 import type { ComponentChildren } from 'preact'
 import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import {
-  padDirectionUnit,
   padDirections,
+  padRingOf,
+  padSectorCount,
   RAIL_PAD_DIRECTION_LABELS,
   type RailItem,
   type RailPadDirection,
@@ -23,26 +23,34 @@ import {
 import { holdSoftKeyboard } from './mobileKeyboard'
 import {
   createRailPadGesture,
-  RAIL_PAD_ENTER_RADIUS_PX,
-  RAIL_PAD_PETAL_DELAY_MS,
-  railPadRadius,
+  RAIL_PAD_DIAL_DELAY_MS,
+  railPadBands,
+  railPadScaleFor,
+  railPadWedgeBounds,
+  railPadWedgeCentre,
   type RailPadGesture,
   type RailPadLatch,
   type RailPadSlotSpec,
 } from './railPadGesture'
 import { railOverlayView } from './railOverlayPlacement'
 
-/** How far from the press point a petal is drawn at full radius. Purely visual: the
- *  gesture commits at `RAIL_PAD_ENTER_RADIUS_PX`, and a petal sits further out so a
- *  thumb does not cover the label it is aiming at. A squeezed direction's petal is
- *  pulled in by the same ratio its radius was, so the drawing never lies. */
-const PETAL_RADIUS_PX = 46
-/** Kept clear below the press point so a petal is not drawn under the screen edge. */
-const PETAL_EDGE_MARGIN_PX = 4
+/** Kept clear of the viewport edge when the dial is squeezed to fit. */
+const DIAL_EDGE_MARGIN_PX = 8
+/** Label distance into a band, as a fraction of the way from its inner to its outer edge.
+ *  Past the middle, because the outer arc is longer and the text reads better out there. */
+const LABEL_AT = 0.55
+/** How far a label may sit from the viewport's own edges before it is pulled back in.
+ *  The wedge itself is free to run off screen - its hitbox is angular and costs nothing
+ *  where it cannot be seen - but a label that did would be the one part that mattered. */
+const LABEL_EDGE_PX = 10
+/** Half a character, at the label's own size. The labels are centre-anchored, so clamping
+ *  their *centre* to the viewport still lets half the word hang off; the clamp has to know
+ *  how wide the word is, and a monospace face makes that a multiplication. */
+const LABEL_HALF_CHAR_PX = 4.6
 
-/** Entry tick, the distinct double-bump a `release` slot arms with, and the near-silent
- *  tick a repetition carries. Most of what makes the control feel like hardware, and the
- *  only channel that reaches a finger already covering the label. */
+/** Entry tick, the distinct double-bump a `release` slot arms with, and the near-silent tick
+ *  a repetition carries. Most of what makes the control feel like hardware, and the only
+ *  channel that reaches a finger already covering the wedge. */
 const HAPTIC_ENTER = 8
 const HAPTIC_ARM = [3, 24, 6]
 const HAPTIC_REPEAT = 3
@@ -76,16 +84,15 @@ export interface RailPadController {
 /**
  * One controller per rail, not per chip.
  *
- * Two pads must never repeat at once, whatever takes the window away has to be able to
- * stop whichever one is, and `RailStrip` renders every chip a second time inside its
- * overflow popover - so two live instances of the same pad genuinely coexist and must
- * share one press.
+ * Two pads must never repeat at once, whatever takes the window away has to be able to stop
+ * whichever one is, and `RailStrip` renders every chip a second time inside its overflow
+ * popover - so two live instances of the same pad genuinely coexist and must share one press.
  *
  * The press is followed at the *window* rather than on the chip, for the reason
- * `RailRepeatKey` documents: the rail's pan takes pointer capture as soon as the same
- * touch starts scrolling, and capture retargets every later pointer event, so a
- * chip-local `pointermove` would never see the travel it has to answer for. The
- * listeners exist only while a press is open.
+ * `RailRepeatKey` documents: the rail's pan takes pointer capture as soon as the same touch
+ * starts scrolling, and capture retargets every later pointer event, so a chip-local
+ * `pointermove` would never see the travel it has to answer for. The listeners exist only
+ * while a press is open.
  */
 export function useRailPad(resetKey: string): RailPadController {
   const handlersRef = useRef<RailPadHandlers | null>(null)
@@ -150,38 +157,64 @@ export interface RailPadProps {
   className?: string
   /** The chip's own face: label or icon, resolved by the host like any other chip. */
   content: ComponentChildren
-  /** Modifier prefix currently applying, e.g. `Ctrl`. Petals show it so a live modifier
-   *  is legible on the four things it is about to change. */
+  /** Modifier prefix currently applying, e.g. `Ctrl`. The dial shows it, so a live modifier
+   *  is legible on the things it is about to change. */
   modifierPrefix?: string
 }
 
-type Petals = { x: number; y: number; latch: RailPadLatch; armed: boolean; visible: boolean } | null
+type Dial = { x: number; y: number; scale: number; latch: RailPadLatch; armed: boolean; visible: boolean } | null
+
+/** A point on the dial, in its own local coordinates: the press is the origin, `angle` is
+ *  `railPadAngle` degrees, and `y` is flipped because the fan opens upward. */
+const polar = (radius: number, angle: number) => ({
+  x: radius * Math.cos(angle * Math.PI / 180),
+  y: -radius * Math.sin(angle * Math.PI / 180),
+})
 
 /**
- * Tap the centre, or drag a direction.
+ * One wedge, as an annulus sector between two radii and two angles.
  *
- * The chip refuses focus on `mousedown` like the rest of the rail, so a press never
- * lowers an open soft keyboard, while `tabIndex` keeps it reachable by Tab. Keyboard
- * activation is the one path with no pointer: Enter and Space arrive as an ordinary
- * click and run the centre, and the four directions have real keys of their own - the
- * arrows on a cardinal pad, and the navigation cluster's own spatial arrangement
- * (Home/PageUp over End/PageDown) on a diagonal one.
+ * Drawn from the same numbers the gesture resolves against, which is the point: the wedge
+ * *is* the hitbox, so a dial that showed a boundary the gesture did not have would be
+ * lying at exactly the moment the operator is trusting it.
+ */
+function wedgePath(inner: number, outer: number, from: number, to: number): string {
+  const large = to - from > 180 ? 1 : 0
+  const a = polar(inner, from)
+  const b = polar(outer, from)
+  const c = polar(outer, to)
+  const d = polar(inner, to)
+  // Increasing `railPadAngle` runs counter-clockwise on screen, which is sweep-flag 0 going
+  // out along the outer arc and 1 coming back along the inner one.
+  return `M ${a.x} ${a.y} L ${b.x} ${b.y} A ${outer} ${outer} 0 ${large} 0 ${c.x} ${c.y}`
+    + ` L ${d.x} ${d.y} A ${inner} ${inner} 0 ${large} 1 ${a.x} ${a.y} Z`
+}
+
+/**
+ * Tap the centre, or drag a wedge.
+ *
+ * The chip refuses focus on `mousedown` like the rest of the rail, so a press never lowers
+ * an open soft keyboard, while `tabIndex` keeps it reachable by Tab. Keyboard activation is
+ * the one path with no pointer: Enter and Space arrive as an ordinary click and run the
+ * centre, and the directions have real keys of their own - the three arrows on a cardinal
+ * pad, and the navigation cluster's own spatial arrangement (Home/PageUp near, End/PageDown
+ * far) on a diagonal one.
  */
 export function RailPad({ controller, item, slots, className, content, modifierPrefix }: RailPadProps) {
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const [petals, setPetals] = useState<Petals>(null)
-  const petalTimer = useRef<number | null>(null)
+  const [dial, setDial] = useState<Dial>(null)
+  const dialTimer = useRef<number | null>(null)
   const orientation = item.pad?.orientation ?? 'cardinal'
   const directions = padDirections(orientation)
+  const sectors = padSectorCount(orientation)
   const byKey = new Map(slots.map(slot => [slot.key, slot]))
   const centre = byKey.get('center')
-  const clearanceRef = useRef(Infinity)
 
-  useEffect(() => () => { if (petalTimer.current !== null) window.clearTimeout(petalTimer.current) }, [])
+  useEffect(() => () => { if (dialTimer.current !== null) window.clearTimeout(dialTimer.current) }, [])
 
-  const closePetals = () => {
-    if (petalTimer.current !== null) { window.clearTimeout(petalTimer.current); petalTimer.current = null }
-    setPetals(null)
+  const closeDial = () => {
+    if (dialTimer.current !== null) { window.clearTimeout(dialTimer.current); dialTimer.current = null }
+    setDial(null)
   }
 
   const runSlot = (key: RailPadSlotKey) => {
@@ -193,15 +226,16 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   const beginPress = (event: PointerEvent) => {
     const specs: Partial<Record<RailPadSlotKey, RailPadSlotSpec>> = {}
     for (const slot of slots) specs[slot.key] = { mode: slot.mode, disabled: slot.disabled }
-    // Room under the finger, measured against the *visual* viewport so an open soft
-    // keyboard counts as the floor it is. This is what squeezes a descending slot's
-    // radius rather than leaving it unreachable at the bottom of a phone.
+    // Room above the finger, measured against the *visual* viewport. The fan opens upward,
+    // so this is the one direction that can run out - a pad in a short pane near the top of
+    // the window has less than the far ring's reach, and a boundary you cannot travel to is
+    // a slot that does not exist.
     const view = railOverlayView()
-    clearanceRef.current = Math.max(0, view.top + view.height - event.clientY - PETAL_EDGE_MARGIN_PX)
+    const roomAbove = Math.max(0, event.clientY - view.top - DIAL_EDGE_MARGIN_PX)
     const opened = controller.gesture.press(event.pointerId, event.clientX, event.clientY, {
       orientation,
       slots: specs,
-      clearanceBelowPx: clearanceRef.current,
+      roomAbovePx: roomAbove,
     })
     if (!opened) return
     let fired = false
@@ -214,36 +248,41 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       latch: (slot, detail) => {
         fired = false
         if (slot && detail.armed) buzz(HAPTIC_ARM)
-        setPetals(current => current && { ...current, latch: slot, armed: detail.armed })
+        setDial(current => current && { ...current, latch: slot, armed: detail.armed })
       },
       // Torn down here rather than from the chip's own `pointerup`: by the time a real
-      // gesture ends, the finger is well off the chip and that event belongs to whatever
-      // is under it, so the chip would never hear about the press it started.
-      end: closePetals,
+      // gesture ends the finger is well off the chip, and that event belongs to whatever is
+      // under it.
+      end: closeDial,
     })
-    // Client coordinates go in raw because the petals are portalled to `document.body`,
-    // which is the one mount where they mean screen pixels. Rendering them inside the
-    // chip is not an option: the rail's scroller sits between the pane's transform and
-    // the chip, and a transformed ancestor makes that scroller clip even `position:fixed`
-    // descendants - the petals would be cut off at the edge of the strip. The drop-ups
-    // dodge the same trap by being rendered at pane level instead.
-    setPetals({ x: event.clientX, y: event.clientY, latch: null, armed: false, visible: false })
-    // Cosmetic only. The gesture has been live since the line above; this decides
-    // nothing except whether the operator is shown the map before they finish.
-    if (petalTimer.current !== null) window.clearTimeout(petalTimer.current)
-    petalTimer.current = window.setTimeout(() => {
-      petalTimer.current = null
-      setPetals(current => current && { ...current, visible: true })
-    }, RAIL_PAD_PETAL_DELAY_MS)
+    // Client coordinates go in raw because the dial is portalled to `document.body`, which
+    // is the one mount where they mean screen pixels. Rendering it inside the chip is not an
+    // option: the rail's scroller sits between the pane's transform and the chip, and a
+    // transformed ancestor makes that scroller clip even `position:fixed` descendants - the
+    // dial would be cut off at the edge of the strip.
+    setDial({
+      x: event.clientX,
+      y: event.clientY,
+      scale: railPadScaleFor(orientation, roomAbove),
+      latch: null,
+      armed: false,
+      visible: false,
+    })
+    // Cosmetic only. The gesture has been live since the line above; this decides nothing
+    // except whether the operator is shown the map before they finish.
+    if (dialTimer.current !== null) window.clearTimeout(dialTimer.current)
+    dialTimer.current = window.setTimeout(() => {
+      dialTimer.current = null
+      setDial(current => current && { ...current, visible: true })
+    }, RAIL_PAD_DIAL_DELAY_MS)
   }
 
   const keyDirection = (key: string): RailPadDirection | null => {
     if (orientation === 'cardinal') {
-      return key === 'ArrowUp' ? 'up' : key === 'ArrowDown' ? 'down'
-        : key === 'ArrowLeft' ? 'left' : key === 'ArrowRight' ? 'right' : null
+      return key === 'ArrowUp' ? 'up' : key === 'ArrowLeft' ? 'left' : key === 'ArrowRight' ? 'right' : null
     }
     return key === 'Home' ? 'upLeft' : key === 'PageUp' ? 'upRight'
-      : key === 'End' ? 'downLeft' : key === 'PageDown' ? 'downRight' : null
+      : key === 'End' ? 'upLeftFar' : key === 'PageDown' ? 'upRightFar' : null
   }
 
   const populated = directions.filter(direction => byKey.has(direction))
@@ -252,10 +291,14 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     ...populated.map(direction => `${RAIL_PAD_DIRECTION_LABELS[direction]}: ${byKey.get(direction)?.label}`),
   ].join('. ')
 
+  const bands = railPadBands(orientation, dial?.scale ?? 1)
+  const outerOf = (ring: 'near' | 'far') => ring === 'far' || !Number.isFinite(bands.ring) ? bands.outer : bands.ring
+  const innerOf = (ring: 'near' | 'far') => ring === 'far' ? bands.ring : bands.dead
+
   return <button
     ref={buttonRef}
     type="button"
-    class={`${className || 'term-key'} rail-pad rail-pad-${orientation}${petals ? ' rail-pad-pressed' : ''}`}
+    class={`${className || 'term-key'} rail-pad rail-pad-${orientation}${dial ? ' rail-pad-pressed' : ''}`}
     title={item.title || 'Drag a direction'}
     aria-label={accessible}
     onMouseDown={event => { event.preventDefault(); holdSoftKeyboard(event) }}
@@ -264,9 +307,9 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       if (!event.isPrimary || event.button !== 0) return
       beginPress(event as unknown as PointerEvent)
     }}
-    onPointerUp={closePetals}
-    onPointerCancel={closePetals}
-    onLostPointerCapture={closePetals}
+    onPointerUp={closeDial}
+    onPointerCancel={closeDial}
+    onLostPointerCapture={closeDial}
     onKeyDown={event => {
       const direction = keyDirection(event.key)
       if (!direction || !byKey.has(direction)) return
@@ -274,38 +317,72 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       runSlot(direction)
     }}
     onClick={() => {
-      closePetals()
-      // A press the gesture already answered - any drag at all, and a centre tap it
-      // fired itself - leaves nothing for the click. Everything else is a plain tap.
+      closeDial()
+      // A press the gesture already answered - any drag at all, and a centre tap it fired
+      // itself - leaves nothing for the click. Everything else is a plain tap.
       if (controller.gesture.consumeHandledClick()) return
       if (centre) runSlot('center')
     }}
   >
     {content}
-    {/* Populated directions, marked inside the chip's own border. Drawn rather than
-        laid out, so the chip is exactly the size it would be without them. */}
+    {/* Populated directions, marked inside the chip's own border. Drawn rather than laid
+        out, so the chip is exactly the size it would be without them. */}
     <span class="rail-pad-marks" aria-hidden="true">
       {populated.map(direction => <span key={direction} class={`rail-pad-mark rail-pad-mark-${direction}`}/>)}
     </span>
-    {petals && createPortal(<span
-      class={`rail-pad-petals${petals.visible ? ' rail-pad-petals-shown' : ''}`}
-      style={{ left: `${Math.round(petals.x)}px`, top: `${Math.round(petals.y)}px` }}
+    {dial && createPortal(<div
+      class={`rail-pad-dial${dial.visible ? ' rail-pad-dial-shown' : ''}`}
       aria-hidden="true"
     >
-      {populated.map(direction => {
-        const slot = byKey.get(direction)
-        if (!slot) return null
-        const unit = padDirectionUnit(direction)
-        // The petal sits at the same fraction of full reach that this direction's
-        // threshold sits at, so a squeezed downward slot is drawn closer in.
-        const reach = PETAL_RADIUS_PX * (railPadRadius(direction, clearanceRef.current) / RAIL_PAD_ENTER_RADIUS_PX)
-        const active = petals.latch === direction
-        return <span
-          key={direction}
-          class={`rail-pad-petal${active ? ' rail-pad-petal-active' : ''}${active && petals.armed ? ' rail-pad-petal-armed' : ''}${slot.disabled ? ' rail-pad-petal-off' : ''}${slot.mode === 'release' ? ' rail-pad-petal-release' : ''}`}
-          style={{ transform: `translate(-50%, -50%) translate(${Math.round(unit.x * reach)}px, ${Math.round(unit.y * reach)}px)` }}
-        >{modifierPrefix ? `${modifierPrefix}+${slot.label}` : slot.label}</span>
-      })}
-    </span>, document.body)}
+      {/* A wash over the workspace, so the wedges read as one surface rather than as
+          translucent shapes competing with whatever the terminal happens to be drawing. */}
+      <div class="rail-pad-dial-scrim"/>
+      <svg
+        class="rail-pad-dial-svg"
+        style={{ left: `${Math.round(dial.x)}px`, top: `${Math.round(dial.y)}px` }}
+        width={bands.outer * 2}
+        height={bands.outer * 2}
+        viewBox={`${-bands.outer} ${-bands.outer} ${bands.outer * 2} ${bands.outer * 2}`}
+      >
+        {directions.map((direction, position) => {
+          const slot = byKey.get(direction)
+          const index = position % sectors
+          const ring = padRingOf(direction)
+          const { from, to } = railPadWedgeBounds(orientation, index)
+          const inner = innerOf(ring)
+          const outer = outerOf(ring)
+          const active = dial.latch === direction
+          const at = polar(inner + (outer - inner) * LABEL_AT, railPadWedgeCentre(orientation, index))
+          const label = slot ? (modifierPrefix ? `${modifierPrefix}+${slot.label}` : slot.label) : ''
+          return <g
+            key={direction}
+            class={`rail-pad-wedge${active ? ' rail-pad-wedge-active' : ''}`
+              + `${active && dial.armed ? ' rail-pad-wedge-armed' : ''}`
+              + `${!slot || slot.disabled ? ' rail-pad-wedge-off' : ''}`
+              + `${slot?.mode === 'release' ? ' rail-pad-wedge-release' : ''}`}
+          >
+            <path d={wedgePath(inner, outer, from, to)}/>
+            {label && <text
+              x={at.x}
+              y={at.y}
+              // Clamped into the viewport rather than the wedge clamped: the hitbox is
+              // angular and costs nothing where it cannot be seen, but a label off the edge
+              // is the one part of the drawing that mattered.
+              transform={`translate(${labelShift(dial.x + at.x, label.length)} 0)`}
+            >{label}</text>}
+          </g>
+        })}
+        <circle class="rail-pad-dial-hub" r={bands.dead}/>
+      </svg>
+    </div>, document.body)}
   </button>
+}
+
+/** How far a label has to slide along x to keep its whole width on screen. Zero for every
+ *  label that already fits, which is nearly all of them. */
+function labelShift(screenX: number, characters: number): number {
+  const half = characters * LABEL_HALF_CHAR_PX
+  const low = LABEL_EDGE_PX + half
+  const high = Math.max(low, window.innerWidth - LABEL_EDGE_PX - half)
+  return Math.min(Math.max(screenX, low), high) - screenX
 }

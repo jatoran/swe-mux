@@ -1697,7 +1697,7 @@ Its rules, and what each one is defending:
   chip group: `.pane-tools` is a fixed-chip row in a bar that cannot wrap, so a readout placed
   there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
-  It carries a keyboard toggle, terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C), Paste, the three sticky modifier chips, and four pads — Copy, Pick, Arrows and Jump — holding the copy actions, the pickers (clipboard history, Skills, prompt templates, Actions), the four arrows, and the line/document jumps respectively.
+  It carries a keyboard toggle, terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, Down), Paste, the three sticky modifier chips, and four pads — Copy, Pick, Arrows and Jump — holding the copy actions, the pickers (clipboard history, prompt templates, Skills, Actions), the three upward arrows, and the line/document jumps respectively.
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
   After the pads, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
@@ -1753,56 +1753,72 @@ Its rules, and what each one is defending:
 - **The drop-up pickers work from inside the popover.**
   A Clip, Skills, Prompts, or Actions chip opened there renders its drop-up *over* the panel and leaves it standing, which needs two exemptions rather than one: the tap that opens a drop-up is an outside press for the panel, and Escape reaches both listeners on `window` where `stopPropagation` stops neither — so the panel stands aside for as long as a drop-up is open.
   The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
-- A **pad** is one rail chip holding up to four other Actions plus a centre, each reached by pressing the chip and dragging that way.
+- A **pad** is one rail chip holding three or four other Actions plus a centre, each reached by pressing the chip and dragging that way.
   It is a container and never a behaviour of its own: every slot names an ordinary catalog id, so a pad composes with backend filtering, project deltas, splices and hides without any of them learning what a pad is.
-  Four directions, never eight — eight halves the angular tolerance to 22.5° and destroys the eyes-free property the control exists for.
-  Where four is not enough the answer is a modifier chip re-labelling the same pad, not more wedges and not a second ring.
-- **A pad has two orientations, because the two useful four-way carvings of a circle put their boundaries in different places.**
-  `cardinal` reads the dominant axis, so its boundaries are the diagonals; `diagonal` reads the sign of each axis, so its boundaries are the axes themselves.
-  A set with a natural up/down/left/right meaning wants the first.
-  A 2×2 matrix of two independent binary choices wants the second, because then each axis carries one choice — which is why the shipped Jump pad is diagonal: left/right is which end of the line, up/down is line or document (NW Home, NE Ctrl+Home, SW End, SE Ctrl+End).
+- **The fan opens upward, and a pad has no downward slot at all.**
+  The rail sits at the bottom of its pane, and on a phone that is the bottom of the screen — so a downward wedge is drawn off the glass, dragged where a thumb cannot reach, and in competition with the system's own bottom-edge gesture.
+  Rather than squeeze it, the 180° above the finger is divided instead (plus a 20° skirt at each end, so a sideways flick that dips a little still lands where it aimed), and the whole lower half becomes the abort zone.
+  **Pulling down cancels**, which is the one gesture a rail on the screen's bottom edge can always complete.
+- **Four slots still fit, because the fan is divided twice: by angle into wedges, and by distance into rings.**
+  A `cardinal` pad is three wedges of one ring — left, up, right.
+  A `diagonal` pad is two wedges of two rings — up-left and up-right, near and far — which is what a 2×2 of two independent binary choices wants, one choice per division.
+  That is why the shipped Jump pad is ringed: left/right is the scope, near/far is which end (near Home and Ctrl+Home, far End and Ctrl+End).
+  Never eight wedges: eight halves the angular tolerance to 22.5° and destroys the eyes-free property the control exists for, where a second ring buys a slot without spending any angle at all.
 - **The only threshold in a pad gesture is distance, never time.**
-  A press is live from the first pixel, a direction commits the instant travel crosses the entry radius, and nothing waits on a clock to decide what the finger meant — so "press, flick up, release" sends one Up as fast as the hand can do it, the key having already fired mid-flick.
-  The one timer in the gesture repeats an already-committed direction; the only other one in the feature is cosmetic, holding the petal labels back ~150 ms so a fast operator never meets them and a hesitant one always gets the map.
-  Hysteresis is asymmetric (enter at 10 px, return to neutral at 6 px) and leaving a latched direction for its neighbour costs a further margin, so a finger resting on a boundary cannot chatter the key.
+  A press is live from the first pixel, a direction commits the instant travel crosses the 14 px dead radius, and nothing waits on a clock to decide what the finger meant — so "press, flick up, release" sends one Up as fast as the hand can do it, the key having already fired mid-flick.
+  Wedge *size* and commit *distance* are separate numbers, which is what lets the targets be thumb-sized without the control becoming slow.
+  The one timer in the gesture repeats an already-committed direction; the only other one in the feature is cosmetic, holding the dial back ~150 ms so a fast operator never meets it and a hesitant one always gets the map.
+  Hysteresis is asymmetric, and leaving a latched wedge for its neighbour — or crossing a ring in either direction — costs a further margin, so a finger resting on a boundary cannot chatter between two actions.
   Returning to neutral and crossing out again fires again, so up-back-up is three Ups without lifting.
 - **A slot's trigger mode says when it fires**, and it is a property of the binding rather than of the Action, so the same key may repeat in one pad and not another.
-  `enter` fires on crossing into the direction; `enter-repeat` then repeats at the rail's shared 350 ms/75 ms cadence; `release` fires only if the press is *still* latched there when it ends.
+  `enter` fires on crossing into the wedge; `enter-repeat` then repeats at the rail's shared 350 ms/75 ms cadence; `release` fires only if the press is *still* latched there when it ends.
   Dragging back out of a `release` slot cancels it, and that escape hatch is the whole value of the mode — so a release slot is drawn outlined while merely armed and filled only when it is not, because "armed" and "run" must never look the same.
-  Returning to the centre to abort runs nothing at all, even with a centre bound: an escape hatch that ran the centre instead would be a redirect rather than an escape.
+  Pulling down into the abort zone, or returning to the centre, runs nothing at all even with a centre bound: an escape hatch that ran the centre instead would be a redirect rather than an escape.
   Modes default from the Action (`defaultPadTriggerMode`), so an arrow arrives already repeating and anything wearing the rail's danger treatment already waiting for release; `release` composes with an Action's own confirm rather than replacing it, which makes ending a session from a pad an arm-then-confirm pair of drags.
+- **A ringed pad commits on release throughout, and that is geometry rather than taste.**
+  Reaching the far ring means crossing the near one, so a near slot that fired on entry would fire every single time somebody went past it, and again on the way back in.
+  A ring you must pass through cannot be a fire-on-entry target, so a two-ring pad defaults every slot to `release` and transit costs nothing.
+  The one-ring pad has no transit and keeps entry-firing, which is what makes the arrows fast.
+  An explicit per-slot mode still wins, so the trade stays available to anyone who wants it.
 - **A pad claims the pointer, which is how it settles with the rail's pan and the mobile menu swipe without either of them changing.**
   Both already stand down for the pointer-drag claim — the pan reads it live, and the gesture recognizer reads a generation mark, so a claim taken at pointer-down and released at pointer-up is still visible at the later `touchend` where `rail_swipe_up` would classify.
   A pad claims **only the axes it uses**: one spanning both has nothing to yield and claims at pointer-down, while one using a single axis lets travel on the other reach the pan, both decided at the pan's own slop so exactly one of them ever takes the pointer.
   The deliberate cost is that a two-axis pad is the one chip a rail pan cannot be started from.
   The chip also sets `touch-action:none`, because the strip carries `touch-action:pan-x` and the browser would otherwise answer a horizontal drag itself — scrolling natively and cancelling the gesture, which loses the press outright.
 - **Pad slots never reflow.**
-  A slot whose Action this backend or session state does not offer stays exactly where it is and goes dead, rather than the others sliding over to fill the gap: directions are positional, and a pad that rearranged itself per backend would be worse than one with a dead corner.
-  An empty direction is inert for the same reason it is useful — it is a safe place to abort a drag into.
+  A slot whose Action this backend or session state does not offer stays exactly where it is and goes dead, rather than the others sliding over to fill the gap: wedges are positional, and a pad that rearranged itself per backend would be worse than one with a dead wedge.
+  An empty wedge is inert for the same reason it is useful — it is a safe place to abort a drag into.
   A pad every one of whose slots the session filtered out renders as nothing, like the other mutually exclusive built-ins.
+- **The dial is a real radial control, at thumb size.**
+  Each wedge is drawn as an annulus sector with its own outline and fill, from the same radii and angles the gesture resolves against, so the drawing *is* the hitbox and cannot describe a boundary the gesture does not have.
+  The wedge under the finger highlights; an unbound or filtered one is dimmed but still drawn, because a target you can see is dead is better than a gap you have to remember.
+  It is drawn over a semi-transparent wash of the workspace, and nothing in it takes pointer events — a dial that could intercept its own drag would be the one way to break the gesture.
+  The whole thing is portalled to `document.body`: the rail's scroller sits between the pane's transform and the chip, and a transformed ancestor makes an intervening `overflow` clip even `position:fixed` descendants, so a dial rendered inside the chip would be sliced off at the edge of the strip.
 - **A pad costs no width.** Its populated directions are marked by thin arrows drawn inside the chip's own border rather than laid out, so the chip is exactly the size the same chip would be without them.
-  The petals are portalled to `document.body` and take no pointer events: the rail's scroller sits between the pane's transform and the chip, and a transformed ancestor makes an intervening `overflow` clip even `position:fixed` descendants, so labels rendered inside the chip would be sliced off at the edge of the strip.
-  A direction whose radius the screen edge has squeezed has its petal drawn in by the same ratio, so the pad is asymmetric and looks asymmetric rather than lying about where its boundary is.
-- **A descending direction shrinks its entry radius to the room left below the finger** (40% of it, floored at the pan's own slop), measured against the visual viewport so an open soft keyboard counts as the floor it is.
-  A rail sits at the bottom of its pane, so on a phone the space under a chip can be less than the radius the pad would like, and a threshold you cannot reach is a slot that does not exist.
-  Firing on entry is what makes the squeezed case safe as well as reachable: committing within a few pixels beats Android's bottom-edge home gesture, which needs considerably more travel before it recognises.
+  A far-ring direction's mark sits inboard of its near one, which is the only thing on the chip that says a wedge has two depths.
+- **A pad in a short pane shrinks its dial, and the gesture shrinks with it.**
+  Upward is the one direction that can run out now, and it is measured against the visual viewport so an open soft keyboard counts.
+  Both ring radii scale together, floored at 45%, so a boundary is never placed where the finger cannot travel to it and never so close that a twitch crosses it.
+  The wedges themselves may run off the sides of the screen and cost nothing there — a hitbox is angular — while their labels are pulled back inside the viewport, because a label off the edge is the one part of the drawing that mattered.
 - **A pad is transient and never opens.** It disappears on release, and is deliberately not a menu: an open state would make every press an overlay level, with dismissal semantics, back-button behaviour, and a gesture recognizer that resolves nothing while it stands.
-  Pads and the rail's drop-ups stay distinct tools — a drop-up is for browsing a list you have to read, a pad for hitting one of four things you already know.
-  Keyboard and trackpad reach it without any of that: a focused pad answers the four arrow keys on a cardinal pad and the navigation cluster's own spatial arrangement (Home/PageUp over End/PageDown) on a diagonal one, and Enter runs the centre.
+  Pads and the rail's drop-ups stay distinct tools — a drop-up is for browsing a list you have to read, a pad for hitting one of a handful of things you already know.
+  Keyboard and trackpad reach it without any of that: a focused pad answers the three arrow keys on a cardinal pad and the navigation cluster's own spatial arrangement (Home/PageUp near, End/PageDown far) on a ringed one, and Enter runs the centre.
 - **A chip that both taps and pads keeps its tap**, decided by distance rather than a timer: past the deadzone is a pad gesture and the trailing click is suppressed, while a release without travel is an ordinary tap.
-- Haptics carry the state a finger is covering: a tick on entering a direction, a distinct double-bump when a `release` slot arms, and a near-silent tick per repetition.
+- Haptics carry the state a finger is covering: a tick on entering a wedge, a distinct double-bump when a `release` slot arms, and a near-silent tick per repetition.
 - **Sticky Ctrl / Alt / Shift chips** apply to the rail's key Actions: tap arms one key, tap again locks, tap a locked one clears it.
-  One chip multiplies the whole rail rather than adding a Ctrl-prefixed duplicate of every key on it, and a live modifier re-labels a pad's four petals — which is why a pad needs no outer ring to reach modified keys.
+  One chip multiplies the whole rail rather than adding a Ctrl-prefixed duplicate of every key on it, and a live modifier re-labels a pad's wedges as it does so.
   Only a key sequence consumes an arm; a skill, a prompt or a picker has no notion of Ctrl, and swallowing the modifier there would make it vanish for no visible reason.
   The modified bytes are resolved where a chip is *rendered*, not where it is sent, because both repeating paths capture what they are repeating when the press opens — resolving at send time would drop the modifier from the second repetition onwards.
   The phase is a colour and never a label change, so the chip's width is identical off, armed and locked and the row's rhythm does not shift as one is used.
   Modifiers clear on session change, so one armed on one pane cannot apply to another.
-- **The default rail places the four shipped pads instead of the fifteen Actions they hold**: Copy (reply/input/resume), Pick (clipboard/skills/prompts/Actions), Arrows, and Jump.
-  Everything they hold stays in the catalog and can be placed as its own chip again; a pad is a *placement* decision and this is the default one.
+- **The default rail places the four shipped pads instead of the fourteen Actions they hold**: Copy (reply/input/resume) and Arrows (left/up/right) as three-wedge pads, Pick (clipboard/prompts/skills/Actions) and Jump (Home/Ctrl+Home/End/Ctrl+End) as ringed ones.
+  Down is the one arrow with nowhere to go in an upward fan, so it keeps a chip of its own next to the pad holding the other three — four chips become two rather than one, which is still the saving and does not require pretending a downward key can live in an upward fan.
+  Everything a pad holds stays in the catalog and can be placed as its own chip again; a pad is a *placement* decision and this is the default one.
   The invariant that replaced "one placement per built-in": every visible built-in is **reachable** on a fresh rail, directly or through a placed pad, and a pad and its contents are never both placed.
   An existing saved layout is untouched — the pads arrive as newly shipped built-ins appended to its first row, beside the individual chips that operator already has.
-- A pad's slots are the one behaviour field a saved layout may override on a built-in, deliberately: a pad is a container, and which four things it holds is the same kind of choice as which chips sit in a row.
-  Its editor is a **picture of the pad** — a 2×2-plus-centre grid of drop targets that rotates with the orientation — because "which Action is up" is a question about a position and a list of four rows makes you translate every answer back into one.
+- A pad's slots are the one behaviour field a saved layout may override on a built-in, deliberately: a pad is a container, and which things it holds is the same kind of choice as which chips sit in a row.
+  Its editor is a **picture of the pad** — the wedges laid out across the top in the order they are reached, the far ring above the near one because it is further out, and the centre underneath where a tap lands — because "which Action is up" is a question about a position and a list of rows makes you translate every answer back into one.
+  Turning a pad between three wedges and two-by-two carries its bindings across position for position, as far as the new shape has positions; one direction of the toggle always leaves one behind, which beats stacking two Actions on one wedge.
   A pad may not hold a pad: one level is a control, two is a menu with a hidden second page, and the gesture has no way to say "and then" without the dwell the whole design avoids.
 - Configured chips — a skill, a slash command, a prompt template, a literal — **size to their own label** with symmetric padding, and their `min-width` is a floor for a short one rather than a width every one of them is stretched to.
   The rail's shared 74px minimum stays right for the built-in labelled buttons, whose wording is fixed and whose even widths are the row's rhythm; it was wrong for a label the user chose, and it padded a five-character skill out to the width of `Copy resume`.

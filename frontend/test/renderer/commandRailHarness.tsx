@@ -17,7 +17,7 @@ import { RailScroller } from '../../src/RailScroller'
 import { RailRepeatKey, useRailKeyRepeat } from '../../src/RailRepeatKey'
 import { RailPad, useRailPad, type RailPadSlotView } from '../../src/RailPad'
 import { pointerDragOwnsPointer } from '../../src/pointerDragClaim'
-import { normalizeRailPad, type RailItem } from '../../src/commandRail'
+import { normalizeRailPad, railPadSlotMode, type RailItem } from '../../src/commandRail'
 import '../../src/style.css'
 
 declare global {
@@ -84,7 +84,6 @@ const CARDINAL_PAD: RailItem = {
     slots: {
       up: { item: 'up', mode: 'enter-repeat' },
       right: { item: 'right', mode: 'enter' },
-      down: { item: 'down', mode: 'enter' },
       left: { item: 'kill', mode: 'release' },
       center: { item: 'centre', mode: 'enter' },
     },
@@ -96,13 +95,16 @@ const DIAGONAL_PAD: RailItem = {
   label: 'Jump',
   className: 'term-key',
   title: 'Jump',
+  // No explicit modes: a two-ring pad defaults to release throughout, because reaching the
+  // far ring means crossing the near one and a transit fire is never what anybody wanted.
+  // The shipped Jump and Pick pads are exactly this, so the harness is too.
   pad: normalizeRailPad({
     orientation: 'diagonal',
     slots: {
-      upLeft: { item: 'home', mode: 'enter' },
-      upRight: { item: 'ctrlHome', mode: 'enter' },
-      downLeft: { item: 'end', mode: 'enter' },
-      downRight: { item: 'ctrlEnd', mode: 'enter' },
+      upLeft: { item: 'home' },
+      upRight: { item: 'ctrlHome' },
+      upLeftFar: { item: 'end' },
+      upRightFar: { item: 'ctrlEnd' },
     },
   }),
 }
@@ -124,7 +126,9 @@ function padSlots(item: RailItem): RailPadSlotView[] {
       itemId: slot.item,
       label: slot.item,
       title: slot.item,
-      mode: slot.mode || 'enter',
+      // Through the production resolver, so the harness inherits the ringed-pad rule rather
+      // than restating it and drifting from what a real pane would do.
+      mode: railPadSlotMode(slot, undefined, pad.orientation),
       disabled,
       run: () => { window.railSends.push(PAD_BYTES[slot.item] || slot.item) },
     }

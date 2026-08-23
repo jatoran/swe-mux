@@ -1,40 +1,51 @@
-// Pointer behaviour for a command-rail pad: one chip holding four actions plus a
+// Pointer behaviour for a command-rail pad: one chip holding three or four actions plus a
 // centre, each reached by dragging a direction off it.
 //
-// The single rule the whole thing is built on: **the only threshold is distance,
-// never time.** A press is live from the first pixel, a direction commits the instant
-// travel crosses the entry radius, and nothing anywhere waits for a clock before
-// deciding what the finger meant. That is what makes "press, flick up, release" send
-// one Up as fast as the hand can do it - the key has already fired mid-flick, before
-// the finger stopped. The only timer in the module repeats an already-committed
-// direction, and the only other one in the feature is cosmetic (`RAIL_PAD_PETAL_DELAY_MS`,
-// how long before the labels are drawn, which the gesture does not consult).
+// **The pad is a fan that opens upward, and it has no downward slot at all.** The rail sits
+// at the bottom of its pane, and on a phone that is the bottom of the screen - so a
+// downward wedge is drawn off the glass, dragged into a place the finger cannot reach, and
+// competes with the system's own bottom-edge gesture. Rather than squeeze it, there is no
+// south: the 180° above the finger is divided instead, and the whole lower half becomes the
+// abort zone. Pulling down cancels, which is a gesture that always has room.
 //
-// The second rule is arbitration, and it needs no new machinery. Two other readers of
-// the same finger exist - the rail's own horizontal pan (`RailScroller`) and the mobile
-// gesture recognizer's `rail_swipe_up`, which opens the app menu - and both already
-// stand down for `pointerDragClaim`. The pan checks it live; the recognizer checks a
-// generation mark, so a claim taken at pointer-down and released at pointer-up is still
-// visible at the later `touchend` where it would have classified the swipe. So a pad
-// claims, and the conflict is over with no delay, no selector exception, and no edit to
-// either of them.
+// Four slots still fit, because the fan is divided **twice**: by angle into wedges, and by
+// distance into rings. A `cardinal` pad is three wedges of one ring (left, up, right). A
+// `diagonal` pad is two wedges of two rings (up-left and up-right, near and far), which is
+// what a 2x2 of two independent binary choices wants - one choice per division.
 //
-// The pad claims **only the axes it uses**, which is what keeps the rest of the trade
-// honest. A pad with slots on both axes has nothing to yield and claims at pointer-down.
-// A pad using only one axis lets travel on the other reach the pan, so a horizontal
-// flick across a vertical-only pad still scrolls the strip. Both decisions are taken at
-// `RAIL_PAN_SLOP_PX`, the same distance the pan starts at, so exactly one of them ever
-// takes the pointer.
+// The rule the whole thing is built on: **the only threshold is distance, never time.** A
+// press is live from the first pixel, a direction commits the instant travel crosses the
+// dead radius, and nothing waits on a clock to decide what the finger meant. That is what
+// makes "press, flick up, release" send one Up as fast as the hand can do it. The only timer
+// here repeats an already-committed direction; the only other one in the feature is cosmetic
+// (`RAIL_PAD_DIAL_DELAY_MS`, when the dial is *drawn*, which the gesture never consults).
 //
-// DOM-free: the geometry, the hysteresis, the trigger modes and the repeat cadence are
-// all decided here so they can be tested without a browser. `RailPad.tsx` owns the
-// element, the listeners, the petals and the haptics.
+// The second rule is arbitration, and it needs no new machinery. Two other readers of the
+// same finger exist - the rail's horizontal pan (`RailScroller`) and the mobile recognizer's
+// `rail_swipe_up`, which opens the app menu - and both already stand down for
+// `pointerDragClaim`. The pan checks it live; the recognizer checks a generation mark, so a
+// claim taken at pointer-down and released at pointer-up is still visible at the later
+// `touchend` where it would have classified the swipe. So a pad claims, and the conflict is
+// over with no delay and no edit to either of them.
+//
+// The pad claims **only the axes it uses**. A pad with wedges on both axes has nothing to
+// yield and claims at pointer-down; one using a single axis lets travel on the other reach
+// the pan. Both decisions are taken at `RAIL_PAN_SLOP_PX`, the same distance the pan starts
+// at, so exactly one of them ever takes the pointer.
+//
+// DOM-free: the geometry, the hysteresis, the trigger modes and the repeat cadence are all
+// decided here so they can be tested without a browser, and so the dial can be *drawn* from
+// the same numbers the gesture is tested against. `RailPad.tsx` owns the element, the
+// listeners, the dial and the haptics.
 
 import {
-  padDirectionDescends,
   padDirectionUnit,
+  padDirections,
+  padRingOf,
+  padSectorCount,
   type RailPadDirection,
   type RailPadOrientation,
+  type RailPadRing,
   type RailPadSlotKey,
   type RailPadTriggerMode,
 } from './commandRail.ts'
@@ -42,27 +53,39 @@ import { claimPointerDrag } from './pointerDragClaim.ts'
 import { RAIL_KEY_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS } from './railKeyRepeat.ts'
 import { RAIL_PAN_SLOP_PX } from './railOverflow.ts'
 
-/** Travel that commits a direction. Small enough that the key fires mid-flick. */
-export const RAIL_PAD_ENTER_RADIUS_PX = 10
-/** Floor for a radius the screen edge has squeezed. Below the pan's own slop the pad
- *  would fire on a press that was never a drag, so this is where compression stops. */
-export const RAIL_PAD_MIN_RADIUS_PX = RAIL_PAN_SLOP_PX
-/** How much of the room below the finger a descending direction may ask for. Well under
- *  half, because the finger has to be able to travel *and* the pad has to draw there. */
-export const RAIL_PAD_CLEARANCE_RATIO = 0.4
-/** Coming back inside this fraction of the entry radius returns the pad to neutral.
+/** Travel that leaves the centre and commits a direction. Small on purpose: the wedges are
+ *  thumb-sized but the *commitment* still happens mid-flick, which is what keeps the pad
+ *  fast. Size and speed are separate decisions here and only one of them is this number. */
+export const RAIL_PAD_DEAD_RADIUS_PX = 14
+/** Where the near ring ends and the far one begins, on a two-ring pad. */
+export const RAIL_PAD_RING_PX = 104
+/** Outer drawn edge of a two-ring pad. Travel past it is still the far ring. */
+export const RAIL_PAD_OUTER_PX = 188
+/** Outer drawn edge of a one-ring pad, which has no boundary to leave room for. */
+export const RAIL_PAD_SINGLE_OUTER_PX = 150
+/** How far the fan reaches below the horizontal at each end, so a thumb flicking sideways
+ *  that dips a little still lands in the wedge it aimed at. */
+export const RAIL_PAD_SKIRT_DEG = 20
+/** Coming back inside this fraction of the dead radius returns the pad to neutral.
  *  Asymmetric on purpose: equal thresholds chatter on the boundary. */
 export const RAIL_PAD_EXIT_RATIO = 0.6
-/** Extra travel required to leave a latched direction for its neighbour. */
-export const RAIL_PAD_SWITCH_MARGIN_PX = 6
-/** How long a press waits before the labels are *drawn*. Cosmetic only - the gesture is
- *  live from the first pixel, so a fast operator never meets this and a hesitant one
- *  always gets the map. */
-export const RAIL_PAD_PETAL_DELAY_MS = 150
+/** Extra travel required to leave a latched wedge for its neighbour, or to cross a ring. */
+export const RAIL_PAD_SWITCH_MARGIN_PX = 8
+/** How long a press waits before the dial is *drawn*. Cosmetic only - the gesture is live
+ *  from the first pixel, so a fast operator never meets this and a hesitant one always gets
+ *  the map. */
+export const RAIL_PAD_DIAL_DELAY_MS = 150
+/** Floor for the scale a cramped pane may squeeze the dial to. Below this the far ring is
+ *  merely hard to reach, which beats a ring that commits on a twitch. */
+export const RAIL_PAD_MIN_SCALE = 0.45
 
 export { RAIL_KEY_REPEAT_DELAY_MS as RAIL_PAD_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS as RAIL_PAD_REPEAT_INTERVAL_MS }
 
-/** Which axes a pad's populated directions actually span. */
+/** The angular span the wedges divide: 180° above the finger, plus a skirt at each end. */
+export const RAIL_PAD_FAN_START_DEG = -RAIL_PAD_SKIRT_DEG
+export const RAIL_PAD_FAN_SPAN_DEG = 180 + RAIL_PAD_SKIRT_DEG * 2
+
+/** Which axes a pad's populated wedges span. */
 export interface RailPadAxes { horizontal: boolean; vertical: boolean }
 
 export function railPadAxes(directions: readonly RailPadDirection[]): RailPadAxes {
@@ -70,78 +93,134 @@ export function railPadAxes(directions: readonly RailPadDirection[]): RailPadAxe
   let vertical = false
   for (const direction of directions) {
     const unit = padDirectionUnit(direction)
-    if (unit.x !== 0) horizontal = true
-    if (unit.y !== 0) vertical = true
+    if (Math.abs(unit.x) > 0.01) horizontal = true
+    if (Math.abs(unit.y) > 0.01) vertical = true
   }
   return { horizontal, vertical }
 }
 
-/**
- * The radius this direction has to be crossed at.
- *
- * Uniform except downward, where it shrinks to fit whatever room is left below the
- * finger. A rail sits at the bottom of its pane, so on a phone the space under a chip
- * can be less than the radius the pad would like - and a threshold you cannot reach is
- * a slot that does not exist. The drawn wedge is placed from this same number, so the
- * pad is asymmetric and *looks* asymmetric rather than lying about where its boundary
- * is. Firing on entry rather than on release is what makes the squeezed case safe as
- * well as reachable: committing within a few pixels beats Android's bottom-edge home
- * gesture, which needs considerably more travel before it recognises.
- *
- * `clearanceBelowPx` of `Infinity` (the default, and every desktop case) leaves the
- * radius uniform.
- */
-export function railPadRadius(direction: RailPadDirection, clearanceBelowPx = Infinity): number {
-  if (!padDirectionDescends(direction) || !Number.isFinite(clearanceBelowPx)) return RAIL_PAD_ENTER_RADIUS_PX
-  const room = Math.max(0, clearanceBelowPx) * RAIL_PAD_CLEARANCE_RATIO
-  return Math.min(RAIL_PAD_ENTER_RADIUS_PX, Math.max(RAIL_PAD_MIN_RADIUS_PX, room))
+/** The radii one orientation's rings occupy, at a given squeeze. Shared by the gesture and
+ *  the drawing, which is what stops the dial describing a boundary it does not have. */
+export interface RailPadBands {
+  /** Inner hole: below this the press is at the centre. */
+  dead: number
+  /** Near/far boundary, or `Infinity` where there is only one ring. */
+  ring: number
+  /** Outer drawn edge. */
+  outer: number
 }
 
-/** The direction a displacement points at, ignoring how far it went. */
-function rawSector(dx: number, dy: number, orientation: RailPadOrientation): RailPadDirection {
+export function railPadBands(orientation: RailPadOrientation, scale = 1): RailPadBands {
+  const clamped = Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, scale))
   if (orientation === 'diagonal') {
-    if (dy < 0) return dx < 0 ? 'upLeft' : 'upRight'
-    return dx < 0 ? 'downLeft' : 'downRight'
+    return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: RAIL_PAD_RING_PX * clamped, outer: RAIL_PAD_OUTER_PX * clamped }
   }
-  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right'
-  return dy < 0 ? 'up' : 'down'
+  return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: Infinity, outer: RAIL_PAD_SINGLE_OUTER_PX * clamped }
 }
 
 /**
- * The direction a displacement points at, biased towards one already latched.
+ * How much the dial has to shrink to fit the room above the press.
  *
- * The bias is the whole hysteresis: the point is pulled `RAIL_PAD_SWITCH_MARGIN_PX`
- * back along the current direction before its sector is read, so leaving that
- * direction costs exactly that much travel past the boundary. One expression covers
- * both orientations even though their boundaries sit in different places - cardinal's
- * on the diagonals, diagonal's on the axes - because the bias is applied in the plane
- * rather than to whichever coordinate happens to be the boundary.
+ * The one direction that can run out now, and the mirror of the downward squeeze this
+ * replaced: a pad in a short pane near the top of the window has less than the far ring's
+ * reach above it, and a boundary you cannot travel to is a slot that does not exist.
  */
-export function railPadSector(
+export function railPadScaleFor(orientation: RailPadOrientation, roomAbovePx: number): number {
+  if (!Number.isFinite(roomAbovePx)) return 1
+  const wanted = orientation === 'diagonal' ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX
+  return Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, Math.max(0, roomAbovePx) / wanted))
+}
+
+/** Angle of a displacement, in degrees, measured counter-clockwise from due east with up
+ *  positive - so the fan is simply `0..180` and the abort zone is everything past it. */
+export function railPadAngle(dx: number, dy: number): number {
+  const raw = Math.atan2(-dy, dx) * 180 / Math.PI
+  return raw < RAIL_PAD_FAN_START_DEG ? raw + 360 : raw
+}
+
+/** Half-open angular bounds of one wedge, in `railPadAngle` degrees. */
+export function railPadWedgeBounds(orientation: RailPadOrientation, index: number): { from: number; to: number } {
+  const width = RAIL_PAD_FAN_SPAN_DEG / padSectorCount(orientation)
+  const from = RAIL_PAD_FAN_START_DEG + index * width
+  return { from, to: from + width }
+}
+
+/** Centre angle of a wedge. Where its label sits, and the direction its unit vector points. */
+export const railPadWedgeCentre = (orientation: RailPadOrientation, index: number): number => {
+  const { from, to } = railPadWedgeBounds(orientation, index)
+  return (from + to) / 2
+}
+
+/** Which wedge an angle falls in, or `null` for the abort zone below the fan. */
+export function railPadWedgeIndex(orientation: RailPadOrientation, angle: number): number | null {
+  const end = RAIL_PAD_FAN_START_DEG + RAIL_PAD_FAN_SPAN_DEG
+  if (angle < RAIL_PAD_FAN_START_DEG || angle >= end) return null
+  const width = RAIL_PAD_FAN_SPAN_DEG / padSectorCount(orientation)
+  return Math.min(padSectorCount(orientation) - 1, Math.floor((angle - RAIL_PAD_FAN_START_DEG) / width))
+}
+
+/** The direction at one wedge and ring. `padDirections` order is wedge-major within a ring. */
+export function railPadDirectionAt(
+  orientation: RailPadOrientation,
+  index: number,
+  ring: RailPadRing,
+): RailPadDirection | null {
+  const sectors = padSectorCount(orientation)
+  const offset = ring === 'far' ? sectors : 0
+  return padDirections(orientation)[index + offset] ?? null
+}
+
+/** What the pad decides a press is currently pointing at. `null` is the centre or the abort
+ *  zone, which behave identically: neither fires anything on the way through. */
+export type RailPadLatch = RailPadDirection | null
+
+/**
+ * The wedge and ring a displacement resolves to, biased towards one already latched.
+ *
+ * The bias is the whole hysteresis, and it is applied in the plane rather than to whichever
+ * coordinate happens to be a boundary - so one expression covers the angular boundaries
+ * between wedges and the radial one between rings, even though they are different kinds of
+ * edge. Leaving a latched direction costs `RAIL_PAD_SWITCH_MARGIN_PX` of travel past it.
+ */
+export function railPadResolve(
   dx: number,
   dy: number,
   orientation: RailPadOrientation,
-  current: RailPadDirection | null = null,
-): RailPadDirection {
-  if (!current) return rawSector(dx, dy, orientation)
-  const unit = padDirectionUnit(current)
-  return rawSector(
-    dx + unit.x * RAIL_PAD_SWITCH_MARGIN_PX,
-    dy + unit.y * RAIL_PAD_SWITCH_MARGIN_PX,
-    orientation,
-  )
+  bands: RailPadBands,
+  current: RailPadLatch = null,
+): RailPadLatch {
+  let x = dx
+  let y = dy
+  if (current) {
+    const unit = padDirectionUnit(current)
+    x += unit.x * RAIL_PAD_SWITCH_MARGIN_PX
+    y += unit.y * RAIL_PAD_SWITCH_MARGIN_PX
+  }
+  const distance = Math.hypot(x, y)
+  if (distance < bands.dead) return null
+  const index = railPadWedgeIndex(orientation, railPadAngle(x, y))
+  if (index === null) return null
+  // The radial boundary gets the same margin the angular ones do, but measured on the raw
+  // radius rather than through the biased point: the plane bias points along the wedge's
+  // *centre*, which is a direction, and a ring is a distance - so it would move the ring
+  // boundary by an amount that depended on which wedge you were in.
+  //
+  // It has to move both ways. A near latch pushes the boundary out and a far latch pulls it
+  // in, so a finger resting on the ring cannot flip between two actions; a one-sided version
+  // makes crossing outward free, which is the direction it happens by accident.
+  const currentRing = current ? padRingOf(current) : null
+  const boundary = bands.ring
+    + (currentRing === 'far' ? -RAIL_PAD_SWITCH_MARGIN_PX : currentRing === 'near' ? RAIL_PAD_SWITCH_MARGIN_PX : 0)
+  return railPadDirectionAt(orientation, index, Math.hypot(dx, dy) >= boundary ? 'far' : 'near')
 }
 
-/** What the pad decides a press is currently pointing at. `null` is the centre. */
-export type RailPadLatch = RailPadDirection | null
-
-/** Everything the engine needs to know about one slot. Supplied per press, because a
- *  slot's availability follows session state that changes under a mounted pad. */
+/** Everything the engine needs to know about one slot. Supplied per press, because a slot's
+ *  availability follows session state that changes under a mounted pad. */
 export interface RailPadSlotSpec {
   mode: RailPadTriggerMode
   /** A direction whose action this backend or state does not admit. It still latches -
-   *  directions are positional and must never reflow - and fires nothing, which also
-   *  makes it a safe place to abort a gesture into. */
+   *  directions are positional and must never reflow - and fires nothing, which also makes
+   *  it a safe place to abort a gesture into. */
   disabled?: boolean
 }
 
@@ -149,49 +228,48 @@ export interface RailPadPressOptions {
   orientation: RailPadOrientation
   /** Only the keys present here are live; everything else is a dead direction. */
   slots: Partial<Record<RailPadSlotKey, RailPadSlotSpec>>
-  /** Room below the press, in CSS pixels. Squeezes the descending radii. */
-  clearanceBelowPx?: number
+  /** Room above the press, in CSS pixels. Squeezes the dial when a pane is short. */
+  roomAbovePx?: number
 }
 
 export interface RailPadCallbacks {
   /** Run the slot. Called once per commitment and once per repetition. */
   fire(slot: RailPadSlotKey): void
-  /** The latch changed. `armed` marks a `release` slot now waiting for the lift, which
-   *  is the state the petals and the haptics render differently. */
+  /** The latch changed. `armed` marks a `release` slot now waiting for the lift, which is
+   *  the state the dial and the haptics render differently. */
   latch(slot: RailPadLatch, detail: { armed: boolean; disabled: boolean }): void
   /** The press is over, however it ended.
    *
-   *  The petals are torn down from here rather than from the chip's own `pointerup`,
-   *  because by then the finger is 40-odd pixels away and that event belongs to whatever
-   *  is under it. A chip that only cleaned up after events it received itself left its
-   *  labels on screen after every gesture that actually went somewhere. */
+   *  The dial is torn down from here rather than from the chip's own `pointerup`, because by
+   *  then the finger is a hundred-odd pixels away and that event belongs to whatever is
+   *  under it. A chip that only cleaned up after events it received itself left its dial on
+   *  screen after every gesture that actually went somewhere. */
   end(): void
 }
 
 export interface RailPadGesture {
   /** Open a press. Returns false if one is already open. Fires nothing. */
   press(pointerId: number, x: number, y: number, options: RailPadPressOptions): boolean
-  /** Report the pointer. Returns true once this press owns the pointer, so the caller
-   *  knows the claim has been taken. */
+  /** Report the pointer. Returns true once this press owns the pointer. */
   move(pointerId: number, x: number, y: number): boolean
-  /** End the press, firing a `release` slot still latched, or the centre from neutral. */
+  /** End the press, firing a `release` slot still latched, or the centre from a clean tap. */
   release(pointerId: number): boolean
   /** Abandon without firing: cancel, blur, a hidden tab, a session swap, unmount. */
   cancel(): void
-  /** Whether a press is open, and where it points. For the petals. */
-  peek(): { open: boolean; latch: RailPadLatch; armed: boolean; radius: (direction: RailPadDirection) => number }
-  /** Whether the trailing click was already answered by the gesture and must be
-   *  swallowed rather than run as the chip's own tap. One-shot: reading clears it. */
+  /** Whether a press is open, where it points, and the bands it is using. For the dial. */
+  peek(): { open: boolean; latch: RailPadLatch; armed: boolean; bands: RailPadBands }
+  /** Whether the trailing click was already answered by the gesture and must be swallowed
+   *  rather than run as the chip's own tap. One-shot: reading it clears it. */
   consumeHandledClick(): boolean
 }
 
 /**
  * One pad press at a time, per rail.
  *
- * Per rail rather than per chip for the reason `useRailKeyRepeat` is: two pads must
- * never repeat at once, whatever takes the window away has to be able to stop
- * whichever one is, and `RailStrip` renders every chip a second time inside its
- * overflow popover - so two live instances of the same pad genuinely coexist.
+ * Per rail rather than per chip for the reason `useRailKeyRepeat` is: two pads must never
+ * repeat at once, whatever takes the window away has to be able to stop whichever one is,
+ * and `RailStrip` renders every chip a second time inside its overflow popover - so two live
+ * instances of the same pad genuinely coexist and must share one press.
  */
 export function createRailPadGesture<T>(
   callbacks: RailPadCallbacks,
@@ -202,11 +280,15 @@ export function createRailPadGesture<T>(
   let startX = 0
   let startY = 0
   let options: RailPadPressOptions | null = null
+  let bands = railPadBands('cardinal')
   let latched: RailPadLatch = null
   let timer: T | null = null
   let releaseClaim: (() => void) | null = null
   let handledClick = false
-  let everLatched = false
+  /** Whether the press ever left the hub. Not "ever latched a wedge": pulling straight down
+   *  into the abort zone latches nothing, and firing the centre for that would turn the one
+   *  escape a bottom-edge rail can always complete into a different action. */
+  let leftCentre = false
   let axes: RailPadAxes = { horizontal: false, vertical: false }
 
   const clearTimer = () => {
@@ -227,13 +309,12 @@ export function createRailPadGesture<T>(
     pointer = null
     options = null
     latched = null
-    everLatched = false
+    leftCentre = false
     axes = { horizontal: false, vertical: false }
     callbacks.end()
   }
 
-  const specFor = (slot: RailPadLatch): RailPadSlotSpec | undefined =>
-    options?.slots[slot ?? 'center']
+  const specFor = (slot: RailPadLatch): RailPadSlotSpec | undefined => options?.slots[slot ?? 'center']
 
   const armRepeat = (slot: RailPadSlotKey, delayMs: number) => {
     timer = schedule(() => {
@@ -248,12 +329,12 @@ export function createRailPadGesture<T>(
     if (next === latched) return
     clearTimer()
     latched = next
-    // Reaching *any* direction answers the chip's click, a dead one included: dragging
-    // into an empty direction is a deliberate abort, and it would be a poor one if the
-    // trailing click then ran the chip's tap action anyway. Claiming the pointer is not
-    // enough on its own - a chip that both taps and pads has to keep its tap, and that
-    // press has already claimed by the time it turns out to have gone nowhere.
-    if (next) { handledClick = true; everLatched = true }
+    // Reaching *any* wedge answers the chip's click, a dead one included: dragging into an
+    // empty direction is a deliberate abort, and it would be a poor one if the trailing
+    // click then ran the chip's tap action anyway. Claiming the pointer is not enough on its
+    // own - a chip that both taps and pads has to keep its tap, and that press has already
+    // claimed by the time it turns out to have gone nowhere.
+    if (next) handledClick = true
     const spec = specFor(next)
     const armed = !!next && !!spec && !spec.disabled && spec.mode === 'release'
     callbacks.latch(next, { armed, disabled: !!next && !spec })
@@ -270,15 +351,16 @@ export function createRailPadGesture<T>(
       if (pointer !== null) return false
       pointer = pointerId
       options = next
+      bands = railPadBands(next.orientation, railPadScaleFor(next.orientation, next.roomAbovePx ?? Infinity))
       startX = x
       startY = y
       latched = null
       const live = (Object.keys(next.slots) as RailPadSlotKey[])
         .filter((key): key is RailPadDirection => key !== 'center')
       axes = railPadAxes(live)
-      // Nothing to yield to: every axis this pad uses is its own, so the pan and the
-      // menu swipe are wrong about this finger from the very first pixel. A pad that
-      // leaves an axis free waits instead, and decides at the pan's own slop.
+      // Nothing to yield to: every axis this pad uses is its own, so the pan and the menu
+      // swipe are wrong about this finger from the very first pixel. A pad that leaves an
+      // axis free waits instead, and decides at the pan's own slop.
       if (axes.horizontal && axes.vertical) claim()
       return true
     },
@@ -299,42 +381,39 @@ export function createRailPadGesture<T>(
         }
         claim()
       }
-      const distance = Math.hypot(dx, dy)
-      const candidate = railPadSector(dx, dy, options.orientation, latched)
-      const radius = railPadRadius(candidate, options.clearanceBelowPx)
-      if (latched === null) {
-        if (distance >= radius) setLatch(candidate)
-        return true
-      }
-      // Leaving for the centre uses the *latched* direction's radius, so a squeezed
-      // downward slot is also released closer in and the pair stays symmetric.
-      if (distance < railPadRadius(latched, options.clearanceBelowPx) * RAIL_PAD_EXIT_RATIO) {
+      // Recorded on distance alone, before any wedge is resolved: a drag straight down
+      // reaches no wedge at all, and it still has to count as having left the hub or the
+      // lift would run the centre.
+      if (Math.hypot(dx, dy) >= bands.dead) leftCentre = true
+      // Leaving for the centre uses the exit ratio; everything else is `railPadResolve`,
+      // which is also what the dial is drawn from.
+      if (latched !== null && Math.hypot(dx, dy) < bands.dead * RAIL_PAD_EXIT_RATIO) {
         setLatch(null)
         return true
       }
-      if (candidate !== latched && distance >= radius) setLatch(candidate)
+      setLatch(railPadResolve(dx, dy, options.orientation, bands, latched))
       return true
     },
     release(pointerId) {
       if (pointer !== pointerId) return false
       const slot: RailPadSlotKey = latched ?? 'center'
       const spec = specFor(latched)
-      // A latched direction fires only if it was waiting for exactly this. Every other
-      // mode already fired on the way in, and a `release` slot the finger has since left
-      // is no longer latched, which is the whole escape hatch.
+      // A latched direction fires only if it was waiting for exactly this. Every other mode
+      // already fired on the way in, and a `release` slot the finger has since left is no
+      // longer latched, which is the whole escape hatch.
       //
       // Neutral fires the centre only when the press *never* reached a direction. Coming
-      // back to the middle to abort must not resolve to a different action instead - an
-      // escape hatch that ran the centre would be a redirect, not an escape - so the
-      // centre stays what it is: what a tap does.
+      // back to the middle to abort, or pulling down into the abort zone, must not resolve
+      // to a different action instead - an escape hatch that ran the centre would be a
+      // redirect, not an escape - so the centre stays what it is: what a tap does.
       const fires = !!spec && !spec.disabled && (latched === null
-        ? !everLatched && spec.mode !== 'release'
+        ? !leftCentre && spec.mode !== 'release'
         : spec.mode === 'release')
       clearTimer()
       if (fires) {
-        // A centre tap that fires *is* the chip's action for this press, so the click
-        // behind it is a duplicate. A press that resolved to nothing leaves the click
-        // alone, and an untravelled press on a padded chip is therefore still a tap.
+        // A centre tap that fires *is* the chip's action for this press, so the click behind
+        // it is a duplicate. A press that resolved to nothing leaves the click alone, and an
+        // untravelled press on a padded chip is therefore still a tap.
         if (latched === null) handledClick = true
         callbacks.fire(slot)
       }
@@ -348,13 +427,12 @@ export function createRailPadGesture<T>(
       stop()
     },
     peek() {
-      const clearance = options?.clearanceBelowPx
       const spec = specFor(latched)
       return {
         open: pointer !== null,
         latch: latched,
         armed: !!latched && !!spec && !spec.disabled && spec.mode === 'release',
-        radius: (direction: RailPadDirection) => railPadRadius(direction, clearance),
+        bands,
       }
     },
     consumeHandledClick() {

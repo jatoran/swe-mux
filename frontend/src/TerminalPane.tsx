@@ -3669,7 +3669,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         itemId:slot.item,
         label:railItemDisplayLabel(target||{id:slot.item,type:'text',label},label),
         title:view?.title||label,
-        mode:railPadSlotMode(slot,target),
+        mode:railPadSlotMode(slot,target,pad.orientation),
         disabled:!view||!!view.disabled,
         run:anchor=>view?.run(anchor),
       })
