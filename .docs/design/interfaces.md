@@ -989,6 +989,7 @@ The daemon writes the input before replying with `{type:"input_ack", input_seq, 
 Latency phases `input_event_delay`, `input_main_thread_stall`, `input_socket_backlog`, `input_ack_latency`, and `input_echo_latency` use the same `client_diagnostic` frame and persist as `terminal_input_diagnostic`.
 Each phase has its own one-second rate window, so a renderer repair cannot suppress input evidence.
 Diagnostic payloads contain timing, counts, connection state, visibility, ownership, device, and renderer context but never the input text.
+The one deliberate exception is the paste trace: phase `terminal_paste_trace` on the same frame persists as its own `terminal_paste_trace` event type under a wider clamp, and its detail carries a bounded pasted-payload summary (codepoint count, flagged non-ASCII codepoints, head/tail excerpt) plus before/after composer snapshots, because that content is the evidence the trace exists to keep (`features/terminal-input.md`).
 
 ### Multi-device arbitration
 
@@ -1348,6 +1349,7 @@ GET    /assistant                          enabled, model, budget, spend, trust,
 GET    /assistant/dialogs[?limit=]
 POST   /assistant/dialogs                  {title?}
 GET    /assistant/dialogs/{id}             messages, actions, turn_running
+POST   /assistant/dialogs/{id}/interrupt   stop the running turn; {interrupted: bool}
 POST   /assistant/dialogs/{id}/turns       {text, client_context?} -> 202 {turn_id, queued}
 POST   /assistant/dialogs/{id}/interrupt
 POST   /assistant/actions/{id}/confirm
@@ -1379,6 +1381,13 @@ The queued and started events share one message id per turn, so a client renders
 words once and updates them in place.
 Refusing instead left the client holding text with nowhere to put it, which is how speaking over
 the assistant lost what was said and how one sentence ended up split across two dialogs.
+
+`interrupted: false` is not a failure - it is the daemon saying nothing was running, which
+means the caller's view is stale. A client must act on it rather than discard it: clear the
+local turn state and refetch the dialog. Discarding it made a stop press with nothing to stop
+byte-identical to one that worked (HTTP 200, no state change), and six presses in a row got six
+200s and changed nothing (2026-08-23). That refetch is also the only recovery there is for a
+terminal event the client missed, because the live handler drops replayed events on purpose.
 
 `assistant_turn_done` carries `exhausted`, true when the turn stopped on
 `MAX_MODEL_CALLS_PER_TURN` with work still outstanding. The reply then ends with a plain notice

@@ -651,6 +651,42 @@ async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> 
         await ws.close()
 
 
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_paste_trace_persists_as_its_own_event_type_with_its_own_clamp() -> None:
+    """The paste trace carries bounded pasted-content evidence by design.
+
+    It must neither join the content-free `terminal_input_diagnostic` class nor be
+    truncated by that class's 512-byte clamp, because its two composer snapshots are
+    the evidence and a clipped snapshot adjudicates nothing.
+    """
+    session = _repaint_test_session("omp", [])
+    app = _repaint_test_app(session)
+    events = app["events"].subscribe(name="test")
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/omp-id")
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "state"
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+
+        detail = {
+            "afterMs": 600,
+            "payload": {"chars": 600, "head": "h" * 48, "tail": "t" * 48, "flagged": ["3:U+00A0"]},
+            "before": {"cursorCol": 10, "rows": ["r" * 120 for _ in range(6)]},
+            "after": {"cursorCol": 58, "rows": ["r" * 120 for _ in range(6)]},
+        }
+        assert len(json.dumps(detail)) > server.CLIENT_DIAGNOSTIC_DETAIL_LIMIT
+        await ws.send_json(
+            {"type": "client_diagnostic", "phase": "terminal_paste_trace", "detail": detail}
+        )
+        event = await _next_event_of(events, "terminal_paste_trace")
+        assert event.payload["phase"] == "terminal_paste_trace"
+        assert json.loads(event.payload["detail"]) == detail
+        await ws.close()
+
+
 async def test_repaint_pulse_never_restores_over_a_concurrent_resize() -> None:
     resizes: list[tuple[int, int]] = []
     session = _repaint_test_session("omp", resizes)

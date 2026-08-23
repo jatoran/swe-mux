@@ -70,6 +70,8 @@ Related events:
 - `terminal_attached` / `terminal_detached`: connection transition.
 - `terminal_client_repair`: surface, renderer, replay, or xterm write-pipeline recovery.
 - `terminal_repaint_requested`: daemon or browser forced the CLI to restate its screen.
+- `terminal_paste_trace`: one record per paste into a readable composer - payload shape (codepoint count, flagged non-ASCII codepoints, head/tail excerpt) plus the composer region, its row text, and the cursor before the paste and 600 ms after.
+  Adjudicates the transient caret-lands-short-of-the-tail paste defect after the fact: hidden codepoints in the payload, or an after-cursor that disagrees with the after-rows' text end, each name a different culprit.
 
 ## Adjudication
 
@@ -91,4 +93,4 @@ Use the acknowledgement and main-thread phases as authoritative boundaries in th
 - Each diagnostic phase persists at most once per second per session.
 - Pending browser correlations expire after 30 seconds and cap at 128.
 - Server detail is allowlisted and clamped to 512 bytes.
-- Diagnostic events contain no typed text.
+- Diagnostic events contain no typed text, with one deliberate exception: `terminal_paste_trace` carries a bounded excerpt and codepoint summary of the pasted payload plus bounded composer row text, under its own 4096-byte clamp, because that content is the evidence it exists to keep.

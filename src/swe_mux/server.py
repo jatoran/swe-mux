@@ -390,6 +390,12 @@ from .wsl_bridge import install_bridge as install_wsl_bridge
 from .wsl_bridge import setup_status as wsl_setup_status
 
 log = logging.getLogger(__name__)
+
+#: Wall-clock ceiling on the assistant's own archive search.
+#: Generous for an indexed FTS hit and far short of the minutes an unindexed
+#: LIKE scan over a multi-gigabyte database takes. The point is not speed, it is
+#: that the failure is a tool result the model can read instead of a wedged app.
+ASSISTANT_HISTORY_SEARCH_BUDGET_MS = 4_000
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 PREVIEW_HTTP_CONCURRENCY = 32
 PREVIEW_WS_CONCURRENCY = 16
@@ -2052,7 +2058,21 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         return result
 
     async def _assistant_history_search(*, query: str, limit: int) -> dict[str, Any]:
-        return await history.history_page(query=query, search_scope="all", limit=limit)
+        """The assistant's archive search, bounded in a way an operator's is not.
+
+        A human running this watches a spinner and can give up; a tool call has
+        nobody to give up, and this one holds the single history executor thread
+        while it runs, so an unbounded search takes every other history read down
+        with it. Measured 2026-08-23 on a 2.79 GB database: minutes of pinned
+        thread, `/api/sessions` timing out, and a chat stuck on
+        "running search_history" with no way to stop it.
+        """
+        return await history.history_page(
+            query=query,
+            search_scope="all",
+            limit=limit,
+            budget_ms=ASSISTANT_HISTORY_SEARCH_BUDGET_MS,
+        )
 
     async def _assistant_create_project(arguments: dict[str, Any]) -> dict[str, Any]:
         """The assistant's create_project execution: the ordinary registration path.
@@ -16211,6 +16231,13 @@ CLIENT_INPUT_DIAGNOSTIC_PHASES = frozenset(
 )
 CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS = 1.0
 CLIENT_DIAGNOSTIC_DETAIL_LIMIT = 512
+# The paste trace (frontend pasteTrace.ts) deliberately carries bounded pasted-content
+# evidence — a head/tail excerpt, flagged codepoints, and two composer snapshots — because
+# the payload's invisible characters ARE the diagnosis it exists for. It therefore
+# persists as its own event type instead of joining the content-free
+# `terminal_input_diagnostic` phases, and its clamp is sized for the two snapshots.
+CLIENT_PASTE_TRACE_PHASE = "terminal_paste_trace"
+CLIENT_PASTE_TRACE_DETAIL_LIMIT = 4096
 
 
 async def _repaint_when_resize_settles(request: web.Request, session: Session) -> None:
@@ -16368,7 +16395,7 @@ def _handle_client_diagnostic(
     """
     phase = frame.get("phase")
     if not isinstance(phase, str) or phase not in (
-        CLIENT_REPAIR_PHASES | CLIENT_INPUT_DIAGNOSTIC_PHASES
+        CLIENT_REPAIR_PHASES | CLIENT_INPUT_DIAGNOSTIC_PHASES | {CLIENT_PASTE_TRACE_PHASE}
     ):
         return
     now = time.monotonic()
@@ -16378,15 +16405,21 @@ def _handle_client_diagnostic(
     session.client_diagnostic_timestamps[phase] = now
     detail = frame.get("detail")
     payload = json.dumps(detail) if isinstance(detail, dict) else ""
-    event_type = (
-        "terminal_client_repair" if phase in CLIENT_REPAIR_PHASES else "terminal_input_diagnostic"
-    )
+    if phase == CLIENT_PASTE_TRACE_PHASE:
+        event_type = CLIENT_PASTE_TRACE_PHASE
+        detail_limit = CLIENT_PASTE_TRACE_DETAIL_LIMIT
+    elif phase in CLIENT_REPAIR_PHASES:
+        event_type = "terminal_client_repair"
+        detail_limit = CLIENT_DIAGNOSTIC_DETAIL_LIMIT
+    else:
+        event_type = "terminal_input_diagnostic"
+        detail_limit = CLIENT_DIAGNOSTIC_DETAIL_LIMIT
     request.app["events"].emit_background(
         event_type,
         session_id=session.record.id,
         source="browser",
         phase=phase,
-        detail=payload[:CLIENT_DIAGNOSTIC_DETAIL_LIMIT],
+        detail=payload[:detail_limit],
         input_owner=session.input_owner == connection_id,
         owner_device=session.input_owner_device,
     )

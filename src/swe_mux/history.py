@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,11 @@ from .transcript_view import (
 
 T = TypeVar("T")
 log = logging.getLogger(__name__)
+
+#: Wall-clock ceiling on an agent-driven archive search (the MCP surface).
+#: Same reasoning as the assistant's: nobody is watching a spinner they can
+#: abandon, and the search holds the single history executor thread while it runs.
+AGENT_SEARCH_BUDGET_MS = 6_000
 _AGENT_BACKEND_ARGS = tuple(sorted(AGENT_BACKENDS))
 _AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
 #: Ids per `history_naming_rows` statement. The id list is bound twice (id and
@@ -486,6 +492,24 @@ def _tune_connection(db: sqlite3.Connection) -> None:
     db.execute("PRAGMA mmap_size=268435456")
 
 
+class HistorySearchBudgetExceeded(RuntimeError):
+    """A history search was stopped because it outran its wall-clock budget.
+
+    Typed rather than a bare timeout because the *caller* decides what it means:
+    an operator's own search should say "narrow this and try again", while the
+    assistant's tool turns it into a tool result the model can act on. What it
+    must never be is silence - an unbounded search is indistinguishable from a
+    hung daemon, which is exactly how this was found.
+    """
+
+    def __init__(self, budget_ms: int) -> None:
+        super().__init__(
+            f"history search exceeded its {budget_ms} ms budget; "
+            "narrow the query, a project, or a date range and try again"
+        )
+        self.budget_ms = budget_ms
+
+
 class HistoryIndex:
     """SQLite index whose every operation runs on one dedicated worker thread.
 
@@ -539,6 +563,49 @@ class HistoryIndex:
         return await loop.run_in_executor(
             self._executor, run_sqlite_operation, self._db, self._operation_lock, fn
         )
+
+    @contextlib.contextmanager
+    def _deadline(self, budget_ms: int) -> Iterator[None]:
+        """Abort SQLite work that outruns a wall-clock budget.
+
+        A `LIKE` scan over a multi-gigabyte message table is not slow, it is
+        unbounded, and nothing above this can stop it: the operation holds
+        `_operation_lock` and occupies the single history executor thread, so
+        every other history read queues behind it and the app reads as frozen.
+        Cancelling the awaiting coroutine does not help either - the work is in a
+        thread, and the thread is inside SQLite.
+
+        `set_progress_handler` is the only lever that reaches *into* the running
+        statement: SQLite calls it every N virtual-machine instructions and
+        aborts the statement when it returns non-zero. So the budget is enforced
+        where the time is actually spent, and the lock is released.
+
+        Measured 2026-08-23: an assistant `search_history` on a 2.79 GB database
+        pinned the executor for minutes, timing out `/api/sessions` while
+        `/api/health` still answered instantly - the event loop was fine, the
+        database thread was not.
+        """
+        deadline = time.monotonic() + max(0.05, budget_ms / 1000)
+        expired = False
+
+        def watch() -> int:
+            nonlocal expired
+            if time.monotonic() < deadline:
+                return 0
+            expired = True
+            return 1
+
+        # Every ~20k VM instructions: frequent enough that the overshoot past the
+        # budget is milliseconds, rare enough not to measurably slow the scan.
+        self._db.set_progress_handler(watch, 20_000)
+        try:
+            yield
+        except sqlite3.OperationalError as exc:
+            if expired:
+                raise HistorySearchBudgetExceeded(budget_ms) from exc
+            raise
+        finally:
+            self._db.set_progress_handler(None, 0)
 
     def _canonicalize_provenance_roots(self) -> None:
         """Collapse rows whose checkout differs only by path separator.
@@ -3069,7 +3136,16 @@ class HistoryIndex:
                 "search_index_ready": bool(search_state["ready"]),
             }
 
-        return await self._run(op)
+        # Bounded for the same reason the assistant's search is: the caller is an
+        # agent, not a human who can give up, and this holds the one history
+        # executor thread while it runs. It is the safer of the two paths - index
+        # reads only, with a candidate cap - which makes it slower to reach the
+        # ceiling, not incapable of it.
+        def bounded() -> dict[str, Any]:
+            with self._deadline(AGENT_SEARCH_BUDGET_MS):
+                return op()
+
+        return await self._run(bounded)
 
     async def history_message_window(
         self,
@@ -3137,7 +3213,16 @@ class HistoryIndex:
         time_basis: str = "started",
         cursor: str | None = None,
         limit: int = 50,
+        budget_ms: int | None = None,
     ) -> dict[str, Any]:
+        """One page of history.
+
+        `budget_ms` bounds the SQLite work and raises `HistorySearchBudgetExceeded`
+        rather than running to completion. It exists for callers that are not a
+        human watching a spinner they can abandon - an assistant tool call has no
+        such human, and an unbounded one takes the whole daemon's history thread
+        with it. A human-driven page passes None and behaves exactly as before.
+        """
         limit = max(1, min(limit, 200))
         if search_scope not in {"all", "user", "assistant", "metadata"}:
             raise ValueError("history search scope must be all, user, assistant, or metadata")
@@ -3264,7 +3349,16 @@ class HistoryIndex:
             )
             return {"items": items, "next_cursor": next_cursor}
 
-        return await self._run(op)
+        if budget_ms is None:
+            return await self._run(op)
+        # The guard runs INSIDE the executor, wrapping the statement itself:
+        # installed out here it would arm on the event loop thread and never see
+        # the query it is supposed to bound.
+        def bounded() -> dict[str, Any]:
+            with self._deadline(budget_ms):
+                return op()
+
+        return await self._run(bounded)
 
     async def history_message_matches(
         self, history_id: str, query: str, search_scope: str = "all", limit: int = 500

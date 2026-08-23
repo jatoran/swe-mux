@@ -3142,3 +3142,124 @@ async def test_seed_text_tells_the_model_what_it_is_for(tmp_path: Path) -> None:
         assert "without" not in seed["description"].split("stage_text")[0].lower()
     finally:
         service.store.close()
+
+
+# --------------------------------------------------------------------------- #
+# read_transcript: truncation and paging are reported, never silent
+# --------------------------------------------------------------------------- #
+
+
+async def test_transcript_cursors_round_trip_and_refuse_anything_else() -> None:
+    from swe_mux.assistant import _decode_transcript_cursor, _encode_transcript_cursor
+
+    anchor = {"_source_start": 42, "id": "abc"}
+    cursor = _encode_transcript_cursor(anchor)
+    assert cursor and _decode_transcript_cursor(cursor) == (anchor, "")
+    # Absent means "the newest messages", which is what a first read wants.
+    assert _decode_transcript_cursor(None) == (None, "")
+    assert _decode_transcript_cursor("") == (None, "")
+    # Anything PRESENT but unusable is an error rather than a silent fallback to
+    # the tail: reading the same page again while the model believed it was
+    # paging backwards is an invisible loop.
+    for junk in ("not-json", "[1,2]", '"a string"', 123, "x" * 5_000):
+        anchor_out, error = _decode_transcript_cursor(junk)
+        assert anchor_out is None and error, junk
+    # An anchor too large to round-trip yields no cursor rather than a broken one.
+    assert _encode_transcript_cursor({"blob": "x" * 5_000}) == ""
+    assert _encode_transcript_cursor(None) == ""
+    assert _encode_transcript_cursor({"bad": {1, 2}}) == ""
+
+
+async def test_read_transcript_reports_truncation_and_offers_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The defect this pins produced a wrong-looking assistant, not a crash.
+
+    A message cut to its first 2000 characters with no marker is
+    indistinguishable from a short one, so the model answered from the visible
+    part of an audit's recommendations and then proposed writing to the agent to
+    ask it to restate them - which is what a reader does when its source stops
+    mid-sentence (2026-08-23).
+    """
+    from swe_mux.assistant import TRANSCRIPT_TEXT_CHARS
+
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        transcript = tmp_path / "conversation.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+        service.sessions.sessions["s1"].transcript_path = transcript
+        long_text = "R" * (TRANSCRIPT_TEXT_CHARS + 1_500)
+
+        def page(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "messages": [
+                    {"role": "assistant", "text": long_text},
+                    {"role": "user", "text": "ok"},
+                ],
+                "has_more": True,
+                "next_anchor": {"_source_start": 7},
+                "abandoned_messages": 2,
+            }
+
+        monkeypatch.setattr("swe_mux.assistant.transcript_message_page", page)
+        result = await service._run_tool("d", "t", "read_transcript", {"session": "backend agent"})
+
+        cut, whole = result["messages"]
+        assert cut["truncated"] is True
+        assert cut["total_chars"] == len(long_text)
+        assert len(cut["text"]) == TRANSCRIPT_TEXT_CHARS
+        # A message that fits carries no marker, so "truncated" is evidence
+        # rather than decoration.
+        assert "truncated" not in whole
+        # And the conversation's own bounds are surfaced instead of discarded.
+        assert result["has_more"] is True
+        assert result["next_before"]
+        assert result["abandoned_messages"] == 2
+    finally:
+        service.store.close()
+
+
+async def test_read_transcript_can_be_asked_for_more_of_a_cut_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from swe_mux.assistant import TRANSCRIPT_TEXT_CHARS, TRANSCRIPT_TEXT_MAX_CHARS
+
+    service, _emitted, _queue, _effects = make_service(tmp_path)
+    try:
+        transcript = tmp_path / "conversation.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+        service.sessions.sessions["s1"].transcript_path = transcript
+        long_text = "R" * (TRANSCRIPT_TEXT_CHARS + 1_500)
+        seen: dict[str, Any] = {}
+
+        def page(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+            seen.update(kwargs)
+            return {"messages": [{"role": "assistant", "text": long_text}], "has_more": False}
+
+        monkeypatch.setattr("swe_mux.assistant.transcript_message_page", page)
+        result = await service._run_tool(
+            "d", "t", "read_transcript",
+            {"session": "backend agent", "chars": TRANSCRIPT_TEXT_MAX_CHARS},
+        )
+        assert result["messages"][0]["text"] == long_text
+        assert "truncated" not in result["messages"][0]
+        # Beyond the ceiling is clamped, never honoured: this text crosses the
+        # model's context, and an unbounded read is the other way to wedge a turn.
+        clamped = await service._run_tool(
+            "d", "t", "read_transcript", {"session": "backend agent", "chars": 10**9}
+        )
+        assert len(clamped["messages"][0]["text"]) <= TRANSCRIPT_TEXT_MAX_CHARS
+
+        # A cursor reaches the reader rather than being dropped on the floor.
+        await service._run_tool(
+            "d", "t", "read_transcript",
+            {"session": "backend agent", "before": '{"_source_start":7}'},
+        )
+        assert seen.get("anchor") == {"_source_start": 7}
+
+        refused = await service._run_tool(
+            "d", "t", "read_transcript", {"session": "backend agent", "before": "garbage"}
+        )
+        assert "before" in refused.get("error", "")
+    finally:
+        service.store.close()

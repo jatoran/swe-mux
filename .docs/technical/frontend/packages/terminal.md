@@ -5,7 +5,7 @@ Design: `../../../design/features/terminal-input.md`.
 
 ## Terminal viewport
 
-`TerminalPane.tsx`, `terminalInputDiagnostics.ts`, `terminalCaretPlacement.ts`, `composerText.ts`,
+`TerminalPane.tsx`, `terminalInputDiagnostics.ts`, `pasteTrace.ts`, `terminalCaretPlacement.ts`, `composerText.ts`,
 `composerInsertion.ts`,
 `railKeyRepeat.ts`, `RailRepeatKey.tsx`, `railPadGesture.ts`, `RailPad.tsx`, `railModifiers.ts`,
 `terminalAttachments.ts`, `terminalProtocol.ts`,
@@ -29,6 +29,10 @@ Design: `../../../design/features/terminal-input.md`.
 `mobileInput.ts` is the touch-gesture arithmetic: drag target, cell/word/selection geometry, explicit sensitivity scaling, linear scroll conversion with `terminalScrollSteps` carrying the sub-row remainder, and application-scroll conversion driven by the harness registry's rows-per-report and minimum-report-interval profile.
 
 `terminalInputDiagnostics.ts` owns content-free physical-input sequence correlation, bounded pending probes, native-event clock normalization, input-to-ack and input-to-render stage arithmetic, and the one shared browser main-thread stall clock.
+
+`pasteTrace.ts` is the paste-trace instrument: the pure payload summary (codepoint count, bracketed-wrapper detection, bounded head/tail excerpt, position-flagged non-printable-ASCII codepoints) and the pure composer snapshot (cursor, `ComposerRegion`, bounded region row text) recorded before a paste and again after its echo settles.
+It fires for every paste into a backend `composerRegionForBackend` can read, recognizing a paste by the native event source or by the bracketed wrapper alone so button- and voice-driven pastes are caught too.
+Unlike `terminalInputDiagnostics.ts` it deliberately carries bounded pasted content - an invisible codepoint in the payload is the diagnosis it exists for - so its report persists as the separate `terminal_paste_trace` event type (`../../../design/features/terminal-input.md`).
 
 `terminalCaretPlacement.ts` is the tap-routing and caret-steering arithmetic, and the single declared home for per-harness caret deviations.
 Routing keys on the terminal's **measured mouse mode** rather than on a harness name, so any application that negotiated tracking is handed a forwarded touch tap and positions its own caret.

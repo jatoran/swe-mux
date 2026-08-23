@@ -20,6 +20,34 @@ Asked for something that is coding, it routes: queue a message to an existing se
   `NON_OVERRIDABLE_REASONS` and the approval floor therefore bind structurally, not by prompt.
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
   - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
+    **A read executing silently still has to be bounded.** `search_history` scans the whole
+    archive and holds the single history executor thread while it does, so an unbounded one
+    starves every other history read: measured 2026-08-23 on a 2.79 GB database, minutes of
+    pinned thread with `/api/sessions` timing out while `/api/health` still answered instantly -
+    the event loop was fine, the database thread was not. It now runs under a wall-clock budget
+    (`ASSISTANT_HISTORY_SEARCH_BUDGET_MS`) enforced *inside* SQLite by a progress handler, which
+    is the only lever that reaches a statement already running; exceeding it returns a tool
+    result the model can narrow and retry from, never a raised turn. An empty query is refused
+    outright rather than bounded, because there is no useful answer to narrow towards. The tool
+    description says what the tool is *for* - locating a conversation you cannot already name -
+    because the incident began with "summarize the audit session's latest response" becoming a
+    full-archive search instead of a `read_transcript` on the session the operator had named.
+
+    **A bounded read says that it is bounded.** `read_transcript` used to cut every message to
+    2000 characters and drop the page's own `has_more`, both silently, so the model could not
+    tell a whole message from the front of one, could not know older messages existed, and had
+    no parameter to ask for either. That is not a smaller answer, it is an answer the reader
+    cannot calibrate: observed 2026-08-23, an audit's final recommendations were cut mid-list,
+    the assistant summarized the visible part, and then proposed *writing to the agent* to ask it
+    to restate them - which is exactly what a reader does when its source stops mid-sentence.
+    A cut message now carries `truncated` and `total_chars`, `has_more`/`next_before`/
+    `abandoned_messages` are surfaced, and `chars` (up to `TRANSCRIPT_TEXT_MAX_CHARS`) and
+    `before` let the model act on both. The cursor is the page's own anchor round-tripped as an
+    opaque string rather than an index, because an index drifts the moment a live conversation
+    grows between two reads; a `before` that is present but unusable is an error rather than a
+    silent fall back to the newest page, which would loop the model through one page while it
+    believed it was paging backwards. `search_history` marks its cut summaries the same way,
+    where the remedy is to read the session it names rather than to ask for more characters.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
   - *reversible* (queue an inert draft, write to a project note — `write_project_note`, below — spawn a session, create a project (`create_project`, below), or stage unsent composer text with `type_into_session`): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
   - *consequential* (armed send, interrupt, end session, `submit_session_composer` — pressing Enter on staged composer text is a send — and `run_project_action`, because a build or a deploy is not taken back): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
