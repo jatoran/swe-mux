@@ -79,8 +79,8 @@ TITLE_SYSTEM_PROMPT = (
     "summary) for THIS run only. Keep the current title UNCHANGED unless the run's "
     "subject has materially changed. When in doubt, return the current title "
     "verbatim - 'no change' is the common, correct answer. Prefer broadening the "
-    "existing handle over inventing a new one (for example 'Phase 7' becomes "
-    "'Phase 7 + diagnostics' once the scope widens). Emit a compact task label of "
+    "existing handle over inventing a new one (for example 'auth refactor' becomes "
+    "'auth refactor + tests' once the scope widens). Emit a compact task label of "
     "2-5 words. Never prefix with Terminal Session, Session, Claude, Codex, User, "
     "or Conversation. Return only the schema."
 )
