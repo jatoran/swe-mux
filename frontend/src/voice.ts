@@ -265,7 +265,14 @@ export function enqueueRequestedStreamClip(clipId:string,streamId:string,index:n
   const request=requestedStreams.get(streamId)
   if(!request||suppressedStreams.has(streamId))return
   const item:QueueItem={clipId,streamId,sessionId:request.sessionId,origin:request.origin}
-  if(currentClipId===clipId)return
+  // Whether this segment ends the stream is decided once, and applied on BOTH
+  // exits. It used to be evaluated only after the dedupe return below, so a
+  // segment the POST response had already started playing left the claim behind
+  // and one the event reached first released it — the same stream ending in two
+  // different states depending on which of two network round trips won.
+  const closing=count>0&&index>=count-1
+  const release=()=>{if(closing)requestedStreams.delete(streamId)}
+  if(currentClipId===clipId){release();return}
   // Busy means "a clip is loaded and has not finished", not "audio is audible":
   // between assigning src and the `play` event, `state.playing` is false while
   // the element is very much occupied, and a clip started there would replace
@@ -273,7 +280,36 @@ export function enqueueRequestedStreamClip(clipId:string,streamId:string,index:n
   // window is hit often enough to swallow whole sentences.
   if(playbackBusy())queue.push(item)
   else void playQueuedClip(item).catch(()=>{})
-  if(count>0&&index>=count-1)requestedStreams.delete(streamId)
+  release()
+}
+
+/**
+ * Segment position from a `voice_clip_ready` payload, preserving "still open".
+ *
+ * The whole contract of `enqueueRequestedStreamClip` rests on `count === 0`
+ * meaning "this stream is still open", and the daemon says so explicitly:
+ * `voice.py` emits `count=len(segments) if final else 0`. Reading that payload
+ * with `Number(payload.segment_count||1)` turned every open stream into a
+ * one-segment stream, which released the claim after the opening sentence — and
+ * because `assistantSpeech.ts` gates each further sentence on that same claim,
+ * the client then stopped POSTing the rest of the reply for synthesis at all.
+ * Ten of thirty-four assistant streams in the field log died that way, every one
+ * of them with `appends=0`.
+ *
+ * Pure and exported so the *seam* is tested, not just the function it feeds:
+ * `enqueueRequestedStreamClip` always handled 0 correctly and had a test saying
+ * so, while the one line that built its arguments had none.
+ */
+export function segmentPosition(payload:{segment_index?:unknown;segment_count?:unknown}):{index:number;count:number}{
+  // A missing or unparseable field reads as 0, which means "open" for the count
+  // and "first" for the index. Both are the safe direction: a claim held too
+  // long is released by `voice_stream_closed`, while one released too early
+  // silences the rest of the reply with nothing to say it went wrong.
+  const read=(value:unknown):number=>{
+    const parsed=Number(value)
+    return Number.isFinite(parsed)&&parsed>0?Math.floor(parsed):0
+  }
+  return {index:read(payload.segment_index),count:read(payload.segment_count)}
 }
 
 function playbackBusy():boolean{

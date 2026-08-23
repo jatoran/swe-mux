@@ -215,7 +215,19 @@ function append(turn: Speech, speech: string): Promise<void> {
     // that stops the assistant talking — barge-in, releasing the microphone,
     // read aloud switched off — cuts the claim, and continuing to post text
     // into a stream nobody will play just spends synthesis on silence.
-    if (!requestedStreamActive(turn.streamId)) { turn.closed = true; return }
+    if (!requestedStreamActive(turn.streamId)) {
+      turn.closed = true
+      // Seal it rather than abandoning it. `retire` short-circuits on a turn
+      // that is already closed, so without this the daemon keeps an open stream
+      // with no producer until its idle drop, and — because a stream is only
+      // joined when it closes — the sentences it DID synthesize never become one
+      // clip. That is the difference between "cut off, but replayable from the
+      // talk tab" and "cut off, and the audio is scattered across loose
+      // segments". Fire-and-forget: `closeStream` swallows its own failures, and
+      // nothing here is waiting on the answer.
+      if (turn.opened) void closeStream(turn.streamId)
+      return
+    }
     if (!turn.opened) {
       const clip = await api<VoiceClip>('POST', '/api/voice/speak', {
         text: speech, stream_id: turn.streamId, final: false,

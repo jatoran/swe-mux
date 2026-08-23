@@ -129,7 +129,7 @@ import { resolveVoiceFuzzy } from './voiceFuzzy'
 import { planUiCommand } from './uiCommand'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playAllHeldClips, playClipGroup, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playAllHeldClips, playClipGroup, segmentPosition, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
@@ -2204,7 +2204,11 @@ export function App() {
             const autoAllowed = eventSession ? eventSession.voice_mode !== 'off' : true
             if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
             if(!isReplay&&event.type==='voice_clip_ready'&&event.payload?.trigger!=='auto'&&clipId&&event.payload?.stream_id){
-              enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
+              // `segmentPosition`, never an inline coercion: `count === 0` means
+              // "this stream is still open", and `||1` read that as "the last of
+              // one" and hung up on the reply after its first sentence.
+              const {index,count}=segmentPosition(event.payload)
+              enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),index,count)
             }
           }
           // The producer finished an open stream. Clips already queued still

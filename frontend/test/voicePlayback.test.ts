@@ -178,6 +178,47 @@ test('an open stream keeps accepting segments until its count is known',async()=
   voice.bargeInPlayback()
 })
 
+test('an open stream reads as open through the event payload, not just the function',()=>{
+  // The regression this pins cost ten of thirty-four assistant replies in the
+  // field log, every one with `appends=0`: the daemon sends `segment_count: 0`
+  // for "still open", `Number(payload.segment_count||1)` turned that into 1, the
+  // claim was released after sentence one, and `assistantSpeech.ts` — which
+  // gates every further sentence on that claim — stopped POSTing the rest of the
+  // reply for synthesis at all. The test above proved the FUNCTION handled 0.
+  // Nothing proved the one line that built its arguments did.
+  assert.deepEqual(voice.segmentPosition({segment_index:0,segment_count:0}),{index:0,count:0})
+  assert.deepEqual(voice.segmentPosition({segment_index:2,segment_count:4}),{index:2,count:4})
+  // Absent, null, and junk all read as "open" and "first", which is the safe
+  // direction: a claim held too long is released by `voice_stream_closed`, one
+  // released too early silences the reply with nothing to say it went wrong.
+  assert.deepEqual(voice.segmentPosition({}),{index:0,count:0})
+  assert.deepEqual(voice.segmentPosition({segment_index:null,segment_count:undefined}),{index:0,count:0})
+  assert.deepEqual(voice.segmentPosition({segment_index:'x',segment_count:Number.NaN}),{index:0,count:0})
+  assert.deepEqual(voice.segmentPosition({segment_index:-3,segment_count:-1}),{index:0,count:0})
+  assert.deepEqual(voice.segmentPosition({segment_index:'1',segment_count:'2'}),{index:1,count:2})
+})
+
+test('the closing segment releases the claim whichever arrives first',async()=>{
+  // The event and the POST response race, and the response path plays the clip
+  // itself. The release used to sit below the dedupe return, so a closing
+  // segment the response had already started left the stream claimed while the
+  // same segment arriving as an event released it.
+  // Every id in this file is distinct on purpose: the playback module keeps its
+  // claim and suppression sets across tests, so a reused stream arrives already
+  // suppressed by whichever test barged in on it last.
+  const stream='99999999-9999-4999-8999-999999999999'
+  voice.beginRequestedStream(stream,'system','system')
+  await voice.playRequestedStreamFirst('race-1',stream,'system','system')
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'race-1')
+  assert.equal(voice.requestedStreamActive(stream),true,'an opening segment must not end the stream')
+  // The event for the clip already playing. It is the closing one, so the claim
+  // has to go even though there is nothing left to enqueue.
+  voice.enqueueRequestedStreamClip('race-1',stream,0,1)
+  assert.equal(voice.requestedStreamActive(stream),false,'the closing segment releases the claim on the dedupe path too')
+  voice.bargeInPlayback()
+})
+
 test('closing a stream releases the claim without cutting queued audio',async()=>{
   const stream='33333333-3333-4333-8333-333333333333'
   voice.beginRequestedStream(stream,'system','system')

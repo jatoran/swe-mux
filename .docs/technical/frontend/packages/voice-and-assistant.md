@@ -65,6 +65,11 @@ A park never submits itself, which is what makes a hold loop impossible rather t
 `ConversationControl.tsx` publishes that provisional reading from `speculate` - the decode already ran at 160 ms of silence and its text was previously discarded for anything that was not a command - and clears it via `settleProvisional` the moment the accurate transcript lands, which is what stops one breath being printed twice.
 `AssistantPanel.tsx` renders the row through its existing `pendingSpeech` bubble plus a `pendingSpeechNote` header; the row is deliberately not a dialog message, so nothing has to be deleted from the transcript when the real turn arrives.
 
+`voice.ts` owns stream playback, and `segmentPosition` is the pure mapping from a `voice_clip_ready` payload to `(index, count)`.
+It exists because `count == 0` means "this stream is still open" and an inline `Number(payload.segment_count || 1)` in `App.tsx` turned that into 1, releasing the stream's claim after the opening sentence.
+That claim is also what `assistantSpeech.ts` checks before posting each further sentence, so the mis-read stopped the reply being synthesized at all - 10 of 34 assistant streams in the field log, every one with `appends=0`.
+The function it feeds always handled 0 and had a test proving it; the seam that built its arguments had none, which is why the mapping is now a named, exported, tested function rather than an expression at the call site.
+
 `smartTurnFeatures.ts` and `smartTurn.ts` are an experiment, imported only by `smartTurnLab.tsx` behind the dev-server-only `frontend/smart-turn-lab.html`, and by `scripts/smart-turn-bench.mts`.
 They port HuggingFace's `WhisperFeatureExtractor(chunk_length=8)` to TypeScript (Bluestein DFT included, because Whisper's 400-point frame is not a power of two) and run pipecat-ai's Smart Turn v3 over onnxruntime-web.
 The weights are fetched by `tools/fetch_smart_turn.py` into `frontend/models/` - deliberately not `frontend/public/`, which vite copies wholesale into `src/swe_mux/static` and would add 8.7 MB to the frozen desktop bundle for a page production never builds.

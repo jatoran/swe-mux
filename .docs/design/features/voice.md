@@ -300,6 +300,26 @@ install-wide, so the tab edits them directly for the focused session.
   the number of segments actually emitted - including a failing one, which is a row and
   carries the error - so a clip settles instead of waiting forever for segments nobody is
   making.
+  **`count == 0` means open, and reading it as "the last of one" truncates the reply.**
+  `enqueueRequestedStreamClip` releases the stream's claim on `count > 0 && index >= count - 1`,
+  and the claim is what `assistantSpeech.ts` checks before posting each further sentence - so
+  mis-reading an open stream does not merely stop playback, it stops the client sending the rest
+  of the reply for synthesis at all, leaving the daemon with an unclosed stream that is never
+  joined. `App.tsx` read the payload as `Number(segment_count || 1)`, which turns 0 into 1;
+  measured in the field log, **10 of 34 assistant streams died this way, every one with
+  `appends=0`** - opened, spoke sentence one, then nothing, no join and no close. It presented as
+  "it reads the first part and stops", intermittently, because the release only happened when the
+  `voice_clip_ready` event beat the `POST` response that re-claims the stream.
+  The mapping now goes through `segmentPosition` (`voice.ts`, pure and unit-tested) rather than an
+  inline coercion. The lesson is the seam, not the operator: `enqueueRequestedStreamClip` always
+  handled 0 correctly *and had a test saying so* - the untested thing was the one line that built
+  its arguments.
+  Two hardenings went with it. The claim release is now decided before the "already playing"
+  early return and applied on both exits, so which of the event and the response arrives first
+  cannot change whether a stream stays claimed. And when a claim is lost for a legitimate reason
+  (barge-in, read aloud switched off), the client now **closes** the stream instead of abandoning
+  it - a stream is only joined when it closes, so an abandoned one leaves the sentences it did
+  synthesize scattered across loose segments rather than as one clip the operator can replay.
   Ordering is the invariant the type exists to hold - exactly one worker task drains one FIFO
   per stream, so clip indices are monotonic however the appends arrive. Two appends synthesizing
   concurrently would emit out of order whenever the shorter finished first, and the browser plays

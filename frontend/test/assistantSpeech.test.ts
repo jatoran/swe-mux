@@ -105,11 +105,20 @@ test('barge-in stops the turn from posting any more of itself', async () => {
   reset()
   speech.beginTurnSpeech('turn-2')
   await speech.speakTurnText('turn-2', 'First sentence.')
-  const posted = calls.length
+  const spoken = () => calls.filter(call => call.text.trim()).length
+  const posted = spoken()
   voice.bargeInPlayback()
   await speech.speakTurnText('turn-2', 'Second sentence.')
   await speech.speakTurnText('turn-2', 'Third sentence.')
-  assert.equal(calls.length, posted, 'nothing further may be sent for synthesis')
+  assert.equal(spoken(), posted, 'no further TEXT may be sent for synthesis')
+  // Counted on text rather than on calls, because the cut stream still has to be
+  // sealed: a stream is only joined when it closes, so abandoning it would leave
+  // the sentences already synthesized scattered across loose segments instead of
+  // one clip the operator can replay from the talk tab.
+  assert.ok(
+    calls.some(call => !call.text.trim() && call.final && call.stream_id),
+    'the abandoned stream must be closed, not left open on the daemon',
+  )
 })
 
 test('a new turn supersedes the reply the operator moved on from', async () => {
