@@ -111,6 +111,11 @@ CONTEXT_ACTION_LIMIT = 12
 # Streamed text is released at a sentence boundary, or at this many characters
 # when the model writes prose that never reaches one.
 STREAM_SENTENCE_MAX_CHARS = 220
+# The opening sentence is coalesced with the ones after it until it reaches this,
+# because a clip shorter than roughly twelve characters finishes playing before
+# the next one can be synthesized (see `_SentenceStreamer`). Forty is the
+# measured point where a clip buys about 1.8x the audio its successor costs.
+MIN_FIRST_SENTENCE_CHARS = 40
 _STREAM_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 # How much of one transcript message a read returns by default, and the ceiling a
 # caller may raise it to for a message it has been told was cut. The default is
@@ -937,26 +942,53 @@ class _SentenceStreamer:
     "3.5" and "e.g." from being cut mid-token. `STREAM_SENTENCE_MAX_CHARS` is the
     backstop for prose that never punctuates: it bounds how long the first sound
     can be delayed, which is the whole point of streaming.
+
+    **The opening sentence has a floor as well as a ceiling.** A reply that opens
+    "Yes." used to be released on its own, and a clip that short cannot pay for
+    the one behind it: measured on this hardware, synthesis costs about
+    480 ms of fixed overhead plus 26 ms per character while speech plays at
+    roughly 15 characters per second, so a three-character clip buys 200 ms of
+    audio for 578 ms of work - it has finished speaking before its successor can
+    exist. Break-even is around twelve characters and a comfortable margin is
+    around forty, so leading sentences are coalesced up to
+    `MIN_FIRST_SENTENCE_CHARS` before the first one is released. It costs a
+    little more silence before the first word and removes the stall right after
+    it, which is the better trade: the operator reaches the actual content no
+    later either way, and it stops sounding broken.
     """
 
     def __init__(self, emit: Callable[[str], Awaitable[None]]) -> None:
         self._emit = emit
         self.buffer = ""
         self.emitted = False
+        # Where to resume looking for a boundary. Non-zero only while a too-short
+        # opening is being held: the text before it stays in the buffer, so the
+        # scan has to start past the boundary already rejected rather than find
+        # it again forever.
+        self._scan_from = 0
 
     async def feed(self, delta: str) -> None:
         self.buffer += delta
         # unsupervised-loop-ok: drains one buffer of already-received text and
         # shrinks it on every pass; bounded by the delta just appended.
         while True:
-            match = _STREAM_SENTENCE_BREAK.search(self.buffer)
+            match = _STREAM_SENTENCE_BREAK.search(self.buffer, self._scan_from)
             if match is not None:
-                head, self.buffer = self.buffer[: match.start()], self.buffer[match.end():]
+                head = self.buffer[: match.start()]
+                if not self.emitted and len(head.strip()) < MIN_FIRST_SENTENCE_CHARS:
+                    # Too short to lead. Keep it and take the next sentence with
+                    # it. The character backstop below still bounds the wait, and
+                    # `flush` still speaks it alone if the model stops here.
+                    self._scan_from = match.end()
+                    continue
+                self.buffer = self.buffer[match.end():]
+                self._scan_from = 0
             elif len(self.buffer) >= STREAM_SENTENCE_MAX_CHARS:
                 cut = self.buffer.rfind(" ", 0, STREAM_SENTENCE_MAX_CHARS)
                 if cut <= 0:
                     return
                 head, self.buffer = self.buffer[:cut], self.buffer[cut:].lstrip()
+                self._scan_from = 0
             else:
                 return
             head = head.strip()
@@ -968,6 +1000,7 @@ class _SentenceStreamer:
         """Release the unterminated tail once the model has stopped writing."""
         tail = self.buffer.strip()
         self.buffer = ""
+        self._scan_from = 0
         if tail:
             self.emitted = True
             await self._emit(tail)

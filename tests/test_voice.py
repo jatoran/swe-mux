@@ -2258,3 +2258,52 @@ def test_join_refuses_segments_that_do_not_share_an_audio_profile(tmp_path: Path
     broken.write_bytes(b"ID3 not audio")
     assert join_wav_files([first, broken], destination) is False
 
+
+def test_no_clip_is_short_enough_to_stall_the_one_behind_it() -> None:
+    """A runt final clip is the one place greedy chunking always leaves one.
+
+    Measured on the primary host: synthesis costs ~480 ms fixed plus ~26 ms per
+    character while speech plays at ~15 chars/sec, so a clip must be longer than
+    about twelve characters to still be playing when its successor is ready. The
+    remainder of a greedy split is routinely two words, and it lands on the last
+    thing the operator hears - a stutter on the way out rather than a pause in
+    the middle.
+    """
+    from swe_mux.voice import MIN_SEGMENT_CHARS
+
+    # Long enough to leave several chunks, with a couple of words spilling past
+    # the last bound - which is where greedy chunking always puts its runt.
+    text = ("word " * 72).strip() + " tail end"
+    chunks = streaming_segments(text, max_chars=120)
+    assert len(chunks) >= 2
+    assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), chunks
+    assert " ".join(chunks) == " ".join(text.split()), "merging must not lose a word"
+
+
+def test_merging_a_runt_tail_may_exceed_the_bound_on_purpose() -> None:
+    # The bound exists to keep synthesis covered by the clip playing ahead of it.
+    # By the last clip there is nothing left to cover, so a slightly long final
+    # clip is strictly better than one that stalls.
+    from swe_mux.voice import _merge_short_tail
+
+    merged = _merge_short_tail(["a" * 100, "b" * 5])
+    assert merged == ["a" * 100 + " " + "b" * 5]
+    # A tail that can stand on its own is left alone.
+    standalone = ["a" * 100, "b" * 60]
+    assert _merge_short_tail(standalone) == standalone
+    # Nothing to merge into, so a lone short clip survives: it is the whole reply.
+    assert _merge_short_tail(["hi"]) == ["hi"]
+    assert _merge_short_tail([]) == []
+
+
+def test_the_opening_clip_halved_its_silence_without_going_under_the_floor() -> None:
+    """140 characters measured 4.1 s to first sound; 60 measures 2.0 s.
+
+    The floor matters as much as the ceiling: at 60 characters the opening clip
+    buys ~4.0 s of audio against the ~2 s its successor needs, so nothing stalls
+    behind it. Dropping it further would start the reply sooner and then stall.
+    """
+    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+
+    assert APPLICATION_FIRST_SEGMENT_CHARS == 60
+    assert APPLICATION_FIRST_SEGMENT_CHARS >= MIN_SEGMENT_CHARS
