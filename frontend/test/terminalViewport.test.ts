@@ -24,6 +24,7 @@ import {
   createSurfaceRepairScheduler,
   createViewportScheduler,
   effectiveViewportCost,
+  inputResetsAppTail,
   redrawVisibleTerminal,
   refitVisibleTerminal,
   reflowVisibleTerminalRenderer,
@@ -455,6 +456,36 @@ test('the application-tail estimate banks nothing past the tail and ignores a re
   // A pane with no measurable row still has to mean something by "scrolled".
   assert.equal(appOffTailByDistance(0, 0), false)
   assert.equal(appOffTailByDistance(1, 0), true)
+})
+
+// The estimate's blind spot, and the one people meet every day: a submitted prompt moves the
+// application's viewport with no gesture to total, so a chip raised by reading back survived
+// the send that had already answered it.
+test('a submission drops the application-tail estimate, and a composer newline does not', () => {
+  assert.equal(inputResetsAppTail('claude', '\r'), true)
+  assert.equal(inputResetsAppTail('claude', 'ship it\r'), true)
+  // Alt+Enter keeps the composer open, which is the whole reason the harness declares it -
+  // and it is the one CR the pane must not read as a send.
+  assert.equal(inputResetsAppTail('claude', '\x1b\r'), false)
+  assert.equal(inputResetsAppTail('claude', 'first line\x1b\rsecond line'), false)
+  // Typing is not a submission until it is submitted.
+  assert.equal(inputResetsAppTail('claude', 'ship it'), false)
+  assert.equal(inputResetsAppTail('claude', ''), false)
+  // Newlines inside a paste are text on a harness whose paste does not submit.
+  assert.equal(inputResetsAppTail('claude', '\x1b[200~one\rtwo\x1b[201~'), false)
+  // A trailing CR after that paste still is one.
+  assert.equal(inputResetsAppTail('claude', '\x1b[200~one\rtwo\x1b[201~\r'), true)
+  // Wheel reports carry no CR at all, so the pacer's traffic can never look like a send.
+  assert.equal(inputResetsAppTail('claude', '\x1b[<64;40;12M'.repeat(8)), false)
+})
+
+test('an undeclared harness keeps the estimate it always kept', () => {
+  // Codex owns no viewport of its own and its composer is unmeasured for this, so nothing
+  // it types may take a chip down: the reader would be left scrolled up with no way back.
+  assert.equal(inputResetsAppTail('codex', '\r'), false)
+  assert.equal(inputResetsAppTail('shell', '\r'), false)
+  assert.equal(inputResetsAppTail(undefined, '\r'), false)
+  assert.equal(inputResetsAppTail('a-harness-this-build-never-heard-of', '\r'), false)
 })
 
 // --- Adaptive viewport scheduling -------------------------------------------

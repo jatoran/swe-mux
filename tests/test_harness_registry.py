@@ -480,6 +480,7 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         "min_desktop_columns",
         "suppresses_late_color_response",
         "touch_scroll_rows_per_report",
+        "app_tail_reset",
     }
     for name, harness in HARNESSES.items():
         item = items[name]
@@ -487,6 +488,23 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         assert item["cli_name"] == harness.script_base_name
         assert item["resume_argv"] == list(harness.resume_argv)
         assert item["skill_invocation_prefix"] == harness.skill_invocation_prefix
+
+
+def test_a_tail_reset_is_declared_only_as_far_as_it_was_measured() -> None:
+    """The browser tracks an application's viewport by dead reckoning, so what puts
+    that viewport back on its newest output has to be declared here.
+
+    Claude is `submit` because a submitted prompt demonstrably makes its transcript
+    follow the newest output, while nothing has established that an ordinary keystroke
+    does - and the two errors are not symmetric. Declaring too little leaves a chip up
+    over a viewport already on its tail, which one tap answers; declaring too much
+    takes the chip away from a reader who is still scrolled up, leaving them with no
+    way back but the rail. `none` is what an unmeasured harness gets.
+    """
+    legal = {"none", "submit", "input"}
+    for name, harness in HARNESSES.items():
+        assert harness.app_tail_reset in legal, name
+    assert HARNESSES["claude"].app_tail_reset == "submit"
 
 
 def test_conversation_id_argv_is_declared_rather_than_matched() -> None:
