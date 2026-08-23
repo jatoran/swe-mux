@@ -46,6 +46,7 @@ from swe_mux.voice import (
     streaming_segments,
 )
 from swe_mux.voice_audio import join_wav_files, wav_profile
+from tests.support.settle import until
 
 
 # Real transcript records rather than stubbed slices. What voice speaks is now
@@ -898,6 +899,21 @@ def stream_events(emitted: list[MuxEvent], stream_id: str) -> list[MuxEvent]:
     ]
 
 
+async def stream_reaches(emitted: list[MuxEvent], stream_id: str, kind: str) -> None:
+    """Wait for an event the speech task emits after the caller's turn returns.
+
+    Synthesis runs off the request, so every assertion about what a stream
+    emitted is waiting on a background task. A fixed sleep here bets that the
+    loop reaches that task inside the window, and a worker sharing the host with
+    fifteen others loses the bet - reddening the gate over machine load rather
+    than over voice (`tests/support/settle.py`).
+    """
+    await until(
+        lambda: any(event.type == kind for event in stream_events(emitted, stream_id)),
+        what=f"a {kind} event for stream {stream_id}",
+    )
+
+
 async def test_an_open_speech_stream_appends_in_order_and_closes(tmp_path: Path) -> None:
     # The assistant speaks a turn sentence by sentence, so the stream's length is
     # unknown while it runs: segments carry count 0 until the closing one, which
@@ -918,7 +934,7 @@ async def test_an_open_speech_stream_appends_in_order_and_closes(tmp_path: Path)
         await service.speak(
             "Third sentence.", stream_id=stream, continue_stream=True, final=True
         )
-        await asyncio.sleep(0.05)
+        await stream_reaches(emitted, stream, "voice_stream_closed")
         assert spoken == ["Opening sentence.", "Second sentence.", "Third sentence."]
         events = stream_events(emitted, stream)
         clips = [event for event in events if event.type == "voice_clip_ready"]
@@ -941,7 +957,7 @@ async def test_an_open_stream_closes_with_nothing_left_to_say(tmp_path: Path) ->
     stream = "22222222-2222-4222-8222-222222222222"
     try:
         await service.speak("Working on it.", stream_id=stream, final=False)
-        await asyncio.sleep(0.05)
+        await stream_reaches(emitted, stream, "voice_clip_ready")
         closed = await service.close_speech_stream(stream)
         assert closed == {
             "stream_id": stream, "closed": True, "known": True, "segment_count": 1
@@ -954,12 +970,12 @@ async def test_an_open_stream_closes_with_nothing_left_to_say(tmp_path: Path) ->
 
 
 async def test_appending_to_a_closed_stream_is_refused(tmp_path: Path) -> None:
-    service, _events, _emitted, _record = make_service(tmp_path)
+    service, _events, emitted, _record = make_service(tmp_path)
     patch_engine(service)
     stream = "33333333-3333-4333-8333-333333333333"
     try:
         await service.speak("All done.", stream_id=stream, final=True)
-        await asyncio.sleep(0.05)
+        await stream_reaches(emitted, stream, "voice_stream_closed")
         with pytest.raises(VoiceError, match="closed"):
             await service.speak(
                 "Late text.", stream_id=stream, continue_stream=True, final=True
@@ -982,7 +998,7 @@ async def test_a_failed_segment_ends_its_stream_rather_than_reordering_it(
         await service.speak(
             "Second.", stream_id=stream, continue_stream=True, final=False
         )
-        await asyncio.sleep(0.05)
+        await stream_reaches(emitted, stream, "voice_stream_closed")
         closed = [
             event for event in stream_events(emitted, stream)
             if event.type == "voice_stream_closed"
