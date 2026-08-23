@@ -1471,14 +1471,27 @@ Its rules, and what each one is defending:
   touch event.
   The total is clamped at zero because the application clamps at its own tail: banking credit
   for scrolls that moved nothing would delay the next chip by exactly that credit.
-- The estimate is reset outright, rather than spent down, by the four events that make it
+- The estimate is reset outright, rather than spent down, by the five events that make it
   meaningless: taking the jump, the Action rail's `^End`, a session switch in a reused pane,
-  and an alternate-screen switch (the application that owned the tracked viewport starting or
-  exiting, after which `offTail` answers for whatever replaced it).
+  an alternate-screen switch (the application that owned the tracked viewport starting or
+  exiting, after which `offTail` answers for whatever replaced it), and a **submission** to a
+  harness declaring `app_tail_reset` (`features/backends.md`).
+  The submission is the one of the five that is not about the pane at all.
+  Sending a prompt moves the application's own viewport to its newest output with nothing
+  forwarded for the pane to total, so the running estimate describes a position the reader has
+  already left - which is what kept a chip up over a viewport sitting exactly where its own tap
+  would have sent them, on the most common thing anyone does after reading back.
+  It is decided by `inputResetsAppTail` at the single `onData` chokepoint, beside the peek
+  pan's identical reset, and reads the harness's declaration rather than the harness's name.
+  Three things are deliberately not submissions: the declared `composer_newline`, which is the
+  one CR-bearing sequence that keeps a composer open and is what a phone's Enter key sends; the
+  payload of a bracketed paste, except the leading newline on a harness declaring
+  `paste_leading_newline_submits`; and anything at all on a harness declaring `none`.
 - Two things pull the estimate off the truth, in opposite directions, and the pane can observe
   neither.
   Dragging past the top of the application's own history totals distance nothing travelled, so
-  a drag that did reach the newest output can leave the chip up, and its tap is the answer.
+  a drag that did reach the newest output can leave the chip up, and its tap is the answer -
+  as is the next submission, which drops the whole overcount rather than spending it.
   Output arriving while the reader is scrolled up moves the tail with no gesture to total, so
   the chip can leave early, and the drag already in progress is the answer - any drag back
   through the history puts it straight back.
@@ -1690,8 +1703,12 @@ Its rules, and what each one is defending:
   Immediately after Up/Down, five editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, copy the composer, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
+  A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because it appeared beside them.
   With nothing to say it renders nothing at all, rather than an empty element holding its own padding: that width belongs to the chips, and the row carrying the readout is the busiest one.
+  It carries the selection readout alone, which is a state and belongs beside the keys that act on it, so most of the time it has nothing to say and the row is all chips.
+  A momentary copy/paste confirmation is not a state and is drawn over the terminal instead (`.terminal-clip-toast`): flush on the rail's top edge, right-aligned with the jump-to-latest cluster, in the terminal's own grid cell so it stacks rather than displaces.
+  It draws *over* the jump-to-latest and peek chips rather than dodging them, because a message that moves depending on which chips happen to be up is harder to read than one that is always in the same place, and it takes no pointer events, so their taps stay theirs.
+  It is mounted only while it has something to say, for the same reason the readout is.
   The strip itself carries no customize gear.
   Every row instead keeps one fixed drawer control outside its scroller, including empty rows and rows whose buttons all fit.
 - **Every row answers overflow twice: it scrolls end to end, and its permanent drawer opens the complete row.**

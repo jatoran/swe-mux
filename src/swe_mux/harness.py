@@ -77,6 +77,22 @@ AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 # is still attached would interleave two writers into one session file.
 BranchStrategy = Literal["transcript_fork", "resume_child_thread"]
 MemoryInventoryKind = Literal["claude_project_markdown", "codex_feature_flag"]
+# What puts a TUI's *own* scroll viewport back on its newest output, for a pane that
+# can only track that viewport by dead reckoning (`trackAppTailDistance`).
+#
+# Scrolling is the only thing the browser can total, because it is the only thing the
+# browser performs. Everything else that moves the application's viewport moves it
+# behind the pane's back, and the estimate then describes a position the reader left -
+# which is what keeps a jump-to-latest chip up over a viewport already on its tail.
+#
+# `submit` is the case that matters and the one that is observable from outside: a
+# submitted prompt appends to the conversation and the CLI follows its own newest
+# output, so the estimate is void the moment a submission is written. `input` is the
+# stronger claim that *any* keystroke does it, and is deliberately not asserted for a
+# harness whose composer has not been measured - it would take the chip down over a
+# viewport that never moved. `none` is the honest answer for a TUI whose scroll
+# behaviour on input is unknown, and it preserves the pre-existing behaviour exactly.
+AppTailReset = Literal["none", "submit", "input"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,6 +493,10 @@ class HarnessDescriptor:
     # Claude Code moves three. A larger multiplier is a measured application-input
     # trait, not something the browser may infer from the harness name.
     touch_scroll_rows_per_report: int
+    # What returns this TUI's own scroll viewport to its newest output, other than the
+    # scroll the browser forwards and can therefore total itself. See
+    # :data:`AppTailReset`; `.docs/design/features/ui.md` carries the chip's rules.
+    app_tail_reset: AppTailReset
     # The key sequence that discards this CLI's *whole* composer.
     #
     # Declared rather than assumed, because the obvious answer is wrong on the
@@ -947,6 +967,11 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=3,
+        # Measured behaviour, and the reason the chip used to outstay the scroll that
+        # raised it: submitting a prompt puts Claude's transcript viewport back on its
+        # newest output with no gesture for the pane to total. Whether an ordinary
+        # keystroke does the same is unmeasured, so this stops at `submit`.
+        app_tail_reset="submit",
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
@@ -1054,6 +1079,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=80,
         suppresses_late_color_response=True,
         touch_scroll_rows_per_report=1,
+        app_tail_reset="none",
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=True,
@@ -1146,6 +1172,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
+        app_tail_reset="none",
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
@@ -1243,6 +1270,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
+        app_tail_reset="none",
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
@@ -1358,6 +1386,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
+        app_tail_reset="none",
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
@@ -2221,6 +2250,7 @@ def public_harness_registry(
                     "min_desktop_columns": harness.min_desktop_columns,
                     "suppresses_late_color_response": harness.suppresses_late_color_response,
                     "touch_scroll_rows_per_report": harness.touch_scroll_rows_per_report,
+                    "app_tail_reset": harness.app_tail_reset,
                 },
             }
             for harness in HARNESSES.values()

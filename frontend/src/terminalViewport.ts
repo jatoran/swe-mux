@@ -1,4 +1,4 @@
-import { appliesWidthEnvelope, minDesktopColumns, ownsScrollViewport } from './harnessRegistry.ts'
+import { appTailReset, appliesWidthEnvelope, composerNewline, minDesktopColumns, ownsScrollViewport, pasteLeadingNewlineSubmits } from './harnessRegistry.ts'
 
 type TerminalDimensions = { cols: number; rows: number; refresh: (start: number, end: number) => void }
 type TerminalRendererOptions = { options: { customGlyphs?: boolean } }
@@ -251,6 +251,51 @@ export function trackAppTailDistance(distancePx: number, deltaPixels: number): n
  */
 export function appOffTailByDistance(distancePx: number, rowHeightPx: number): boolean {
   return distancePx >= Math.max(1, rowHeightPx)
+}
+
+// A bracketed paste and its terminator. Unterminated because a paste arrives in one
+// `onData` here, but a caller that ever splits one must not have the tail read as typing.
+const BRACKETED_PASTE = /\x1b\[200~([\s\S]*?)(?:\x1b\[201~|$)/g
+
+/**
+ * Whether these bytes end a composer, and so return an application's viewport to its tail.
+ *
+ * The estimate this answers for totals forwarded scroll, which is the only thing the pane
+ * performs and therefore the only thing it can count. A submitted prompt moves the same
+ * viewport with no gesture to total: the CLI appends the turn and follows its own newest
+ * output, leaving the estimate describing a position the reader has left. That is what kept
+ * a jump-to-latest chip up over a viewport already exactly where its tap would send it,
+ * and sending a message is the most common thing anyone does after reading back.
+ *
+ * Three things are deliberately not submissions:
+ * - a composer newline (`composer_newline`, Alt+Enter on both measured agents), which is the
+ *   one CR-bearing sequence that keeps the composer open. Read from the registry rather than
+ *   spelled here, because a browser-side copy of a per-CLI grammar is what that field exists
+ *   to prevent;
+ * - the payload of a bracketed paste, whose newlines are text on all but the harnesses that
+ *   declare `paste_leading_newline_submits` - where exactly the leading one submits;
+ * - anything at all for a harness declaring `none`, which is every harness whose composer has
+ *   not been measured. The two errors are not symmetric: a chip that outstays its scroll costs
+ *   one tap, while a chip withdrawn from a reader still scrolled up leaves them no way back.
+ */
+export function inputResetsAppTail(backend: string | undefined, data: string): boolean {
+  const reset = appTailReset(backend)
+  if (reset === 'none') return false
+  if (reset === 'input') return data.length > 0
+  const pasteSubmits = pasteLeadingNewlineSubmits(backend)
+  const typed = data.replace(BRACKETED_PASTE, (_match, payload: string) =>
+    pasteSubmits && (payload.startsWith('\r') || payload.startsWith('\n')) ? '\r' : '',
+  )
+  const newline = composerNewline(backend)
+  for (let index = 0; index < typed.length; index += 1) {
+    const character = typed[index]
+    if (character !== '\r' && character !== '\n') continue
+    // The composer newline ends in this character, so the run preceding it decides
+    // which of the two it is.
+    if (newline.length > 1 && typed.startsWith(newline, index - newline.length + 1)) continue
+    return true
+  }
+  return false
 }
 
 /**

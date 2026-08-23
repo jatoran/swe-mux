@@ -2631,6 +2631,20 @@ body {
 /* Touch targets are 38px, so the offset that clears the latest chip grows with them. */
 @media(hover:none){.terminal-peek-top{min-width:38px;min-height:38px;padding:0;margin:0 53px 9px 0}}
 @media(hover:none){.terminal-jump-latest{min-width:38px;min-height:38px;padding:0}}
+/* Copy/paste confirmations. A moment of text, so it is drawn where a moment of text costs
+   nothing: the last strip of the terminal's own cell, flush on the rail's top edge and
+   right-aligned with the chip cluster. It used to sit *in* the rail's trailing furniture,
+   where it narrowed the scrolling strip for its two seconds and then gave the width back.
+   The steady selection readout stays there, because that one is a state and not an event.
+   Being a grid overlay is what keeps it from moving anything: it shares the terminal's
+   cell (`grid-row:1/grid-column:1`, and see the note on `.terminal-surface` for why the
+   explicit column is load-bearing), so it can only ever stack. It deliberately draws over
+   the jump-to-latest and peek chips rather than dodging them - a message that changes
+   position depending on which chips happen to be up is harder to read than one that always
+   appears in the same place - and `pointer-events:none` keeps their taps theirs.
+   Mounted only while it has something to say, like the rail readout beside it: a hidden
+   live region is out of the accessibility tree either way, so there is nothing to keep. */
+.terminal-clip-toast{grid-row:1;grid-column:1;justify-self:end;align-self:end;z-index:16;margin:0 9px 0 0;max-width:min(60vw,340px);padding:3px 8px;border:1px solid var(--line);border-bottom:0;background:color-mix(in srgb,var(--panel) 94%,var(--green));color:var(--text);font-family:'Cascadia Mono',Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;box-shadow:0 2px 10px #0009}
 .terminal-image-drop{position:absolute;z-index:18;inset:10px;display:grid;place-items:center;border:2px dashed var(--green);background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--green);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none}
 .terminal-connection{position:absolute;z-index:13;top:5px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:3px 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);pointer-events:none}
 .terminal-connection.reconnecting{color:var(--amber)}.terminal-connection.ended{color:var(--red)}

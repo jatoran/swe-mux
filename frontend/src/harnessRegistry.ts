@@ -58,7 +58,20 @@ export interface HarnessCapabilities {
   suppresses_late_color_response?: boolean
   /** Finger rows represented by one wheel report forwarded during a touch drag. */
   touch_scroll_rows_per_report?: number
+  /** What returns this TUI's own scroll viewport to its newest output besides the
+   *  scroll the pane forwards. Absent from older daemon payloads, where the
+   *  conservative answer is `none`: it keeps the estimate exactly as it was. */
+  app_tail_reset?: AppTailReset
 }
+
+/**
+ * See `AppTailReset` in `src/swe_mux/harness.py`, which owns this vocabulary.
+ *
+ * `none` - nothing but forwarded scroll is known to move that viewport.
+ * `submit` - a submitted prompt does, because the CLI follows its own newest output.
+ * `input` - any keystroke does.
+ */
+export type AppTailReset = 'none' | 'submit' | 'input'
 
 export interface HarnessDescriptor {
   name: string
@@ -255,6 +268,17 @@ export function applicationTouchScrollProfile(name: string | undefined): {
     rowsPerReport: Math.max(1, Math.trunc(capabilities?.touch_scroll_rows_per_report ?? 1)),
   }
 }
+
+/**
+ * What returns this harness's own scroll viewport to its newest output, for the pane
+ * that has to track that viewport by dead reckoning.
+ *
+ * A missing declaration answers `none` rather than guessing: an older daemon's payload
+ * carries no opinion, and inventing one here would take a jump-to-latest chip down over
+ * a viewport nothing had moved.
+ */
+export const appTailReset = (name: string | undefined): AppTailReset =>
+  harnessDescriptor(name)?.capabilities.app_tail_reset ?? 'none'
 
 /** Whether the daemon implements a fork strategy for this harness. */
 export const supportsBranch = (name: string | undefined): boolean =>
