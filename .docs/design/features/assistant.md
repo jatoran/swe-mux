@@ -276,6 +276,10 @@ The assistant is text-first and voice-attached, not voice-only:
   Two invariants hold the design together.
   Everything one turn says shares one stream, including any card it opens, so nothing a turn says can cut off something else the same turn said: starting a second stream hard-stops the first, which is what used to truncate the card's line mid-word and follow it with several seconds of silence while the next clip synthesized.
   And the appends are serialized, because segment order on the daemon is the order its `speak` calls arrive.
+  A third rule follows from the first two: `spoke` - the flag deciding whether `assistant_turn_done`'s text still needs saying - is set when an append is **queued**, never when its synthesis returns.
+  The daemon is right to put the whole reply on the completion event, because a client consuming no sentence events needs it; not duplicating it is the client's half of that contract.
+  Reading the flag after the post made the guard consult state the operation it guards against had not written yet, and a one-sentence reply said itself twice: the sentence, then the identical fallback, measured 2026-08-23 as two segments and 11.8 s of audio for 95 characters.
+  It only ever missed on a short reply, because synthesis takes seconds while a one-sentence turn ends within milliseconds of its only sentence.
 - A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant in dictation mode too — one addressee removes the ambiguity the wake word exists to resolve.
 - **Starting a fresh conversation is a deterministic registry alias, not a model turn.**
   `assistant.newConversation` puts "new conversation", "clear context", and their variants (`NEW_CONVERSATION_PHRASES` in `assistant.ts`) on the ordinary command registry, so clearing context costs no model call and cannot be paraphrased into something adjacent.
@@ -348,7 +352,7 @@ the one that shipped without a control, so the escape hatch it exists to be was 
 - `src/swe_mux/server.py` — assistant HTTP handlers and service wiring (note read/write closures, history search, spawn/interrupt/end operations shared with session control, and the Project Action catalog/preview/run closures over `_start_project_action`).
 - `src/swe_mux/project_actions.py` — `preview_action_run`, the shared resolve-and-refuse used by the assistant preflight.
 - `frontend/src/assistant.ts` — client dialog view, event reducer, follow-up window, spoken-verdict grammar, API calls.
-- `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, and the close.
+- `frontend/src/assistantSpeech.ts` — one speech stream per turn: sentence appends, the card announcement joining the same stream, the close, and the queued-not-returned `spoke` flag behind the completion fallback.
 - `frontend/src/AssistantPanel.tsx` — the conversation view and action cards, at all three `variant`s (`full`, `peek`, `hidden`), plus the open-card and reply signals the dock's chip reads.
 - `frontend/src/voiceFuzzy.ts` — tier 2, the conservative fuzzy pass in front of the fallback.
 - `frontend/src/earcons.ts` — the synthesized acknowledgment sounds.

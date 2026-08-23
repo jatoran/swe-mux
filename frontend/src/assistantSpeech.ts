@@ -35,6 +35,11 @@ type Speech = {
   chain: Promise<void>
   /** False until the opening `speak` has succeeded, which decides `continue_stream`. */
   opened: boolean
+  /**
+   * Whether this turn has text on the way. Set when an append is *queued*, not
+   * when its synthesis returns, because its only reader (`endTurnSpeech`) asks
+   * the moment the turn ends - seconds before a Kokoro post comes back.
+   */
   spoke: boolean
   closed: boolean
   /** Pending idle-close for a loose stream, cancelled by the next append. */
@@ -209,6 +214,19 @@ function scheduleIdleClose(turn: Speech): void {
 
 function append(turn: Speech, speech: string): Promise<void> {
   if (turn.idle) { clearTimeout(turn.idle); turn.idle = null }
+  // Marked here, synchronously, rather than when the post returns. `spoke` is
+  // read by `endTurnSpeech` to decide whether the completion fallback is still
+  // needed, and that decision is made the moment the turn ends - which for a
+  // one-sentence reply is milliseconds after the sentence was queued and
+  // seconds before its synthesis comes back. Setting it after the await made
+  // the guard read state the operation it guards against had not written yet,
+  // and the turn said the whole reply twice (measured 2026-08-23: one sentence,
+  // no card, two segments, 11.8s of audio for a 95-character sentence).
+  //
+  // "Has text on the way" is also what the flag means to its only reader. A
+  // queued segment that never synthesizes is not a reason to speak the fallback:
+  // if the stream died, the fallback would be dropped with it.
+  turn.spoke = true
   const next = turn.chain.then(async () => {
     if (turn.closed && turn.opened) return
     // Playback is the authority on whether this stream still matters. Anything
@@ -233,7 +251,6 @@ function append(turn: Speech, speech: string): Promise<void> {
         text: speech, stream_id: turn.streamId, final: false,
       })
       turn.opened = true
-      turn.spoke = true
       // The response is the fallback for a `voice_clip_ready` that was lost or
       // delayed; the live event usually starts playback first and this dedupes.
       await playRequestedStreamFirst(clip.id, clip.stream_id || turn.streamId, 'system', 'system')
@@ -243,7 +260,6 @@ function append(turn: Speech, speech: string): Promise<void> {
     await api('POST', '/api/voice/speak', {
       text: speech, stream_id: turn.streamId, continue_stream: true, final: false,
     })
-    turn.spoke = true
     scheduleIdleClose(turn)
   })
   // The chain must survive a failed segment: one clip that could not be
