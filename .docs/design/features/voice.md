@@ -90,8 +90,13 @@ install-wide, so the tab edits them directly for the focused session.
   Synthesis is **not linear**: about 480 ms of fixed overhead plus ~26 ms per character, while
   speech plays at ~15 characters per second. The last row is the whole design constraint - a clip
   must play for longer than its successor takes to make, so anything under about **twelve
-  characters stalls by arithmetic**, on any hardware, and `MIN_SEGMENT_CHARS` (40) is that bound
-  with a ~1.8x margin. `_merge_short_tail` folds a runt final clip into the one before it even
+  characters stalls by arithmetic**, on any hardware, and `MIN_SEGMENT_CHARS` (20) is that bound
+  with about 30% margin. The number came down twice under real sentences, which is worth recording
+  because the first guesses were wrong in the same direction: the pathology is a *three-to-five*
+  character lead ("Yes.", "Ok.", "Done." - `covers` 0.35), while ordinary short sentences cover
+  fine and must keep leading on their own ("First result is ready." is 22 characters at ~1.4;
+  "Three sessions are working." is 27 at ~1.5). Floors at 40 and then 25 glued both of those to
+  the sentence after them for no gain. `_merge_short_tail` folds a runt final clip into the one before it even
   when that pushes the last clip past `max_chars`, because by the last clip there is nothing left
   to cover and a two-word ending lands as a stutter on the way out.
   The same arithmetic governs the *opening*: `MIN_FIRST_SENTENCE_CHARS` in `assistant.py`

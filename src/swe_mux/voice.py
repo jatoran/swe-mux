@@ -97,8 +97,17 @@ VOICE_APPROVAL_TTL_SECONDS = 20.0
 APPLICATION_FIRST_SEGMENT_CHARS = 60
 # No clip this module emits is allowed to be shorter than this, because a clip
 # below roughly twelve characters finishes playing before the next one can be
-# made. Forty is the measured point with a comfortable margin (~1.8x).
-MIN_SEGMENT_CHARS = 40
+# made (`streaming_segments` carries the measured curve).
+#
+# Twenty, and the number came down twice under real sentences. The pathology is
+# a THREE-to-FIVE character lead - "Yes.", "Ok.", "Done." - which covers 0.35 and
+# stalls before the reply's second word. Ordinary short sentences are not the
+# problem and must keep leading on their own: "First result is ready." is 22
+# characters and covers ~1.4, "Three sessions are working." is 27 and covers
+# ~1.5. A floor at 40, then 25, glued both to the sentence after them for no
+# gain. Twenty sits above the ~12-character break-even with about 30% margin and
+# leaves a coherent opening sentence alone, which is what it is for.
+MIN_SEGMENT_CHARS = 20
 # An open speech stream with no producer left is dropped after this long. A
 # stream is closed explicitly by whoever opened it; this only reclaims the ones
 # whose tab went away mid-turn.
@@ -571,24 +580,54 @@ def streaming_segments(
     if len(cleaned) <= lead:
         return [cleaned]
     first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0]
-    first = _bounded_speech_chunks(first_sentence, lead)[0]
+    if len(first_sentence) >= MIN_SEGMENT_CHARS:
+        # Long enough to stand alone, so lead with the whole sentence: a cut in
+        # the middle of a thought sounds like a second, unrelated reply.
+        first = _bounded_speech_chunks(first_sentence, lead)[0]
+    else:
+        # "Yes." cannot stand alone - 4 characters, `covers=0.27` measured in the
+        # field, a stall guaranteed before the second word of the reply. Run past
+        # the sentence boundary and fill the opening clip by words instead.
+        #
+        # `_bounded_speech_chunks` cannot do this: it accumulates whole *pieces*,
+        # so a 57-character follow-on never joins a 4-character lead under a
+        # 60-character bound and the runt survives. Nor can merging the two
+        # segments afterwards - the second is bounded at `max_chars`, so folding
+        # it in produced a 190-character opening clip and pushed time-to-first-
+        # sound from 2 s to 5.4 s, trading the stall for the wait it exists to
+        # avoid.
+        first = _lead_words(cleaned, lead)
     remainder = cleaned[len(first):].strip()
-    return _merge_short_tail([first, *_bounded_speech_chunks(remainder, bound)])
+    return _merge_runt_tail([first, *_bounded_speech_chunks(remainder, bound)])
 
 
-def _merge_short_tail(segments: list[str]) -> list[str]:
+def _lead_words(text: str, limit: int) -> str:
+    """As many whole words as fit the opening bound, ignoring sentence ends."""
+    lead = ""
+    for word in text.split():
+        candidate = f"{lead} {word}".strip()
+        if lead and len(candidate) > limit:
+            break
+        lead = candidate
+    return lead
+
+
+def _merge_runt_tail(segments: list[str]) -> list[str]:
     """Fold a runt final clip into the one before it.
 
-    Greedy chunking leaves whatever does not fit as the last piece, and that
-    remainder is frequently a word or two. It is the worst possible place for
-    one: a ten-character clip costs about 740 ms to synthesize for 660 ms of
-    audio, so it stalls, and it stalls on the last thing the operator hears,
-    which lands as a stutter on the way out rather than a pause in the middle.
+    Greedy chunking always leaves its remainder last, and that is the worst place
+    for one: a ten-character clip costs about 740 ms to synthesize for 660 ms of
+    audio, so it stalls, and it stalls on the last thing the operator hears -
+    a stutter on the way out rather than a pause in the middle.
 
     Merging can push the final clip past `max_chars`. That is deliberate and
-    strictly better - the bound exists to keep synthesis latency covered by the
+    strictly better: the bound exists to keep synthesis latency covered by the
     clip playing ahead of it, and by the last clip there is nothing left to
-    cover.
+    cover. The opening clip is floored at the source instead, because merging
+    there would blow the one bound that *is* time-to-first-sound.
+
+    A lone short segment is the whole reply and is left alone - there is nothing
+    to merge it into, and silence is not an improvement.
     """
     if len(segments) < 2 or len(segments[-1]) >= MIN_SEGMENT_CHARS:
         return segments

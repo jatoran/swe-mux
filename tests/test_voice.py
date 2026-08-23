@@ -2284,16 +2284,16 @@ def test_merging_a_runt_tail_may_exceed_the_bound_on_purpose() -> None:
     # The bound exists to keep synthesis covered by the clip playing ahead of it.
     # By the last clip there is nothing left to cover, so a slightly long final
     # clip is strictly better than one that stalls.
-    from swe_mux.voice import _merge_short_tail
+    from swe_mux.voice import _merge_runt_tail
 
-    merged = _merge_short_tail(["a" * 100, "b" * 5])
+    merged = _merge_runt_tail(["a" * 100, "b" * 5])
     assert merged == ["a" * 100 + " " + "b" * 5]
     # A tail that can stand on its own is left alone.
     standalone = ["a" * 100, "b" * 60]
-    assert _merge_short_tail(standalone) == standalone
+    assert _merge_runt_tail(standalone) == standalone
     # Nothing to merge into, so a lone short clip survives: it is the whole reply.
-    assert _merge_short_tail(["hi"]) == ["hi"]
-    assert _merge_short_tail([]) == []
+    assert _merge_runt_tail(["hi"]) == ["hi"]
+    assert _merge_runt_tail([]) == []
 
 
 def test_the_opening_clip_halved_its_silence_without_going_under_the_floor() -> None:
@@ -2307,3 +2307,54 @@ def test_the_opening_clip_halved_its_silence_without_going_under_the_floor() -> 
 
     assert APPLICATION_FIRST_SEGMENT_CHARS == 60
     assert APPLICATION_FIRST_SEGMENT_CHARS >= MIN_SEGMENT_CHARS
+
+
+def test_a_reply_opening_on_a_short_sentence_does_not_get_a_runt_lead() -> None:
+    """The miss the first attempt shipped, caught by its own new logging.
+
+    `_SentenceStreamer` coalesces a short opening sentence with the next one so
+    the two are spoken together - and `streaming_segments` then split them apart
+    again at exactly that boundary, because leading with a whole sentence was
+    unconditional. The result reached the field: a four-character clip logged
+    `covers=0.27`, a stall guaranteed before the second word of the reply.
+
+    A floor on one side of that handoff is not a floor.
+    """
+    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+
+    text = (
+        "Yes. The supervisor liveness race is the first recommendation, because a "
+        "transient socket failure can make live sessions look exited and then record "
+        "them that way. The second is timeouts on the fleet refresh. ok"
+    )
+    chunks = streaming_segments(text, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS)
+    assert len(chunks) >= 2
+    assert chunks[0].startswith("Yes. The supervisor"), chunks[0]
+    assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), [len(c) for c in chunks]
+    # And the opening clip still respects the bound that IS time-to-first-sound.
+    # Merging the runt into the next segment instead would have produced a
+    # 190-character opener and traded a 2 s wait for a 5.4 s one.
+    assert len(chunks[0]) <= APPLICATION_FIRST_SEGMENT_CHARS
+    assert " ".join(chunks).split() == text.split()
+
+
+def test_every_edge_holds_the_floor_across_shapes() -> None:
+    """One clip may be short only when it is the entire reply."""
+    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+
+    shapes = [
+        "Done.",
+        "Yes. No. Maybe so.",
+        "Three sessions are working and nothing is waiting on you right now, so you "
+        "are clear to keep going with whatever you were doing.",
+        ("word " * 72).strip() + " tail end",
+        "Ok. " + ("filler words here " * 40).strip() + " end",
+    ]
+    for text in shapes:
+        chunks = streaming_segments(text, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS)
+        assert chunks, text
+        assert " ".join(chunks).split() == text.split(), text
+        if len(chunks) > 1:
+            assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), (
+                text, [len(c) for c in chunks]
+            )
