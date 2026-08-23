@@ -134,3 +134,18 @@ mode change can never produce a budget the daemon rejects for a field the operat
 
 `frontend/test/budgetControl.test.ts` asserts that every cap in the inventory reaches it and that
 no retired scalar field is still edited as a bare number box.
+
+Its layout is three chips on one row and then the two figures side by side, at every width.
+The pair is one field - what stops this, counted two ways - so stacking the axes on a phone put
+the dollar figure under the fold directly below the chips that were choosing between them, and
+bought nothing: two columns hold down to a 320px viewport at roughly 130px an axis, wider than
+any figure a cap carries.
+What a phone actually needs is a tap target, so a coarse pointer gets a 40px chip; the whole chip
+is the label, so that is a 40px hit area for an 18px dot.
+The axes start their rows at the top rather than stretching, because only the unenforced one
+carries the "kept, not enforced" note and a stretched column put its input below its neighbour's.
+
+`frontend/test/renderer/voice-settings.spec.ts` measures all of it on a 390px viewport: the dot is
+`--check-size` square, no chip clips its own word, and the two axes share a row and a top edge.
+The clipping assertion is the one that matters, because the defect it replaces passed every
+structural check - the chips were one row and under 40px tall, with no room left for their text.
