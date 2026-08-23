@@ -6787,6 +6787,35 @@ export function App() {
         else if(leaf.kind!=='terminal')openTabMenu(leaf,mobileTabMenuLabel(leaf),at.x,at.y,'mobile')
         return
       }
+      case 'quotaChip.accounts': {
+        // Literally "as if you had tapped it": the popover's open state belongs to
+        // `ProviderAccounts` and nothing else needs it, so this presses the chip rather
+        // than lifting that state into App for one gesture. A synthetic click raises no
+        // `pointerdown`, so the outside-press dismissers stay out of it.
+        const chip=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('rail-quota'))
+        chip?.click()
+        return
+      }
+      case 'micToggle.reveal': {
+        // Idempotent in both directions, unlike the button's own tap: a drag down means
+        // "be open" and a drag up means "be gone", and neither should undo itself when
+        // the panel is already where it was asked to be.
+        if(voiceDockRef.current.state==='chip')dispatchVoiceDock({kind:'toggle'})
+        return
+      }
+      case 'micToggle.hide': {
+        if(voiceDockRef.current.state!=='chip')dispatchVoiceDock({kind:'set',state:'chip'})
+        return
+      }
+      case 'runTrigger.menu': {
+        // The launcher anchors to its button, so the button is what it needs — not the
+        // point the finger left, which is wherever the drag happened to end.
+        const trigger=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('mobile-run-trigger'))
+        if(activeProject&&trigger)toggleRunMenu(activeProject,trigger)
+        return
+      }
+      case 'navToggle.open': runNamedCommand('sidebar.open'); return
+      case 'drawerToggle.open': runNamedCommand('drawer.open'); return
       case 'noteRail.outline': {
         // `note.outline` asks "who has focus?", and a rail is not focus — touching it
         // never made that note the insert target. The gesture already knows the editor

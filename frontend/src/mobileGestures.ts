@@ -158,7 +158,17 @@ export function pathOwnsHorizontalScroll<T extends HorizontalScrollElement>(
 
 export type GestureDirection = 'up' | 'down' | 'left' | 'right'
 
-export type GestureRegion = 'noteRail' | 'tabRail' | 'voiceDock' | 'projectName' | 'commandRail'
+export type GestureRegion =
+  | 'noteRail'
+  | 'tabRail'
+  | 'voiceDock'
+  | 'projectName'
+  | 'quotaChip'
+  | 'micToggle'
+  | 'runTrigger'
+  | 'navToggle'
+  | 'drawerToggle'
+  | 'commandRail'
 
 /** What a region gesture asks for. Resolved to a command, or to an act needing the
  *  element the touch started on, by the caller — this module owns only the mapping. */
@@ -172,6 +182,12 @@ export type SurfaceGesture =
   | 'projectName.menu'
   | 'tabRail.menu'
   | 'noteRail.outline'
+  | 'quotaChip.accounts'
+  | 'micToggle.reveal'
+  | 'micToggle.hide'
+  | 'runTrigger.menu'
+  | 'navToggle.open'
+  | 'drawerToggle.open'
 
 /**
  * Region selectors, matched against the composed path, **most specific first**.
@@ -185,6 +201,16 @@ export const GESTURE_REGION_SELECTORS: readonly (readonly [GestureRegion, string
   ['tabRail', '.mobile-unified-tabs'],
   ['voiceDock', '.voice-dock-head'],
   ['projectName', '.mobile-project-name'],
+  // The rest of the mobile top bar. Every control on that row now answers to a drag as
+  // well as a tap, and mostly to the *same* thing the tap does — which is the point
+  // rather than a redundancy: it is a 44px row of small targets under a thumb, and a
+  // drag that starts anywhere on a control and ends anywhere at all is far more
+  // forgiving than a tap that has to land and stay put.
+  ['quotaChip', '.rail-quota'],
+  ['micToggle', '.conversation-talk-toggle'],
+  ['runTrigger', '.mobile-run-trigger'],
+  ['navToggle', '.mobile-nav-toggle'],
+  ['drawerToggle', '.mobile-drawer-toggle'],
   ['commandRail', RAIL_GESTURE_SELECTOR],
 ]
 
@@ -218,6 +244,20 @@ const REGION_GESTURES: Partial<Record<GestureRegion, Partial<Record<GestureDirec
   },
   tabRail: { up: 'tabRail.menu', down: 'tabRail.menu' },
   noteRail: { up: 'noteRail.outline' },
+  // Downward for the three that *open* something, because the thing they open is drawn
+  // below the bar and the drag is the pull that brings it down. Only the mic has an
+  // upward half, because its panel is the one that stays on screen afterwards and so is
+  // the one you can be holding open by mistake.
+  quotaChip: { down: 'quotaChip.accounts' },
+  micToggle: { down: 'micToggle.reveal', up: 'micToggle.hide' },
+  runTrigger: { down: 'runTrigger.menu' },
+  // Any direction at all: these two are the edge toggles, and the whole reason to drag
+  // one instead of tapping it is that a thumb reaching the corner of a phone is not
+  // placing a precise tap. Refusing three of the four directions would put the precision
+  // back. They only ever open — the panel they open is closed by its own scrim, its own
+  // swipe-away, and a second tap.
+  navToggle: { up: 'navToggle.open', down: 'navToggle.open', left: 'navToggle.open', right: 'navToggle.open' },
+  drawerToggle: { up: 'drawerToggle.open', down: 'drawerToggle.open', left: 'drawerToggle.open', right: 'drawerToggle.open' },
 }
 
 /**

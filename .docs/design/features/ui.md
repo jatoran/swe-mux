@@ -1244,9 +1244,15 @@ Its rules, and what each one is defending:
   server-side, so adding one requires the same slot list in `config.py`.
 - **Some swipes belong to a piece of chrome rather than to the screen.**
   A **region** is chrome that answers to a swipe of its own, because the channel the rest of the
-  app reserves is dead there. There are five (`GESTURE_REGION_SELECTORS`): the terminal's command
-  rail, the mobile tab rail, the voice panel's header, the mobile top bar's Project name, and the
-  note editor's command rail.
+  app reserves is dead there (`GESTURE_REGION_SELECTORS`): the terminal's command rail, the mobile
+  tab rail, the voice panel's header, the note editor's command rail, and every control on the
+  mobile top bar - the two quota chips, the Project name, the microphone, Run, and the two edge
+  toggles.
+  On the top bar most of these do what the control's own *tap* does, and that is the point rather
+  than a redundancy: it is a 44px row of small targets under a thumb, and a drag that starts
+  anywhere on a control and ends anywhere at all is far more forgiving than a tap that has to land
+  and stay put. It also costs nothing, because a drag past the 48px bar suppresses the click the
+  browser would otherwise synthesize, so the tap keeps working for short touches.
   Three rules hold for all of them and are what keep this from eating the app.
   **One finger** - two fingers are the global slots' channel everywhere, and no region has ever
   resolved a two-finger gesture.
@@ -1277,7 +1283,17 @@ Its rules, and what each one is defending:
   a **tab on the mobile tab rail** opens that tab's menu on either vertical direction - the same
   menu its 350 ms hold opens, reached faster, which is the shape the "reaching a menu should never
   require a hold on touch" rule prefers;
-  the **note editor's command rail** opens the heading outline.
+  the **note editor's command rail** opens the heading outline;
+  a **quota chip** opens Accounts and **Run** opens the launcher, both on a downward drag, because
+  what they open is drawn below the bar and the drag is the pull that brings it down;
+  the **microphone** reveals the voice panel downward and puts it away upward - the one control
+  here with both halves, because its panel is the one that stays on screen and so is the one you
+  can be holding open by mistake, and both halves are idempotent where the button's own tap
+  toggles;
+  the **two edge toggles** open their panel on a drag in *any* direction, because a thumb reaching
+  the corner of a phone is not placing a precise tap and refusing three of the four directions
+  would put the precision straight back. They only open; the panel is closed by its own scrim, its
+  own swipe-away, and a second tap.
   Both slide-in panels and any overlay suppress all four: they are workspace chrome, so anything
   painted over the workspace means the swipe is about that instead.
 - **A region gesture that acts on an element carries that element, not a command id.**

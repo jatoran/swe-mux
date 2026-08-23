@@ -145,10 +145,42 @@ test('each region is recognized from the composed path, and everything else is n
   // class behind it — the class is free to be renamed by a version bump, the part is not.
   assert.equal(regionForPath(region('[part~="command-rail"]')), 'noteRail')
   assert.equal(regionForPath(region('.command-rail-buttons')), null)
+  // The rest of the mobile top bar.
+  assert.equal(regionForPath(region('.rail-quota')), 'quotaChip')
+  assert.equal(regionForPath(region('.conversation-talk-toggle')), 'micToggle')
+  assert.equal(regionForPath(region('.mobile-run-trigger')), 'runTrigger')
+  assert.equal(regionForPath(region('.mobile-nav-toggle')), 'navToggle')
+  assert.equal(regionForPath(region('.mobile-drawer-toggle')), 'drawerToggle')
   // The drawer tab bar and the desktop tab strip are scrollers, not regions.
   assert.equal(regionForPath(region('.drawer-tabs')), null)
   assert.equal(regionForPath(region('.stack-tabs')), null)
   assert.equal(regionForPath([]), null)
+})
+
+test('the top bar opens downward, and only the mic can be put away again', () => {
+  assert.equal(surfaceGestureFor('quotaChip', 'down'), 'quotaChip.accounts')
+  assert.equal(surfaceGestureFor('runTrigger', 'down'), 'runTrigger.menu')
+  assert.equal(surfaceGestureFor('micToggle', 'down'), 'micToggle.reveal')
+  assert.equal(surfaceGestureFor('micToggle', 'up'), 'micToggle.hide')
+  // The two that only open have no upward half: what they open is closed by its own
+  // scrim, its own swipe-away, and a second tap.
+  assert.equal(surfaceGestureFor('quotaChip', 'up'), null)
+  assert.equal(surfaceGestureFor('runTrigger', 'up'), null)
+  // Nor a sideways one — the top bar's own strip pans there when it overflows.
+  for (const region of ['quotaChip', 'micToggle', 'runTrigger'] as const) {
+    assert.equal(surfaceGestureFor(region, 'left'), null)
+    assert.equal(surfaceGestureFor(region, 'right'), null)
+  }
+})
+
+test('the two edge toggles answer to any direction, and only ever open', () => {
+  // A thumb reaching the corner of a phone is not placing a precise tap, which is the
+  // whole reason to drag one of these — so refusing three directions would put the
+  // precision straight back.
+  for (const direction of ['up', 'down', 'left', 'right'] as const) {
+    assert.equal(surfaceGestureFor('navToggle', direction), 'navToggle.open')
+    assert.equal(surfaceGestureFor('drawerToggle', direction), 'drawerToggle.open')
+  }
 })
 
 test('a region swipe resolves a direction on one finger and nothing on two', () => {
