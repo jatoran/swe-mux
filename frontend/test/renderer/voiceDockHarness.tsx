@@ -35,7 +35,7 @@ const conversation: Conversation = {
   target: {kind:'session',id:'dock-harness',label:'Agent · harness',available:()=>true,agentRunId:()=>null,voiceMode:()=>null,voiceContent:()=>null},
   targetAvailable: true, pinned: false, phase: talkActive ? 'listening' : 'off', active: talkActive,
   standby: false, hold: false, holdBuffer: '', deferredTrigger: '', deferredSource: null,
-  comms: false, wake: 'mux',
+  pendingText: '', pendingNote: '', comms: false, wake: 'mux',
   detail: talkActive ? 'Listening. Say “mux, send” to submit.' : '',
   landedAt: 0, latency: null, detector: 'silero',
   history: [

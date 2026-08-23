@@ -241,6 +241,11 @@ The assistant is text-first and voice-attached, not voice-only:
   `DEFERRAL_PARK_MAX_MS` (120 s, so an abandoned half-sentence is forgotten rather than glued to
   whatever is said an hour later). The chat panel shows `unfinished · waiting for the rest`, and
   the follow-up window still opens so the next breath reaches the assistant.
+  **The parked words stay on screen** in the panel's pending row (`voice.md`), which also carries
+  the speculative decode's provisional reading of the breath in progress - so the operator sees
+  what they said seconds before the accurate transcript can exist, and a held fragment never
+  appears and then vanishes. A held fragment is a client-local row rather than a dialog message
+  precisely so that the merged turn can re-send it without the panel having to delete anything.
 - **Queue-merge is the safety net under both.** A fragment the heuristic does not recognize
   becomes a turn, and the next breath merges into the waiting turn rather than opening a second
   one; barge-in already silences a reply to fragment one.

@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   ASSISTANT_HOLD_COMPLETION, DEFERRAL_MAX_HOLD_MS, DEFERRAL_PARK_MAX_MS,
-  DEFERRAL_PARK_MAX_WORDS, DeferralPen,
+  DEFERRAL_PARK_MAX_WORDS, DeferralPen, pendingUtterance,
 } from '../src/utteranceDeferral.ts'
 import { COMPLETION, DEFAULT_CHAT_PATIENCE_MS, deferralExtensionMs } from '../src/utteranceCompleteness.ts'
 
@@ -112,6 +112,69 @@ test('expiry never touches a heuristic deferral, which has its own release path'
   time.advance(DEFERRAL_PARK_MAX_MS * 2)
   assert.equal(pen.expireStalePark(), null)
   assert.ok(pen.pending, 'the release timer owns this one, not the park sweep')
+})
+
+const NOTHING = { hold: false, holdBuffer: '', held: null, provisional: '' }
+
+test('the pending row shows nothing when there is nothing in flight', () => {
+  assert.deepEqual(pendingUtterance(NOTHING), { text: '', note: '' })
+  // Whitespace is not speech; a row of blanks would still render a bubble.
+  assert.equal(pendingUtterance({ ...NOTHING, provisional: '   ' }).text, '')
+})
+
+test('a provisional reading is shown on its own, before any turn exists', () => {
+  // The latency win: the accurate transcript cannot arrive until the endpoint
+  // has proved the turn is over, seconds later, and until this row existed the
+  // surface looked deaf for all of it.
+  const row = pendingUtterance({ ...NOTHING, provisional: 'now I want you to add' })
+  assert.equal(row.text, 'now I want you to add')
+  assert.match(row.note, /hearing you/)
+})
+
+test('a held fragment leads, and the breath in progress follows it', () => {
+  const pen = new DeferralPen(clock().now)
+  const routed = pen.offer('open the alpha session and', PATIENCE)
+  assert.equal(routed.kind, 'defer')
+  const row = pendingUtterance({ ...NOTHING, held: pen.pending, provisional: 'tell me what it is' })
+  // Exactly the text the merge will send, in the order it was spoken. Getting
+  // this backwards would show the operator a sentence they did not say.
+  assert.equal(row.text, 'open the alpha session and tell me what it is')
+  assert.match(row.note, /unfinished after “and”/)
+})
+
+test('a park says it is waiting, because unlike a deferral it never sends itself', () => {
+  const pen = new DeferralPen(clock().now)
+  pen.park('now I want you to add', PATIENCE)
+  const row = pendingUtterance({ ...NOTHING, held: pen.pending })
+  assert.equal(row.text, 'now I want you to add')
+  assert.match(row.note, /waiting for the rest/)
+  // The distinction is not cosmetic: a heuristic hold expires into a turn on its
+  // own, so waiting is enough, while only more speech resolves a park.
+  const pen2 = new DeferralPen(clock().now)
+  pen2.offer('open the', PATIENCE)
+  assert.notEqual(pendingUtterance({ ...NOTHING, held: pen2.pending }).note, row.note)
+})
+
+test('the brainstorm buffer outranks the pen, and still shows the live breath', () => {
+  const pen = new DeferralPen(clock().now)
+  pen.park('this should not win', PATIENCE)
+  const row = pendingUtterance({
+    hold: true, holdBuffer: 'first thought', held: pen.pending, provisional: 'second thought',
+  })
+  assert.equal(row.text, 'first thought second thought')
+  assert.match(row.note, /go ahead/)
+})
+
+test('the row never double-prints the same breath', () => {
+  // The controller clears the provisional reading the moment the accurate
+  // transcript lands, BEFORE the pen is offered the text - so a held fragment
+  // and the provisional copy of that same fragment can never both be present.
+  // This pins the shape the composer relies on: it concatenates, it does not
+  // deduplicate, and it cannot tell two readings of one breath apart.
+  const pen = new DeferralPen(clock().now)
+  pen.park('now I want you to add', PATIENCE)
+  const wrong = pendingUtterance({ ...NOTHING, held: pen.pending, provisional: 'now I want you to add' })
+  assert.equal(wrong.text, 'now I want you to add now I want you to add')
 })
 
 test('the second breath merges into the held fragment and dispatches as one turn', () => {

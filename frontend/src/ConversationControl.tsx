@@ -31,7 +31,7 @@ import { voiceCommsMessage } from './voiceComms'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
 import { assistantFollowUpActive, latestOpenAction, spokenConfirmation } from './assistant'
 import { chatPatienceMs, endpointPatienceMs } from './utteranceCompleteness'
-import { DEFERRAL_PARK_MAX_MS, DeferralPen } from './utteranceDeferral'
+import { DEFERRAL_PARK_MAX_MS, DeferralPen, pendingUtterance } from './utteranceDeferral'
 import type { DeferralSource, DeferredUtterance } from './utteranceDeferral'
 import { playEarcon } from './earcons'
 import {
@@ -95,6 +95,15 @@ export type Conversation={
    * only one of them ever submits the fragment on its own.
    */
   deferredSource:DeferralSource|null
+  /**
+   * The operator's in-flight words, for the conversation panel's pending row:
+   * the brainstorm buffer, the fragment the pen is holding, and the speculative
+   * reading of the breath happening right now, composed in the order they were
+   * spoken. Client-local - the daemon has seen none of it yet.
+   */
+  pendingText:string
+  /** Header for that row, naming which of the three states produced it. */
+  pendingNote:string
   comms:boolean
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
@@ -154,6 +163,16 @@ export function useConversation(
   const [holdBuffer,setHoldBufferState]=useState('')
   const [deferredTrigger,setDeferredTrigger]=useState('')
   const [deferredSource,setDeferredSource]=useState<DeferralSource|null>(null)
+  /**
+   * The speculative decode's provisional reading of the breath in progress.
+   *
+   * The real transcript cannot exist until the endpoint has proved the turn is
+   * over, which is patience plus any extension later - measured at 3.2 s of a
+   * 4.1 s round trip on a held fragment. The speculative decode already ran at
+   * 160 ms of silence and its text was thrown away for anything that was not a
+   * command; showing it costs no extra decode and is the whole latency win.
+   */
+  const [provisional,setProvisional]=useState('')
   const [commsTargetId,setCommsTargetId]=useState<string|null>(null)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
@@ -199,6 +218,20 @@ export function useConversation(
    * of the text in it. Voice dispatches one turn at a time, so one slot is enough.
    */
   const lastAskedRef=useRef('')
+  /**
+   * The utterance whose real transcript has already landed.
+   *
+   * A speculative decode starts earlier but can finish later, and a provisional
+   * reading published after the accurate one would replace good text with worse
+   * text and then duplicate it against the fragment the pen just took. One slot
+   * is enough: utterances are strictly serial.
+   */
+  const settledUtteranceRef=useRef('')
+  /** Clear the provisional row, and refuse any late speculation for this utterance. */
+  const settleProvisional=(utteranceId:string)=>{
+    settledUtteranceRef.current=utteranceId
+    setProvisional('')
+  }
   /** Speech is arriving right now, per the gate. Read by the release timer. */
   const speakingRef=useRef(false)
   /** How many utterances are mid-decode. A continuation in flight is not silence. */
@@ -290,6 +323,10 @@ export function useConversation(
     // would clear it, and a stale "still speaking" would make the next
     // deferral's release re-arm against nothing.
     resolveDeferral('discarded')
+    // The provisional row dies with the microphone too: it is a reading of a
+    // breath nobody is going to finish, and leaving it on screen would claim the
+    // assistant is still listening to it.
+    setProvisional('')
     speakingRef.current=false
     speculationRef.current?.controller.abort();speculationRef.current=null
     startingRef.current?.stop();startingRef.current=null
@@ -614,6 +651,7 @@ export function useConversation(
       // so a fragment held by the heuristic goes with them rather than surfacing
       // as a turn seconds after the operator asked for quiet.
       resolveDeferral('discarded')
+      setProvisional('')
       enterStandby(true);setPhase('standby')
       respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
     }
@@ -685,6 +723,7 @@ export function useConversation(
     }
     if(parsed.command==='cancel'){
       const dropped=resolveDeferral('discarded')
+      setProvisional('')
       setDraft(clearDraft());setPhase('listening')
       respond(dropped?'Voice message cleared, and the unfinished sentence was dropped. Still listening.':'Voice message cleared. Still listening.');return
     }
@@ -800,6 +839,11 @@ export function useConversation(
     try{decoded=await decode(audio,marks,'dictation')}
     finally{clearTimeout(slow)}
     try{
+      // The accurate transcript is here, so the provisional reading of the same
+      // breath has done its job. Cleared BEFORE the pen sees the text: whatever
+      // the pen holds becomes the row's content, and leaving the speculative
+      // copy up would show the same sentence twice, once badly.
+      settleProvisional(marks.utteranceId)
       recordHistory('you',decoded.text)
       if(marks.playbackAtStart&&!isPlaybackControl(decoded.parsed.command)){
         const spoken=marks.playbackOriginAtStart==='system'
@@ -856,7 +900,20 @@ export function useConversation(
     // a question the slowest thing the operator does, and every second spent
     // there is a second a scheduled action is running down its cancel window.
     const verdict=awaitingVerdict()?spokenConfirmation(decoded.text):null
-    if(!decoded.parsed.command&&!verdict)return
+    if(!decoded.parsed.command&&!verdict){
+      // Not a command, so this decode does NOT end the utterance - the real one
+      // still has to run on the dictation profile, and the endpoint still has to
+      // prove the operator is finished. What changes is that their words stop
+      // being invisible for the several seconds that takes. Refused once the
+      // accurate transcript has landed, so a late speculation cannot overwrite
+      // it, and only while the assistant is the addressee: in talk mode the
+      // dictation draft already shows the text.
+      if(settledUtteranceRef.current!==marks.utteranceId&&chatAddressee()&&!standbyRef.current){
+        const text=decoded.text.trim()
+        if(text)setProvisional(text)
+      }
+      return
+    }
     if(!capture.commitSpeculative(marks.utteranceId))return
     recordHistory('you',decoded.text)
     try{await handleTranscript(decoded.parsed,decoded.text)}
@@ -979,13 +1036,31 @@ export function useConversation(
     }catch(cause){capture.stop();if(startingRef.current!==capture)return;startingRef.current=null;enabledRef.current=false;setActive(false);reportFailure(cause)}
   }
 
+  // Composed here rather than in the panel: the three states that feed it are
+  // all owned by this hook, and the ordering rule ("what is already held, then
+  // what is being said") is a correctness claim with its own unit tests.
+  //
+  // This reads a REF during render, which repaints only because every mutation
+  // of the pen is already paired with a state set — `armDeferral` and
+  // `parkAssistantHold` set the trigger and the phase, and every path that
+  // empties the pen goes through `clearDeferralTimer`, which clears them. A
+  // future pen mutation that skips that pairing would leave this row showing
+  // stale words with nothing to say it had gone wrong, so pair it or give the
+  // pen its own state.
+  const pending=pendingUtterance({hold,holdBuffer,held:penRef.current.pending,provisional})
+
   return {
     target,targetAvailable,pinned:!!pinnedTarget,
     // Derived rather than stored: readiness has one source of truth (`detector`), and
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,hold,holdBuffer,deferredTrigger,deferredSource,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
+    detail,draft:draft.text,active,standby,hold,holdBuffer,deferredTrigger,deferredSource,
+    // Recomposed on every render rather than stored: it is a view of three
+    // pieces of state that already exist, and a fourth copy of them is a fourth
+    // thing to keep in sync.
+    pendingText:pending.text,pendingNote:pending.note,
+    comms:!!commsTargetId,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()

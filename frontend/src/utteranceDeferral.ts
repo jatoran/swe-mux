@@ -224,3 +224,64 @@ export class DeferralPen {
 
 /** Re-exported so callers scoring a fragment do not import two modules. */
 export { COMPLETION }
+
+/**
+ * What the conversation panel should show as the operator's in-flight words.
+ *
+ * Three things can be true at once - a brainstorm buffer is accumulating, the
+ * pen is holding a fragment, and a speculative decode has a provisional reading
+ * of the breath happening right now - and all three are the same sentence from
+ * the operator's point of view. Composed here, pure, because the ordering rule
+ * ("what is already held, then what is being said") is the whole correctness
+ * claim and it belongs somewhere a test can reach without a microphone.
+ *
+ * The row this feeds is deliberately NOT a dialog message. A held fragment that
+ * became a real message would have to be deleted again the moment the merged
+ * turn re-sent it, which is exactly the disappearing-text behaviour this
+ * replaces; a client-local row simply clears when the real turn arrives.
+ */
+export type PendingUtterance = {
+  text: string
+  /** Header line for the row, naming which of the three states it is in. */
+  note: string
+}
+
+export type PendingInputs = {
+  /** Brainstorm hold is engaged, so plain speech is buffering rather than asking. */
+  hold: boolean
+  holdBuffer: string
+  /** The pen's fragment, if one is held or parked. */
+  held: DeferredUtterance | null
+  /**
+   * The speculative decode's reading of the utterance in progress.
+   *
+   * Lower fidelity than the real one - it runs on the command profile - and it
+   * is a PREFIX, taken at the first short pause. It exists because the real
+   * transcript does not arrive until the endpoint has proved the turn is over,
+   * which is seconds later and is the wait that makes the surface feel deaf.
+   */
+  provisional: string
+}
+
+export function pendingUtterance(inputs: PendingInputs): PendingUtterance {
+  const provisional = inputs.provisional.trim()
+  const join = (...parts: string[]) => parts.map(part => part.trim()).filter(Boolean).join(' ')
+  if (inputs.hold) {
+    return {
+      text: join(inputs.holdBuffer, provisional),
+      note: 'holding — say “go ahead” to send',
+    }
+  }
+  if (inputs.held) {
+    return {
+      text: join(inputs.held.text, provisional),
+      // The two holds end differently and the operator has to be able to tell
+      // which one they are in: one expires into a turn, the other never does.
+      note: inputs.held.source === 'assistant'
+        ? 'waiting for the rest of your thought'
+        : `unfinished after “${inputs.held.trigger}” — keep going, or pause to send`,
+    }
+  }
+  if (provisional) return { text: provisional, note: 'hearing you…' }
+  return { text: '', note: '' }
+}

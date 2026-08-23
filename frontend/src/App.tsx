@@ -2726,7 +2726,8 @@ export function App() {
     clientContext={assistantClientContext}
     speechEnabled={!!voiceStatus?.enabled}
     voiceActive={talkActive}
-    pendingSpeech={conversation.hold?conversation.holdBuffer:''}
+    pendingSpeech={conversation.pendingText}
+    pendingSpeechNote={conversation.pendingNote}
     variant={voiceBodyVariant(voiceDock.state,voiceBody,'chat')}
     onOpenActions={count=>{
       setAssistantPendingActions(count)

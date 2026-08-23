@@ -40,6 +40,7 @@ export function AssistantPanel({
   speechEnabled,
   voiceActive,
   pendingSpeech = '',
+  pendingSpeechNote = 'holding — say “go ahead” to send',
   variant = 'full',
   onOpenActions,
   onReply,
@@ -50,13 +51,24 @@ export function AssistantPanel({
   speechEnabled: boolean
   voiceActive: boolean
   /**
-   * Live transcription accumulating on this device (the brainstorm hold
-   * buffer), shown as a pending user bubble so the operator watches their
-   * thinking land in the conversation itself, not only in the talk tab. It is
-   * client-local by design — the daemon sees nothing until the release cue
-   * turns it into a real turn, which replaces this bubble with the message.
+   * Live transcription accumulating on this device, shown as a pending user
+   * bubble so the operator watches their thinking land in the conversation
+   * itself, not only in the talk tab. It is client-local by design — the daemon
+   * sees nothing until the turn is really sent, which replaces this bubble with
+   * the message.
+   *
+   * Three states feed it, composed by `pendingUtterance` in
+   * `utteranceDeferral.ts`: the brainstorm hold buffer, a fragment the deferral
+   * pen is holding, and the speculative decode's provisional reading of the
+   * breath in progress. The last of those is why this row matters for latency:
+   * the accurate transcript cannot exist until the endpoint has proved the turn
+   * is over, seconds later, and without this the surface looks deaf until then.
    */
   pendingSpeech?: string
+  /** Header for that row. Which of the three states it is naming matters: a
+   * heuristic hold expires into a turn on its own, a park never does, and a
+   * provisional reading is not held at all - it is simply not finished. */
+  pendingSpeechNote?: string
   /** Full conversation, the dock's one-row peek, or mounted and drawing nothing. */
   variant?: VoiceBodyVariant
   /**
@@ -254,7 +266,7 @@ export function AssistantPanel({
   useLayoutEffect(() => {
     const element = logRef.current
     if (element) element.scrollTop = element.scrollHeight
-  }, [messages, actions, thinking, pendingSpeech, variant])
+  }, [messages, actions, thinking, pendingSpeech, pendingSpeechNote, variant])
 
   const openActions = actions.filter(item => item.status === 'pending' || item.status === 'scheduled')
   const openActionCount = openActions.length
@@ -337,7 +349,7 @@ export function AssistantPanel({
         <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
       </article>)}
       {pendingSpeech.trim() && <article class="assistant-message user assistant-pending-speech">
-        <header>you · holding — say “go ahead” to send</header>
+        <header>you · {pendingSpeechNote}</header>
         <p>{pendingSpeech}</p>
       </article>}
       {thinking && <p class="assistant-thinking">{thinking}</p>}

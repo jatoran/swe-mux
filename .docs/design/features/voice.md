@@ -519,6 +519,40 @@ install-wide, so the tab edits them directly for the focused session.
     expires into an ordinary turn, so waiting is enough, while a park never sends on its own and
     only more speech resolves it.
 
+- **The pending row: the operator's words are visible before the turn exists.**
+  Measured on a real held utterance: `total_ms 4056`, of which `endpoint_ms` was **3168** and the
+  decode only 571. Nearly four fifths of the wait is the endpoint proving the turn is over - and
+  lengthening exactly that wait is what stopped the interruptions. So the fix is not to shorten it
+  but to stop tying *display* to *dispatch*.
+  `pendingUtterance` (`utteranceDeferral.ts`, pure) composes one client-local row from the three
+  things that can be in flight at once, in the order they were spoken: the brainstorm buffer, the
+  fragment the pen is holding, and the speculative decode's provisional reading of the breath
+  happening right now. `AssistantPanel`'s existing `pendingSpeech` bubble renders it, with a
+  `pendingSpeechNote` header naming which of the three states produced it.
+  - **The provisional text costs no extra decode.** The speculative pass already runs at 160 ms of
+    silence and, for anything that was not a command, `ConversationControl.tsx` threw its transcript
+    away. It is now published as the row's tail instead. It is lower fidelity on purpose - the
+    `command` profile is `small.en` at beam 1 (342 ms measured, against 571 ms for `turbo` at beam
+    5) - and it is a *prefix*, taken at the first short pause rather than rolling, because
+    `speculated` latches once per utterance. Rolling partial decodes would multiply STT load and are
+    deliberately not done until this proves insufficient.
+  - **The provisional reading is cleared the instant the accurate one lands**, before the pen is
+    offered the text (`settleProvisional`). That ordering is the whole no-duplication argument: the
+    composer concatenates and cannot tell two readings of one breath apart, so a held fragment and a
+    stale speculative copy of that same fragment must never both be present. A `settledUtteranceRef`
+    also refuses a speculation that finishes *after* the real decode, which would otherwise replace
+    good text with worse.
+  - **A held fragment is deliberately not a dialog message.** It was one briefly - the park path
+    dispatched a turn, so `assistant_turn_started` rendered a `you` bubble, and the `held` verdict
+    then deleted it, which is the disappearing-text behaviour this replaces. A client-local row
+    simply clears when the real turn arrives, so nothing is ever removed from the transcript, and
+    the *heuristic* deferral - whose text never reached the panel at all, only the `talk` tab via
+    `recordHistory` - becomes visible for the first time.
+  - The row reads the pen through a ref during render, which repaints only because every pen
+    mutation is already paired with a state set (`armDeferral`, `parkAssistantHold`, and
+    `clearDeferralTimer` on every emptying path). A future mutation that skips that pairing shows
+    stale words silently.
+
 - **Smart Turn v3 lab** (`frontend/smart-turn-lab.html`, dev server only, wired into nothing).
   The word list is the wrong long-term layer and the research says so: production voice stacks all
   moved to a learned end-of-turn model, and the good ones read audio rather than a transcript,
