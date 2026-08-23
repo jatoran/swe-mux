@@ -952,6 +952,16 @@ Its rules, and what each one is defending:
       still is what keeps a larger interface from also becoming a sparser one. Nor do
       panel *maxima* (`height:min(760px, 100dvh - 42px)`) — those are viewport-bound — or
       widths the user already drags (the sidebar, the docked drawer).
+    - A tick or a dot is glyph-sized rather than type-derived, so both take their size from
+      one rule (`--check-size`, 14px, 18px on a coarse pointer) and neither scales.
+      The corollary is a rule about *other* rules: a container rule that stretches its inputs
+      (`<panel> input { width:100%;height:... }`) has to exclude **both** `[type=checkbox]` and
+      `[type=radio]`, because a dot stretched to a field's width and height is not a dot.
+      Excluding only the checkbox is the version of this that keeps shipping: it rendered every
+      budget-mode radio in Settings as a 77x31 blob and pushed the word beside it out of its own
+      chip, on desktop exactly as much as on a phone.
+      `frontend/test/styleInvariants.test.ts` scans `style.css` and fails on a selector that
+      spares one and not the other, which is cheaper than a renderer test per panel.
     - The steps stop at 1.4 because past it the fixed values start to crowd.
   - **The terminal follows the scale too, but not through CSS.** xterm owns its font and
     derives the cell grid from it, so `TerminalPane` is handed the scale as a number and
