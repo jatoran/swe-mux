@@ -367,9 +367,20 @@ Other 404s do not mutate the request: an unknown model remains a terminal config
 Models absent from a stale catalog use the same bounded profile sequence, so a newly configured exact model is not coupled to catalog refresh timing.
 The selectable catalog still excludes non-text models and models without structured-output support because every current swe-mux OpenRouter consumer requires a strict JSON object.
 Malformed, empty, non-object, and schema-invalid structured responses are retryable title faults.
+
+**Every schema `complete_json` sends is bound by strict mode, and the binding is absolute rather than stylistic.**
+`strict: true` is what makes `require_parameters` routing return schema data instead of prose, and it imposes two rules ordinary JSON Schema does not: `required` must list every key in `properties`, and `additionalProperties` must be `false` on every object.
+A schema breaking either is rejected with HTTP 400 before a single token is billed, so an "optional" property is not a looser contract but a call that can never succeed.
+The failure is silent in the worst direction: a rejected call bills nothing, writes no spend row, and is therefore indistinguishable in the spend table from an automation that simply never fired.
+`TITLE_SCHEMA` shipped with `confidence` declared and not required, and `builtin:adaptive-title` consequently failed 100% of its live calls from the day it was first enabled until 2026-08-23.
+Consumer tests cannot catch this and a similar test never will, because they inject a fake provider that ignores the `schema` argument entirely - correct for testing pivot logic, and exactly why the schemas carry their own guard (`tests/test_llm_schemas.py`, discovery by source scan so a new schema is covered without being remembered).
+
 Observer-call rows retain only safe response diagnostics: generation and resolved model, provider,
 finish reason, HTTP status, token and cost usage, response content type and length, and retryability.
 The response content itself is not retained.
+Every caller records those fields on failure as well as on success, because a failed call that bills nothing leaves the row as its *only* trace, and a row saying merely that something failed cannot be acted on.
+A rejected request also keeps the provider's own explanation of the rejection: HTTP 400 joins the statuses whose body is retained (`SAFE_ERROR_DETAIL_STATUSES`), since it names which part of the request was refused and is a request error rather than an auth error.
+Auth statuses stay excluded because their body can echo the rejected credential, and key-shaped text is scrubbed from every retained detail regardless.
 
 **Observer input is scrubbed before it is hashed, measured, or sent.** Slice construction
 and `complete_json` both run text through `text_safety.utf8_safe`, because a lone surrogate
@@ -418,6 +429,10 @@ pivot definition (`evaluate_pivot`) with the phase-transition signals below, so 
 disagree about what a pivot is. Its re-title count is surfaced in the scan snapshot's
 `adaptive_title` field; a stable-subject run reads zero. With the consumer off (or the scan timeline
 off), titling is exactly the one-shot behaviour above.
+
+That zero is deliberately ambiguous and must not be read as health.
+Working-and-stable and rejected-on-every-call produce the identical count, and neither produces a spend row, so the discriminator is the observer-call ledger: a healthy quiet run has *no* rows for `builtin:adaptive-title`, while a broken one has rows carrying a terminal status and an HTTP code.
+The Automation dashboard's Observer calls list is where that is read.
 
 **Phase-transition signals (Phase 7.7, `phase_transitions`, off by default)** ride the same scan
 record and the same pivot gate. On a genuine `work_phase` pivot they write a non-blocking
