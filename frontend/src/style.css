@@ -2297,7 +2297,14 @@ body {
 .terminal-action-rows{grid-row:1;grid-column:1;min-width:0;display:flex;flex-direction:column}
 /* One `.rail-row` per configured row: a scrolling strip plus fixed trailing furniture. */
 .terminal-action-rows>.rail-row{position:relative;min-width:0;display:flex;min-height:var(--rail-row-h)}
-.terminal-action-rows>.rail-row>.overflow-rail{position:static;flex:1 1 auto;min-width:0;display:flex;overflow:visible}
+/* `relative`, so the endpoint indicators resolve against the *strip's* box rather than the
+   row's. The row is the strip plus a trailing cluster whose width is not fixed — the row
+   carrying the status readout is wider than the rest — so anything positioned from the row
+   edge has to guess that width, and guessed wrong on exactly that row: the arrow was drawn
+   past the strip, out over inert chrome, where its glow showed against the flat panel
+   instead of over a chip and where a tap landed on nothing. `overflow:visible` is what the
+   base rule's `hidden` would otherwise clip; the strip inside does its own clipping. */
+.terminal-action-rows>.rail-row>.overflow-rail{position:relative;flex:1 1 auto;min-width:0;display:flex;overflow:visible}
 .terminal-action-rows>.rail-row>.overflow-rail>.terminal-action-scroll{flex:1 1 auto}
 .terminal-action-rows>.rail-row+.rail-row{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
 .overflow-rail{position:relative;min-width:0;overflow:hidden}
@@ -2574,8 +2581,12 @@ body {
 .overflow-rail-edge::after{content:'';position:absolute;top:50%;transform:translateY(-50%);width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--text) 82%,transparent))}
 .overflow-rail-left{left:0}.overflow-rail-left::before{left:-5px}.overflow-rail-left::after{left:3px;border-right:5px solid color-mix(in srgb,var(--text) 82%,var(--muted))}
 .overflow-rail-right{right:0}.overflow-rail-right::before{right:-5px}.overflow-rail-right::after{right:3px;border-left:5px solid color-mix(in srgb,var(--text) 82%,var(--muted))}
+/* Both insets are now the strip's own, the wrapper above being its box. The left one clears
+   the strip's padding so the glow sits on the first chip rather than in the gutter; the
+   right one keeps the 1px the old row-relative `calc` worked out to, so the row that always
+   looked right still renders identically. */
 .terminal-action-rows>.rail-row .overflow-rail-left{left:var(--rail-pad-x)}
-.terminal-action-rows>.rail-row .overflow-rail-right{right:calc(var(--rail-more-width) + var(--rail-pad-x) + 1px)}
+.terminal-action-rows>.rail-row .overflow-rail-right{right:1px}
 .terminal-action-rail button.rail-pulse:not(:disabled){animation:rail-pulse .34s ease-out}
 @keyframes rail-pulse{
   0%{border-color:var(--green);color:var(--green);background:color-mix(in srgb,var(--green) 26%,var(--panel2));box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)}

@@ -31,7 +31,9 @@ A fixed-width drawer control lives in trailing furniture outside the scroller on
 The drawer's small count is `chips.length`, so it describes the complete row and does not change with viewport width.
 Opening it clones the complete chip list into `RailOverflowPopover` as a wrapping grid.
 The same trailing cluster anchors the panel, giving all rows one trailing-edge placement.
-Command-rail glow wedges are positioned relative to `.rail-row`, not each scroller's width, so stacked rows align even when one row also carries status text.
+Command-rail glow wedges are positioned relative to each row's `OverflowRail` wrapper, which is the scroller's own box: `.terminal-action-rows>.rail-row>.overflow-rail` is `position:relative` with `overflow:visible`, so the wedge sits on the strip's edge while its glow still bleeds past it.
+Positioned from `.rail-row` instead, the right wedge had to name the trailing cluster's width in a `calc`, and that width is not one number - the readout row is wider - so on that row the wedge was drawn past its own strip, over furniture that answers to no tap.
+Rows whose trailing furniture matches still align, which is nearly always: `RailStrip` renders the status readout only when it has text, so the empty string the caller passes to mark the readout row costs the chips nothing.
 
 `railOverlayPlacement.ts` is the DOM half of placing **every** command-rail overlay - the popover and each drop-up - and exists for two soft-keyboard bugs that presented as one.
 `railOverlayView()` reads the *visual* viewport, because `interactive-widget=resizes-visual` keeps the layout viewport at full height and every bound drawn against `innerHeight` therefore describes a rectangle running behind the keyboard.
@@ -49,6 +51,9 @@ Three consequences are behaviours rather than details, and all three are covered
 a drop-up opened from a chip inside it is outside its DOM, so the pointer that opens one is exempted from outside-dismissal;
 Escape reaches both listeners on `window`, where `stopPropagation` stops neither and this one is registered first, so the panel stands aside while any `.rail-dropup` exists;
 and `railPopoverClosingCommand` folds the panel for the selections that navigate away (a drawer tab, a drawer section, the prompt library), listened for on the `mux:command` bus so a drop-up's sticky exit and a voice command fold it the same way a chip does.
+A fourth consequence is not the panel's own code: it renders *inside* `.terminal-action-rail`, which is a mobile gesture region, and its grid scrolls vertically, which is that region's swipe.
+`mobileGestures.ts` names it in `GESTURE_SHADOWING_SELECTORS` so a touch that begins in it is dropped by the recognizer entirely - not merely denied a region, which would hand it to the workspace slots and change tabs behind the open panel.
+Portalling it out would settle that too, and would cost the chips inside it the pulse `.terminal-action-rail`'s own `onClick` gives them, which is why the veto is by name.
 The glass opacity is one CSS variable at `:root`, `--rail-glass`, shared with every drop-up, and it is measured rather than chosen: `test/railGlassContrast.test.ts` composites it over a white and a black terminal for every theme in the stylesheet and requires it both to cost no theme its 4.5:1 and to stay under 95%, so a later contrast "fix" cannot pass by going opaque.
 The *single-layer* composition sets the number - a drop-up row is transparent over its panel where a popover chip has its own background - so testing only the chip would have let the drop-ups ship at an opacity that fails.
 

@@ -1265,6 +1265,16 @@ Its rules, and what each one is defending:
   That last rule exists because the overflow veto is *conditional* - a strip that scrolls only
   when full would otherwise make a gesture beside it work half the time, which is worse than not
   having it.
+  **A surface drawn over a region takes its touches whole** (`GESTURE_SHADOWING_SELECTORS`).
+  A region claims a channel because that channel is dead there, and an overlay opened from the
+  region can break that premise while still living inside it: the command rail's overflow popover
+  is a DOM child of the rail row and scrolls vertically, so scrolling its chips *was* the rail's
+  upward swipe and opened the app menu. The veto is on surface identity, not on scroll state - a
+  short panel that does not overflow is no more a place to open the app menu than a tall one - and
+  it drops the sequence outright rather than merely declining to call it a region gesture, since
+  a path that is only "not a region" still resolves the workspace slots and a sideways drag across
+  the panel would change tabs behind it. Drop-ups need no entry: they mount outside the rail, so
+  no region matches them to begin with.
 - **Only the command rail's swipe is a rebindable slot** (`rail_swipe_up`, default `menu.toggle`),
   because it is the only one whose action is not about the surface it starts on - it opens the app
   menu, and any command would make sense there.
@@ -1671,12 +1681,15 @@ Its rules, and what each one is defending:
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because a transient `Copied` appeared beside it.
+  With nothing to say it renders nothing at all, rather than an empty element holding its own padding: that width belongs to the chips, and the row carrying the readout is the busiest one.
   The strip itself carries no customize gear.
   Every row instead keeps one fixed drawer control outside its scroller, including empty rows and rows whose buttons all fit.
 - **Every row answers overflow twice: it scrolls end to end, and its permanent drawer opens the complete row.**
   Every configured chip remains in the scroller for direct pan, wheel, touch-drag, and focus reveal.
   Passive left and right glow wedges appear only while content exists in that direction.
-  The wedges consume no layout space, accept no input, and align to the same row-relative edges across stacked rails.
+  The wedges consume no layout space, accept no input, and sit on the edges of **their own strip**.
+  A wedge is a claim about where this row's content is cut, so it is positioned from the strip rather than from the row: a row's trailing furniture is not one width, and one aligned across rows from the row's edge stood off the end of the strip on any row whose furniture was wider, drawing its glow over the flat panel and marking a spot no tap could reach.
+  Rows whose furniture does match still line up, which is nearly always, since an empty status readout now takes no width.
   The drawer control uses the rail's ordinary neutral button treatment with a slightly heavier outline and drawer mark.
   Its small bottom-right count is the row's total action count, not an overflow calculation, so it remains stable across resizing.
   The fixed trailing cluster gives the drawer one position on every row and anchors the panel to the rail's trailing edge.
