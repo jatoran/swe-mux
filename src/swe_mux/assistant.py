@@ -112,6 +112,15 @@ CONTEXT_ACTION_LIMIT = 12
 # when the model writes prose that never reaches one.
 STREAM_SENTENCE_MAX_CHARS = 220
 _STREAM_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+# How much of one transcript message a read returns by default, and the ceiling a
+# caller may raise it to for a message it has been told was cut. The default is
+# unchanged; what changed is that exceeding it is reported rather than silent.
+TRANSCRIPT_TEXT_CHARS = 2_000
+TRANSCRIPT_TEXT_MAX_CHARS = 12_000
+# A transcript cursor is an opaque round-trip of the page's own anchor. Bounded
+# because it arrives from a model: a malformed or oversized one is refused with a
+# message rather than fed to the reader.
+_TRANSCRIPT_CURSOR_MAX_CHARS = 2_000
 # Kinds where repeating an already-executed action is itself the damage. A
 # second identical note append writes the paragraph twice; a second identical
 # spawn is a thing operators genuinely ask for, so it stays unguarded.
@@ -351,6 +360,47 @@ def strip_hold_sentinel(text: str) -> tuple[bool, str]:
     if match is None:
         return False, (text or "").strip()
     return True, (text or "")[match.end():].strip()
+
+
+def _encode_transcript_cursor(anchor: Any) -> str:
+    """The page's anchor as one opaque string the model can hand back.
+
+    A cursor rather than an offset because the reader's own paging is
+    anchor-based: an index would drift the moment the conversation grew between
+    two calls, which for a live session is most of the time.
+    """
+    if not isinstance(anchor, dict):
+        return ""
+    try:
+        encoded = json.dumps(anchor, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return ""
+    return encoded if len(encoded) <= _TRANSCRIPT_CURSOR_MAX_CHARS else ""
+
+
+def _decode_transcript_cursor(raw: Any) -> tuple[dict[str, Any] | None, str]:
+    """Turn a returned cursor back into an anchor, or say why it cannot.
+
+    Returns `(anchor, error)`. Absent is not an error - it means "the newest
+    messages", which is what a first read wants. Anything present but unusable
+    IS an error, because silently reading the tail again would loop the model
+    through the same page while it believed it was paging backwards.
+    """
+    if raw is None or raw == "":
+        return None, ""
+    if not isinstance(raw, str) or len(raw) > _TRANSCRIPT_CURSOR_MAX_CHARS:
+        return None, "before must be the next_before string from a previous read_transcript"
+    unusable = (
+        "before is not a cursor this reader issued; "
+        "omit it to read the newest messages"
+    )
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        return None, unusable
+    if not isinstance(decoded, dict):
+        return None, unusable
+    return decoded, ""
 
 
 def is_hold_sentinel(text: str) -> bool:
@@ -2064,10 +2114,32 @@ class AssistantService:
             ),
             tool(
                 "read_transcript",
-                "The last N messages of a session's conversation, oldest first.",
+                "The last N messages of a session's conversation, oldest first. A message "
+                "longer than the character budget comes back with truncated=true and its "
+                "total_chars: read it again with a larger `chars` when the part you need is "
+                "past the cut, and do not answer from a truncated message as though it were "
+                "whole. has_more=true means older messages exist; pass the returned "
+                "next_before as `before` to page further back.",
                 {
                     "session": session_property,
                     "messages": {"type": "integer", "minimum": 1, "maximum": 30},
+                    "chars": {
+                        "type": "integer",
+                        "minimum": 200,
+                        "maximum": TRANSCRIPT_TEXT_MAX_CHARS,
+                        "description": (
+                            "Characters of each message to return "
+                            f"(default {TRANSCRIPT_TEXT_CHARS}). Raise it for a message "
+                            "reported as truncated."
+                        ),
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": (
+                            "The next_before cursor from a previous read of this session, to "
+                            "read the messages before that page. Omit for the newest."
+                        ),
+                    },
                 },
                 ["session"],
             ),
@@ -3422,6 +3494,11 @@ class AssistantService:
             if not session.transcript_path or not session.transcript_path.exists():
                 return {"error": "the session has no readable transcript"}
             count = max(1, min(int(arguments.get("messages") or 10), 30))
+            requested_chars = int(arguments.get("chars") or TRANSCRIPT_TEXT_CHARS)
+            chars = max(200, min(requested_chars, TRANSCRIPT_TEXT_MAX_CHARS))
+            anchor, anchor_error = _decode_transcript_cursor(arguments.get("before"))
+            if anchor_error:
+                return {"error": anchor_error}
             # Bound to a narrowed local: `session` is reassigned in later
             # branches, which widens the closure capture back to Optional.
             target = session
@@ -3430,20 +3507,41 @@ class AssistantService:
                     target.transcript_path,
                     target.record.backend,
                     direction="tail",
-                    anchor=None,
+                    anchor=anchor,
                     max_bytes=512 * 1024,
                     max_messages=count,
                     native_id=target.record.native_session_id,
                 )
             )
-            messages = [
-                {
-                    "role": item.get("role"),
-                    "text": str(item.get("text") or "")[:2_000],
-                }
-                for item in page.get("messages", [])
-            ]
-            return {"messages": messages}
+            # Truncation is REPORTED, never silent. A message cut to its first
+            # 2000 characters with no marker is indistinguishable from a short
+            # one, so the model cannot tell whether to ask for more - and neither
+            # can the operator, whose summary may be missing the tail of a list
+            # with nothing to say so. Observed 2026-08-23: an audit's final
+            # response was cut mid-list, the assistant answered from the visible
+            # part, and then proposed writing to the agent to ask it to restate
+            # the recommendations, which is what a reader does when its source
+            # stops mid-sentence.
+            messages = []
+            for item in page.get("messages", []):
+                text = str(item.get("text") or "")
+                message: dict[str, Any] = {"role": item.get("role"), "text": text[:chars]}
+                if len(text) > chars:
+                    message["truncated"] = True
+                    message["total_chars"] = len(text)
+                messages.append(message)
+            transcript: dict[str, Any] = {"messages": messages}
+            # `has_more` is computed by the page and used to be discarded here,
+            # which left the model unable to know a longer conversation existed
+            # and with no parameter to ask for it even if it had.
+            if page.get("has_more"):
+                transcript["has_more"] = True
+                cursor = _encode_transcript_cursor(page.get("next_anchor"))
+                if cursor:
+                    transcript["next_before"] = cursor
+            if page.get("abandoned_messages"):
+                transcript["abandoned_messages"] = page["abandoned_messages"]
+            return transcript
         if kind == "search_history":
             if self.history_search is None:
                 return {"error": "history search is not wired on this daemon"}
@@ -3472,16 +3570,22 @@ class AssistantService:
                     "error": str(exc),
                     "retry_with": "a narrower phrase, or ask the operator which project to look in",
                 }
-            items = [
-                {
+            # Same rule as read_transcript: a cut summary says it was cut. This
+            # one is a locator rather than an answer, so the remedy is to read
+            # the session it names rather than to ask for more characters here.
+            items = []
+            for item in page.get("items", []):
+                summary = str(item.get("summary") or "")
+                entry: dict[str, Any] = {
                     "name": item.get("name"),
                     "backend": item.get("backend"),
                     "project": item.get("project_label") or item.get("project_id"),
                     "started_at": item.get("started_at"),
-                    "summary": str(item.get("summary") or "")[:400],
+                    "summary": summary[:400],
                 }
-                for item in page.get("items", [])
-            ]
+                if len(summary) > 400:
+                    entry["summary_truncated"] = True
+                items.append(entry)
             return {"items": items}
         if kind == "list_project_notes":
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
