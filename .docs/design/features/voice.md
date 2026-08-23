@@ -75,11 +75,41 @@ install-wide, so the tab edits them directly for the focused session.
   A per-session lock drops overlapping `auto` preparation requests, and two engine slots bound synthesis concurrency (`_engine_semaphore`).
 - **Application speech opens on a much tighter clip** (`APPLICATION_FIRST_SEGMENT_CHARS`, the
   `first_max_chars` argument to `streaming_segments`), because the opening clip *is*
-  time-to-first-sound. Synthesis time tracks characters: a 420-character opener measures 11-14 s
-  of silence on Kokoro before a word is heard, against about a second for a short one. Only the
-  first cut moves; the tail keeps the wide bound. Agent read-aloud deliberately keeps the wide
-  opener too - the coherence of somebody else's prose matters more there than the first second,
-  which is the trade this split exists to make separately for each.
+  time-to-first-sound. Only the first cut moves; the tail keeps the wide bound. Agent read-aloud
+  deliberately keeps the wide opener too - the coherence of somebody else's prose matters more
+  there than the first second, which is the trade this split exists to make separately for each.
+- **A clip has a floor as well as a ceiling, and the floor is what stops playback stalling.**
+  Measured on the primary host (Kokoro, two passes, natural prose):
+
+  | chars | 3 | 19 | 40 | 60 | 90 | 140 | 280 | 420 |
+  |---|---|---|---|---|---|---|---|---|
+  | synth ms | 578 | 984 | 1484 | 2016 | 3109 | 4110 | 3969 | 8438 |
+  | audio ms | 200 | 1267 | 2667 | 4000 | 6000 | 9333 | 18667 | 28000 |
+  | audio/synth | **0.35** | 1.29 | 1.80 | 1.98 | 1.93 | 2.27 | 4.70 | 3.32 |
+
+  Synthesis is **not linear**: about 480 ms of fixed overhead plus ~26 ms per character, while
+  speech plays at ~15 characters per second. The last row is the whole design constraint - a clip
+  must play for longer than its successor takes to make, so anything under about **twelve
+  characters stalls by arithmetic**, on any hardware, and `MIN_SEGMENT_CHARS` (20) is that bound
+  with about 30% margin. The number came down twice under real sentences, which is worth recording
+  because the first guesses were wrong in the same direction: the pathology is a *three-to-five*
+  character lead ("Yes.", "Ok.", "Done." - `covers` 0.35), while ordinary short sentences cover
+  fine and must keep leading on their own ("First result is ready." is 22 characters at ~1.4;
+  "Three sessions are working." is 27 at ~1.5). Floors at 40 and then 25 glued both of those to
+  the sentence after them for no gain. `_merge_short_tail` folds a runt final clip into the one before it even
+  when that pushes the last clip past `max_chars`, because by the last clip there is nothing left
+  to cover and a two-word ending lands as a stutter on the way out.
+  The same arithmetic governs the *opening*: `MIN_FIRST_SENTENCE_CHARS` in `assistant.py`
+  coalesces leading sentences so a reply that begins "Yes." is not released as its own 200 ms clip
+  with a guaranteed gap behind it. It costs a little more silence before the first word and
+  removes the stall right after it - the operator reaches the content no later either way.
+  These numbers also corrected the constant they replaced: `APPLICATION_FIRST_SEGMENT_CHARS` was
+  140 on the strength of a comment claiming 140 characters spoke "in about a second", which
+  measures 4.1 s. It is 60 (2.0 s), and **~580 ms is the floor for any sound at all** - beating
+  that is a different voice model, not a chunking change.
+  None of this was measurable before: `voice clip synthesized` now logs `chars`, `synth_ms`,
+  `audio_ms`, and `covers` (audio ÷ synth) per clip, which is how a bound drifts four-fold from
+  reality without anyone noticing.
 - Content is `summary` (spoken-word summary via OpenRouter, strict `{speech}` JSON schema,
   three-to-eight plain-English sentences) or `verbatim` (assistant text with markdown, code
   fences, links, and tables reduced to listenable prose by `speechify`, bounded by

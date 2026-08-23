@@ -103,6 +103,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   },
   "data_dir": "C:\\Users\\demo\\.mux",
   "default_backend": "shell",
+  "default_harness": "",
   "default_shell_profile": "default",
   "drawer_tab_display": "icon",
   "ghost_window_poll_seconds": 5.0,

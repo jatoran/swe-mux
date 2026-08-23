@@ -1,7 +1,7 @@
 # Backend: MCP, queues, messaging, and scheduled runs
 
 Index: `../packages.md`.
-Design: `../../../design/features/mux-mcp.md`, `../../../design/features/prompt-queue.md`, `../../../design/features/auto-delivery.md`, `../../../design/features/agent-messaging.md`, `../../../design/features/scheduled-runs.md`, `../../../design/features/observations.md`.
+Design: `../../../design/features/mux-mcp.md`, `../../../design/features/configurator.md`, `../../../design/features/prompt-queue.md`, `../../../design/features/auto-delivery.md`, `../../../design/features/agent-messaging.md`, `../../../design/features/scheduled-runs.md`, `../../../design/features/observations.md`.
 
 Each entry lists what the module owns, then **Not:** what it deliberately does not.
 
@@ -32,11 +32,31 @@ Also token-derived identity, exact display-name resolution, cursors, output budg
 **Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`server.py`).
 Nor any authority a write tool borrows: session control (`session_control.py`), landing (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`).
 
+Also the configurator family (`CONFIGURATOR_TOOLS`), which is a *separate* array rather than flagged entries in `TOOLS`: `tools_for` returns the ordinary list unchanged to every session but a configurator, so nothing has to remember to filter.
+Listing and dispatch apply the same `SessionRecord.configurator` check, and a guessed name answers "unknown tool" rather than "not permitted" - to a session that was never shown the tool that is the literal truth.
+The four handlers are thin: the guides are served straight from `configurator.py` (files in this build, no runtime state), and the other three call the injected service.
+
 ### `mcp_contract.py`
 
 The shared closed read and write tool declarations, and the generated Claude read-permission names.
 
+Four names sit apart from the fleet lists in `CONFIGURATOR_READ_TOOL_NAMES` and `CONFIGURATOR_WRITE_TOOL_NAMES`: they describe and change *swe-mux*, not the work any session is doing.
+The reads are in the generated permission allowlist and the write is not - a rule only decides whether the CLI prompts, the daemon refuses a non-configurator caller regardless, and a settings change is exactly the thing a human should see before it happens.
+
 **Not:** tool implementation, transport, or write approval.
+
+### `configurator.py`
+
+The configurator agent's substrate (`design/features/configurator.md`).
+
+- The generated inventory: a settings catalog derived from the `Config` dataclass, `RESTART_FIELDS`, and `_validate` itself; the harness table over `public_harness_registry`; the automation DAG with transitive closures; the project-config field and forbidden sets; the MCP surface.
+- **Constraints are quoted from the validator, not transcribed.** `settings_catalog` sets an impossible sentinel on a detached candidate, runs `_validate`, and keeps the sentence it objects with. Restoration is in a `finally`, and a test asserts the live config is untouched: a missed restore would corrupt the running install with a value nothing else could produce.
+- Credential-shaped fields redact to `<set>`/`<unset>`. No `Config` field is a credential today; the pattern is anchored on whole singular words because a loose "token" match swallowed nine budget ceilings.
+- The closed guide set and its reads. Guides live in `assets/configurator/` - the wheel and the PyInstaller bundle both carry that directory and neither carries `.docs/`.
+- `install_mode()` / `source_checkout()`: whether this daemon can be edited at all.
+- The seed prompt, and `ConfiguratorService`, whose diagnostics and settings write are injected callables so this module stays free of the HTTP layer.
+
+**Not:** the settings write itself (`config.update_config`, reached through the injected callable), the health report (`doctor.py`, gathered by `server._doctor_report`), harness resolution (`harness.resolve_default_harness`), the routes and the session marker (`server.py`, `models.py`), or MCP transport (`mcp.py`).
 
 ### `project_scope.py`
 

@@ -96,6 +96,36 @@ WRITE_TOOL_NAMES = (
 )
 
 
+#: The configurator agent's own reads (`configurator.py`). Kept apart from
+#: `READ_TOOL_NAMES` because they are not part of the fleet surface at all: they
+#: describe and diagnose *swe-mux*, not the work any session is doing, and they
+#: are listed only to sessions the daemon itself launched as configurators. An
+#: ordinary session neither sees them in `tools/list` nor can call them.
+CONFIGURATOR_READ_TOOL_NAMES = (
+    "configurator_capabilities",
+    "configurator_guide",
+    "configurator_diagnostics",
+)
+
+#: The one configurator write. It changes install-wide settings through
+#: `update_config` - the same call `PATCH /api/config` makes - so it can do
+#: nothing the Settings panel could not, cannot skip a validation, and cannot
+#: half-apply a batch. It is deliberately the *only* write in the family: reading
+#: a diagnostic is safe to repeat, and changing an install is not.
+CONFIGURATOR_WRITE_TOOL_NAMES = ("configurator_apply_settings",)
+
+
 def claude_read_permissions() -> list[str]:
-    """Claude permission rules for the read-only mux MCP tools."""
-    return [f"mcp__mux__{name}" for name in READ_TOOL_NAMES]
+    """Claude permission rules for the read-only mux MCP tools.
+
+    The configurator reads are included even though almost no session can call
+    them. A permission rule only decides whether the CLI *prompts*; the daemon
+    still refuses a caller that is not a configurator, so pre-allowing them
+    grants nothing and spares the one session that can from an approval dialog
+    in front of every "what is this setting called" lookup. The configurator
+    *write* is deliberately absent: a settings change is exactly the thing a
+    human should see before it happens.
+    """
+    return [
+        f"mcp__mux__{name}" for name in (*READ_TOOL_NAMES, *CONFIGURATOR_READ_TOOL_NAMES)
+    ]

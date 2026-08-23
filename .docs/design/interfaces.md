@@ -1620,6 +1620,26 @@ Every failed check carries a concrete `remedy`.
 Each `observation_freshness[]` row is one agent session whose observation the daemon can no longer trust - `{id, name, backend, reason, since, seconds_stale, diagnostic, delivery_blocking}` - drawn from the same `observation_stale_since`/`observation_stale_reason` fields the per-session state-log exposes (`features/status-detection.md`).
 Like `export`, the report is built from already-sanitized sources and content-free rows, so it never includes a secret, terminal bytes, prompt or message content, or a credential.
 
+## Configurator agent
+
+```text
+GET  /api/configurator/options
+POST /api/configurator/launch    {project_id?, harness?}
+```
+
+`options` is what the launcher needs before it is pressed: `harnesses[]` (registered agents this machine can actually run), `default_harness` (the one a plain press would use, or null), `configured_default` (the operator's own `default_harness` setting; `""` means resolve by detection), `install_mode` (`source`/`frozen`/`installed`), `source_checkout`, and the registered `projects` count.
+It is its own request rather than something the button recomputes because detection shells out to probe CLI versions; a surface holding the button asks once when it opens and renders a disabled control with a reason rather than one that fails when clicked.
+
+`launch` spawns a configurator session and returns **exactly the body `POST /api/sessions` answers with**, `201`.
+The browser places a new session into a pane itself, so a launcher returning a shape of its own would need a second placement path that drifts from the one every other launch uses; the record already carries `configurator: true`.
+The prompt travels as `seed_text` (the agent runs it), never `stage_text`: the human pressed a button whose label says it starts a conversation.
+
+Two refusals, both `409` and deliberately distinct, because they are different problems with different fixes: `no_harness` (with `candidates[]`) when no agent is installed and enabled, or when a named one is not among them; `no_project` when none is registered.
+
+`SessionRecord.configurator` is set here and by nothing else, and is **not** a `SpawnRequest` field: were it one, `request_spawn` would be a way for any agent to ask for a session that can rewrite this install's settings, and the human approving that request would read it as an ordinary spawn (`features/configurator.md`).
+
+The four MCP tools that marker unlocks — `configurator_capabilities`, `configurator_guide`, `configurator_diagnostics`, `configurator_apply_settings` — are listed only to such a session, and `apply_settings` runs the same `update_config` path as `PATCH /api/config`, reporting `hot_applied` and `restart_required` separately and refusing an invalid batch as a typed result that changes nothing.
+
 ## History and reviews
 
 ```text

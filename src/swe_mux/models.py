@@ -496,6 +496,21 @@ class SessionRecord:
     # project's own task files and was equally visible in the retained argv
     # before, so this changes legibility, not exposure.
     spawn_env: dict[str, str] = field(default_factory=dict)
+    # True only for a session the daemon itself launched as the configurator
+    # (`POST /api/configurator/launch`). It is what gates the configurator MCP
+    # family, so it is the whole of that family's authority and is set in exactly
+    # one place.
+    #
+    # Deliberately not reachable through `SpawnRequest`: if it were a spawn field,
+    # the `request_spawn` MCP tool would be a way for any agent to ask for a
+    # session that can rewrite this install's settings, and the human approving
+    # that request would have no reason to read it as anything but an ordinary
+    # spawn. The only way to get one is the endpoint the button calls.
+    #
+    # Carried through snapshot()/from_snapshot() because sessions outlive the
+    # daemon: a configurator adopted after a session-preserving restart that came
+    # back without its tools would look like the feature silently breaking.
+    configurator: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

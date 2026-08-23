@@ -2258,3 +2258,103 @@ def test_join_refuses_segments_that_do_not_share_an_audio_profile(tmp_path: Path
     broken.write_bytes(b"ID3 not audio")
     assert join_wav_files([first, broken], destination) is False
 
+
+def test_no_clip_is_short_enough_to_stall_the_one_behind_it() -> None:
+    """A runt final clip is the one place greedy chunking always leaves one.
+
+    Measured on the primary host: synthesis costs ~480 ms fixed plus ~26 ms per
+    character while speech plays at ~15 chars/sec, so a clip must be longer than
+    about twelve characters to still be playing when its successor is ready. The
+    remainder of a greedy split is routinely two words, and it lands on the last
+    thing the operator hears - a stutter on the way out rather than a pause in
+    the middle.
+    """
+    from swe_mux.voice import MIN_SEGMENT_CHARS
+
+    # Long enough to leave several chunks, with a couple of words spilling past
+    # the last bound - which is where greedy chunking always puts its runt.
+    text = ("word " * 72).strip() + " tail end"
+    chunks = streaming_segments(text, max_chars=120)
+    assert len(chunks) >= 2
+    assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), chunks
+    assert " ".join(chunks) == " ".join(text.split()), "merging must not lose a word"
+
+
+def test_merging_a_runt_tail_may_exceed_the_bound_on_purpose() -> None:
+    # The bound exists to keep synthesis covered by the clip playing ahead of it.
+    # By the last clip there is nothing left to cover, so a slightly long final
+    # clip is strictly better than one that stalls.
+    from swe_mux.voice import _merge_runt_tail
+
+    merged = _merge_runt_tail(["a" * 100, "b" * 5])
+    assert merged == ["a" * 100 + " " + "b" * 5]
+    # A tail that can stand on its own is left alone.
+    standalone = ["a" * 100, "b" * 60]
+    assert _merge_runt_tail(standalone) == standalone
+    # Nothing to merge into, so a lone short clip survives: it is the whole reply.
+    assert _merge_runt_tail(["hi"]) == ["hi"]
+    assert _merge_runt_tail([]) == []
+
+
+def test_the_opening_clip_halved_its_silence_without_going_under_the_floor() -> None:
+    """140 characters measured 4.1 s to first sound; 60 measures 2.0 s.
+
+    The floor matters as much as the ceiling: at 60 characters the opening clip
+    buys ~4.0 s of audio against the ~2 s its successor needs, so nothing stalls
+    behind it. Dropping it further would start the reply sooner and then stall.
+    """
+    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+
+    assert APPLICATION_FIRST_SEGMENT_CHARS == 60
+    assert APPLICATION_FIRST_SEGMENT_CHARS >= MIN_SEGMENT_CHARS
+
+
+def test_a_reply_opening_on_a_short_sentence_does_not_get_a_runt_lead() -> None:
+    """The miss the first attempt shipped, caught by its own new logging.
+
+    `_SentenceStreamer` coalesces a short opening sentence with the next one so
+    the two are spoken together - and `streaming_segments` then split them apart
+    again at exactly that boundary, because leading with a whole sentence was
+    unconditional. The result reached the field: a four-character clip logged
+    `covers=0.27`, a stall guaranteed before the second word of the reply.
+
+    A floor on one side of that handoff is not a floor.
+    """
+    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+
+    text = (
+        "Yes. The supervisor liveness race is the first recommendation, because a "
+        "transient socket failure can make live sessions look exited and then record "
+        "them that way. The second is timeouts on the fleet refresh. ok"
+    )
+    chunks = streaming_segments(text, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS)
+    assert len(chunks) >= 2
+    assert chunks[0].startswith("Yes. The supervisor"), chunks[0]
+    assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), [len(c) for c in chunks]
+    # And the opening clip still respects the bound that IS time-to-first-sound.
+    # Merging the runt into the next segment instead would have produced a
+    # 190-character opener and traded a 2 s wait for a 5.4 s one.
+    assert len(chunks[0]) <= APPLICATION_FIRST_SEGMENT_CHARS
+    assert " ".join(chunks).split() == text.split()
+
+
+def test_every_edge_holds_the_floor_across_shapes() -> None:
+    """One clip may be short only when it is the entire reply."""
+    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+
+    shapes = [
+        "Done.",
+        "Yes. No. Maybe so.",
+        "Three sessions are working and nothing is waiting on you right now, so you "
+        "are clear to keep going with whatever you were doing.",
+        ("word " * 72).strip() + " tail end",
+        "Ok. " + ("filler words here " * 40).strip() + " end",
+    ]
+    for text in shapes:
+        chunks = streaming_segments(text, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS)
+        assert chunks, text
+        assert " ".join(chunks).split() == text.split(), text
+        if len(chunks) > 1:
+            assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), (
+                text, [len(c) for c in chunks]
+            )

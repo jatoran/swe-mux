@@ -17,6 +17,21 @@
   the open enforcement gaps: `development/archive/HARNESS_PARITY_AUDIT_2026-08-11.md`;
   per-candidate parity study for CLIs not yet in the registry, and the sequencing that consumes
   it: `development/HARNESS_EXPANSION_CANDIDATES.md`, `development/ROADMAP.md` Phase 12
+- Changing the configurator agent - its generated inventory, its shipped guides, the gated
+  MCP family, the launcher, or `default_harness`: `design/features/configurator.md`, plus
+  `design/features/mux-mcp.md` for anything touching the tool contract.
+  The rule the split exists to enforce: **nothing structural in that inventory may be
+  hand-written.** Every section is derived from the registry that owns it, and the settings
+  constraints are quoted from `_validate` by probing it rather than transcribed - a
+  hand-maintained table beside a validator is a second validator, and the copy is what drifts.
+  The second rule is packaging: the guides live under `src/swe_mux/assets/` because that is
+  what the wheel and the PyInstaller bundle both carry, and `.docs/` is in neither. A guide
+  moved into `.docs/` reads correctly from source and is silently absent for every user of
+  the frozen app, which is the entire audience.
+- Adding a tool to the mux MCP surface, or changing who may see one: `design/features/mux-mcp.md`,
+  `src/swe_mux/mcp_contract.py`. A tool visible to a subset of sessions is listed *and*
+  dispatched behind the same check (`design/features/configurator.md`, "The gate") - a tool
+  advertised and then refused teaches an agent that the surface lies to it.
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project notes, the global Scratchpad, files, ignores, or watches:
@@ -479,7 +494,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   exact sounds use misaki's `[word](/phonemes/)` form, atomic in the ladder.
   Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Those segments are **rows, not clips**: `stream_id`/`segment_index`/`segment_count` (schema 3) make one reply one entry everywhere a person looks (`clip_groups`/`group_snapshot`, growing live as its segments land), a completed stream is joined into a single file under a new id with the segments kept servable for ten minutes, eviction and deletion take whole streams, and pre-schema-3 rows are discarded by the migration because they cannot be reassembled.
-  Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`) because that clip *is* time-to-first-sound, and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
+  Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`, 60) because that clip *is* time-to-first-sound, and no clip may fall under `MIN_SEGMENT_CHARS` because a clip shorter than ~12 characters finishes playing before its successor can be synthesized (measured curve in `design/features/voice.md`; `voice clip synthesized` logs `covers` per clip), and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
   Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block and owns the master; the voice panel's `tts` tab is the operational surface for layers 2 and 3 and for the global clip list, ordered by the *source message's* arrival (`voice_clips.source_ts`/`message_anchor`) rather than by synthesis time.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.

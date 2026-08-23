@@ -406,12 +406,37 @@ operator's.
   `agent_ended`, distinct from an operator `killed` and a CLI-initiated `exited`/`completed`
   (`sessions.md`, `data-model.md`).
 
+## The configurator family
+
+Four tools sit outside every list above and are shown to **one kind of session**: one the
+daemon itself launched as the configurator (`configurator.md`). They are
+`configurator_capabilities`, `configurator_guide`, `configurator_diagnostics`, and
+`configurator_apply_settings`, and they describe and change *swe-mux* rather than the work
+any session is doing - which is why they are a separate contract list rather than additions
+to the read/write sets here.
+
+Three properties matter to this document:
+
+- **Listing is the same gate as calling.** `tools_for` returns the ordinary array unchanged
+  to every other session, and dispatch re-checks. A tool advertised and then refused teaches
+  an agent that the surface lies to it, and the refusal arrives after it has already planned
+  around the capability.
+- **A guessed name answers "unknown tool", not "not permitted."** To a session that was never
+  shown the tool that is the literal truth, and naming a capability that exists elsewhere
+  invites an agent to look for a way to reach it.
+- **The marker is not reachable from `request_spawn`.** `SessionRecord.configurator` is set by
+  `POST /api/configurator/launch` and by nothing else. Were it a `SpawnRequest` field, this
+  document's own spawn-request tool would be a way for any agent to ask for a session that can
+  rewrite the install's settings, and the approving human would read it as an ordinary spawn.
+
+The three reads are in the generated Claude permission allowlist; the write is not.
+
 ## Registration per backend
 
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. Generated per-session settings allow the closed sixteen-tool read set without a prompt and do not allow `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, or `end_session`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed read set (the fleet reads plus the three configurator reads) without a prompt and do not allow `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, or `configurator_apply_settings`; user deny/ask policy still has higher precedence. Pre-allowing the configurator reads for every session grants nothing — a rule only decides whether the CLI prompts, and the daemon refuses a caller that is not a configurator regardless — and it spares the one session that can call them a dialog in front of every lookup. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.
@@ -461,6 +486,8 @@ Both tiers are excluded from `.worktree-verify` and CI.
   `AutomationStore.scan_records` in `src/swe_mux/automation_store.py`
 - The `project` argument, shared by the read and write surfaces: `src/swe_mux/project_scope.py`
 - Closed read/write declarations and Claude read permissions: `src/swe_mux/mcp_contract.py`
+- The configurator family's substrate (generated inventory, shipped guides, seed prompt):
+  `src/swe_mux/configurator.py`; its session marker: `src/swe_mux/models.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
 - Session-control authority and bounds (grant, budget, cycle, idempotency, readiness gate):
   `src/swe_mux/session_control.py`
@@ -474,13 +501,15 @@ Both tiers are excluded from `.worktree-verify` and CI.
   `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
 - Tests: `tests/test_mcp.py`, `tests/test_mcp_scan_timeline.py`,
   `tests/test_agent_messaging.py`, `tests/test_project_scope.py`,
-  `tests/test_session_watch.py`;
+  `tests/test_session_watch.py`, `tests/test_configurator_mcp.py`;
   live tiers `tests/test_live_automations.py`, `tests/test_live_mcp_control.py`, with the
   in-process fact and isolated-daemon harnesses in `tests/support/live_facts.py` and
   `tests/support/live_daemon.py`
 
 ## Relates to
 
+- `configurator.md` — the one session kind that sees four more tools, why the marker that
+  grants them is not a spawn field, and what the inventory those tools serve is derived from.
 - `agent-messaging.md` — what the write tools may do, and every bound behind them.
 - `prompt-queue.md` — where a `notify` lands and how it is delivered.
 - `observations.md` - compatibility storage retained after the human Observation Inbox was retired.

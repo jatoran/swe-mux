@@ -2126,6 +2126,36 @@ def enabled_backends(
     return tuple(result)
 
 
+def resolve_default_harness(
+    *, preferences: Sequence[str], available: Sequence[str]
+) -> str | None:
+    """The agent harness to use when something needs one and nobody named it.
+
+    ``preferences`` is the operator's stated intent in narrowing order - a
+    Project's own default, then the install-wide one, then whatever the general
+    launcher default happens to be - and ``available`` is what this machine can
+    actually run (:func:`enabled_backends`). The first preference that is both a
+    registered agent and available wins; failing all of them, the first available
+    agent does, because "you have exactly one agent installed" is by far the most
+    common shape and asking that operator to choose is asking nothing.
+
+    ``None`` means there is genuinely no agent to launch, which callers must
+    surface as "install or enable one" rather than silently substituting a shell.
+    A shell cannot receive a seeded prompt, so falling back to one would turn a
+    missing-harness problem into a launch that succeeds and does nothing.
+
+    Non-agent preferences (``shell``, most often, since the install-wide
+    ``default_backend`` defaults to it) are skipped rather than rejected: they
+    are a legitimate answer to a different question.
+    """
+    offered = [name for name in available if is_agent_harness(name)]
+    for candidate in preferences:
+        name = str(candidate or "").strip()
+        if name and is_agent_harness(name) and name in offered:
+            return name
+    return offered[0] if offered else None
+
+
 def provider_account_harnesses() -> tuple[str, ...]:
     return tuple(
         name for name, harness in HARNESSES.items() if harness.provider_account_management

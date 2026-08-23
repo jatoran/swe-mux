@@ -60,7 +60,7 @@ import { customProviderOverride } from './modelRouting'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
-  startup_cwd:string; default_backend:string; shell_exe:string
+  startup_cwd:string; default_backend:string; default_harness:string; shell_exe:string
   harness_exe:Record<string,string>; scrollback_bytes:number; attach_replay_bytes:number; history_limit:number
   session_recovery_checkpoint_bytes:number;session_recovery_retention_days:number
   session_recovery_max_sessions:number
@@ -283,7 +283,10 @@ function VerificationBadge({entry}:{entry:LlmProviderEntry}){
 }
 
 
-export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;
+export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, onLaunchConfigurator, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void;
+  /** Start the configurator agent. Owned by the composition root, like the tutorial:
+   *  a launch places a pane in the workspace, which this panel does not have. */
+  onLaunchConfigurator?:(harness?:string)=>void; initialSection?:string;
   /** `data-setting` id of one control to scroll to and flash on arrival (`settingTargets.ts`). */
   initialSetting?:string;
   /** Changes per deep-link request, so the same link twice reveals twice. */
@@ -1437,6 +1440,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         </Fragment>}
 
         {activeTab==='harnesses'&&<Fragment>
+          {/* Above the per-harness list on purpose: it is the one setting here that
+              is about the set rather than about a member of it, and reading it after
+              five harness cards would make it look like a property of the last one. */}
+          <section><h3>Default harness</h3>
+          <p>Which agent swe-mux launches when something needs an agent and nobody named one — the configurator button, and anything else that has to pick. This is a different question from the Run menu's default, which may legitimately be a shell; a shell cannot receive a starting prompt, so it is not an answer here.</p>
+          <label data-setting="default_harness">Default harness<Dropdown value={draft.default_harness} onChange={value=>change('default_harness',value)} options={[{value:'',label:'Follow detection'},...allHarnessesIncludingDisabled().map(harness=>({value:harness.name,label:harness.display_name}))]}/></label>
+          <p class="profile-hint">Follow detection is right for a machine with one agent installed: there is no choice to make, and a CLI installed later is picked up without touching this. Set it explicitly when several are available and you have a preference.</p>
+          </section>
+
           <section class="settings-harnesses"><h3>Harnesses</h3>
           <p>Which harnesses appear in the launchers, and how each one starts. Enabling follows detection until you choose otherwise: turn a detected harness off to hide it, or turn one on before it is installed. A disabled harness still opens from an existing session, the command line, or the API, and its past conversations stay searchable in History.</p>
           {allHarnessesIncludingDisabled().map(harness=><div class="settings-harness" key={harness.name}>
@@ -2088,6 +2100,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             {value:'ERROR',label:'ERROR'},
           ]}/><small><code>DEBUG</code> is verbose enough to rotate the log quickly on a busy fleet, so it is worth putting back afterwards.</small></label>
           </section>
+
+          {/* Above Export diagnostics, because it is the same errand one step
+              earlier: "collect a bundle" is what you do when you are going to ask
+              somebody, and this is asking somebody. */}
+          {onLaunchConfigurator&&<section><h3>Ask an agent about this install</h3>
+          <p>Starts an agent session pointed at swe-mux itself, in whichever harness this install defaults to. It can read the generated inventory of every setting and its real constraints, the automation dependency graph, and the health report, and it can change install-wide settings once you have said yes to a specific change. It explains what a control does and where it is rather than only changing it for you.</p>
+          <div class="theme-actions"><button class="primary" onClick={()=>{onClose();onLaunchConfigurator()}}>Launch the configurator</button></div>
+          <p class="profile-hint">It runs as an ordinary session in the current Project, so it appears in the sidebar, can be interrupted, and can be closed like any other. Set which agent it uses under Harnesses → Default harness.</p>
+          </section>}
 
           <section><h3>Export diagnostics</h3>
           <p>Export a single copyable bundle of connection state, firewall status, network counters, sanitized config (no secrets), and recent daemon logs. Share it when reporting a connection problem.</p>

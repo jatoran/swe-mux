@@ -4,7 +4,7 @@ import { matchesTutorialAction, placeTutorialCard, TUTORIAL_ACTION_EVENT, type T
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 
-export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'gates'|'features'|'feature-menu'|'ready'
+export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'gates'|'features'|'feature-menu'|'configurator'|'ready'
 
 type Props={
   hasProject:boolean
@@ -78,6 +78,11 @@ export function GuidedTutorial({hasProject,onNavigate,onExit,onComplete}:Props){
     {id:'gates',eyebrow:'SWITCHED OFF ON PURPOSE',title:'Anything that costs something starts off.',body:<><p>swe-mux keeps the expensive and interruptive things off until you ask for them: reading transcripts, ranking what needs you, letting an agent act on its own. So a panel that has never been switched on says so, instead of looking empty.</p><p>Every one of those notices turns the thing on where you are standing — it names the scope, says where the change is written, and tells you whether it can cost money before you press it. You never have to go and find a settings page.</p></>},
     {id:'features',eyebrow:'FIND ANYTHING',title:'Open the main menu.',selectors:['[data-tutorial="menu"]'],action:{kind:'click',selectors:['[data-tutorial="menu"]'],hint:'Click menu'},targetLabel:'CLICK MENU',body:<><p>The main menu is the map to History, notes, processes, prompt templates, usage, notifications, automation, and Settings.</p><p>Open it now to see those real destinations.</p></>},
     {id:'feature-menu',eyebrow:'MAIN FEATURES',title:'Everything else stays one click away.',selectors:['[data-tutorial="main-menu"]'],body:<><p><strong>Utilities</strong> holds the viewers — History, notes, every running process, prompt templates, the fleet queue, usage and notifications. Below it sit the things you configure: Actions, automation, and Settings.</p><p>Press <kbd>Ctrl Alt P</kbd> for the command palette. <kbd>Ctrl Alt T</kbd> opens a terminal; <kbd>Ctrl Alt ←/→</kbd> moves focus between panes.</p></>},
+    // The tour ends by handing over to something that answers questions it did
+    // not cover, which is most of them: two minutes cannot explain an install, and
+    // the gear in the footer can. Anchored on the real control so the last thing
+    // the tour does is point at where help lives afterwards.
+    {id:'configurator',eyebrow:'ASK ABOUT SWE-MUX',title:'The gear starts an agent that knows this install.',selectors:['.configurator-trigger'],targetLabel:'THE CONFIGURATOR',body:<><p>Press it and swe-mux opens an agent session pointed at itself. It can read every setting with its real accepted values, the dependency graph behind those switched-off panels, and this machine's health report — and it will change a setting for you once you have agreed to a specific change.</p><p>It is the right place for "what does this do", "why is this panel empty", and "help me set up my phone".</p></>},
     {id:'ready',eyebrow:'TOUR COMPLETE',title:'You are ready to build.',body:<><p>Your Projects and layouts persist, and long-running sessions survive browser reloads or a hidden desktop window.</p><p>Restart this walkthrough any time from <strong>Settings → General → Reset &amp; run tutorial</strong>.</p></>},
   ],[dragging,initialHasProject,mobileAtStart])
   const step=steps[index]

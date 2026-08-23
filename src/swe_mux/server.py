@@ -39,6 +39,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from . import (
+    __version__,
     agent_environment,
     budget,
     git_init,
@@ -89,6 +90,12 @@ from .composer_input import (
     note_composer_write,
 )
 from .config import Config, load_config, update_config
+from .configurator import (
+    ConfiguratorService,
+    compose_seed_prompt,
+    install_mode,
+    source_checkout,
+)
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore, parse_device_report
 from .event_bus import EventBus
@@ -127,6 +134,7 @@ from .harness import (
     repaints_scrollback,
     replay_needs_repaint,
     require_backend,
+    resolve_default_harness,
     suppresses_late_color_response,
 )
 from .history import HistoryIndex
@@ -1046,6 +1054,8 @@ def create_app(
             web.get("/api/diagnostics/storage", get_storage_usage),
             web.get("/api/diagnostics/export", diagnostics_export),
             web.get("/api/diagnostics/doctor", get_doctor_report),
+            web.get("/api/configurator/options", configurator_options),
+            web.post("/api/configurator/launch", launch_configurator),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
@@ -2545,6 +2555,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             # nothing else reaches it, because a watch is only ever asked for by
             # the session that will receive the notice.
             session_watch=session_watch,
+            # The configurator family's backing service. Reachable only from a
+            # session the daemon itself launched as a configurator; every other
+            # caller is never shown the tools and is refused if it guesses a name.
+            configurator=build_configurator_service(app),
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -3804,6 +3818,296 @@ async def reset_config(request: web.Request) -> web.Response:
     await request.app["events"].emit("configuration_changed", source="settings", reset=True)
     return json_response(
         {**config.public_dict(), "hot_applied": sorted(hot), "restart_required": sorted(restart)}
+    )
+
+
+# ------------------------------------------------------------- configurator
+#
+# The configurator agent (`configurator.py`, `design/features/configurator.md`):
+# a real harness session pointed at swe-mux itself, launched by one button
+# rather than assembled by the operator. Everything below exists to make that
+# button a single request - resolve which agent, resolve which Project anchors
+# it, compose a prompt that names this machine's actual state, spawn, and mark
+# the session as the one holding the configurator tools.
+
+
+def _project_summaries(app: web.Application) -> list[dict[str, Any]]:
+    """Registered Projects, in the cheap shape the manifest wants.
+
+    Deliberately not `_projects_payload`: that one joins history activity and
+    per-Project counts, and a configurator reading its inventory needs none of
+    it. A capabilities read must not cost a fan-out of history queries.
+    """
+    manager: ProjectManager = app["projects"]
+    return [
+        {"id": item.id, "name": item.name, "root": str(item.root)}
+        for item in manager.ordered_projects()
+    ]
+
+
+async def _configurator_apply_settings(
+    app: web.Application, changes: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply a settings batch through the same path `PATCH /api/config` uses.
+
+    A refusal comes back as a *result* naming the offending fields rather than as
+    an exception, for the same reason the queue's refusals do: the agent needs to
+    know whether to adapt the value or stop asking, and an error string it has to
+    parse tells it neither. Nothing partial can happen either way - `_validate`
+    runs over the whole candidate before anything is written.
+    """
+    config: Config = app["config"]
+    try:
+        hot, restart = await asyncio.to_thread(update_config, config, changes)
+    except ValueError as exc:
+        detail = exc.args[0] if exc.args else {}
+        return {
+            "applied": False,
+            "errors": detail if isinstance(detail, dict) else {"changes": str(exc)},
+            "revision": config.revision,
+        }
+    _apply_runtime_config(app, hot)
+    # `source` is the provenance the event log keeps, and it is worth being able
+    # to tell a configurator-driven change from one a human made in the panel
+    # when reading back why a setting moved.
+    await app["events"].emit(
+        "configuration_changed", source="configurator", changed=sorted(hot | restart)
+    )
+    log.info(
+        "configurator_settings_applied hot=%s restart_required=%s revision=%s",
+        sorted(hot),
+        sorted(restart),
+        config.revision,
+    )
+    return {
+        "applied": True,
+        "hot_applied": sorted(hot),
+        "restart_required": sorted(restart),
+        "revision": config.revision,
+    }
+
+
+def build_configurator_service(app: web.Application) -> ConfiguratorService:
+    """Wire the configurator's tools to the daemon's own operations.
+
+    Closures over this application rather than the application itself, matching
+    `action_runner`: `configurator.py` stays free of the HTTP layer and testable
+    with three stubs, while every call it makes lands in the same implementation
+    the browser reaches.
+    """
+    config: Config = app["config"]
+    return ConfiguratorService(
+        config=config,
+        projects=lambda: _project_summaries(app),
+        installations=lambda: detect_installations_with_versions(dict(config.harness_exe)),
+        diagnostics=lambda: _doctor_report(app),
+        apply_settings=lambda changes: _configurator_apply_settings(app, changes),
+        version=__version__,
+    )
+
+
+def _configurator_candidates(config: Config) -> tuple[str, ...]:
+    """Agent harnesses this machine can launch a configurator into."""
+    return tuple(
+        name
+        for name in enabled_backends(dict(config.harness_enabled), dict(config.harness_exe))
+        if is_agent_harness(name)
+    )
+
+
+def _configurator_harness(config: Config, requested: str, candidates: Sequence[str]) -> str | None:
+    """Which agent to launch, honouring an explicit ask over every default."""
+    if requested:
+        return requested if requested in candidates else None
+    return resolve_default_harness(
+        preferences=(config.default_harness, config.default_backend), available=candidates
+    )
+
+
+def _configurator_project(app: web.Application, requested: str) -> Any:
+    """The Project the configurator session is anchored to.
+
+    A session must belong to a Project - that is what gives it a working
+    directory, a scope, and a place in the sidebar - so this picks one rather
+    than inventing one. The order matters: an explicit ask wins, then the Project
+    that *is* this swe-mux checkout when the daemon runs from source (so a
+    maintainer's configurator lands where swe-mux's own code is, which is the
+    only place code changes are possible), then simply the first Project.
+    """
+    manager: ProjectManager = app["projects"]
+    if requested and requested in manager.projects:
+        return manager.projects[requested]
+    ordered = manager.ordered_projects()
+    checkout = source_checkout()
+    if checkout is not None:
+        for item in ordered:
+            try:
+                if Path(item.root).resolve() == checkout.resolve():
+                    return item
+            except OSError:
+                continue
+    return ordered[0] if ordered else None
+
+
+async def configurator_options(request: web.Request) -> web.Response:
+    """What the launcher can offer, so the button knows before it is pressed.
+
+    Detection runs off the loop and includes CLI version probes, which is why
+    this is its own request rather than something the button recomputes: the
+    frontend asks once when the surface opens and renders a disabled control
+    with a reason rather than a control that fails when clicked.
+    """
+    config: Config = request.app["config"]
+    candidates = await asyncio.to_thread(_configurator_candidates, config)
+    manager: ProjectManager = request.app["projects"]
+    return json_response(
+        {
+            "harnesses": list(candidates),
+            "default_harness": _configurator_harness(config, "", candidates),
+            "configured_default": config.default_harness,
+            "install_mode": install_mode(),
+            "source_checkout": str(source_checkout() or ""),
+            "projects": len(manager.projects),
+        }
+    )
+
+
+async def launch_configurator(request: web.Request) -> web.Response:
+    """Spawn a configurator session and run its opening prompt.
+
+    `seed_text` rather than `stage_text`: the human pressed a button whose label
+    says it starts a conversation about their install, so the opening turn is the
+    thing they asked for and leaving it sitting unsent in a composer would be a
+    worse answer to the same press. Nothing it says in that turn changes
+    anything - the one write in its toolset is a separate, explicit call.
+
+    The `configurator` marker is set after the spawn and republished, the same
+    way a Project Action's `relaunchable` is: the spawn path takes a
+    `SpawnRequest`, and deliberately has no field for this (see
+    `SessionRecord.configurator`), so no request an agent can compose reaches it.
+    """
+    body = await request.json() if request.can_read_body else {}
+    config: Config = request.app["config"]
+    candidates = await asyncio.to_thread(_configurator_candidates, config)
+    requested = str(body.get("harness") or "").strip()
+    harness = _configurator_harness(config, requested, candidates)
+    if harness is None:
+        return json_response(
+            {
+                "error": (
+                    f"{requested} is not an available agent harness"
+                    if requested
+                    else "no agent harness is installed and enabled on this machine"
+                ),
+                "code": "no_harness",
+                "candidates": list(candidates),
+            },
+            409,
+        )
+    project = _configurator_project(request.app, str(body.get("project_id") or "").strip())
+    if project is None:
+        return json_response(
+            {
+                "error": (
+                    "the configurator runs inside a Project, and none is registered yet; "
+                    "add one first"
+                ),
+                "code": "no_project",
+            },
+            409,
+        )
+    installations = await asyncio.to_thread(
+        detect_installations_with_versions, dict(config.harness_exe)
+    )
+    prompt = await asyncio.to_thread(
+        compose_seed_prompt,
+        config,
+        harness=harness,
+        cwd=str(project.root),
+        installations=installations,
+        projects=_project_summaries(request.app),
+        doctor_summary=await _configurator_health_preview(request.app),
+        version=__version__,
+    )
+    session = await _spawn_from_body(
+        request.app,
+        {
+            "project_id": project.id,
+            "backend": harness,
+            "name": "configurator",
+            "seed_text": prompt,
+        },
+    )
+    session.record.configurator = True
+    session.publish_update()
+    await request.app["events"].emit(
+        "configurator_launched",
+        source="user",
+        session_id=session.record.id,
+        backend=harness,
+        project_id=project.id,
+        install_mode=install_mode(),
+    )
+    log.info(
+        "configurator_launched session=%s backend=%s project=%s mode=%s",
+        session.record.id,
+        harness,
+        project.id,
+        install_mode(),
+    )
+    # Exactly the body `POST /api/sessions` answers with, deliberately: the
+    # browser places a new session into a pane itself, and a launcher that
+    # returned a shape of its own would need a second placement path that drifts
+    # from the one every other launch uses. The record already carries
+    # `configurator: true`, so the caller can tell what it got without a wrapper.
+    return json_response(session.record.snapshot(), 201)
+
+
+#: How long the launch waits for a health summary before starting without one.
+#: The full report inspects the firewall and probes CLI versions, and a button
+#: press must not sit on either: the summary is a *nicety* in the opening turn,
+#: and the agent can fetch the real report at any moment. Degrading is therefore
+#: strictly better than a slow launch, and the fallback line says where to look.
+CONFIGURATOR_HEALTH_BUDGET_SECONDS = 3.0
+
+
+async def _configurator_health_preview(app: web.Application) -> str:
+    """One sentence of health for the seed prompt, or nothing within the budget."""
+    try:
+        report = await asyncio.wait_for(
+            _doctor_report(app), CONFIGURATOR_HEALTH_BUDGET_SECONDS
+        )
+    except Exception as exc:  # noqa: BLE001 - a nicety never fails a launch
+        log.info("configurator_health_preview_skipped error_type=%s", type(exc).__name__)
+        return ""
+    return _configurator_health_line(report)
+
+
+def _configurator_health_line(report: dict[str, Any]) -> str:
+    """One sentence of health for the seed prompt, or an empty string.
+
+    A count and the worst few titles, never the whole report. The prompt's job is
+    to make the agent *look*, and pasting a full diagnostic into it would both
+    bloat the opening turn and freeze a snapshot into the transcript that the
+    tool can answer freshly at any moment.
+    """
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        return ""
+    failing = [
+        check
+        for check in checks
+        if isinstance(check, dict) and check.get("status") in {"warn", "fail"}
+    ]
+    if not failing:
+        return "Health report: every check passes right now."
+    critical = [check for check in failing if check.get("severity") == "critical"]
+    worst = (critical or failing)[:3]
+    titles = "; ".join(str(check.get("title") or check.get("id") or "?") for check in worst)
+    return (
+        f"Health report: {len(failing)} check(s) are not clean"
+        f"{f', {len(critical)} critical' if critical else ''} - {titles}. "
+        "Call `configurator_diagnostics` for the current detail before acting on this."
     )
 
 
@@ -7882,17 +8186,25 @@ async def get_doctor_report(request: web.Request) -> web.Response:
 
     One structured report over the diagnostics the daemon already serves plus the
     observation-freshness check that nothing else exposes. Assembly is pure and
-    lives in `doctor.py`; this handler only gathers the payloads. Everything here
-    is already sanitized (public config, connection state, firewall, status
-    health) and the freshness rows are content-free, so no secret, terminal byte,
-    or message body is ever included.
+    lives in `doctor.py`; the gathering is `_doctor_report`, shared with the
+    configurator's own diagnostics tool so the two can never disagree about this
+    install's health. Everything here is already sanitized (public config,
+    connection state, firewall, status health) and the freshness rows are
+    content-free, so no secret, terminal byte, or message body is ever included.
     """
+    response = json_response(await _doctor_report(request.app))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _doctor_report(app: web.Application) -> dict[str, Any]:
+    """Gather every diagnostic payload and assemble the report."""
     from .doctor import build_doctor_report, observation_freshness
     from .session import fleet_status_health
 
-    config: Config = request.app["config"]
-    sessions: SessionManager = request.app["sessions"]
-    supervisor = request.app.get("supervisor")
+    config: Config = app["config"]
+    sessions: SessionManager = app["sessions"]
+    supervisor = app.get("supervisor")
 
     live = sum(session.pty.isalive() for session in sessions.sessions.values())
     supervisor_state = (
@@ -7906,7 +8218,7 @@ async def get_doctor_report(request: web.Request) -> web.Response:
         "ok": True,
         "version": "0.1.0",
         "live_sessions": live,
-        "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
+        "ui_build_id": read_ui_build_id(app["frontend_dir"]),
         "supervisor_state": supervisor_state,
         "supervisor_unadopted": int(
             getattr(sessions, "unadopted_supervisor_sessions", 0) or 0
@@ -7931,7 +8243,7 @@ async def get_doctor_report(request: web.Request) -> web.Response:
         detect_installations_with_versions, dict(config.harness_exe)
     )
     now = time.time()
-    report = build_doctor_report(
+    report: dict[str, Any] = build_doctor_report(
         health=health,
         remote=remote,
         firewall=firewall,
@@ -7949,9 +8261,7 @@ async def get_doctor_report(request: web.Request) -> web.Response:
         now=now,
         wsl_bridges=await asyncio.to_thread(_wsl_bridge_report, config),
     )
-    response = json_response(report)
-    response.headers["Cache-Control"] = "no-store"
-    return response
+    return report
 
 
 def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:

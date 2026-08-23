@@ -227,13 +227,24 @@ responsive controls.
   tree it edits, and `menu → Projects`, between the viewers and Configure Actions. The header
   button is discoverable only once the sidebar is open and its header is in view, while the
   app menu is where every other app-wide surface is looked for.
-- The sidebar footer is two controls: `menu` at the left edge and the alerts bell at the right.
-  It held four. `projects` moved into the `PROJECTS` header, beside the tree it edits, and the
-  settings cog was removed: `menu → Settings` sits one row away from the button next to it,
-  and a second permanent door to the same panel cost a footer slot for a saving of nothing.
-  A named menu row is also searchable and keyboard-reachable, which an icon is not.
-  The remaining pair still uses the left item's own `margin-right:auto` rather than
-  `space-between`, so either removed button can come back without the layout re-deciding itself.
+- The sidebar footer is three controls: `menu` at the left edge, then the alerts bell and the
+  configurator gear at the right.
+  It once held four different ones. `projects` moved into the `PROJECTS` header, beside the
+  tree it edits, and the settings cog was removed: `menu → Settings` sits one row away from the
+  button next to it, and a second permanent door to the same panel cost a footer slot for a
+  saving of nothing. A named menu row is also searchable and keyboard-reachable, which an icon
+  is not.
+  The rule that removal established is "app-wide switches, not navigation", and the
+  configurator gear is worth restating it for: it is **not** a door to an existing surface, it
+  starts an agent session about this install (`configurator.md`), so it belongs to the whole
+  app rather than to the tree above it. A plain press launches the default harness; right-click,
+  shift-click, or alt-click opens a harness chooser, and only when more than one agent is
+  available. A missing prerequisite dims it with the reason in its title rather than hiding it,
+  because a control that vanishes teaches nothing.
+  It has a twin in the collapsed rail: collapsing the sidebar must not remove a control, and
+  an expand round-trip to ask a question about the app is the round-trip it exists to avoid.
+  The row still uses the left item's own `margin-right:auto` rather than `space-between`, so a
+  removed button can come back without the layout re-deciding itself.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
