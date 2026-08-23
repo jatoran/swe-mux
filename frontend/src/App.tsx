@@ -189,7 +189,7 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { RESERVE_INTENT_WINDOW_MS, reservedKeyboardPx } from './keyboardReserve'
 import { SOFT_KEYBOARD_EVENT, deepActiveElement, dismissSoftKeyboard, lastSoftKeyboardInset, raisesSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset, softKeyboardVisualOffset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
-import { classifyGesture, classifyRailGesture, classifyRegionGesture, defaultMobileGestureSettings, gestureOverlayDepth, isHorizontalDirection, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, regionForPath, resolveGestureCommand, surfaceGestureFor, surfaceGesturesEnabled, swipeAwayCloseEnabled, type GestureRegion, type MobileGestureSettings, type SurfaceGesture } from './mobileGestures'
+import { classifyGesture, classifyRailGesture, classifyRegionGesture, defaultMobileGestureSettings, gestureOverlayDepth, isHorizontalDirection, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, pathShadowsGesture, regionForPath, resolveGestureCommand, surfaceGestureFor, surfaceGesturesEnabled, swipeAwayCloseEnabled, type GestureRegion, type MobileGestureSettings, type SurfaceGesture } from './mobileGestures'
 import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
@@ -5988,6 +5988,13 @@ export function App() {
       // *are* one). Recognized without the `touchmove` listener below — there is nothing
       // to preventDefault, and attaching one is precisely what swallows a rail's first
       // horizontal drag — so travel is measured from the touch that lifts.
+      // A surface drawn over a region takes its touches whole: the rail's overflow popover
+      // lives inside `.terminal-action-rail` and scrolls vertically, so without this a
+      // scroll through its chips read as the rail's upward swipe and opened the app menu.
+      // Dropped here rather than in `regionForPath` alone, because a path that is merely
+      // "not a region" still resolves the workspace slots — and a sideways drag across the
+      // panel would then change tabs behind it.
+      if (pathShadowsGesture(path)) { state = null; detachMove(); return }
       const region = regionForPath(path)
       if (!(target instanceof Element) || (!region && (!target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer, .settings-layer, .usage-layer, .process-layer, .folder-picker-layer, .palette-layer') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)))) { state = null; detachMove(); return }
       // Which panning a horizontal region swipe would be stealing, decided here while the

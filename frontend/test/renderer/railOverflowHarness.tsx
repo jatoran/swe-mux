@@ -52,7 +52,12 @@ function Harness() {
   const [dropup, setDropup] = useState<HTMLElement | null>(null)
   const [armed, setArmed] = useState(false)
   const clip = useRef<HTMLButtonElement>(null)
-  const multipleRows = new URLSearchParams(location.search).has('rows')
+  const query = new URLSearchParams(location.search)
+  const multipleRows = query.has('rows')
+  // The second row's readout, so a spec can drive the two cases that decide where the right
+  // wedge lands: real text (a trailing cluster wider than the row above it) and the empty
+  // string production passes most of the time (a cluster that must match it exactly).
+  const secondStatus = query.get('status') ?? 'Copied'
   window.setBuffer = setBufferColour
   window.fireCommand = command => window.dispatchEvent(new CustomEvent('mux:command', { detail: command }))
   window.openKeyboard = inset => {
@@ -114,7 +119,7 @@ function Harness() {
         {multipleRows && <RailStrip
           chips={secondRow}
           label="Actions, row 2"
-          status="Copied"
+          status={secondStatus}
           onConfigure={() => { window.railOverflowFires.push('configure') }}
         />}
       </div>
