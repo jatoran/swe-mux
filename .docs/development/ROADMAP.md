@@ -4203,6 +4203,117 @@ makes the performance story trivial: cost is proportional to open viewers, not t
   (separate per-agent files under the workflow transcript dir), background `--bg` jobs
   (separate sessions, already attachable), then other harnesses.
 
+## Phase 18 - Conversation rollover adoption: following a pane whose CLI forks itself (deferred)
+
+Recorded 2026-08-23 after a live incident; deferred, not scheduled.
+This is the notes home for the "a pane silently stops being the conversation mux follows" class.
+The goal is that a pane whose CLI replaces its own conversation is followed rather than
+abandoned, and that a pane mux has demonstrably lost track of says so instead of freezing on
+its last reading.
+
+### The incident that opened it
+
+Session `23eb2466` (Claude 2.1.241, running inside the `rail-pads` worktree) detached at
+16:34 and stayed detached.
+The operator pressed `←` on an empty prompt - Claude Code's documented one-keystroke
+"detach and return to agent view" gesture, no confirmation - while a `Bash` call was in
+flight.
+The CLI printed "Backgrounding after the current tool finishes...", deferred, and four
+seconds later **forked** rather than re-homing: `bg spawned f25f94e5 (slash)`.
+The pane has run conversation `f25f94e5` ever since.
+
+Every consequence followed from mux still believing in `23eb2466`.
+The `Stop` hook at 16:38 was discarded as foreign along with 227 others, so the record's last
+proven transition stayed `working` from 16:34:33 onward.
+The Mux assistant's queued message then hard-blocked twice on `root_agent_working` against a
+session that was idle, which is how the incident was noticed at all - by a *reason that was
+false*, an hour later.
+
+Upstream context, researched the same day.
+The agent-view docs say `/bg` keeps the same session; the shipped binary has a deferred-fork
+path and an `abort-then-fork` sibling, both respawning with `--reply-on-resume`.
+`anthropics/claude-code#70373` reports the fork (open, repro'd on 2.1.186) but attributes it
+to *in-flight subagents*; this incident had no subagent, only an in-flight tool, so the real
+trigger is wider than the issue records.
+An opt-out exists (`disableAgentView` / `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`) but is
+all-or-nothing: it also removes `claude agents`, `--bg`, `/background`, and the on-demand
+daemon.
+
+### Why both existing nets failed, which is the actual finding
+
+mux already had two independent mechanisms for exactly this event.
+Both were reached, and both were killed by the same comparison: **the CLI's reported cwd
+against the session's spawn cwd**, which a worktree is precisely the case that breaks.
+
+- The `SessionStart` hook path (`conversation_rollover_decision`, `observation.py`) compared
+  the hook's cwd (`...\worktrees\rail-pads`) against `run_cwd` (`D:\PROJECTS\swe-mux`) and
+  `runtime_cwd` (`...\worktrees\rail-pads\frontend`, stale, sourced from OSC 7).
+  No exact match, so `cwd_mismatch`, so refused.
+- The `cli_state` parked-conversation follower (`_parked_move`, `cli_state.py`) is
+  purpose-built for this and was handed a perfect signal: the pane's own
+  `~/.claude/sessions/51604.json` still read `sessionId: 23eb2466`, `kind: interactive`,
+  `parkedJobId: f25f94e5`.
+  It matched the session, resolved the job, saw a different conversation, then compared
+  `parked.cwd` (the worktree) against `run_cwd` (the checkout) and returned `None` - before
+  even writing its ledger line, which is why the session's timeline carries no `cli_state`
+  entry to show it tried.
+
+The job file already carried the discriminator in fields `_parse_job` does not read:
+`originCwd` is exactly `record.run_cwd`, and `worktreePath`/`interactiveLineage` name the
+rest.
+`respawnFlags` even contains the owning mux session id in its `--settings` path.
+
+Rarity is not safety here.
+Four `cwd_mismatch` refusals since 08-17 against 189 `foreign_process_startup` ones, and
+outside a worktree this same fork is adopted silently - so the failure is invisible until it
+lands on a worktree session, and then it is total and permanent for that session.
+
+### Candidate work, in the order it would be sequenced
+
+- [ ] Record the `SessionStart` `source` and `cwd` on the refusal event and timeline entry.
+  Today a refusal carries only `reason` and `native_session_id`, which is why diagnosing this
+  incident required disassembling the CLI to learn what mux had already been handed.
+  Cheapest item here and it precedes every behavioral change, because the others should be
+  judged against recorded evidence rather than a reconstruction.
+- [ ] Compare against `originCwd` (falling back to `cwd`) in `_parked_move`, and widen the
+  hook check to accept a known worktree root or an ancestor/descendant of a known cwd.
+  Note this makes net 2 *stricter*, not looser: exact equality against the field that actually
+  means "where this pane was spawned", instead of an equality that a worktree always fails.
+- [ ] A detached-pane detector: N consecutive foreign hooks for the same foreign id including
+  a turn-lifecycle event proves detachment regardless of what refused it, and should set
+  `observation_stale_since` with a diagnostic.
+  This is the general net - session `16d01933` accumulated 1237 foreign hooks with no refusal
+  at all, so a detector keyed on refusals would miss that shape entirely.
+  It also converts the delivery block from a fabricated `root_agent_working` into the true
+  `transcript_stale`, which `delivery_readiness` already understands.
+- [ ] Transcript-prefix proof as an additional accept path: a fork shares a byte-identical
+  prefix with its parent (confirmed in this incident and independently in #70373), which a
+  nested child cannot forge.
+  It supplements rather than replaces the cwd logic, because `/clear` legitimately produces an
+  empty transcript with no shared prefix.
+- [ ] Decide whether recovery is automatic (adopt on proof, roll, resume) or an explicit
+  operator action; there is no rebind endpoint today, so restarting the pane is the only
+  recovery and a detached session stays detached until someone notices.
+
+### Open questions to resolve before scheduling
+
+- What `source` value does the background fork actually carry?
+  The documented set is `startup`/`resume`/`clear`/`compact`/`fork`, and `fork` is the obvious
+  candidate, but this was never observed because mux does not record it.
+  The first checklist item answers this, and the answer may make `source` a better primary
+  discriminator than cwd for every non-`startup` rollover.
+- Does `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` stop the CLI writing `~/.claude/sessions/<pid>.json`?
+  If it does, the prevention route costs mux its whole `cli_state` detection layer, which is a
+  bad trade against a rare bug and would settle the question against prevention.
+  Untested; it is the deciding fact and cheap to measure.
+- Prevention is the weaker axis regardless: `/clear` in a worktree, compaction, and resume all
+  produce a legitimate rollover and will keep happening, so adoption is the fix that
+  generalizes and prevention is at most belt-and-braces.
+- Worth reporting the wider trigger upstream on #70373 (an in-flight *tool*, not only an
+  in-flight subagent), with the job-state and timeline artifacts from this incident.
+- Local hazard worth carrying into the command-rail work: the rail emits arrow keys, and `←`
+  into an empty Claude prompt is exactly this gesture.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
