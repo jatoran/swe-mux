@@ -383,6 +383,52 @@ def test_legacy_harness_executable_and_argument_keys_migrate_to_registry_maps(
     assert "codex_args" not in persisted
 
 
+def test_enabled_legacy_attention_observer_switch_survives_its_rename(tmp_path: Path) -> None:
+    # `load_config` copies only known dataclass fields, so a bare rename would drop
+    # the old key and re-save without it - three observers silently turning off on
+    # upgrade. The migration must carry the value, not merely tolerate the key.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 30\nphase7_observers_enabled = true\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.attention_observers_enabled is True
+    persisted = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert persisted["attention_observers_enabled"] is True
+    assert "phase7_observers_enabled" not in persisted
+
+
+def test_disabled_legacy_attention_observer_switch_stays_disabled(tmp_path: Path) -> None:
+    # The off case is not covered by the default: it must migrate as a recorded
+    # choice, so a later change to the field's default cannot silently turn it on.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 30\nphase7_observers_enabled = false\n",
+        encoding="utf-8",
+    )
+
+    assert load_config(path).attention_observers_enabled is False
+
+
+def test_current_attention_observer_switch_wins_over_a_stale_legacy_key(
+    tmp_path: Path,
+) -> None:
+    # A config carrying both names was written by the new build; the legacy key is
+    # residue from a hand edit or a merged file and must not overwrite the live one.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 30\n"
+        "phase7_observers_enabled = false\n"
+        "attention_observers_enabled = true\n",
+        encoding="utf-8",
+    )
+
+    assert load_config(path).attention_observers_enabled is True
+
+
 def test_harness_enabled_holds_only_explicit_choices_and_hot_reloads(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)

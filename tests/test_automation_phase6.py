@@ -1568,7 +1568,7 @@ async def test_phase7_observers_are_bounded_on_both_backend_fixtures(
         Config(
             data_dir=tmp_path,
             automation_enabled=True,
-            phase7_observers_enabled=True,
+            attention_observers_enabled=True,
             openrouter_cheap_model="vendor/cheap",
             openrouter_standard_model="vendor/standard",
         ),
@@ -1608,7 +1608,7 @@ async def test_phase7_provider_failure_does_not_change_agent_state(
         Config(
             data_dir=tmp_path,
             automation_enabled=True,
-            phase7_observers_enabled=True,
+            attention_observers_enabled=True,
             openrouter_cheap_model="vendor/cheap",
         ),
         FailingPhase7Provider(),  # type: ignore[arg-type]
@@ -1668,7 +1668,7 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
         Config(
             data_dir=tmp_path,
             observer_titler_enabled=True,
-            phase7_observers_enabled=False,
+            attention_observers_enabled=False,
         ),
         FakeProvider(),  # type: ignore[arg-type]
     )
@@ -1685,7 +1685,7 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
         "builtin.context-handoff",
     }
     assert builtins["builtin.session-titler"]["enabled"] is True
-    assert builtins["builtin.stalled-triage"]["setting_key"] == "phase7_observers_enabled"
+    assert builtins["builtin.stalled-triage"]["setting_key"] == "attention_observers_enabled"
     assert builtins["builtin.context-handoff"]["model"] == "Standard model"
     engine.store.close()
 

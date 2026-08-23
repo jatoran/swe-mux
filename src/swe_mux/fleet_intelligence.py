@@ -305,7 +305,7 @@ class FleetIntelligence:
                 continue
             await self._attention(session, now, index)
         await self._interlocks(now, index)
-        if self.config.phase7_observers_enabled and now - self._last_digest >= DIGEST_SECONDS:
+        if self.config.attention_observers_enabled and now - self._last_digest >= DIGEST_SECONDS:
             self._last_digest = now
             items = await self.store.notifications(unread=True, limit=50)
             if items:

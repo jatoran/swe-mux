@@ -116,7 +116,7 @@ def assert_espeak_free() -> None:
             "an espeak-ng wrapper is installed ("
             + ", ".join(present)
             + "); the Kokoro engine refuses to run beside it — remove the package "
-            "(Phase 10.5 forbids espeak-ng anywhere in the closure)"
+            "(swe-mux forbids espeak-ng anywhere in its shipped closure)"
         )
 
 

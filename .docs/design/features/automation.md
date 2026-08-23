@@ -241,7 +241,11 @@ and the declared minimum observation capability.
   Disabled controls and built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
-  context observers share the `phase7_observers_enabled` attention setting.
+  context observers share the `attention_observers_enabled` attention setting.
+  That setting was named `phase7_observers_enabled` before config schema 31 and is migrated by
+  value on load, because `load_config` copies only known dataclass fields: an unmigrated rename
+  would silently drop an enabled switch and re-save the config without it, turning three
+  observers off on upgrade with no record that they had ever been on.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
 - Attention records are **dismissible from the surface that lists them** — the drawer's

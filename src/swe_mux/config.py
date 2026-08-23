@@ -76,7 +76,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -1129,12 +1129,18 @@ class Config:
     # it either way, only time-to-first-word.
     assistant_stream_replies: bool = True
     observer_titler_enabled: bool = False
-    # Phase 7.7 retired the turn summarizer; the scan timeline is the single
-    # behavioral-summary producer. A config predating the removal still carries
-    # `observer_summarizer_enabled`; `load_config` copies only known dataclass
-    # fields, so the stale key is dropped on load and on the next write rather
-    # than erroring.
-    phase7_observers_enabled: bool = False
+    # The one switch behind the three attention observers (stalled-run triage,
+    # approval-request triage, context-handoff suggestion), which is why the
+    # dashboard enables or disables them as a group.
+    #
+    # It was named `phase7_observers_enabled` until schema 31. The turn
+    # summarizer it once sat beside was retired earlier; the scan timeline is
+    # the single behavioral-summary producer, and a config predating that
+    # removal still carries `observer_summarizer_enabled`. `load_config` copies
+    # only known dataclass fields, so a stale key is dropped on load and on the
+    # next write rather than erroring - which is exactly why the rename needs
+    # the explicit schema-31 migration below and could not be a bare rename.
+    attention_observers_enabled: bool = False
     tts_enabled: bool = False
     tts_default_mode: str = "off"
     tts_content: str = "summary"
@@ -2135,6 +2141,18 @@ def load_config(path: Path | None = None) -> Config:
             # always works with no download, so an `edge` config lands there;
             # Kokoro stays a deliberate choice once its model is downloaded.
             cfg.tts_engine = "sapi"
+        if source_schema < 31 and "attention_observers_enabled" not in raw:
+            # `phase7_observers_enabled` was renamed to `attention_observers_enabled`:
+            # the old name leaked this project's roadmap numbering into `/api/config`
+            # and named a release rather than the thing it switches. The field-copy
+            # loop above only reads known dataclass fields, so without this the old
+            # key would be silently dropped and every install that had enabled the
+            # attention observers would find them off after one load - a switch
+            # flipping itself on upgrade, with a re-save that erases the evidence.
+            legacy_attention = raw.get("phase7_observers_enabled")
+            if isinstance(legacy_attention, bool):
+                cfg.attention_observers_enabled = legacy_attention
+                migrated = True
         if source_schema < 22 and "harness_setup_complete" not in raw:
             # The first-run harness panel is new. An existing config is by definition
             # not a first run, so mark setup complete on upgrade; only a brand-new
