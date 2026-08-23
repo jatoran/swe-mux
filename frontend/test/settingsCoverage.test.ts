@@ -87,7 +87,7 @@ const CONFIG_ONLY: Record<string, string> = {
   notes_default_open: 'Retired by workspace layout v6 and stripped from public_dict, so the browser never receives it.',
   pinned_directories: 'Written by the directory picker as you pin a folder, which is the control.',
   observer_titler_enabled: "Owned by the Automation dashboard's built-in rule rows, which is where a rule is enabled or disabled.",
-  phase7_observers_enabled: 'Same: the dashboard enables the attention observer group as one rule.',
+  attention_observers_enabled: 'Same: the dashboard enables the attention observer group as one rule.',
 }
 
 const hasControl = (field: string): boolean =>

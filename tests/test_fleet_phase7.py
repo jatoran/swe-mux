@@ -44,7 +44,7 @@ def fleet(
     tmp_path: Path,
     sessions: dict[str, Any],
     *,
-    phase7_enabled: bool = False,
+    attention_observers_enabled: bool = False,
 ) -> tuple[FleetIntelligence, EventBus, AutomationStore, Any]:
     bus = EventBus()
     store = AutomationStore(tmp_path / "mux.db")
@@ -56,7 +56,7 @@ def fleet(
         store,
         processes,  # type: ignore[arg-type]
         previews,  # type: ignore[arg-type]
-        Config(data_dir=tmp_path, phase7_observers_enabled=phase7_enabled),
+        Config(data_dir=tmp_path, attention_observers_enabled=attention_observers_enabled),
     )
     return intelligence, bus, store, processes
 
@@ -339,7 +339,7 @@ async def test_digest_is_persisted_and_injection_gate_never_authorizes(
 ) -> None:
     current = session("a", scope="scope-a", branch="main")
     current.record.state = "idle"
-    intelligence, _, store, _ = fleet(tmp_path, {"a": current}, phase7_enabled=True)
+    intelligence, _, store, _ = fleet(tmp_path, {"a": current}, attention_observers_enabled=True)
     await store.notify(
         agent_run_id=current.record.agent_run_id,
         session_id="a",

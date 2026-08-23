@@ -153,7 +153,7 @@ type Config = {
   attention_narration_daily_budget:Budget
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
   observer_titler_enabled:boolean
-  phase7_observers_enabled:boolean
+  attention_observers_enabled:boolean
   tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
   tts_engine:'sapi'|'kokoro';tts_kokoro_voice:string;tts_kokoro_speed:number
   tts_lexicon:Record<string,string>
