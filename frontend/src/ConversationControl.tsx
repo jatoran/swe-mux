@@ -30,9 +30,9 @@ import { insertIntoTerminal } from './terminalActions'
 import { voiceCommsMessage } from './voiceComms'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
 import { assistantFollowUpActive, latestOpenAction, spokenConfirmation } from './assistant'
-import { chatPatienceMs, deferralExtensionMs, endpointPatienceMs } from './utteranceCompleteness'
-import { DeferralPen } from './utteranceDeferral'
-import type { DeferredUtterance } from './utteranceDeferral'
+import { chatPatienceMs, endpointPatienceMs } from './utteranceCompleteness'
+import { DEFERRAL_PARK_MAX_MS, DeferralPen } from './utteranceDeferral'
+import type { DeferralSource, DeferredUtterance } from './utteranceDeferral'
 import { playEarcon } from './earcons'
 import {
   canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, voiceBodyVariant,
@@ -89,6 +89,12 @@ export type Conversation={
    * than a queue, and it clears the moment the turn resolves.
    */
   deferredTrigger:string
+  /**
+   * Who held it: the word heuristic, or the assistant reporting the turn had
+   * nothing answerable in it. The chip reads differently for the two, because
+   * only one of them ever submits the fragment on its own.
+   */
+  deferredSource:DeferralSource|null
   comms:boolean
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
@@ -147,6 +153,7 @@ export function useConversation(
   const [hold,setHoldState]=useState(false)
   const [holdBuffer,setHoldBufferState]=useState('')
   const [deferredTrigger,setDeferredTrigger]=useState('')
+  const [deferredSource,setDeferredSource]=useState<DeferralSource|null>(null)
   const [commsTargetId,setCommsTargetId]=useState<string|null>(null)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
@@ -178,6 +185,20 @@ export function useConversation(
    */
   const penRef=useRef(new DeferralPen())
   const deferralTimerRef=useRef<ReturnType<typeof setTimeout>|null>(null)
+  /**
+   * A park has no release timer - it is waiting for speech, not for a clock - so
+   * this only exists to stop a fragment the operator abandoned from sitting in
+   * the pen forever and gluing itself to whatever they say an hour later.
+   */
+  const parkTimerRef=useRef<ReturnType<typeof setTimeout>|null>(null)
+  /**
+   * The exact body most recently sent to the assistant.
+   *
+   * The send call returns as soon as the daemon accepts the turn, so the "there
+   * was nothing to answer" verdict arrives later on the event socket with no copy
+   * of the text in it. Voice dispatches one turn at a time, so one slot is enough.
+   */
+  const lastAskedRef=useRef('')
   /** Speech is arriving right now, per the gate. Read by the release timer. */
   const speakingRef=useRef(false)
   /** How many utterances are mid-decode. A continuation in flight is not silence. */
@@ -237,13 +258,19 @@ export function useConversation(
     void api('POST','/api/voice/deferral-diagnostic',{
       outcome,trigger:deferred.trigger,kind:deferred.kind,words:deferred.words,
       heldMs:Math.round(performance.now()-deferred.at),
+      // The score and the window it bought. Without these the diagnostic can say
+      // which trigger fired but not whether its prior was worth what it cost,
+      // which is the only question the continuous curve raises.
+      source:deferred.source,completion:deferred.completion,extensionMs:deferred.extensionMs,
     },{timeoutMs:4000}).catch(()=>{})
   }
   /** Cancel a pending release and clear the chip. Safe to call with nothing held. */
   const clearDeferralTimer=()=>{
     if(deferralTimerRef.current!==null)clearTimeout(deferralTimerRef.current)
     deferralTimerRef.current=null
-    setDeferredTrigger('')
+    if(parkTimerRef.current!==null)clearTimeout(parkTimerRef.current)
+    parkTimerRef.current=null
+    setDeferredTrigger('');setDeferredSource(null)
   }
   /** Empty the pen for a non-dispatch reason, reporting the deferral it ends. */
   const resolveDeferral=(outcome:DeferralOutcome):DeferredUtterance|null=>{
@@ -449,6 +476,7 @@ export function useConversation(
     const handler=onAssistantRef.current
     if(!handler)return false
     setPhase('sending');setDetail('Asking the assistant…')
+    lastAskedRef.current=body
     const outcome=await handler(body)
     if(outcome===false){setPhase('listening');return false}
     setPhase('listening');respond(outcome||'Asked the assistant.')
@@ -481,11 +509,37 @@ export function useConversation(
   }
   /** Arm the single extension the pen just granted, and say why on screen. */
   const armDeferral=(deferred:DeferredUtterance)=>{
-    const holdMs=deferralExtensionMs(configuredPatience())
+    // The pen's window, not a freshly computed one: the score that justified the
+    // hold also sized it, and recomputing here is how the gate's tail and the
+    // release timer drift apart.
+    const holdMs=deferred.extensionMs
     deferralTimerRef.current=setTimeout(()=>releaseDeferral(deferred,holdMs),holdMs)
-    setDeferredTrigger(deferred.trigger)
+    setDeferredTrigger(deferred.trigger);setDeferredSource('heuristic')
     setPhase('listening')
     setDetail(`That sounded unfinished after “${deferred.trigger}” - keep going, or pause and it goes as-is.`)
+  }
+  /**
+   * The assistant reported that the turn it was just given had nothing in it to
+   * answer. Park the text and say nothing at all.
+   *
+   * No timer, no chip flash, no spoken line: the operator is mid-thought and the
+   * only correct output is silence. Their next breath merges with this fragment
+   * and the joined text goes as one turn. The stale-park timeout is the only
+   * clock involved, and it exists to forget an abandoned fragment rather than to
+   * answer it.
+   */
+  const parkAssistantHold=(text:string)=>{
+    if(penRef.current.pending)return
+    const parked=penRef.current.park(text,configuredPatience())
+    if(!parked)return
+    setDeferredTrigger(parked.trigger);setDeferredSource('assistant')
+    setPhase('listening')
+    setDetail('Still listening - that read as half a thought, so it is waiting for the rest.')
+    parkTimerRef.current=setTimeout(()=>{
+      const expired=penRef.current.expireStalePark()
+      if(expired)reportDeferral(expired,'discarded')
+      clearDeferralTimer()
+    },DEFERRAL_PARK_MAX_MS)
   }
   const beginHold=()=>{
     // A fragment held by the heuristic is thinking-out-loud text, which is
@@ -496,6 +550,29 @@ export function useConversation(
     enterHold(true);setPhase('listening')
     respond('Holding — thinking out loud is buffered, not answered. Say “go ahead” when you want the assistant to respond.')
   }
+  // The assistant's own completeness verdict, arriving on the event socket.
+  //
+  // Subscribed here rather than threaded through `onAssistantUtterance` because
+  // that call returns when the daemon *accepts* the turn, long before the model
+  // has decided anything. The daemon suppresses a held turn's text, speech, and
+  // stored message; this is the half that keeps the operator's words, so the next
+  // breath has something to join.
+  const parkRef=useRef(parkAssistantHold);parkRef.current=parkAssistantHold
+  useEffect(()=>{
+    const handler=(raw:Event)=>{
+      const detail=(raw as CustomEvent).detail as {type:string;payload:Record<string,unknown>;replay?:boolean}
+      if(!detail||detail.replay)return
+      if(detail.type!=='assistant_turn_done'&&detail.type!=='assistant_turn_failed')return
+      const asked=lastAskedRef.current
+      lastAskedRef.current=''
+      if(detail.type!=='assistant_turn_done')return
+      if(detail.payload?.held!==true||!asked)return
+      parkRef.current(asked)
+    }
+    window.addEventListener('mux:assistant-event',handler)
+    return()=>window.removeEventListener('mux:assistant-event',handler)
+  },[])
+
   const releaseHold=async(extra='')=>{
     const combined=[holdBufferRef.current,extra].map(part=>part.trim()).filter(Boolean).join(' ')
     if(!combined){enterHold(false);setHoldBuffer('');setPhase('listening');respond('Nothing was buffered. Chat replies normally again.');return}
@@ -589,7 +666,7 @@ export function useConversation(
         // merges and dispatches whatever the merged text looks like - the
         // heuristic deliberately does not run again, which is what makes "one
         // deferral per utterance" bounded rather than a rule to remember.
-        const routed=penRef.current.offer(rawText)
+        const routed=penRef.current.offer(rawText,configuredPatience())
         if(routed.kind==='defer'){armDeferral(routed.deferred);return}
         if(routed.merged){clearDeferralTimer();reportDeferral(routed.merged,'merged')}
         try{
@@ -878,7 +955,12 @@ export function useConversation(
         // held, the continuation gets a roomier tail so the second breath is not
         // itself chopped in half. It ends when the deferral resolves, and a
         // deferral resolves exactly once, so the extension cannot compound.
-        return endpointPatienceMs(configuredPatience(),penRef.current.pending!==null)
+        //
+        // The exact window the pen granted, so weak evidence buys a short tail
+        // and strong evidence a long one. A park grants no window - it is waiting
+        // for speech rather than for silence - and correctly falls back to the
+        // ordinary patience here.
+        return endpointPatienceMs(configuredPatience(),penRef.current.pending?.extensionMs??null)
       },
     })
     startingRef.current=capture
@@ -903,7 +985,7 @@ export function useConversation(
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,hold,holdBuffer,deferredTrigger,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
+    detail,draft:draft.text,active,standby,hold,holdBuffer,deferredTrigger,deferredSource,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()
@@ -1214,7 +1296,11 @@ export function VoiceDock({
           addressee, so the header says where speech is going. */}
       {talkActive&&!dictating&&<span class="dictation-mic-note" title="The dictation draft is not on screen, so plain speech goes to the assistant">mic→assistant</span>}
       {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
-      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
+      {/* Two different holds, and the difference matters to the operator: the
+          heuristic's expires into an ordinary turn, so waiting is enough; the
+          assistant's never sends on its own, so only more speech resolves it. */}
+      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource==='assistant'&&<span class="dictation-phase standby" title="The assistant read that as half a thought with nothing to answer yet, so it stayed silent and kept your words. Finish the sentence and both halves go as one turn; “Mux, cancel” drops it.">unfinished · waiting for the rest</span>}
+      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource!=='assistant'&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
       <span class="sr-only" role="status" aria-live="polite">{conversation.detail}</span>
       {dictating&&conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">

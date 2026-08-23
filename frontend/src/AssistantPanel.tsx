@@ -157,6 +157,19 @@ export function AssistantPanel({
       if (event.type === 'assistant_turn_done' || event.type === 'assistant_turn_failed') {
         setTurnRunning(false)
         if (event.type === 'assistant_turn_done') {
+          // A held turn made no sound and said nothing, so neither the done
+          // earcon nor the reply hook belongs to it - both would announce an
+          // answer that deliberately does not exist. The follow-up window still
+          // opens: the operator is mid-thought and their next breath has to reach
+          // the assistant to join the fragment it is holding.
+          if (payload.held === true) {
+            openFollowUpWindow()
+            if (speakingTurnRef.current === turnId) {
+              void endTurnSpeech(turnId, '').catch(() => {})
+              speakingTurnRef.current = null
+            }
+            return
+          }
           playEarcon('done')
           onReplyRef.current?.()
           if (speakingTurnRef.current === turnId) {

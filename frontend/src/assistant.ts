@@ -389,6 +389,16 @@ export function applyAssistantEvent(
   }
   if (event.type === 'assistant_turn_done') {
     const id = String(payload.message_id || '')
+    // A held turn is not an answer and leaves no trace in the dialog. Both
+    // bubbles go: the empty assistant one that would otherwise render, and the
+    // operator's own fragment - which is not lost, it is coming back joined to
+    // their next breath as a new turn, and keeping it here would show their
+    // half-sentence twice with a blank reply wedged between the copies.
+    if (payload.held === true) {
+      const turn = String(payload.turn_id || '')
+      const messages = state.messages.filter(item => item.id !== id && item.id !== `user:${turn}`)
+      return { ...state, messages, thinking: null }
+    }
     const display = String(payload.display || '')
     const messages = [...state.messages]
     const index = messages.findIndex(item => item.id === id)

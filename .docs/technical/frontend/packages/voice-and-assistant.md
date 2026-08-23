@@ -11,7 +11,7 @@ Design: `../../../design/features/voice.md`, `../../../design/features/assistant
 `fleetStatus.ts`, `insertTarget.ts`, `audioFrames.ts`, `speechGate.ts`, `utteranceCompleteness.ts`,
 `utteranceDeferral.ts`, `sileroVad.ts`, `voiceCaptureWorklet.ts`, `voiceLatency.ts`, `wakeWordTest.ts`,
 `VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoiceReadTab.tsx`, `voiceDock.ts`, `voiceMode.ts`,
-`voice.ts`, `mobileVoice.ts`
+`voice.ts`, `mobileVoice.ts`, `smartTurnFeatures.ts`, `smartTurn.ts`, `smartTurnLab.tsx`
 
 Scope: app-owned capture, draft, and history; one app-level dock holding every voice surface, with no pane-attached view; follow and pin targets; registry-backed commands; typed fleet, help, and reply queries; guarded approvals; confirmed-speech barge-in; segmented playback; session-scoped Voice Comms; mobile HTTPS.
 
@@ -56,7 +56,16 @@ Completed barge-in probes post bounded detector, origin, and peak measurements t
 `CaptureFrameWatchdog` (in `conversation.ts`, clock-injected and pure) separates a dead capture from a quiet room by raw-block liveness: a stall renders the `stalled` phase instead of `listening`, attempts `context.resume()`, and posts bounded stalled and recovered reports to `/api/voice/capture-diagnostic`.
 
 `utteranceCompleteness.ts` is the pure unfinished-utterance rule set - dangling conjunction, preposition, or article, plus the question and length guards - and the patience and extension arithmetic.
+Its verdict carries a `completion` score (P(finished), in [0, 1]) rather than only a boolean, and `deferralFactor`/`deferralExtensionMs` turn that score into a window of 0.5x-2x the operator's patience, so weak evidence costs less silence than strong evidence.
+The curve is defined across the whole [0, 1] domain on purpose: the five values the word list emits all sit at the bottom of it, and the rest is the interface an acoustic scorer feeds.
 `utteranceDeferral.ts`'s clock-injected `DeferralPen` owns the one-deferral-per-utterance decisions (offer, release, take), while `ConversationControl.tsx` keeps the effects: the single re-arming release timer, the assistant dispatch, and the resolution report to `/api/voice/deferral-diagnostic`.
+`park` is the pen's second entry point, for a turn the *model* reported as having nothing answerable in it (`assistant.md`'s hold sentinel): no release timer, resolved only by the next breath merging into it, bounded by `DEFERRAL_PARK_MAX_WORDS` and `DEFERRAL_PARK_MAX_MS`.
+A park never submits itself, which is what makes a hold loop impossible rather than merely unlikely - re-sending the fragment alone would earn the same verdict forever.
+
+`smartTurnFeatures.ts` and `smartTurn.ts` are an experiment, imported only by `smartTurnLab.tsx` behind the dev-server-only `frontend/smart-turn-lab.html`, and by `scripts/smart-turn-bench.mts`.
+They port HuggingFace's `WhisperFeatureExtractor(chunk_length=8)` to TypeScript (Bluestein DFT included, because Whisper's 400-point frame is not a power of two) and run pipecat-ai's Smart Turn v3 over onnxruntime-web.
+The weights are fetched by `tools/fetch_smart_turn.py` into `frontend/models/` - deliberately not `frontend/public/`, which vite copies wholesale into `src/swe_mux/static` and would add 8.7 MB to the frozen desktop bundle for a page production never builds.
+`frontend/test/smartTurnGolden.json` pins the extractor against the real Python output; see `design/features/voice.md` for the latency and int8-parity findings.
 
 ## Mux assistant
 

@@ -205,18 +205,42 @@ The assistant is text-first and voice-attached, not voice-only:
 - **Thinking out loud is not answered at every pause.** Three deterministic client mechanisms
   (all in `voice.md`): `voice_chat_patience_ms` lengthens the endpoint tail while the
   assistant is the addressee (commands keep short-circuiting it); a **completeness heuristic
-  runs before the turn is dispatched**, so an utterance ending mid-clause earns exactly one
-  adaptive patience extension instead of becoming a turn; and the `hold`/`proceed`
+  runs before the turn is dispatched**, so an utterance ending mid-clause earns a patience
+  extension *scaled to how confident the rule is* instead of becoming a turn; and the `hold`/`proceed`
   brainstorm pair buffers plain speech until a "go ahead" cue releases it as one consolidated
   turn. Deliberately not an assistant tool: a wait tool runs *inside* a turn, so every pause
   would still cost a model call — the same reason confirm/cancel keeps the model out of the loop.
-- **The model is never instructed to return nothing.** Incomplete fragments are handled *before*
-  the model by the heuristic above, because a model told to sometimes withhold a reply will
-  withhold one when it should have answered, and a model asked "are you finished?" is the
-  round-trip spam the whole design avoids. The primer teaches exactly one thing here: when a turn
-  reads as an unfinished thought, **offer the brainstorm hold once**, in one short sentence,
-  while still answering the turn - suggest it, never emulate it, and never repeat the offer
-  later in the same conversation.
+- **The model is never instructed to return nothing** - it is instructed to return a *token*.
+  Incomplete fragments are handled *before* the model by the heuristic above wherever a word rule
+  can see them, because a model told to sometimes withhold a reply will withhold one when it
+  should have answered, and a model asked "are you finished?" is the round-trip spam the whole
+  design avoids. But a word list only recognizes danglers, and "now I want you to add" ends on a
+  transitive verb: it reaches the model as a turn. What the primer used to teach for that case -
+  offer the brainstorm hold in one short sentence, while still answering - produced the failure it
+  was meant to prevent, because there was nothing to answer, so the *entire* reply became
+  "Go ahead, I can hold while you finish", spoken aloud, mid-thought. An offer phrased as an
+  addendum silently becomes an interruption exactly when the fragment is most incomplete.
+  So the primer now teaches the **hold sentinel** (`ASSISTANT_HOLD_TOKEN`, `[[HOLD]]`): when a turn
+  reads as an unfinished thought *and there is nothing in it that could be answered*, the whole
+  reply is that token and nothing else. Anything answerable is answered normally and holding is
+  never mentioned - a partial answer beats silence.
+  The token is plumbing and never reaches the operator. `run_turn` suppresses the sentence, the
+  speech, and the stored message, emits `assistant_turn_done` with `held: true`, and returns before
+  the "Done." fallback that a turn writing nothing would otherwise get. A reply that leads with the
+  sentinel and then keeps talking is a primer violation, and is answered with the token stripped
+  rather than suppressed or read aloud (`strip_hold_sentinel`), because `[[HOLD]]` spoken to the
+  operator is the worst outcome available.
+  Deliberately not a tool, for the unchanged reason: a wait tool runs *inside* a turn, so every
+  pause would still cost a model call. The sentinel costs the one call that already happened and
+  turns its output into silence.
+- **A held turn is parked on the client, never re-sent.** `DeferralPen.park` keeps the operator's
+  words with no release timer, and the next breath merges with them into one turn. That asymmetry
+  is what makes a hold *loop* impossible rather than merely unlikely: submitting the fragment alone
+  would produce the same verdict again forever, so nothing ever submits it. Bounded by
+  `DEFERRAL_PARK_MAX_WORDS` (400, past which the accumulated text is a turn in its own right) and
+  `DEFERRAL_PARK_MAX_MS` (120 s, so an abandoned half-sentence is forgotten rather than glued to
+  whatever is said an hour later). The chat panel shows `unfinished · waiting for the rest`, and
+  the follow-up window still opens so the next breath reaches the assistant.
 - **Queue-merge is the safety net under both.** A fragment the heuristic does not recognize
   becomes a turn, and the next breath merges into the waiting turn rather than opening a second
   one; barge-in already silences a reply to fragment one.

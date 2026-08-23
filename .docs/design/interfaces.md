@@ -1390,6 +1390,9 @@ Each `assistant_sentence` is released as the model writes it, so a device speaks
 Both carry `speech_suppressed`, set for what the model emits after a turn opened a confirmation card *and did nothing else*: the card's own `announcement` is then the spoken statement, and the model's paraphrase of it would be the same sentence twice.
 A turn that also executed something, or opened more than one card, keeps its voice - "I opened two of the three and one needs your confirmation" is information no card carries.
 `assistant_turn_done` also carries `sentence_count`, and its `speech` is only what still needs saying - empty when the card covers it.
+`assistant_turn_done` also carries `held`, always present as a boolean.
+True means the model judged the turn an unfinished thought with nothing answerable in it and asked to stay silent (`design/features/assistant.md`): the turn emits no `assistant_sentence` at all, `display` and `speech` are empty, `sentence_count` is 0, and no message is stored - so a client must not render a bubble, play the done earcon, or treat it as an answered turn.
+The operator's own words are not lost; the client parks them and merges them into the next utterance.
 
 `assistant_action` carries `announcement`, the daemon-built spoken line for a `pending` or `scheduled` card.
 It omits the text preview the written `restatement` keeps, because synthesis time tracks characters and the operator can read the preview on the card.
@@ -1448,8 +1451,16 @@ the moment it dies — the failure this exists for was reconstructed from the ac
 later while the UI said "listening" throughout.
 
 `/voice/deferral-diagnostic` records one resolved unfinished-utterance deferral:
-`{outcome, kind, trigger, words, heldMs}`, where `outcome` is `merged`, `submitted`, `held`, or
-`discarded` and `kind` is `conjunction`, `preposition`, or `article`.
+`{outcome, kind, trigger, source, completion, extensionMs, words, heldMs}`, where `outcome` is
+`merged`, `submitted`, `held`, or `discarded`, `kind` is `conjunction`, `preposition`, or
+`article`, and `source` is `heuristic` or `assistant`.
+`completion` is the P(finished) score that justified the hold and `extensionMs` is the window that
+score bought; both are recorded because the wait is no longer one length for every trigger, so a
+record without them names the word that fired but not whether its prior was worth the silence.
+An absent or unparseable `completion` is stored as `-1` rather than `0`, which would read as
+certainty.
+`source` separates two different claims: only `heuristic` can be a false positive in the
+`submitted` sense, because an `assistant` park has no release timer and never submits itself.
 The trigger token is required and is narrowed to alphanumerics, spaces, apostrophes, and hyphens
 before it reaches a log line; the counts are clamped.
 It is posted on resolution rather than at the deferral, because the outcome is what judges the

@@ -1394,6 +1394,9 @@ def test_service_validates_and_logs_deferral_diagnostics(
             "outcome": "merged",
             "kind": "conjunction",
             "trigger": "and",
+            "source": "heuristic",
+            "completion": -1.0,
+            "extension_ms": 0,
             "words": 9,
             "held_ms": 840,
         }
@@ -1426,6 +1429,62 @@ def test_service_validates_and_logs_deferral_diagnostics(
             )
         with pytest.raises(VoiceError, match="object"):
             service.record_deferral_diagnostic("merged")
+    finally:
+        service.store.close()
+
+
+def test_deferral_diagnostics_carry_the_score_and_the_window_it_bought(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The wait is no longer one length for every trigger, so the record says both.
+
+    Without the score and the window, a record names the word that fired but not
+    whether its prior was worth the silence it cost - and the priors are the only
+    thing there is to tune.
+    """
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger="swe_mux.voice"):
+            scored = service.record_deferral_diagnostic(
+                {
+                    "outcome": "merged",
+                    "kind": "article",
+                    "trigger": "the",
+                    "source": "heuristic",
+                    "completion": 0.031234,
+                    "extensionMs": 2_292,
+                }
+            )
+        assert scored["completion"] == 0.0312
+        assert scored["extension_ms"] == 2_292
+        assert '"completion": 0.0312' in caplog.text
+        # The model's own hold is a different claim from the word rule's and is
+        # separated at the source, because only one of the two can be a false
+        # positive in the `submitted` sense - a park never submits itself.
+        parked = service.record_deferral_diagnostic(
+            {
+                "outcome": "discarded",
+                "kind": "conjunction",
+                "trigger": "assistant",
+                "source": "assistant",
+                "completion": 0.12,
+                "extensionMs": 1_968,
+            }
+        )
+        assert parked["source"] == "assistant"
+        # Junk is bounded, never trusted: a NaN would reach the log as a bare
+        # token that no JSON reader will parse, and an out-of-range score would
+        # silently read as certainty.
+        for junk, expected in ((float("nan"), -1.0), ("banana", -1.0), (5, 1.0), (-2, 0.0)):
+            record = service.record_deferral_diagnostic(
+                {"outcome": "merged", "kind": "article", "trigger": "the", "completion": junk}
+            )
+            assert record["completion"] == expected, junk
+            json.loads(json.dumps(record))
+        with pytest.raises(VoiceError, match="source"):
+            service.record_deferral_diagnostic(
+                {"outcome": "merged", "kind": "article", "trigger": "the", "source": "vibes"}
+            )
     finally:
         service.store.close()
 

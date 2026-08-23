@@ -461,8 +461,25 @@ install-wide, so the tab edits them directly for the focused session.
   The design is deterministic-first and pre-model for two reasons: a model-arbitrated "are you
   done?" loop is the round-trip spam the feature exists to remove, and a model instructed to
   sometimes return nothing will return nothing when it should have answered.
-  **The model is never told to withhold a reply**; it is taught one thing instead - to offer the
-  brainstorm hold once when a turn reads as an unfinished thought (`assistant.md`).
+  **The model is never told to withhold a reply**; it is taught to emit a hold *sentinel* the
+  daemon turns into silence, for the fragments a word list structurally cannot see
+  (`assistant.md`).
+  - **The verdict is a score, not a boolean** (`completion`, P(finished), in [0, 1]). A rule fires
+    below `DEFERRAL_COMPLETION_THRESHOLD` (0.5), and the window it buys is
+    `DEFERRAL_FACTOR_MIN`..`DEFERRAL_FACTOR_MAX` (0.5x-2x patience) linear in how far below the
+    threshold it landed. That spread is the point: a dangling article is right essentially always
+    (0.03) and a weak preposition is right about a third of the time (0.35), and before this they
+    cost the operator exactly the same silence. At the default 1.2 s patience: article ~2.3 s,
+    strong preposition ~2.0 s, conjunction ~1.9 s, weak preposition ~1.1 s.
+    The priors are priors, not measurements - `POST /api/voice/deferral-diagnostic` now records
+    `completion`, `extension_ms`, and `source` with every outcome so they can become measurements.
+    The whole curve is defined across [0, 1] rather than over the five values the word list can
+    produce, because **this is the interface an acoustic scorer feeds** (see the Smart Turn lab
+    below); the extension math has to be sensible over the full domain before that arrives, not
+    after.
+  - **The pen grants the window, and the gate reads the same number** (`DeferredUtterance.extensionMs`,
+    passed to `endpointPatienceMs`). Recomputing it at either end is how the release timer and the
+    trailing-silence tail drift apart.
   - **One deferral per utterance, structurally.** The decisions live in `DeferralPen`
     (`utteranceDeferral.ts`) and the effects stay in `ConversationControl.tsx`, so the invariant
     is tested rather than asserted. The held fragment resolves exactly once:
@@ -496,7 +513,39 @@ install-wide, so the tab edits them directly for the focused session.
     false-positive rate. Tune the lists from `POST /api/voice/deferral-diagnostic` records in
     `daemon.log`, not from intuition.
   - The chat panel shows the held fragment as an `unfinished · "and"` chip beside the phase, so a
-    turn that is waiting rather than ignored is legible at a glance.
+    turn that is waiting rather than ignored is legible at a glance. A fragment parked by the
+    *assistant* reads `unfinished · waiting for the rest` instead, because the two holds end
+    differently and the operator has to be able to tell which one they are in: the heuristic's
+    expires into an ordinary turn, so waiting is enough, while a park never sends on its own and
+    only more speech resolves it.
+
+- **Smart Turn v3 lab** (`frontend/smart-turn-lab.html`, dev server only, wired into nothing).
+  The word list is the wrong long-term layer and the research says so: production voice stacks all
+  moved to a learned end-of-turn model, and the good ones read audio rather than a transcript,
+  because "I would like to order one large pizza" followed by a pause is the same transcript
+  whether the pitch fell or rose. `smartTurnFeatures.ts` + `smartTurn.ts` run pipecat-ai's
+  Smart Turn v3 (BSD-2-Clause, Whisper Tiny encoder, 8M params, 8.7 MB int8 ONNX) over
+  onnxruntime-web, on the same Silero + `SpeechGate` segmentation capture uses, and emit exactly
+  the `completion` score the curve above already consumes.
+  It is a **measurement, not a feature**, and the thing being measured is latency, not accuracy -
+  accuracy is published. Findings so far, all reproducible with `npm run bench:smart-turn`:
+  - The ONNX graph does **not** take audio. Its one input is `input_features`, an (80, 800) Whisper
+    log-mel grid, so the whole HuggingFace preprocessing chain had to be ported to TypeScript
+    (front-pad to 8 s, zero-mean unit-variance, reflect-pad, 400/160 periodic Hann, a 400-point
+    DFT via Bluestein because 400 is not a power of two, 80 Slaney mel filters, log10 floored 8 dB
+    under the peak). Every stage fails *silently*, so it is pinned against a golden vector from the
+    real Python extractor: worst deviation 1.7e-6.
+  - **Single-threaded WASM costs ~138 ms per utterance on a 16-core desktop** (~104 ms inference,
+    ~34 ms feature extraction), against the ~12 ms headline, which is native and multi-threaded.
+    Threads are not available: `SharedArrayBuffer` needs COOP/COEP headers the Tailscale Serve path
+    cannot send. A phone is the number that decides this, and the lab is how to take it.
+  - **The WASM and x86 int8 kernels disagree** by up to 1.9e-2 on the probability from byte-identical
+    input. Not a bug and not this code - proven by feeding Python's own features through both
+    runtimes - but it means a threshold tuned on published numbers is a few points off in a browser.
+  - It would probably **not** have caught the failure that started this: the model answers "did they
+    stop talking", and on "now I want you to add" the operator did stop. Turn-end and thought-end are
+    different events, which is why the sentinel in `assistant.md` is the load-bearing fix and this is
+    an upgrade to the *scorer*.
 - **Push-to-talk** (hold `Ctrl`+`Alt`+`Space`) suspends endpointing entirely: the key release is
   the endpoint. It is the escape hatch for when detection is the problem rather than the fix — a
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the

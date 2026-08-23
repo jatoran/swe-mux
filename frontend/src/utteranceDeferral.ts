@@ -1,4 +1,4 @@
-import { utteranceCompleteness, utteranceWords } from './utteranceCompleteness.ts'
+import { COMPLETION, deferralExtensionMs, utteranceCompleteness, utteranceWords } from './utteranceCompleteness.ts'
 import type { CompletenessKind } from './utteranceCompleteness.ts'
 
 /**
@@ -22,6 +22,19 @@ import type { CompletenessKind } from './utteranceCompleteness.ts'
  * without waiting fifteen real seconds.
  */
 
+/**
+ * Who decided this fragment was unfinished, which decides how it ends.
+ *
+ * `heuristic` is the pre-model word rule: it may be wrong, so its window expires
+ * into an ordinary turn - exactly what would have happened without the feature.
+ * `assistant` is the model itself reporting that the turn contained nothing to
+ * answer, which is a much stronger claim and has a very different consequence:
+ * re-sending that text alone would produce the same verdict again, so it is
+ * parked for the next breath instead of ever being submitted by a timer. That
+ * asymmetry is what makes a hold loop impossible rather than merely unlikely.
+ */
+export type DeferralSource = 'heuristic' | 'assistant'
+
 export type DeferredUtterance = {
   /** Everything held so far - a single fragment, never an accumulated chain. */
   text: string
@@ -31,6 +44,11 @@ export type DeferredUtterance = {
   words: number
   /** Clock reading at the deferral, for the hold ceiling and the held-ms report. */
   at: number
+  source: DeferralSource
+  /** P(finished) that produced this hold; reported so the priors can be tuned. */
+  completion: number
+  /** The window this score bought. 0 for a park, which has no release timer. */
+  extensionMs: number
 }
 
 export type OfferResult =
@@ -56,6 +74,30 @@ export type ReleaseResult =
  */
 export const DEFERRAL_MAX_HOLD_MS = 15_000
 
+/**
+ * How long a parked fragment waits for the breath that completes it.
+ *
+ * A park has no release timer by design, so this is the only thing standing
+ * between "the operator paused to think" and "the operator walked away and comes
+ * back after lunch to find their half-sentence glued to a new question". Long
+ * enough to cover real thinking, short enough that the merge is still obviously
+ * the same thought.
+ */
+export const DEFERRAL_PARK_MAX_MS = 120_000
+
+/**
+ * Word ceiling on a parked fragment.
+ *
+ * Each park needs new speech from the operator, so parks cannot loop on their own
+ * - but a long enough dictation of pure context would keep parking forever and
+ * never reach the model. At this many words the accumulated text is a turn in its
+ * own right and dispatches whatever it looks like.
+ */
+export const DEFERRAL_PARK_MAX_WORDS = 400
+
+/** The score attributed to a hold the model asked for. See `DeferralSource`. */
+export const ASSISTANT_HOLD_COMPLETION = 0.12
+
 export class DeferralPen {
   // A plain assigned field, not a constructor parameter property: the frontend
   // unit tests run under node's type stripping, which refuses parameter properties.
@@ -75,7 +117,7 @@ export class DeferralPen {
    * wait cannot afford. With nothing held it dispatches a complete utterance and
    * holds an unfinished one.
    */
-  offer(text: string): OfferResult {
+  offer(text: string, patienceMs: number): OfferResult {
     const body = text.trim()
     const merged = this.held
     if (merged) {
@@ -86,15 +128,58 @@ export class DeferralPen {
     if (verdict.complete || !verdict.trigger || !verdict.kind) {
       return { kind: 'dispatch', text: body, merged: null }
     }
+    const extensionMs = deferralExtensionMs(patienceMs, verdict.completion)
+    // A score that buys no window is not a deferral. Belt-and-braces against a
+    // future scorer whose threshold and factor curve disagree: without this the
+    // caller would arm a zero-length timer and answer mid-clause anyway.
+    if (extensionMs <= 0) return { kind: 'dispatch', text: body, merged: null }
     const deferred: DeferredUtterance = {
       text: body,
       trigger: verdict.trigger,
       kind: verdict.kind,
       words: utteranceWords(body).length,
       at: this.now(),
+      source: 'heuristic',
+      completion: verdict.completion,
+      extensionMs,
     }
     this.held = deferred
     return { kind: 'defer', deferred }
+  }
+
+  /**
+   * The model answered a dispatched turn with "there is nothing here to answer".
+   *
+   * Parked rather than deferred: no timer is armed, because there is no useful
+   * thing for a timer to do. Submitting the text again would produce the same
+   * verdict, and saying anything at all is the interruption the whole feature
+   * exists to prevent, so it waits silently for the breath that finishes it.
+   *
+   * Refuses once the accumulated text is long enough to be a turn in its own
+   * right, so an operator who never stops trailing off still eventually gets an
+   * answer. Also refuses when something is already held, which cannot happen from
+   * the dispatch path but keeps the one-fragment invariant true by construction.
+   */
+  park(text: string, patienceMs: number): DeferredUtterance | null {
+    const body = text.trim()
+    if (this.held || !body) return null
+    const words = utteranceWords(body).length
+    if (words >= DEFERRAL_PARK_MAX_WORDS) return null
+    const parked: DeferredUtterance = {
+      text: body,
+      trigger: 'assistant',
+      kind: 'conjunction',
+      words,
+      at: this.now(),
+      source: 'assistant',
+      completion: ASSISTANT_HOLD_COMPLETION,
+      // Sized like any other hold even though nothing will fire on it: the
+      // window is what the *gate* reads, and an operator the model just judged
+      // mid-thought needs the roomier tail more than anyone, not less.
+      extensionMs: deferralExtensionMs(patienceMs, ASSISTANT_HOLD_COMPLETION),
+    }
+    this.held = parked
+    return parked
   }
 
   /**
@@ -112,6 +197,20 @@ export class DeferralPen {
   }
 
   /**
+   * Drop a parked fragment that waited too long for its second half.
+   *
+   * Returns it so the caller can report the outcome; returns null while the park
+   * is still fresh, so this is safe to call on any convenient tick.
+   */
+  expireStalePark(): DeferredUtterance | null {
+    const held = this.held
+    if (!held || held.source !== 'assistant') return null
+    if (this.now() - held.at < DEFERRAL_PARK_MAX_MS) return null
+    this.held = null
+    return held
+  }
+
+  /**
    * Claim the held fragment for any non-dispatch reason: folded into a
    * brainstorm hold, or dropped by cancel, standby, or Talk stopping. Returns
    * null when nothing is held, so the caller can report only real deferrals.
@@ -122,3 +221,6 @@ export class DeferralPen {
     return held
   }
 }
+
+/** Re-exported so callers scoring a fragment do not import two modules. */
+export { COMPLETION }

@@ -1338,6 +1338,16 @@ class VoiceService:
         two. `held` (folded into a brainstorm hold) and `discarded` (Talk
         stopped, standby, or cancel) are neither, and are counted separately so
         they cannot be mistaken for either verdict.
+
+        `completion` is the score that justified the hold and `extension_ms` is
+        the window that score bought, because the wait is no longer one length
+        for every trigger. Without both, a record says which word fired but not
+        whether its prior was worth what it cost - and the priors are the only
+        thing there is to tune. `source` separates the two very different holds:
+        `heuristic` is the pre-model word rule, whose `submitted` outcome is a
+        false positive, while `assistant` is the model reporting that the turn
+        had nothing answerable in it, which never submits on its own and whose
+        outcomes are therefore only ever `merged` or `discarded`.
         """
         if not isinstance(raw, dict):
             raise VoiceError("deferral diagnostic must be an object")
@@ -1365,10 +1375,27 @@ class VoiceService:
                 return 0
             return max(0, min(number, ceiling))
 
+        def bounded_score(value: Any) -> float:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return -1.0
+            if number != number:  # NaN, which json.dumps would write unquoted
+                return -1.0
+            return round(max(0.0, min(number, 1.0)), 4)
+
+        source = str(raw.get("source") or "heuristic")
+        if source not in {"heuristic", "assistant"}:
+            raise VoiceError("deferral source must be heuristic or assistant")
         sample: dict[str, Any] = {
             "outcome": outcome,
             "kind": kind,
             "trigger": trigger,
+            "source": source,
+            # -1 marks "the client did not send one" rather than silently reading
+            # as maximal confidence, which 0.0 would.
+            "completion": bounded_score(raw.get("completion")),
+            "extension_ms": bounded_int(raw.get("extensionMs"), 60_000),
             "words": bounded_int(raw.get("words"), 10_000),
             "held_ms": bounded_int(raw.get("heldMs"), 3_600_000),
         }

@@ -1207,6 +1207,119 @@ async def test_plain_answer_turn_emits_sentences_and_done(tmp_path: Path) -> Non
         service.store.close()
 
 
+async def test_the_hold_sentinel_matches_a_bare_token_and_nothing_with_words_in_it() -> None:
+    from swe_mux.assistant import ASSISTANT_HOLD_TOKEN, is_hold_sentinel
+
+    assert is_hold_sentinel(ASSISTANT_HOLD_TOKEN)
+    # Models decorate a bare token far more often than they wrap it in prose, and
+    # every one of these still means hold. Rendering "[[HOLD]]." to the operator
+    # would be a worse failure than accepting a sloppy sentinel.
+    sloppy_forms = (
+        '  [[HOLD]]  ', '[[hold]]', '"[[HOLD]]"', '[[HOLD]].', '`[[ hold ]]`', '*[[HOLD]]*',
+    )
+    for sloppy in sloppy_forms:
+        assert is_hold_sentinel(sloppy), sloppy
+    # Anything carrying real words is an answer and must be spoken normally.
+    for answer in ('[[HOLD]] and here is the thing', 'I will [[HOLD]]', 'hold on', '', 'HOLD'):
+        assert not is_hold_sentinel(answer), answer
+
+
+async def test_the_primer_teaches_the_sentinel_and_never_asks_the_operator_to_continue() -> None:
+    from swe_mux.assistant import ASSISTANT_HOLD_TOKEN, SYSTEM_PRIMER
+
+    assert ASSISTANT_HOLD_TOKEN in SYSTEM_PRIMER
+    # The placeholder must have been substituted; a literal "{hold}" reaching the
+    # model teaches it to emit a token nothing recognizes, and the turn would be
+    # spoken aloud as an interruption instead of held.
+    assert '{hold}' not in SYSTEM_PRIMER
+    # The old behaviour - asking the operator, out loud, whether they are done -
+    # is the exact thing being removed, and its absence IS the feature. Asserted
+    # on the phrases that turn into speech, because a primer that still teaches
+    # them produces the interruption again no matter what the sentinel does.
+    lowered = SYSTEM_PRIMER.lower()
+    for revived in (
+        'say "hold on" to keep talking',
+        'go ahead" when they want an answer',
+        'in one short sentence, to hold',
+    ):
+        assert revived not in lowered, revived
+    assert 'never explain the hold in words' in lowered
+
+
+async def test_a_held_turn_says_nothing_stores_nothing_and_reports_held(tmp_path: Path) -> None:
+    from swe_mux.assistant import ASSISTANT_HOLD_TOKEN
+
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn(ASSISTANT_HOLD_TOKEN)],
+    )
+    try:
+        dialog_id = await run_turn(service, "now I want you to add")
+        types = [event.type for event in emitted]
+        # Not one spoken or displayed sentence: the whole point is silence.
+        assert "assistant_sentence" not in types
+        assert types[-1] == "assistant_turn_done"
+        done = emitted[-1]
+        assert done.payload["held"] is True
+        assert done.payload["display"] == ""
+        assert done.payload["speech"] == ""
+        assert done.payload["sentence_count"] == 0
+        # The "Done." fallback for a turn that wrote nothing must not fire here -
+        # it is the one case where it would say the wrong thing out loud.
+        assert "Done." not in json.dumps(done.payload)
+        # Only the operator's own message survives; a stored empty assistant reply
+        # would read as an answered turn to every consumer of the dialog.
+        messages = await service.store.messages(dialog_id)
+        assert [item["role"] for item in messages] == ["user"]
+    finally:
+        service.store.close()
+
+
+async def test_an_ordinary_turn_still_reports_held_false(tmp_path: Path) -> None:
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        [tool_turn("Two sessions are live.")],
+    )
+    try:
+        await run_turn(service, "what needs me")
+        done = emitted[-1]
+        assert done.type == "assistant_turn_done"
+        # Always present, so a client reads one shape rather than treating a
+        # missing key as "not held" and a stray truthy value as held.
+        assert done.payload["held"] is False
+        assert done.payload["display"]
+    finally:
+        service.store.close()
+
+
+async def test_a_sentinel_mixed_with_prose_answers_without_the_token(tmp_path: Path) -> None:
+    from swe_mux.assistant import ASSISTANT_HOLD_TOKEN
+
+    service, emitted, _queue, _effects = make_service(
+        tmp_path,
+        # A primer violation: the model asked to hold and then kept talking. The
+        # prose is a real answer and is kept, but the raw token must never reach
+        # the operator - "[[HOLD]]" read aloud is the worst outcome available.
+        [tool_turn(f"{ASSISTANT_HOLD_TOKEN} Two sessions are live.")],
+    )
+    try:
+        dialog_id = await run_turn(service, "and then I want to")
+        done = emitted[-1]
+        assert done.payload["held"] is False, "prose means this was an answer, not a hold"
+        spoken = [event for event in emitted if event.type == "assistant_sentence"]
+        assert spoken, "the answer half must still be said"
+        for event in spoken:
+            assert "HOLD" not in event.payload["display"]
+            assert "HOLD" not in event.payload["speech"]
+        assert "HOLD" not in done.payload["display"]
+        # And the stored message is clean too, or the next turn reads the token
+        # back as ordinary prose and learns to imitate it.
+        messages = await service.store.messages(dialog_id)
+        assert all("HOLD" not in str(item["display"]) for item in messages)
+    finally:
+        service.store.close()
+
+
 def send_call(deliver: bool) -> dict[str, Any]:
     return {
         "id": "call-1",

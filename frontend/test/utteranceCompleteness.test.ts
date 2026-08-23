@@ -2,14 +2,26 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  chatPatienceMs, DEFAULT_CHAT_PATIENCE_MS, deferralExtensionMs, endpointPatienceMs,
+  chatPatienceMs, COMPLETION, DEFAULT_CHAT_PATIENCE_MS, DEFERRAL_COMPLETION_THRESHOLD,
+  DEFERRAL_FACTOR_MAX, DEFERRAL_FACTOR_MIN, deferralExtensionMs, deferralFactor,
+  endpointPatienceMs, MAX_DEFERRAL_EXTENSION_MS,
   MAX_EXTENDED_PATIENCE_MS, MIN_DEFERRAL_EXTENSION_MS, MIN_WEAK_PREPOSITION_WORDS,
   utteranceCompleteness, utteranceWords,
 } from '../src/utteranceCompleteness.ts'
 
 const incomplete = (text: string, trigger: string, kind: string) => {
   const verdict = utteranceCompleteness(text)
-  assert.deepEqual(verdict, { complete: false, trigger, kind }, `expected "${text}" to read as unfinished`)
+  assert.deepEqual(
+    { complete: verdict.complete, trigger: verdict.trigger, kind: verdict.kind },
+    { complete: false, trigger, kind },
+    `expected "${text}" to read as unfinished`,
+  )
+  // Every rule that fires must claim it, or the extension curve sizes a window
+  // for a hold the threshold would not have granted in the first place.
+  assert.ok(
+    verdict.completion < DEFERRAL_COMPLETION_THRESHOLD,
+    `"${text}" deferred on "${trigger}" but scored ${verdict.completion}, at or above the threshold`,
+  )
 }
 const complete = (text: string) => {
   const verdict = utteranceCompleteness(text)
@@ -110,15 +122,47 @@ test('the extension is the operator\'s own patience, floored and capped', () => 
   assert.equal(chatPatienceMs(99_000), 5_000)
   // A patience of 0 still buys a usable pause: the floor is what makes the
   // deferral a real extension rather than a no-op re-dispatch.
-  assert.equal(deferralExtensionMs(0), MIN_DEFERRAL_EXTENSION_MS)
-  assert.equal(deferralExtensionMs(1_200), 1_200)
-  assert.equal(deferralExtensionMs(99_000), 5_000)
+  assert.equal(deferralExtensionMs(0, COMPLETION.article), MIN_DEFERRAL_EXTENSION_MS)
+  assert.equal(deferralExtensionMs(99_000, COMPLETION.article), MAX_DEFERRAL_EXTENSION_MS)
+})
+
+test('a weaker rule buys a shorter window than a stronger one', () => {
+  // The whole point of the score. Before this, a rule that is right about a
+  // third of the time cost the operator exactly as much silence as one that is
+  // right essentially always.
+  const patience = DEFAULT_CHAT_PATIENCE_MS
+  const article = deferralExtensionMs(patience, COMPLETION.article)
+  const conjunction = deferralExtensionMs(patience, COMPLETION.conjunction)
+  const weak = deferralExtensionMs(patience, COMPLETION.weakPreposition)
+  assert.ok(article > conjunction, `article ${article} should outwait conjunction ${conjunction}`)
+  assert.ok(conjunction > weak, `conjunction ${conjunction} should outwait weak preposition ${weak}`)
+  // And the spread is worth having, not a rounding difference.
+  assert.ok(article >= weak * 1.5, `spread too narrow: ${weak} to ${article}`)
+})
+
+test('the factor curve spans the deferral region and stops at the threshold', () => {
+  assert.equal(deferralFactor(0), DEFERRAL_FACTOR_MAX)
+  assert.equal(deferralFactor(DEFERRAL_COMPLETION_THRESHOLD), 0)
+  assert.equal(deferralFactor(1), 0)
+  // Monotonic: more confidence that the turn is finished never buys more silence.
+  let previous = Infinity
+  for (let score = 0; score < DEFERRAL_COMPLETION_THRESHOLD; score += 0.02) {
+    const factor = deferralFactor(score)
+    assert.ok(factor <= previous, `factor rose at ${score}`)
+    assert.ok(factor >= DEFERRAL_FACTOR_MIN, `factor fell below the floor at ${score}`)
+    previous = factor
+  }
+  // Garbage in is a dispatch, never an unbounded wait.
+  assert.equal(deferralFactor(Number.NaN), 0)
+  assert.equal(deferralFactor(-5), DEFERRAL_FACTOR_MAX)
+  assert.equal(deferralExtensionMs(1_200, 0.9), 0)
 })
 
 test('the patience extension applies only while a fragment is held, and is capped', () => {
-  assert.equal(endpointPatienceMs(1_200, false), 1_200)
-  assert.equal(endpointPatienceMs(1_200, true), 2_400)
-  assert.equal(endpointPatienceMs(0, false), 0)
-  assert.equal(endpointPatienceMs(0, true), MIN_DEFERRAL_EXTENSION_MS)
-  assert.ok(endpointPatienceMs(5_000, true) <= MAX_EXTENDED_PATIENCE_MS)
+  assert.equal(endpointPatienceMs(1_200, null), 1_200)
+  assert.equal(endpointPatienceMs(1_200, 0), 1_200)
+  assert.equal(endpointPatienceMs(1_200, 1_200), 2_400)
+  assert.equal(endpointPatienceMs(0, null), 0)
+  assert.equal(endpointPatienceMs(0, MIN_DEFERRAL_EXTENSION_MS), MIN_DEFERRAL_EXTENSION_MS)
+  assert.ok(endpointPatienceMs(5_000, MAX_DEFERRAL_EXTENSION_MS) <= MAX_EXTENDED_PATIENCE_MS)
 })

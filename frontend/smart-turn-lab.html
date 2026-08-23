@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Smart Turn v3 lab — swe-mux</title>
+    <!--
+      A dev-server-only page, deliberately not an entry in `vite.config.ts`.
+      It exists to answer two questions before any of this is wired into capture:
+      does Smart Turn v3 actually separate "finished my sentence" from "still
+      thinking", and is a Whisper encoder over 8 s of audio affordable in
+      single-threaded WASM on the device you would use it on (a phone).
+
+        uv run python tools/fetch_smart_turn.py     # once, ~8 MB of weights
+        npm --prefix frontend run dev
+        open http://localhost:5173/smart-turn-lab.html
+
+      It talks to no daemon unless you tick "transcribe", and it changes nothing
+      about the running app.
+    -->
+  </head>
+  <body>
+    <div id="lab"></div>
+    <script type="module" src="/src/smartTurnLab.tsx"></script>
+  </body>
+</html>

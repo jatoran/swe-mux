@@ -248,11 +248,20 @@ twice. When a request names several targets — three sessions, two notes — em
 independent tool calls in one response rather than one per round. If the rounds run low, \
 stop starting new work and say plainly what is done and what is not.
 
-The operator is usually speaking, and speech arrives in breaths. If a turn reads as an \
-unfinished thought - it stops mid-clause, or it is context with no request in it yet - offer \
-once, in one short sentence, to hold while they finish: they can say "hold on" to keep talking \
-and "go ahead" when they want an answer. Suggest it, never assume it. Still answer whatever \
-they did say in the same reply, and do not repeat the offer later in the conversation.
+The operator is usually speaking, and speech arrives in breaths, so a turn is sometimes half \
+of one. If a turn reads as an unfinished thought AND there is nothing in it you could answer \
+- it stops mid-clause, or it is context with no request in it yet - reply with exactly \
+{hold} and nothing else: no greeting, no explanation, no offer to wait. That token is not \
+shown or spoken; it makes the device stay silent and keep listening, and the operator's next \
+breath arrives joined to this one. Saying anything at all here is the interruption to avoid - \
+they are still thinking, and being asked whether they are finished is what breaks the thought. \
+Never explain the hold in words and never ask them to keep going.
+
+Use {hold} only when you would otherwise have nothing useful to say. If any part of the turn \
+is answerable, answer that part normally and do not mention holding at all - a partial answer \
+is better than silence. Never emit {hold} alongside other text, never emit it twice in a row \
+for the same material, and never use it to avoid a question you simply cannot answer: say so \
+plainly instead.
 
 spawn_session has two prompt parameters and they are not interchangeable. stage_text \
 leaves the prompt waiting in the new session's composer WITHOUT sending it, so the \
@@ -290,6 +299,53 @@ submit_session_composer presses Enter on that staged text and always confirms. P
 this pair over send_to_session when the operator says "type", "enter", or "without \
 sending"; for a session that does not exist yet, spawn_session with stage_text does the \
 same thing in one call."""
+
+
+#: The reply that means "stay silent, they are still thinking".
+#:
+#: A sentinel rather than an empty reply, and rather than a tool, for reasons that
+#: have not changed: a model instructed to sometimes return nothing returns
+#: nothing when it should have answered, and a wait *tool* would still cost a
+#: model call per pause. This costs the one call that already happened and turns
+#: its output into silence instead of into an interruption.
+#:
+#: Deliberately free of sentence-ending punctuation, so `_SentenceStreamer` cannot
+#: release it as a completed sentence mid-stream - it can only arrive through
+#: `flush()`, by which time the turn is known to contain nothing else.
+ASSISTANT_HOLD_TOKEN = "[[HOLD]]"
+
+#: Tolerant match for the sentinel at the head of a reply.
+#:
+#: Models add stray formatting to a bare token more often than they add prose:
+#: quotes, a trailing period, a code fence. Every one of those still means hold,
+#: and rendering `"[[HOLD]]."` to the operator would be a worse failure than
+#: accepting a sloppy sentinel.
+_HOLD_PREFIX = re.compile(r'^[\s"\'`*_]*\[\[\s*HOLD\s*\]\][\s"\'`*_.,:;-]*', re.IGNORECASE)
+
+
+def strip_hold_sentinel(text: str) -> tuple[bool, str]:
+    """Split a reply into "did it ask to hold" and "what else did it say".
+
+    Two failure modes, and the split is what separates them. A reply that is
+    *only* the sentinel is a hold, and the remainder is empty. A reply that leads
+    with the sentinel and then keeps talking is a primer violation - but the
+    operator must never be shown the raw token either way, so the prose survives
+    with the sentinel removed rather than the whole turn being suppressed or the
+    whole turn being spoken with `[[HOLD]]` read out at the front of it.
+    """
+    match = _HOLD_PREFIX.match(text or "")
+    if match is None:
+        return False, (text or "").strip()
+    return True, (text or "")[match.end():].strip()
+
+
+def is_hold_sentinel(text: str) -> bool:
+    """True when this reply is the hold sentinel and nothing else."""
+    asked, remainder = strip_hold_sentinel(text)
+    return asked and not remainder
+
+
+SYSTEM_PRIMER = SYSTEM_PRIMER.format(hold=ASSISTANT_HOLD_TOKEN)
 
 
 class AssistantError(RuntimeError):
@@ -3490,9 +3546,30 @@ class AssistantService:
         cards_opened = 0
         mutations_executed = 0
         suppress_speech = False
+        # The model asked to stay silent because the operator is mid-thought. Set
+        # from inside emit_sentence, because with streaming on there is no other
+        # point where the whole reply is known before some of it has been sent.
+        held = False
 
         async def emit_sentence(sentence: str) -> None:
-            nonlocal sentence_index
+            nonlocal sentence_index, held
+            if held:
+                # A hold is the whole turn or it is not a hold. Anything the model
+                # writes after the sentinel is a primer violation, and speaking it
+                # would be the interruption the sentinel just asked to avoid.
+                log.warning("assistant turn %s wrote past the hold sentinel", turn_id)
+                return
+            if sentence_index == 0:
+                asked, remainder = strip_hold_sentinel(sentence)
+                if asked and not remainder:
+                    held = True
+                    return
+                if asked:
+                    # Sentinel plus prose in one breath. The prose is a real answer
+                    # and is spoken; the token never reaches the operator, because
+                    # "[[HOLD]]" read aloud is the worst outcome available here.
+                    log.warning("assistant turn %s mixed the hold sentinel with a reply", turn_id)
+                    sentence = remainder
             await self.events.emit(
                 "assistant_sentence",
                 source="assistant",
@@ -3529,9 +3606,20 @@ class AssistantService:
             totals["cost_usd"] += float(turn.cost_usd or 0)
             totals["calls"] += 1
             if turn.content.strip():
-                display_parts.append(turn.content.strip())
-                if not suppress_speech:
-                    spoken_parts.append(turn.content.strip())
+                # A held turn leaves no transcript. The sentinel is plumbing, not
+                # something the operator said or the assistant answered, and
+                # storing it would put "[[HOLD]]" in the dialog the next turn
+                # reads back - teaching the model to treat it as ordinary prose.
+                # The same strip runs on a mixed reply, so the token cannot reach
+                # the stored message either.
+                if sentence_index == 0:
+                    _, body = strip_hold_sentinel(turn.content)
+                else:
+                    body = turn.content.strip()
+                if body:
+                    display_parts.append(body)
+                    if not suppress_speech:
+                        spoken_parts.append(body)
                 if streamer.emitted:
                     # Streaming already published every complete sentence; only
                     # the unterminated tail is left. Re-emitting from `content`
@@ -3634,7 +3722,10 @@ class AssistantService:
             )
             sentence_index += 1
         display = "\n\n".join(display_parts).strip()
-        if not display:
+        if not display and not held:
+            # A turn that did work but wrote nothing still owes the operator an
+            # acknowledgement. A HELD turn owes them silence, which is the one
+            # case where this fallback would say the wrong thing out loud.
             display = "Done." if totals["calls"] else ""
             if not suppress_speech and display:
                 spoken_parts.append(display)
@@ -3644,6 +3735,31 @@ class AssistantService:
         # the unsuppressed part, and one that only knows this event must not be
         # handed the card's paraphrase.
         speech = speech_form(spoken) if spoken else ""
+        # A held turn leaves no message behind. The operator's fragment is coming
+        # back joined to their next breath, and a stored empty assistant reply
+        # between the two halves would show as a blank bubble in the panel and
+        # read as an answered turn to every consumer of the dialog.
+        if held:
+            await self.events.emit(
+                "assistant_turn_done",
+                source="assistant",
+                dialog_id=dialog_id,
+                turn_id=turn_id,
+                message_id=message_id,
+                display="",
+                speech="",
+                speech_suppressed=True,
+                sentence_count=0,
+                exhausted=exhausted,
+                held=True,
+                usage={**totals, "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)},
+            )
+            log.info(
+                "assistant turn held dialog=%s turn=%s calls=%d cost=%.5f",
+                dialog_id, turn_id, totals["calls"], totals["cost_usd"],
+            )
+            self.diagnostic = None
+            return
         await self.store.add_message(
             {
                 "id": message_id,
@@ -3687,6 +3803,7 @@ class AssistantService:
             # asked for. The client shows it; nothing may report such a turn as
             # complete.
             exhausted=exhausted,
+            held=False,
             usage={**totals, "elapsed_ms": elapsed_ms},
         )
 

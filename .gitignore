@@ -116,3 +116,7 @@ tests/.phase2-*.db*
 
 .tmp/
 .swe-mux/
+# Smart Turn v3 weights, fetched by tools/fetch_smart_turn.py (BSD-2-Clause, ~8 MB).
+# An experiment behind frontend/smart-turn-lab.html; a binary this size does not
+# belong in git history, and the lab tells you how to fetch it when it is absent.
+frontend/models/
