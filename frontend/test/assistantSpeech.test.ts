@@ -149,4 +149,33 @@ test('a turn that already spoke does not repeat itself at the end', async () => 
   assert.deepEqual(calls.map(call => call.text), ['Three sessions are working.', ''])
 })
 
+test('a sentence still being synthesized already counts as spoken', async () => {
+  // The awaited version above is not how the client calls this. `AssistantPanel`
+  // fires `void speakTurnText(...)` and the completion event arrives on its own,
+  // so for a one-sentence reply `endTurnSpeech` runs milliseconds later while the
+  // post is still in flight - and seconds before synthesis returns. Reading
+  // `spoke` after the await made the guard miss, and the turn said the whole
+  // reply twice: measured 2026-08-23, one sentence, no card, two segments, 11.8s
+  // of audio for a 95-character sentence.
+  reset()
+  speech.beginTurnSpeech('turn-7')
+  const sentence = speech.speakTurnText('turn-7', 'The top note is swe-mux Notes.')
+  await speech.endTurnSpeech('turn-7', 'The top note is swe-mux Notes.')
+  await sentence
+  assert.deepEqual(
+    calls.map(call => call.text),
+    ['The top note is swe-mux Notes.', ''],
+    'the fallback must not repeat a sentence that was queued but not yet synthesized',
+  )
+})
+
+test('a turn that queued nothing still says its fallback', async () => {
+  // The other side of the same flag: making it eager must not silence the terse
+  // completion line for a turn that was all tool calls.
+  reset()
+  speech.beginTurnSpeech('turn-8')
+  await speech.endTurnSpeech('turn-8', 'Done.')
+  assert.deepEqual(calls.map(call => call.text), ['Done.', ''])
+})
+
 test.after(() => { globalThis.fetch = realFetch })
