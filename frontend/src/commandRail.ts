@@ -44,11 +44,206 @@ export const RAIL_SURFACES: readonly RailSurface[] = ['strip']
 // 'skill' → inject a skill invocation, backend-aware (/name on Claude, $name on Codex)
 // 'prompt'→ insert a prompt-library template, resolved from the server by key at
 //           click time so the button always injects the template's current text
-export type RailItemType = 'key' | 'action' | 'text' | 'slash' | 'skill' | 'prompt'
+// 'pad'   → a directional container: one chip holding up to four other catalog
+//           items, reached by dragging a direction off it (see the pad section below)
+export type RailItemType = 'key' | 'action' | 'text' | 'slash' | 'skill' | 'prompt' | 'pad'
 export type RailItemDisplay = 'auto' | 'icon' | 'label' | 'icon-label'
 
 /** Injection types a user may author. 'action' is app-owned and never custom. */
-export const CUSTOM_RAIL_TYPES: readonly RailItemType[] = ['key', 'text', 'slash', 'skill', 'prompt']
+export const CUSTOM_RAIL_TYPES: readonly RailItemType[] = ['key', 'text', 'slash', 'skill', 'prompt', 'pad']
+
+// ---------------------------------------------------------------------------
+// Pads
+// ---------------------------------------------------------------------------
+//
+// A pad is one chip that holds up to four other catalog items plus a centre, each
+// reached by pressing the chip and dragging a direction off it. It is a *container*
+// and never a behaviour of its own: every slot names an ordinary catalog id, so a
+// pad composes with backend filtering, project deltas, splices and hides without any
+// of them learning what a pad is.
+//
+// Four directions, never eight. Eight halves the angular tolerance to 22.5° and
+// destroys the eyes-free property the control exists for; where four is not enough
+// the answer is a modifier chip re-labelling the same pad, not more wedges.
+//
+// Two orientations, because the two useful four-way carvings of a circle put their
+// boundaries in different places. `cardinal` reads the dominant axis and so its
+// boundaries are the diagonals; `diagonal` reads the sign of each axis and so its
+// boundaries are the axes themselves. A set with a natural up/down/left/right
+// meaning wants the first; a 2x2 matrix of two independent binary choices - which is
+// exactly what Home/End crossed with plain/Ctrl is - wants the second, because then
+// each axis carries one of the choices.
+
+/**
+ * Where a stored Action id lands now.
+ *
+ * Every built-in this catalog has retired *and replaced* is one row here, and each
+ * must stay forever: a rail layout is device-local, per-Project, and can be
+ * arbitrarily old, and rows are normalized against the live catalog — so an id with
+ * no entry here is silently dropped from whichever row the operator had dragged it
+ * into. Same durability rule as the drawer's `migratedTabTarget` and the daemon's
+ * `_COMMAND_MIGRATIONS`.
+ *
+ * Only a *replacement* belongs here. A built-in that was retired outright
+ * (`draftToggle`) has nothing to migrate to, and dropping it is the correct answer.
+ *
+ * Mapping rather than dropping is also what keeps position: `clearInput` was
+ * removed and Ctrl+U put back in its place, so the operator finds a key where the
+ * button was instead of a hole plus a stranger appended to the end of row one.
+ *
+ * It sits above the catalog rather than beside the other normalization helpers
+ * because the shipped pads canonicalize their own slots at their definition site, and
+ * that runs `migratedRailItemId` while `BUILTIN_RAIL` is still being evaluated.
+ */
+const RETIRED_RAIL_IDS: Readonly<Record<string, string>> = {
+  clearInput: 'ctrlU',
+}
+
+/** Resolve a stored id through the retirement table. Unknown ids pass through
+ *  unchanged; whether they exist is the caller's separate question. */
+export function migratedRailItemId(id: string): string {
+  return RETIRED_RAIL_IDS[id] ?? id
+}
+
+export type RailPadOrientation = 'cardinal' | 'diagonal'
+export type RailPadDirection = 'up' | 'right' | 'down' | 'left' | 'upLeft' | 'upRight' | 'downRight' | 'downLeft'
+export type RailPadSlotKey = RailPadDirection | 'center'
+
+/**
+ * When a slot fires.
+ *
+ *  * `enter`        - the instant the press crosses into this direction, once.
+ *  * `enter-repeat` - the same, then repeating while held.
+ *  * `release`      - only if the press is *still* latched here when it ends, which
+ *                     is what makes dragging back out an escape hatch. The mode for
+ *                     anything a mis-flick must not be able to do.
+ */
+export type RailPadTriggerMode = 'enter' | 'enter-repeat' | 'release'
+
+export const RAIL_PAD_ORIENTATIONS: readonly RailPadOrientation[] = ['cardinal', 'diagonal']
+export const RAIL_PAD_TRIGGER_MODES: readonly RailPadTriggerMode[] = ['enter', 'enter-repeat', 'release']
+
+export const CARDINAL_PAD_DIRECTIONS: readonly RailPadDirection[] = ['up', 'right', 'down', 'left']
+export const DIAGONAL_PAD_DIRECTIONS: readonly RailPadDirection[] = ['upLeft', 'upRight', 'downRight', 'downLeft']
+
+export const RAIL_PAD_DIRECTION_LABELS: Readonly<Record<RailPadDirection, string>> = {
+  up: 'Up',
+  right: 'Right',
+  down: 'Down',
+  left: 'Left',
+  upLeft: 'Up-left',
+  upRight: 'Up-right',
+  downRight: 'Down-right',
+  downLeft: 'Down-left',
+}
+
+/** The four directions this orientation carves the circle into. */
+export function padDirections(orientation: RailPadOrientation): readonly RailPadDirection[] {
+  return orientation === 'diagonal' ? DIAGONAL_PAD_DIRECTIONS : CARDINAL_PAD_DIRECTIONS
+}
+
+/** Every addressable slot: the four directions, then the centre. */
+export function padSlotKeys(orientation: RailPadOrientation): readonly RailPadSlotKey[] {
+  return [...padDirections(orientation), 'center']
+}
+
+const PAD_UNITS: Readonly<Record<RailPadDirection, { x: number; y: number }>> = {
+  up: { x: 0, y: -1 },
+  right: { x: 1, y: 0 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  upLeft: { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+  upRight: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+  downRight: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+  downLeft: { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+}
+
+/** Unit vector pointing down the middle of a direction's wedge. Screen axes, so `y` grows down. */
+export const padDirectionUnit = (direction: RailPadDirection): { x: number; y: number } => PAD_UNITS[direction]
+
+/** True for the directions whose travel spends vertical room below the finger, which is the
+ *  room a rail at the bottom of the screen does not have. */
+export const padDirectionDescends = (direction: RailPadDirection): boolean => PAD_UNITS[direction].y > 0
+
+export interface RailPadSlot {
+  /** Catalog item id this direction runs. */
+  item: string
+  /** Omitted means the item's own default (`defaultPadTriggerMode`). */
+  mode?: RailPadTriggerMode
+}
+
+export interface RailPadConfig {
+  orientation: RailPadOrientation
+  slots: Partial<Record<RailPadSlotKey, RailPadSlot>>
+}
+
+/**
+ * A slot's trigger mode when the binding does not name one.
+ *
+ * Derived from the item rather than fixed per pad, so dropping an action into a pad
+ * arrives already safe: an arrow repeats because repetition is what an arrow is for,
+ * and anything wearing the rail's danger treatment waits for release because a
+ * mis-flick must not be able to do it.
+ */
+export function defaultPadTriggerMode(item: RailItem | undefined): RailPadTriggerMode {
+  if (!item) return 'enter'
+  if (item.repeatable) return 'enter-repeat'
+  if (item.className?.includes('rail-danger')) return 'release'
+  return 'enter'
+}
+
+/** The mode a bound slot actually runs at. */
+export function railPadSlotMode(slot: RailPadSlot | undefined, item: RailItem | undefined): RailPadTriggerMode {
+  if (slot?.mode && RAIL_PAD_TRIGGER_MODES.includes(slot.mode)) return slot.mode
+  return defaultPadTriggerMode(item)
+}
+
+/**
+ * Sanitize a stored pad config.
+ *
+ * Slots naming an item that is not in the catalog are **kept**, not dropped, and go
+ * dead at render time instead. Same durability rule the retirement table exists for:
+ * a layout is arbitrarily old and per-Project, so a slot pointing at an action that
+ * happens to be missing from *this* resolution - a project item seen from another
+ * project, a built-in mid-rename - must survive being loaded and saved again rather
+ * than being quietly deleted by the round trip. Ids are migrated on the way through,
+ * for the same reason rows migrate theirs.
+ *
+ * A slot key that does not belong to the orientation is dropped, because that one is
+ * unreachable by construction rather than merely unresolved right now.
+ */
+export function normalizeRailPad(raw: unknown): RailPadConfig {
+  // Slots are rebuilt in `padDirections` order rather than the order they were written
+  // in. That is not tidiness: a fork stores a *copy* of a shipped item and reattach asks
+  // whether the copy still equals the shipped definition, so a pad whose literal was
+  // authored in reading order and whose saved copy came back in canonical order would
+  // report as edited by the operator when nothing had been. The shipped pads are run
+  // through here at their definition site for exactly that reason.
+  const source = isRecord(raw) ? raw : {}
+  const orientation = RAIL_PAD_ORIENTATIONS.includes(source.orientation as RailPadOrientation)
+    ? source.orientation as RailPadOrientation
+    : 'cardinal'
+  const slots: Partial<Record<RailPadSlotKey, RailPadSlot>> = {}
+  const rawSlots = isRecord(source.slots) ? source.slots : {}
+  for (const key of padSlotKeys(orientation)) {
+    const entry = rawSlots[key]
+    if (!isRecord(entry) || typeof entry.item !== 'string' || !entry.item) continue
+    const mode = RAIL_PAD_TRIGGER_MODES.includes(entry.mode as RailPadTriggerMode)
+      ? entry.mode as RailPadTriggerMode
+      : undefined
+    slots[key] = { item: migratedRailItemId(entry.item), ...(mode ? { mode } : {}) }
+  }
+  return { orientation, slots }
+}
+
+/** Catalog ids a pad reaches. Used by placement checks and the voice adapter, both of
+ *  which have to see a padded action as placed. */
+export function railPadSlotItemIds(item: RailItem): string[] {
+  if (item.type !== 'pad' || !item.pad) return []
+  return padSlotKeys(item.pad.orientation)
+    .map(key => item.pad?.slots[key]?.item)
+    .filter((id): id is string => !!id)
+}
 
 /** A catalog entry: what the command is, never where it sits. */
 export interface RailItem {
@@ -81,6 +276,12 @@ export interface RailItem {
   submit?: boolean
   /** 'action' items: which built-in handler to run. */
   action?: string
+  /** 'pad' items: the orientation and the four-plus-centre slot bindings. */
+  pad?: RailPadConfig
+  /** Holding this item down repeats it. The one source for both the standalone
+   *  hold-to-repeat key (`isRepeatableRailKey`) and a pad slot's default trigger
+   *  mode, which must never be able to disagree about the same button. */
+  repeatable?: boolean
   /** Deterministic aliases that may expose this item through Talk. Omission is
    *  deliberate for destructive and UI-only built-ins. Configured skills and
    *  slash commands receive conservative name-derived aliases separately. */
@@ -175,8 +376,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   // so it pairs with Tab on the rail.
   { id: 'shiftTab', type: 'key', bytes: '\x1b[Z', label: '⇧Tab', className: 'term-key', title: 'Shift+Tab (cycle mode / back-tab)', voicePhrases: ['shift tab', 'press shift tab', 'cycle mode'] },
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)', voicePhrases: ['control c', 'press control c'] },
-  { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
-  { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
+  { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', repeatable: true, title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
+  { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', repeatable: true, title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
   { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it', voicePhrases: ['insert markdown divider'] },
   { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines', voicePhrases: ['insert code fence', 'start code fence'] },
   // Copy the composer. Reads the draft off the terminal grid, because no harness
@@ -208,8 +409,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   // `restoreInput` below is voiced precisely because it is the recovering half.
   { id: 'ctrlU', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Kill to start of line (Ctrl+U) — clears a single-line draft' },
   { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)', voicePhrases: ['restore input', 'yank input'] },
-  { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left', voicePhrases: ['left arrow', 'press left'] },
-  { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right', voicePhrases: ['right arrow', 'press right'] },
+  { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', repeatable: true, title: 'Left', voicePhrases: ['left arrow', 'press left'] },
+  { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', repeatable: true, title: 'Right', voicePhrases: ['right arrow', 'press right'] },
   // Navigation + editing extras remain in the catalog and follow the main rail row.
   // The permanent drawer popover makes the long tail reachable without a second surface.
   { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', voicePhrases: ['home key', 'press home'] },
@@ -226,6 +427,119 @@ export const BUILTIN_RAIL: RailItem[] = [
   // operators who do not want it visible can remove its rail placement.
   { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)' },
   { id: 'attach', type: 'action', action: 'attach', label: 'Attach', agentOnly: true, title: 'Attach files to this chat without sending' },
+  // The three sticky modifiers. Tap arms one key, tap again locks, tap a locked one
+  // clears it: the phone-keyboard shift model, which is what makes one chip multiply
+  // the whole rail instead of adding a row of Ctrl-prefixed duplicates. They are also
+  // why pads carry no outer ring - a live modifier re-labels a pad's four slots, so
+  // one pad covers four modifier states at its original size.
+  //
+  // No voice phrases: a modifier is a *state* a spoken caller cannot see, and the
+  // thing it would modify is a second command away.
+  { id: 'modCtrl', type: 'action', action: 'modifier', label: 'Ctrl', className: 'term-key rail-modifier', title: 'Ctrl for the next key. Tap again to lock.' },
+  { id: 'modAlt', type: 'action', action: 'modifier', label: 'Alt', className: 'term-key rail-modifier', title: 'Alt for the next key. Tap again to lock.' },
+  { id: 'modShift', type: 'action', action: 'modifier', label: 'Shift', className: 'term-key rail-modifier', title: 'Shift for the next key. Tap again to lock.' },
+  // The four shipped pads. Each one is an ordinary catalog entry whose slots name
+  // ordinary catalog entries, so nothing downstream needs a special case: the items
+  // they hold stay in the catalog, keep their own backend gating, and can still be
+  // placed as individual chips by anyone who wants them back.
+  {
+    id: 'padArrows',
+    type: 'pad',
+    label: 'Arrows',
+    className: 'term-key',
+    title: 'Arrow keys. Drag a direction; hold to repeat.',
+    pad: normalizeRailPad({
+      orientation: 'cardinal',
+      slots: { up: { item: 'up' }, right: { item: 'right' }, down: { item: 'down' }, left: { item: 'left' } },
+    }),
+  },
+  // Diagonal, because this is not four directions but two independent binary choices -
+  // start-or-end crossed with line-or-document - and the diagonal carving is the one
+  // that gives each axis a choice: left/right is which end, up/down is which scope.
+  {
+    id: 'padJump',
+    type: 'pad',
+    label: 'Jump',
+    className: 'term-key',
+    title: 'Line and document jumps. Drag a corner.',
+    pad: normalizeRailPad({
+      orientation: 'diagonal',
+      slots: {
+        upLeft: { item: 'home' },
+        upRight: { item: 'ctrlHome' },
+        downLeft: { item: 'end' },
+        downRight: { item: 'ctrlEnd' },
+      },
+    }),
+  },
+  // Not `agentOnly`, though two of its three slots effectively are: a slot whose item
+  // this backend does not admit renders as a dead direction rather than removing the
+  // pad, because directions are positional and a pad that rearranged itself per
+  // backend would be worse than one with three live slots.
+  {
+    id: 'padCopy',
+    type: 'pad',
+    label: 'Copy',
+    title: 'Copy from this session. Drag a direction.',
+    pad: normalizeRailPad({
+      orientation: 'cardinal',
+      slots: { left: { item: 'copyReply' }, up: { item: 'copyInput' }, right: { item: 'copyResume' } },
+    }),
+  },
+  {
+    id: 'padPickers',
+    type: 'pad',
+    label: 'Pick',
+    title: 'Clipboard, skills, prompts, Actions. Drag a direction.',
+    pad: normalizeRailPad({
+      orientation: 'cardinal',
+      slots: {
+        left: { item: 'clipboardHistory' },
+        up: { item: 'skills' },
+        right: { item: 'prompts' },
+        down: { item: 'actionsDrawer' },
+      },
+    }),
+  },
+]
+
+/**
+ * The strip a fresh install starts with.
+ *
+ * Not every catalog id, which is what it used to be: the four pads hold fifteen of
+ * them, and placing both the pad and its contents would spend the space the pad
+ * exists to save. Everything omitted here is still in the catalog and one drag away
+ * in the editor - a pad is a *placement* decision, and this is the default one.
+ *
+ * Only ids that exist in `BUILTIN_RAIL`; asserted below so a rename cannot silently
+ * shorten the default rail.
+ */
+export const DEFAULT_RAIL_ORDER: readonly string[] = [
+  'relaunch',
+  'padCopy',
+  'branch',
+  'approveOnce',
+  'paste',
+  'padPickers',
+  'kbdToggle',
+  'esc',
+  'enter',
+  'tab',
+  'shiftTab',
+  'ctrlC',
+  'padArrows',
+  'padJump',
+  'modCtrl',
+  'modAlt',
+  'modShift',
+  'markdownDivider',
+  'markdownCodeFence',
+  'ctrlU',
+  'restoreInput',
+  'newline',
+  'rewind',
+  'endSession',
+  'attach',
 ]
 
 const BUILTIN_BY_ID = new Map(BUILTIN_RAIL.map(item => [item.id, item]))
@@ -241,33 +555,6 @@ export function railItemDisplayMode(item: RailItem, hasIcon: boolean): Exclude<R
   if (!hasIcon) return 'label'
   if (item.display === 'label' || item.display === 'icon-label') return item.display
   return 'icon'
-}
-
-/**
- * Where a stored Action id lands now.
- *
- * Every built-in this catalog has retired *and replaced* is one row here, and each
- * must stay forever: a rail layout is device-local, per-Project, and can be
- * arbitrarily old, and rows are normalized against the live catalog — so an id with
- * no entry here is silently dropped from whichever row the operator had dragged it
- * into. Same durability rule as the drawer's `migratedTabTarget` and the daemon's
- * `_COMMAND_MIGRATIONS`.
- *
- * Only a *replacement* belongs here. A built-in that was retired outright
- * (`draftToggle`) has nothing to migrate to, and dropping it is the correct answer.
- *
- * Mapping rather than dropping is also what keeps position: `clearInput` was
- * removed and Ctrl+U put back in its place, so the operator finds a key where the
- * button was instead of a hole plus a stranger appended to the end of row one.
- */
-const RETIRED_RAIL_IDS: Readonly<Record<string, string>> = {
-  clearInput: 'ctrlU',
-}
-
-/** Resolve a stored id through the retirement table. Unknown ids pass through
- *  unchanged; whether they exist is the caller's separate question. */
-export function migratedRailItemId(id: string): string {
-  return RETIRED_RAIL_IDS[id] ?? id
 }
 
 /** True for built-in item ids whose behaviour (type/bytes/action/label) is
@@ -286,12 +573,16 @@ export function newRailRowId(): string {
 }
 export const defaultRowId = (device: RailDevice, surface: RailSurface): string => `${device}-${surface}`
 
-/** The layout every device starts with: one rail row containing every built-in.
+/** The layout every device starts with: one rail row holding `DEFAULT_RAIL_ORDER`.
  *  Desktop and mobile start identical and diverge from there. */
 export function defaultRailLayouts(items: readonly RailItem[] = BUILTIN_RAIL): RailLayouts {
+  const known = new Set(items.map(item => item.id))
+  // Intersected rather than assumed, so a caller seeding from a narrowed catalog
+  // (the tests do) gets a layout that only references what it handed in.
+  const ordered = DEFAULT_RAIL_ORDER.filter(id => known.has(id))
   const seed = (device: RailDevice): RailRow => ({
     id: defaultRowId(device, 'strip'),
-    items: items.map(item => item.id),
+    items: [...ordered],
   })
   return {
     desktop: { strip: [seed('desktop')] },
@@ -307,8 +598,11 @@ export function defaultRailConfig(): RailConfig {
 // Normalization
 // ---------------------------------------------------------------------------
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  !!value && typeof value === 'object' && !Array.isArray(value)
+// A declaration rather than a const, so the shipped pads can be canonicalized through
+// `normalizeRailPad` at their definition site further up the file.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
 
 /** Merge a saved catalog over the built-in one. Built-ins keep their authoritative
  *  behaviour fields (so shipped defaults can evolve) while custom entries are kept
@@ -336,11 +630,19 @@ export function mergeRailCatalog(saved: unknown): { items: RailItem[]; addedBuil
       const backends = Array.isArray(raw.backends)
         ? raw.backends.filter((backend): backend is RailBackend => typeof backend === 'string' && knownBackends.has(backend))
         : undefined
+      // A built-in pad's *slots* are the one behaviour field a save may override, and
+      // deliberately so: a pad is a container, and which four things it holds is the
+      // same kind of choice as which chips sit in a row. Locking it would leave the
+      // slot editor able to build new pads and unable to adjust the four that ship.
+      // The shipped config remains the fallback, so a pad the operator never touched
+      // still tracks whatever it is re-slotted to in a later release.
+      const pad = builtin.type === 'pad' && isRecord(raw.pad) ? normalizeRailPad(raw.pad) : undefined
       items.push({
         ...builtin,
         ...(display ? { display } : {}),
         ...(displayLabel ? { displayLabel } : {}),
         ...(backends?.length ? { backends } : {}),
+        ...(pad ? { pad } : {}),
       })
       continue
     }
@@ -349,7 +651,7 @@ export function mergeRailCatalog(saved: unknown): { items: RailItem[]; addedBuil
     const entry = raw as unknown as RailItem
     if (!CUSTOM_RAIL_TYPES.includes(entry.type)) continue
     seen.add(id)
-    items.push({ ...entry })
+    items.push(entry.type === 'pad' ? { ...entry, pad: normalizeRailPad(entry.pad) } : { ...entry })
   }
   // Built-ins introduced after this config was saved. Returned separately so the
   // caller can also place them, which is the only way a new button reaches a user
@@ -712,7 +1014,7 @@ function deltaItems(delta: RailProjectDelta, taken: Set<string>): RailItem[] {
     const entry = raw as unknown as RailItem
     if (!CUSTOM_RAIL_TYPES.includes(entry.type)) continue
     taken.add(entry.id)
-    items.push({ ...entry })
+    items.push(entry.type === 'pad' ? { ...entry, pad: normalizeRailPad(entry.pad) } : { ...entry })
   }
   return items
 }

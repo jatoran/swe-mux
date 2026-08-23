@@ -8,7 +8,8 @@ Design: `../../../design/features/ui.md`, `../../../design/features/prompt-libra
 `commandRail.ts`, `railScope.ts`, `railLayout.ts`, `railDrag.ts`, `railReattach.ts`, `RailEditor.tsx`,
 `ActionEditorModal.tsx`, `ActionsTab.tsx`, `PromptsTab.tsx`,
 `PromptTemplateEditor.tsx`, `promptRail.ts`, `promptTitles.ts`,
-`railKeyRepeat.ts`, `RailRepeatKey.tsx`, `railVoice.ts`
+`railKeyRepeat.ts`, `RailRepeatKey.tsx`, `railPadGesture.ts`, `RailPad.tsx`, `railModifiers.ts`,
+`railVoice.ts`
 
 The model modules do not touch the DOM outside the editors and `railDrag.ts`.
 Rendering stays with the hosts: `TerminalPane.tsx` for the Action rail, `ActionsTab.tsx` for Actions.
@@ -76,6 +77,47 @@ A press sends nothing - the tap rides the button's own click, so the rail's pan 
 Travelling `RAIL_PAN_SLOP_PX` ends the press's candidacy for repetition, and a hold that reaches the delay claims the pointer and marks its trailing click as already served.
 `RailRepeatKey.tsx` is the button and the window-level pointer listeners that arbitration needs.
 It is its own module because the rail's pointer capture retargets moves away from the button, so the behaviour is only provable against a real rail with real touches (`test/renderer/command-rail-keys.spec.ts`).
+
+`isRepeatableRailKey` reads the catalog's own `repeatable` flag rather than a list of ids kept in the module, because a pad slot's default trigger mode reads the same flag: an arrow that repeated as a chip and not inside a pad would be a difference nobody chose.
+
+### Pads
+
+`railPadGesture.ts` is the browser-free gesture for a pad chip; `RailPad.tsx` is the element, its listeners, the petals and the haptics.
+The model - orientations, directions, slot bindings, trigger modes and `normalizeRailPad` - lives in `commandRail.ts`, so `railPadGesture.ts` imports from it and never the reverse.
+
+**The only threshold is distance.**
+The gesture is live from the first pixel; the sole timer repeats an already-committed direction, and `RAIL_PAD_PETAL_DELAY_MS` governs only when labels are *drawn*.
+
+`railPadSector` applies hysteresis by biasing the point back along the latched direction before reading its sector, which is one expression for both orientations even though their boundaries sit in different places - cardinal's on the diagonals, diagonal's on the axes.
+`railPadRadius` shrinks a descending direction's radius to the room below the finger, and `peek()` exposes the same numbers so the petals are drawn from what the gesture is actually using.
+
+Arbitration reuses `pointerDragClaim` and adds nothing to `RailScroller` or the mobile recognizer.
+A pad claims only the axes its bound directions span; a single-axis pad defers to the pan, decided at `RAIL_PAN_SLOP_PX` so exactly one of them takes the pointer.
+Two consequences are invisible to a unit test and are covered by `test/renderer/command-rail-pad.spec.ts` instead.
+The chip needs `touch-action:none`, or the strip's own `pan-x` answers a horizontal drag natively and `pointercancel`s the press.
+And the press's end is announced through the gesture's `end` callback rather than the chip's `pointerup`, which by then belongs to whatever the finger has moved over.
+
+Ownership rules the rest of the layer relies on:
+
+- **A slot's mode belongs to the binding, not the Action.** `defaultPadTriggerMode` supplies it when the binding is silent.
+- **Slots are stored canonically**: `normalizeRailPad` rebuilds them in `padDirections` order.
+  A fork stores a copy of a shipped pad and `planForkReattach` asks whether the copy still equals the definition, so a pad authored in reading order and reloaded in canonical order would report as edited by an operator who changed nothing.
+  The shipped pads are run through `normalizeRailPad` at their definition site for that reason, which is also why `RETIRED_RAIL_IDS` sits above `BUILTIN_RAIL` - the canonicalization migrates slot ids while the catalog is still being evaluated.
+- **An unresolvable slot is kept, an unreachable one is dropped.** A slot naming an absent Action survives the round trip (it may simply be missing from *this* resolution); a slot key that does not belong to the orientation cannot be reached at all and goes.
+- **`railPadSlotItemIds` is how the rest of the app sees through a pad.** `railVoice.ts` walks it so a padded arrow keeps its spoken alias, which matters because the default rail reaches the four arrows only through `padArrows`.
+- `updateRailPadSlot` and `setRailPadOrientation` in `railLayout.ts` are open to built-in pads, unlike `updateRailCatalogItem`. Turning a pad carries its four bindings across position for position rather than dropping them.
+
+### Sticky modifiers
+
+`railModifiers.ts` is the browser-free state machine (off → armed → locked → off) and the sequence algebra.
+`applyRailModifiers` is safe to run over everything the rail sends: an unmodified sequence, an empty set, and a sequence with no encoding for the modifier asked for all pass through unchanged.
+
+Terminals encode modified keys two ways and the rail sends both.
+The CSI family carries a `1;n` parameter, and an already-modified sequence gains the new modifier rather than replacing it - which is the round trip the shipped `^Home` chip performs.
+**The CSI final set is a closed list, not any letter**: back-tab is `ESC[Z`, has no `1;n` form, and a permissive matcher rewrote it to `ESC[1;5Z` - a sequence no terminal reads, from a chip that looked like it worked.
+Everything else is bytes: Alt is an ESC prefix, Ctrl folds a single character onto its control code, Shift upper-cases, and Shift+Tab is back-tab.
+
+`TerminalPane` resolves modified bytes where a chip is *rendered* rather than where it is sent, because `railKeyRepeat` captures its sequence at press and `RailPad` closes over its slot handlers - so consuming an armed modifier on the first send cannot pull it out from under the rest of a hold.
 
 ### Voice adaptation
 

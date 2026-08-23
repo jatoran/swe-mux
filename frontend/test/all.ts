@@ -1,3 +1,6 @@
+// Asserts that this list is complete. First, so a file nobody registered is reported
+// before the suites that depend on it having been run.
+import './testRegistry.test.ts'
 import './terminalKeys.test.ts'
 import './terminalActions.test.ts'
 import './composerInsertion.test.ts'
@@ -142,6 +145,14 @@ import './railVoice.test.ts'
 import './railLayout.test.ts'
 import './railKeyRepeat.test.ts'
 import './railOverflow.test.ts'
+import './railPadGesture.test.ts'
+import './railPadModel.test.ts'
+import './railModifiers.test.ts'
+// Two that were never registered, found by `testRegistry.test.ts` when it was added
+// alongside the pads. `railGlassContrast` is the one `ui.md` credits with holding the rail
+// overlays' contrast floors, and it had not run since it was written.
+import './railDensity.test.ts'
+import './railGlassContrast.test.ts'
 import './promptRail.test.ts'
 import './fileClipboard.test.ts'
 import './delimitedText.test.ts'

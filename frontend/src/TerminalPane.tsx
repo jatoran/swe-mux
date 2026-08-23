@@ -1,4 +1,4 @@
-import type { VNode } from 'preact'
+import type { ComponentChildren, VNode } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { memo } from 'preact/compat'
 import { SettingLink } from './SettingLink'
@@ -36,9 +36,11 @@ import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsMan
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
-import { railItemDisplayLabel, railItemDisplayMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
+import { padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
+import { RailPad, useRailPad, type RailPadSlotView } from './RailPad'
+import { activeRailModifiers, applyRailModifiers, consumeRailModifiers, EMPTY_RAIL_MODIFIERS, railModifierForItem, railModifierPhase, railModifierPrefix, toggleRailModifier, type RailModifierState } from './railModifiers'
 import { activatePromptRailItem, railItemLabel } from './promptRail'
 import { usePromptTitles } from './promptTitles'
 import { railItemHasIcon, RailItemIcon, SendIcon } from './railIcons'
@@ -3280,7 +3282,29 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(sequence===APP_TAIL_KEY)clearAppTail('rail_tail_key')
     if(!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }
-  const railKeyRepeat=useRailKeyRepeat(sendKey,session.id)
+  // Sticky Ctrl/Alt/Shift for the rail's key chips (`railModifiers.ts`).
+  //
+  // The modified bytes are resolved where a chip is *rendered*, not where it is sent, and
+  // that is load-bearing rather than incidental: both repeating paths capture what they
+  // are repeating when the press opens - `railKeyRepeat` stores the sequence, `RailPad`
+  // closes over the slot's handler - so consuming an armed modifier on the first send
+  // cannot pull it out from under the rest of the hold. Sending would re-read the state
+  // and drop the modifier from the second repetition onwards.
+  const [railModifiers,setRailModifiers]=useState<RailModifierState>(EMPTY_RAIL_MODIFIERS)
+  const activeModifiers=activeRailModifiers(railModifiers)
+  const modifierPrefix=railModifierPrefix(activeModifiers)
+  // Arming a modifier and then switching session would leave it applying to a pane the
+  // operator never armed it on.
+  useEffect(()=>{setRailModifiers(EMPTY_RAIL_MODIFIERS)},[session.id])
+  // Only a key sequence consumes an arm. A skill, a prompt or a picker has no notion of
+  // Ctrl, so swallowing the modifier there would make it vanish for no visible reason.
+  const sendRailKey=(sequence:string)=>{
+    sendKey(sequence)
+    setRailModifiers(current=>consumeRailModifiers(current))
+  }
+  const modifiedSequence=(item:RailItem)=>applyRailModifiers(item.bytes||'',activeModifiers)
+  const railKeyRepeat=useRailKeyRepeat(sendRailKey,session.id)
+  const railPadControl=useRailPad(session.id)
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
   // the terminal alone is what left this dead on a phone in a Claude session while the rail's
   // `^End` — which happens to send the same key on its way past — kept working.
@@ -3445,7 +3469,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     :mobileInputModeState==='read'
       ?acceptsTerminalAttachments(session)?'Read/select mode. Tap for persistent Draft.':'Read/select mode. Tap for live input.'
       :'Persistent Draft. Tap for live input; text stays saved.'
-  const railRows=resolveRailRows(loadRailConfig(session.project_id),'strip',{device:currentProfile(),backend:session.backend as RailBackend})
+  const railConfig=loadRailConfig(session.project_id)
+  // Kept beside the rows because a pad's slots name catalog ids rather than carrying
+  // their own behaviour, so resolving one means a lookup the rows themselves do not do.
+  const railItems=new Map(railConfig.items.map(entry=>[entry.id,entry]))
+  const railRows=resolveRailRows(railConfig,'strip',{device:currentProfile(),backend:session.backend as RailBackend})
   // Only a rail that actually carries an auto-labelled prompt button reads the
   // library; every other rail costs nothing (`promptTitles.ts`).
   const promptTitles=usePromptTitles(session.project_id,railRows.some(row=>row.entries.some(entry=>entry.item.type==='prompt'&&entry.item.autoLabel)))
@@ -3469,12 +3497,50 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       content:mode==='label'?label:mode==='icon'?<RailItemIcon id={item.id}/>:<><RailItemIcon id={item.id}/><span class="rail-icon-label-text">{label}</span></>,
     }
   }
-  const renderRailItem=({item,key}:RailEntry)=>{
+  // What a rail item *does*, separated from how it is drawn.
+  //
+  // One resolver rather than a switch that builds buttons, because a pad slot has to run
+  // an action without rendering its chip, and gating answered in two places is gating that
+  // drifts. `renderRailItem` builds the chip out of this; `RailPad` calls `run` from a
+  // direction and reads `disabled` for a dead one. `null` is an item this session does not
+  // have at all, which is a hidden chip and a dead direction.
+  //
+  // `run` takes the element it was activated from, because the three pickers anchor a
+  // drop-up to it - from a pad that is the pad's own chip, which is where the drop-up
+  // should hang from anyway.
+  type RailItemView={
+    run:(anchor:HTMLElement|null)=>void
+    className?:string
+    content?:ComponentChildren
+    title?:string
+    ariaLabel?:string
+    disabled?:boolean
+    expanded?:boolean
+    /** Short face for a pad petal, where the chip's icon and full wording do not fit. */
+    padLabel?:string
+  }
+  const railItemView=(item:RailItem):RailItemView|null=>{
     switch(item.id){
-      case 'attach':{const view=actionPresentation(item);return acceptsTerminalAttachments(session)?<button key={key} class={view.className} disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}>{view.content}</button>:null}
-      case 'relaunch':{const view=actionPresentation(item);return isTask?<button key={key} class={`term-relaunch ${view.className||''}`.trim()} title="Relaunch this task terminal - stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>{view.content}</button>:null}
-      case 'copyReply':{const view=actionPresentation(item);return isTask?null:<button key={key} class={view.className} disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>{view.content}</button>}
-      case 'copyResume':{const view=actionPresentation(item);return isTask?null:<button key={key} class={view.className} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${resolvesTranscriptByCwd(session.backend)?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>{view.content}</button>}
+      case 'attach':{
+        if(!acceptsTerminalAttachments(session))return null
+        const view=actionPresentation(item)
+        return {...view,run:()=>attachmentInputRef.current?.click(),disabled:attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady),ariaLabel:attachmentBusy?'Attaching files':'Attach files',title:attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'}
+      }
+      case 'relaunch':{
+        if(!isTask)return null
+        const view=actionPresentation(item)
+        return {...view,className:`term-relaunch ${view.className||''}`.trim(),run:()=>runCommand('session.relaunch'),title:'Relaunch this task terminal - stops it and re-runs the same command'}
+      }
+      case 'copyReply':{
+        if(isTask)return null
+        const view=actionPresentation(item)
+        return {...view,run:()=>void copyLastReply(),disabled:!isAgentBackend(session.backend),ariaLabel:'Copy last reply',title:!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply',padLabel:'Reply'}
+      }
+      case 'copyResume':{
+        if(isTask)return null
+        const view=actionPresentation(item)
+        return {...view,run:()=>void copyResumeCommand(),disabled:!resumeCmd,title:resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${resolvesTranscriptByCwd(session.backend)?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions',padLabel:'Resume'}
+      }
       case 'branch':{
         if(!onBranch)return null
         // Reads the daemon's declared strategy rather than restating which harnesses
@@ -3483,7 +3549,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // minted is branchable immediately; the rest wait for a discovered id.
         const branchable=supportsBranch(session.backend)
         const ready=branchable&&(assignsConversationId(session.backend)||(!!session.native_session_id&&session.native_session_id!==session.id))
-        const view=actionPresentation(item);return <button key={key} class={view.className} disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet - branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}>{view.content}</button>
+        const view=actionPresentation(item)
+        return {...view,run:()=>onBranch(),disabled:!ready,ariaLabel:'Branch this conversation',title:ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet - branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`}
       }
       case 'approveOnce':{
         // Enabled only while this session is actually showing an approval. The
@@ -3491,49 +3558,141 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // gate is a readability affordance rather than the guard: a button that
         // is always clickable and usually 409s teaches nothing.
         const showing=session.state==='awaiting'&&session.awaiting_reason==='approval'
-        const view=actionPresentation(item);return <button key={key} class={`rail-approve ${view.className||''}`.trim()} disabled={!showing||approveBusy} aria-label="Approve the pending request" title={showing?'Approve the request this session is showing':'Available while this session is waiting for an approval'} onClick={()=>void approveOnce()}>{approveBusy?'…':view.content}</button>
+        const view=actionPresentation(item)
+        return {...view,className:`rail-approve ${view.className||''}`.trim(),content:approveBusy?'…':view.content,run:()=>void approveOnce(),disabled:!showing||approveBusy,ariaLabel:'Approve the pending request',title:showing?'Approve the request this session is showing':'Available while this session is waiting for an approval'}
       }
-      case 'paste':{const view=actionPresentation(item);return <button key={key} class={view.className} aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}>{view.content}</button>}
+      case 'paste':{
+        const view=actionPresentation(item)
+        return {...view,run:()=>void paste(),ariaLabel:'Paste into terminal',title:'Paste the clipboard into this terminal'}
+      }
       // The two pickers open a drop-up of the most recent/relevant few rather than
       // the drawer section outright. The section is still one tap away, from the
       // sticky row inside the drop-up, so nothing became less reachable.
-      case 'clipboardHistory':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='clipboard'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='clipboard'} title="Recent clipboard - tap an entry to insert it here" onClick={event=>toggleDropup('clipboard',event.currentTarget as HTMLElement)}>{view.content}</button>}
+      case 'clipboardHistory':{
+        const view=actionPresentation(item)
+        return {...view,className:`${dropup?.kind==='clipboard'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined,expanded:dropup?.kind==='clipboard',run:anchor=>{if(anchor)toggleDropup('clipboard',anchor)},title:'Recent clipboard - tap an entry to insert it here',padLabel:'Clip'}
+      }
       // `agentOnly` already keeps this off shells, where the endpoint 409s.
-      case 'skills':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='skills'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='skills'} title={item.title||'Insert one of this session’s skills'} onClick={event=>toggleDropup('skills',event.currentTarget as HTMLElement)}>{view.content}</button>}
+      case 'skills':{
+        const view=actionPresentation(item)
+        return {...view,className:`${dropup?.kind==='skills'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined,expanded:dropup?.kind==='skills',run:anchor=>{if(anchor)toggleDropup('skills',anchor)},title:item.title||'Insert one of this session’s skills'}
+      }
       // Every template, not only those with dedicated configured buttons.
-      case 'prompts':{const view=actionPresentation(item);return <button key={key} class={`${dropup?.kind==='prompts'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined} aria-expanded={dropup?.kind==='prompts'} title={item.title||'Insert one of your prompt templates'} onClick={event=>toggleDropup('prompts',event.currentTarget as HTMLElement)}>{view.content}</button>}
+      case 'prompts':{
+        const view=actionPresentation(item)
+        return {...view,className:`${dropup?.kind==='prompts'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined,expanded:dropup?.kind==='prompts',run:anchor=>{if(anchor)toggleDropup('prompts',anchor)},title:item.title||'Insert one of your prompt templates'}
+      }
       case 'copyInput':{
         // Disabled rather than absent on an unmeasured harness: a button that is
         // simply missing reads as "not built", while one that says why reads as
         // "not here yet", which is the true answer.
         const readable=composerIsReadable(session.backend)
-        const view=actionPresentation(item);return <button key={key} class={view.className} disabled={!readable} aria-label="Copy composer text" title={readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>void copyComposerInput()}>{view.content}</button>
+        const view=actionPresentation(item)
+        return {...view,run:()=>void copyComposerInput(),disabled:!readable,ariaLabel:'Copy composer text',title:readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`,padLabel:'Input'}
       }
-      case 'actionsDrawer':{const view=actionPresentation(item);return <button key={key} class={view.className} title={item.title} onClick={()=>runCommand('drawer.peekActions')}>{view.content}</button>}
+      case 'actionsDrawer':{
+        const view=actionPresentation(item)
+        return {...view,run:()=>runCommand('drawer.peekActions'),title:item.title}
+      }
       case 'endSession':{
         // Ended sessions keep the button: the same command removes their row from the
         // sidebar, which is the only remaining thing left to do with them.
         const ended=session.state==='exited'||session.state==='crashed'
         const verb=ended?'Remove':'End session'
-        const view=actionPresentation(item,ended?'Remove':item.label);return <button key={key} class={`rail-danger ${killArmed?'confirming ':''}${view.className||''}`.trim()} aria-label={killArmed?`Confirm ${verb.toLowerCase()}`:verb} title={killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'} onClick={()=>runCommand('session.kill')}>{killArmed?'Confirm ✓':view.content}</button>
+        const view=actionPresentation(item,ended?'Remove':item.label)
+        return {...view,className:`rail-danger ${killArmed?'confirming ':''}${view.className||''}`.trim(),content:killArmed?'Confirm ✓':view.content,run:()=>runCommand('session.kill'),ariaLabel:killArmed?`Confirm ${verb.toLowerCase()}`:verb,title:killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'}
       }
-      case 'kbdToggle':return <button key={key} class={`term-key kbd-toggle mode-${mobileInputModeState} ${mobileDraftText?'has-draft':''}`} aria-label={`Mobile input mode: ${mobileInputModeState}. Tap for ${nextInputMode}.`} title={mobileInputModeTitle} onClick={cycleMobileInputMode}>{railItemDisplayLabel(item,mobileInputModeIcon)}</button>
+      case 'kbdToggle':return {
+        className:`term-key kbd-toggle mode-${mobileInputModeState} ${mobileDraftText?'has-draft':''}`,
+        content:railItemDisplayLabel(item,mobileInputModeIcon),
+        run:()=>cycleMobileInputMode(),
+        ariaLabel:`Mobile input mode: ${mobileInputModeState}. Tap for ${nextInputMode}.`,
+        title:mobileInputModeTitle,
+      }
+    }
+    const modifier=railModifierForItem(item.id)
+    if(modifier){
+      // Three states in one control, and the phase is on the class rather than in the
+      // label so the chip's width never changes as it is armed and locked.
+      const phase=railModifierPhase(railModifiers,modifier)
+      const view=actionPresentation(item)
+      return {...view,className:`${item.className||'term-key'} rail-modifier-${phase}`,run:()=>setRailModifiers(current=>toggleRailModifier(current,modifier)),ariaLabel:`${item.label}: ${phase==='off'?'off':phase==='armed'?'armed for the next key':'locked'}`,title:phase==='locked'?`${item.label} is locked. Tap to clear.`:phase==='armed'?`${item.label} applies to the next key. Tap to lock.`:item.title}
     }
     if(item.type==='key'){
-      const sequence=item.bytes||''
       const label=railItemDisplayLabel(item)
-      if(isRepeatableRailKey(item.id))return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={sequence} label={label} title={item.title||label} className={item.className||'term-key'}/>
-      return <button key={key} class={item.className||'term-key'} title={item.title||label} onClick={()=>sendKey(sequence)}>{label}</button>
+      const sequence=modifiedSequence(item)
+      return {className:item.className||'term-key',content:label,run:()=>sendRailKey(sequence),title:`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`,padLabel:label}
     }
-    if(item.type==='action')return null
+    if(item.type==='action'||item.type==='pad')return null
     // Prompt templates resolve over the network at click time (see promptRail.ts), so
     // they cannot go through the synchronous payload path below.
     // `rail-text` on the four configured types and on none of the built-ins: their labels are
     // whatever the user named the thing, so they size to their own text, while the built-in
     // wording is fixed and its even widths are the row's rhythm (see style.css).
-    if(item.type==='prompt')return <button key={key} class={`rail-text ${item.className||''}`.trim()} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{railItemDisplayLabel(item,railItemLabel(item,promptTitles))}</button>
+    if(item.type==='prompt'){
+      const label=railItemDisplayLabel(item,railItemLabel(item,promptTitles))
+      return {className:`rail-text ${item.className||''}`.trim(),content:label,padLabel:label,run:()=>void runPromptItem(item),title:item.title||'Insert this prompt template into the composer'}
+    }
     const payload=railPayload(item,session.backend as RailBackend)
-    return <button key={key} class={`rail-text ${item.className||''}`.trim()} title={item.title||payload} onClick={()=>{void injectText(payload,item.submit).catch(cause=>reportError(cause instanceof Error?cause.message:String(cause)))}}>{railItemDisplayLabel(item)}</button>
+    return {
+      className:`rail-text ${item.className||''}`.trim(),
+      content:railItemDisplayLabel(item),
+      padLabel:railItemDisplayLabel(item),
+      run:()=>{void injectText(payload,item.submit).catch(cause=>reportError(cause instanceof Error?cause.message:String(cause)))},
+      title:item.title||payload,
+    }
+  }
+  // The bound directions of a pad, resolved against this session. A slot naming an item
+  // the session does not have, or that its backend filters out, stays in place as a
+  // *disabled* direction rather than being dropped: directions are positional, so a pad
+  // that rearranged itself per backend would be worse than one with a dead corner.
+  const railPadSlots=(item:RailItem):RailPadSlotView[]=>{
+    const pad=item.pad
+    if(!pad)return []
+    const views:RailPadSlotView[]=[]
+    for(const key of padSlotKeys(pad.orientation)){
+      const slot=pad.slots[key]
+      if(!slot)continue
+      const target=railItems.get(slot.item)
+      const view=target&&railItemVisible(target,session.backend as RailBackend)?railItemView(target):null
+      const label=view?.padLabel||view?.title||target?.label||slot.item
+      views.push({
+        key,
+        itemId:slot.item,
+        label:railItemDisplayLabel(target||{id:slot.item,type:'text',label},label),
+        title:view?.title||label,
+        mode:railPadSlotMode(slot,target),
+        disabled:!view||!!view.disabled,
+        run:anchor=>view?.run(anchor),
+      })
+    }
+    return views
+  }
+  const renderRailItem=({item,key}:RailEntry)=>{
+    if(item.type==='pad'){
+      const slots=railPadSlots(item)
+      // A pad every one of whose slots this session filtered out is not a control, it is
+      // a chip that does nothing - the same reason the mutually exclusive built-ins render
+      // as nothing rather than as dead buttons.
+      if(!slots.some(slot=>!slot.disabled))return null
+      const view=actionPresentation(item)
+      return <RailPad key={key} controller={railPadControl} item={item} slots={slots} className={`${item.className||'term-key'} ${view.className||''}`.trim()} content={view.content} modifierPrefix={modifierPrefix||undefined}/>
+    }
+    if(item.type==='key'&&isRepeatableRailKey(item.id)){
+      const label=railItemDisplayLabel(item)
+      return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`} className={item.className||'term-key'}/>
+    }
+    const view=railItemView(item)
+    if(!view)return null
+    return <button
+      key={key}
+      class={view.className}
+      disabled={view.disabled}
+      aria-label={view.ariaLabel}
+      aria-expanded={view.expanded}
+      title={view.title}
+      onClick={event=>view.run(event.currentTarget as HTMLElement)}
+    >{view.content}</button>
   }
   // Rows are rendered first and *then* filtered on what actually produced a button.
   // Backend filtering alone is not enough: the mutually exclusive built-ins

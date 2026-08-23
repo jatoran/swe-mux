@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig,
   mergeRailCatalog, migratedRailItemId, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
-  railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
+  railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotItemIds, railPayload, resolveRailRows, writeRailConfigBlob,
   type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem, type RailSurface,
 } from '../src/commandRail.ts'
 import { composerClearSequence } from '../src/composerText.ts'
@@ -24,29 +24,52 @@ test('the default layout seeds one rail row, identical on both devices', () => {
   assert.notEqual(config.layouts.desktop.strip[0].id, config.layouts.mobile.strip[0].id)
 })
 
-test('default rail includes the complete built-in catalog and ends with Attach', () => {
+test('default rail places the four pads instead of what they hold, and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
-    'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'skills', 'prompts', 'actionsDrawer', 'kbdToggle',
-    'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down',
-    'markdownDivider', 'markdownCodeFence', 'copyInput', 'ctrlU', 'restoreInput',
-    'left', 'right', 'home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'rewind', 'endSession', 'attach',
+    'relaunch', 'padCopy', 'branch', 'approveOnce', 'paste', 'padPickers', 'kbdToggle',
+    'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'padArrows', 'padJump',
+    'modCtrl', 'modAlt', 'modShift',
+    'markdownDivider', 'markdownCodeFence', 'ctrlU', 'restoreInput',
+    'newline', 'rewind', 'endSession', 'attach',
   ])
 })
 
-test('every visible built-in has one default rail placement', () => {
+// The invariant that replaced "one placement per built-in", which the pads deliberately
+// broke: a built-in must still be *reachable* on a fresh install, as its own chip or
+// inside a pad that is placed. Placing both would spend the space the pad exists to save,
+// and placing neither would ship a button nobody can find.
+test('every visible built-in is reachable on the default rail, directly or through a pad', () => {
   const config = defaultRailConfig()
+  const placed = new Set(ids(config, 'strip'))
+  const reachable = new Set(placed)
+  for (const id of placed) {
+    const item = config.items.find(entry => entry.id === id)
+    if (item) for (const slot of railPadSlotItemIds(item)) reachable.add(slot)
+  }
   assert.deepEqual(
-    ids(config, 'strip').sort(),
+    [...reachable].sort(),
     BUILTIN_RAIL.filter(item => railItemVisible(item, 'claude')).map(item => item.id).sort(),
   )
 })
 
+test('a pad and its contents are never both on the default rail', () => {
+  const config = defaultRailConfig()
+  const placed = ids(config, 'strip')
+  for (const id of placed) {
+    const item = config.items.find(entry => entry.id === id)
+    for (const slot of item ? railPadSlotItemIds(item) : []) {
+      assert.equal(placed.includes(slot), false, `${slot} is both in ${id} and on the rail`)
+    }
+  }
+})
+
 test('desktop and mobile layouts are edited independently', () => {
   const config = defaultRailConfig()
+  const desktopCount = ids(config, 'strip').length
   config.layouts.mobile.strip[0].items = ['esc', 'enter']
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
-  assert.equal(ids(config, 'strip').length, BUILTIN_RAIL.filter(item => railItemVisible(item, 'claude')).length)
+  assert.equal(ids(config, 'strip').length, desktopCount)
 })
 
 test('an item placed in no row is simply absent from that device', () => {
@@ -313,14 +336,20 @@ test('a pre-layout save becomes one rail row per device without losing visible e
   }
 })
 
-test('an untouched pre-layout save migrates to the shipped default', () => {
+// A pre-layout save keeps everything it had, which is no longer the fresh default: the
+// pads changed where a *new* rail starts, and must not reach back and unplace buttons an
+// existing operator has been using. So the migration is asserted against the catalog it
+// came from, and the two are asserted to differ - the pads are the difference.
+test('an untouched pre-layout save keeps every button it had placed', () => {
   const migrated = migrateLegacyRail(BUILTIN_RAIL.map(item => ({
     ...item,
     placement: 'strip',
   })) as LegacyRailItem[])
+  const everything = BUILTIN_RAIL.map(item => item.id)
   const fresh = defaultRailConfig()
   for (const device of ['desktop', 'mobile'] as const) {
-    assert.deepEqual(migrated.layouts[device].strip[0].items, fresh.layouts[device].strip[0].items)
+    assert.deepEqual(migrated.layouts[device].strip[0].items, everything)
+    assert.notDeepEqual(migrated.layouts[device].strip[0].items, fresh.layouts[device].strip[0].items)
   }
 })
 

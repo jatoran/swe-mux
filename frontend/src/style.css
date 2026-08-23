@@ -2589,6 +2589,77 @@ body {
 .terminal-action-rail button.rail-danger{color:var(--muted)}
 @media(hover:hover){.terminal-action-rail button.rail-danger:hover:not(:disabled){border-color:var(--red);color:var(--red)}}
 .terminal-action-rail button.rail-danger.confirming{border-color:var(--red);background:color-mix(in srgb,var(--red) 22%,var(--panel2));color:var(--red)}
+/* Pads. One chip holding four actions plus a centre, reached by dragging a direction.
+
+   Three pieces, and the first two are the reason a pad costs no space at all:
+
+   * the direction MARKS are drawn inside the chip's own border rather than laid out, so a
+     pad is exactly the width the same chip would be without them. `position:relative` on
+     the button is the whole mechanism; the marks are absolutely positioned squares with
+     two borders, rotated to point outward.
+   * the PETALS are portalled to `document.body` and positioned in raw client pixels. They
+     cannot be children of the chip: the rail's horizontal scroller sits between the pane's
+     transform and the chip, and a transformed ancestor makes an `overflow` in between clip
+     even `position:fixed` descendants — the labels would be sliced off at the edge of the
+     strip. They take no pointer events, so they can never interrupt the gesture they are
+     describing.
+   * the chip stays a chip. No :active growth, no layout on press. Everything that moves is
+     in the portal. */
+/* `touch-action:none` is load-bearing, not defensive. The strip carries `touch-action:pan-x`,
+   so without this the browser answers a horizontal drag on a pad chip *itself*: it scrolls
+   the strip natively and fires `pointercancel` at the gesture, which loses the whole press.
+   The visible symptom is a leftward slot that never runs and a rail that pans instead — and
+   it is invisible to every unit test, because it is the browser's decision and not ours
+   (`command-rail-pad.spec.ts` drives real touches at it). Panning the strip is unaffected:
+   on touch the rail pans itself in JS (`OverflowRail touchDrag`) rather than relying on
+   native overflow arbitration, and a pad that leaves an axis free stands down for it
+   through the pointer-drag claim. */
+.terminal-action-rail .rail-pad,.rail-overflow-grid .rail-pad{position:relative;touch-action:none}
+.rail-pad-marks{position:absolute;inset:0;pointer-events:none;color:inherit;opacity:.55}
+.rail-pad-mark{position:absolute;width:3px;height:3px;border-top:1px solid currentColor;border-left:1px solid currentColor}
+.rail-pad-mark-up{top:2px;left:50%;transform:translateX(-50%) rotate(45deg)}
+.rail-pad-mark-right{top:50%;right:2px;transform:translateY(-50%) rotate(135deg)}
+.rail-pad-mark-down{bottom:2px;left:50%;transform:translateX(-50%) rotate(225deg)}
+.rail-pad-mark-left{top:50%;left:2px;transform:translateY(-50%) rotate(315deg)}
+.rail-pad-mark-upLeft{top:2px;left:2px}
+.rail-pad-mark-upRight{top:2px;right:2px;transform:rotate(90deg)}
+.rail-pad-mark-downRight{bottom:2px;right:2px;transform:rotate(180deg)}
+.rail-pad-mark-downLeft{bottom:2px;left:2px;transform:rotate(270deg)}
+.rail-pad-pressed .rail-pad-marks{opacity:1}
+/* Above the drop-ups (96), because a pad can be pressed from inside the row popover and
+   its labels have to be readable over whatever is already open. */
+.rail-pad-petals{position:fixed;z-index:98;width:0;height:0;pointer-events:none;opacity:0;transition:opacity .09s ease-out}
+.rail-pad-petals-shown{opacity:1}
+@media(prefers-reduced-motion:reduce){.rail-pad-petals{transition:none}}
+.rail-pad-petal{position:absolute;left:0;top:0;max-width:96px;padding:2px 6px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail-pad-petal-active{border-color:var(--green);background:color-mix(in srgb,var(--green) 26%,var(--panel2));color:var(--green)}
+/* A release slot is outlined rather than filled while merely latched: the press has armed
+   it and not run it, and those two must never look the same. */
+.rail-pad-petal-release{border-style:dashed}
+.rail-pad-petal-armed{border-style:solid;border-color:var(--amber,var(--green));background:color-mix(in srgb,var(--amber,var(--green)) 26%,var(--panel2));color:var(--amber,var(--green))}
+.rail-pad-petal-off{opacity:.4}
+/* Sticky modifiers. The phase is a colour and never a label change, so the chip's width
+   is identical off, armed and locked and the row's rhythm does not shift as one is used. */
+.terminal-action-rail button.rail-modifier-armed,.rail-overflow-grid button.rail-modifier-armed{border-color:var(--green);color:var(--green)}
+.terminal-action-rail button.rail-modifier-locked,.rail-overflow-grid button.rail-modifier-locked{border-color:var(--green);background:color-mix(in srgb,var(--green) 22%,var(--panel2));color:var(--green)}
+/* The pad's slot editor: a picture of the pad, because "which action is up" is a question
+   about a position and a list of four rows makes you translate every answer back into one. */
+.rail-pad-grid{display:grid;gap:6px;margin-top:8px}
+.rail-pad-grid-cardinal{grid-template-areas:'. up .' 'left center right' '. down .'}
+.rail-pad-grid-diagonal{grid-template-areas:'upLeft . upRight' '. center .' 'downLeft . downRight'}
+.rail-pad-grid>.rail-pad-cell-up{grid-area:up}
+.rail-pad-grid>.rail-pad-cell-right{grid-area:right}
+.rail-pad-grid>.rail-pad-cell-down{grid-area:down}
+.rail-pad-grid>.rail-pad-cell-left{grid-area:left}
+.rail-pad-grid>.rail-pad-cell-upLeft{grid-area:upLeft}
+.rail-pad-grid>.rail-pad-cell-upRight{grid-area:upRight}
+.rail-pad-grid>.rail-pad-cell-downRight{grid-area:downRight}
+.rail-pad-grid>.rail-pad-cell-downLeft{grid-area:downLeft}
+.rail-pad-grid>.rail-pad-cell-center{grid-area:center}
+.rail-pad-cell{min-width:0;display:flex;flex-direction:column;gap:3px}
+.rail-pad-cell-name{color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;letter-spacing:.04em;text-transform:uppercase}
+.rail-pad-cell-note{color:var(--muted);font-size:10px}
+@media(max-width:560px){.rail-pad-grid-cardinal,.rail-pad-grid-diagonal{grid-template-areas:none;grid-template-columns:1fr}.rail-pad-grid>*{grid-area:auto}}
 .action-editor-layer{z-index:82}.action-editor-modal{width:min(1180px,calc(100vw - 24px));height:min(860px,calc(100dvh - 24px));display:grid;grid-template-rows:auto minmax(0,1fr) auto}.action-editor-body{min-height:0;overflow:auto;padding:14px 18px}.action-editor-body>.commandrail-settings>h3{margin-top:0}
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored

@@ -62,14 +62,18 @@ test('preview-as dims what that session type would not show', async ({ page }) =
   await page.goto('/action-editor-harness.html?seen=1')
   await expect(page.locator('.rail-chip.filtered')).toHaveCount(0)
   await chooseDropdown(page, page.locator('.rail-preview-as .dropdown-trigger'), 'shell')
-  // Approve and Skills are `agentOnly` and both are on the default desktop rail, so a shell
-  // preview dims them **without removing them** — the editor is showing you a layout you are
-  // still editing, and a chip that vanished could not be dragged, moved, or deleted.
+  // Approve is `agentOnly` and Rewind is Claude-only; both are directly placed on the
+  // default desktop rail, so a shell preview dims them **without removing them** — the
+  // editor is showing you a layout you are still editing, and a chip that vanished could not
+  // be dragged, moved, or deleted. One of each filter, because they are separate gates.
   // Named items rather than a bare count: a count alone passes just as well when the
   // dimmer marks the wrong chips, which is the failure worth catching.
+  // Skills used to stand here and no longer does: the default rail reaches it through the
+  // Pick pad, and the pad itself is not `agentOnly` because three of its four slots still
+  // work in a shell.
   const dimmed = page.locator('.rail-chip.filtered')
   await expect(dimmed.filter({ hasText: 'Approve' })).toHaveCount(1)
-  await expect(dimmed.filter({ hasText: 'Skills' })).toHaveCount(1)
+  await expect(dimmed.filter({ hasText: 'Rewind' })).toHaveCount(1)
   // Still present in the layout, and still carrying why they are dimmed.
   await expect(page.locator('.rail-chip', { hasText: 'Approve' })).toHaveCount(1)
   await expect(dimmed.filter({ hasText: 'Approve' })).toHaveAttribute('title', /Hidden in shell sessions\./)

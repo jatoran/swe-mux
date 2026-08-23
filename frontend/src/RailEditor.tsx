@@ -3,16 +3,19 @@ import type { JSX } from 'preact'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
 import {
-  allRailBackends, defaultRailConfig, isBuiltinRailId, railItemDisplayLabel, railItemDisplayMode,
-  railItemVisible, railPayload,
+  allRailBackends, defaultPadTriggerMode, defaultRailConfig, isBuiltinRailId, padSlotKeys,
+  railItemDisplayLabel, railItemDisplayMode,
+  railItemVisible, railPadSlotMode, railPayload,
   railProjectScopeKind, railRowKey,
-  RAIL_DEVICES, RAIL_SURFACES,
+  RAIL_DEVICES, RAIL_PAD_DIRECTION_LABELS, RAIL_PAD_TRIGGER_MODES, RAIL_SURFACES,
   type RailBackend, type RailBlob, type RailConfig, type RailDevice, type RailItem,
-  type RailItemDisplay, type RailItemType, type RailRow, type RailSurface,
+  type RailItemDisplay, type RailItemType, type RailPadOrientation, type RailPadSlotKey,
+  type RailPadTriggerMode, type RailRow, type RailSurface,
 } from './commandRail'
 import {
   addRailRow, copyRailSurface, moveRailEntry, moveRailRow, railPlacementCounts,
-  removeRailEntry, removeRailRow, setRailRowLabel, updateRailCatalogItem, updateRailItemPresentation,
+  removeRailEntry, removeRailRow, setRailPadOrientation, setRailRowLabel, updateRailCatalogItem,
+  updateRailItemPresentation, updateRailPadSlot,
   type RailDropTarget, type RailRef,
 } from './railLayout'
 import { railItemHasIcon, RailItemIcon } from './railIcons'
@@ -449,6 +452,13 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
             </label>
           }))}
         </fieldset>
+        {item.type === 'pad' && <RailPadSlotEditor
+          item={item}
+          items={resolved.config.items}
+          promptTitleOf={promptTitleOf}
+          onOrientation={orientation => commitConfig(setRailPadOrientation(resolved.config, item.id, orientation))}
+          onSlot={(slot, binding) => commitConfig(updateRailPadSlot(resolved.config, item.id, slot, binding))}
+        />}
         <fieldset class="rail-detail-group">
           <legend>Shown in these sessions</legend>
           {backends.map(backend => <label class="check" key={backend}>
@@ -633,6 +643,90 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
   </section>
 }
 
+const TRIGGER_LABEL: Record<RailPadTriggerMode, string> = {
+  'enter': 'On entering the direction',
+  'enter-repeat': 'On entering, repeating while held',
+  'release': 'Only on release, in this direction',
+}
+
+/**
+ * The pad's directions, drawn as the pad.
+ *
+ * A picture rather than a list of four rows, because the thing being configured is
+ * spatial: "which action is up" is a question about a position, and a list makes you
+ * translate every answer back into one. So the four slots sit where they will be reached
+ * from, the orientation control rotates them, and the centre sits in the middle where a
+ * tap lands.
+ *
+ * Each position carries two controls and no more: what it runs, and when it fires. The
+ * mode defaults from the action itself (`defaultPadTriggerMode`), so an arrow arrives
+ * already repeating and anything destructive already waiting for release - the select is
+ * there to override a default, not to make every binding a two-step.
+ */
+function RailPadSlotEditor({ item, items, promptTitleOf, onOrientation, onSlot }: {
+  item: RailItem
+  items: readonly RailItem[]
+  promptTitleOf: (item: RailItem) => string
+  onOrientation: (orientation: RailPadOrientation) => void
+  onSlot: (slot: RailPadSlotKey, binding: { item: string | null; mode?: RailPadTriggerMode }) => void
+}) {
+  const pad = item.pad ?? { orientation: 'cardinal' as const, slots: {} }
+  // A pad may not hold a pad. One level is a control; two is a menu with a hidden second
+  // page, and the gesture has no way to say "and then" without the dwell the whole design
+  // is built to avoid.
+  const choices = items
+    .filter(entry => entry.type !== 'pad' && entry.id !== item.id)
+    .map(entry => ({
+      value: entry.id,
+      label: entry.type === 'prompt' ? promptTitleOf(entry) : railItemDisplayLabel(entry),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+
+  const slotCell = (key: RailPadSlotKey) => {
+    const binding = pad.slots[key]
+    const target = binding ? items.find(entry => entry.id === binding.item) : undefined
+    const mode = railPadSlotMode(binding, target)
+    const auto = defaultPadTriggerMode(target)
+    return <div class={`rail-pad-cell rail-pad-cell-${key}`} key={key}>
+      <span class="rail-pad-cell-name">{key === 'center' ? 'Centre (tap)' : RAIL_PAD_DIRECTION_LABELS[key]}</span>
+      <Dropdown
+        value={binding?.item || ''}
+        onChange={value => onSlot(key, { item: value || null, mode: binding?.mode })}
+        options={[{ value: '', label: '— empty —' }, ...choices]}
+      />
+      {binding && <Dropdown
+        value={binding.mode || ''}
+        onChange={value => onSlot(key, { item: binding.item, mode: (value || undefined) as RailPadTriggerMode | undefined })}
+        options={[
+          { value: '', label: `Automatic (${TRIGGER_LABEL[auto].toLowerCase()})` },
+          ...RAIL_PAD_TRIGGER_MODES.map(value => ({ value, label: TRIGGER_LABEL[value] })),
+        ]}
+      />}
+      {binding && mode === 'release' && <small class="rail-pad-cell-note">Fires on release, so dragging back out cancels it.</small>}
+    </div>
+  }
+
+  return <fieldset class="rail-detail-group rail-pad-editor">
+    <legend>Directions</legend>
+    <label>Layout<Dropdown
+      value={pad.orientation}
+      onChange={value => onOrientation(value as RailPadOrientation)}
+      options={[
+        { value: 'cardinal', label: 'Up / down / left / right' },
+        { value: 'diagonal', label: 'Corners (NW / NE / SE / SW)' },
+      ]}
+    /></label>
+    <div class={`rail-pad-grid rail-pad-grid-${pad.orientation}`}>
+      {padSlotKeys(pad.orientation).map(slotCell)}
+    </div>
+    <p class="rail-add-note">
+      Press the chip and drag a direction. An empty direction is inert, which also makes it a
+      safe place to abort a drag into. A direction whose action this session does not offer
+      stays where it is and goes dim rather than letting the others move.
+    </p>
+  </fieldset>
+}
+
 type AddDraft = { type: RailItemType; name: string; label: string; submit: boolean; target: RailAddTarget }
 
 /** Adding an action places it into *both* device layouts, because a button you
@@ -690,6 +784,15 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
     const base = name.replace(/^[/$]/, '').trim() || name
     const label = draft.label.trim() || (draft.type === 'text' ? base.slice(0, 12) : base)
     const id = uniqueId(`custom:${draft.type}:${base}`)
+    // A pad arrives empty and cardinal. Its directions are bound afterwards, in the
+    // picture of the pad under "All actions", because binding four things is a different
+    // job from naming one and cramming both into this form would make every other type
+    // pay for it.
+    if (draft.type === 'pad') {
+      onAdd({ id, type: 'pad', label, className: 'term-key', pad: { orientation: 'cardinal', slots: {} } }, target)
+      setDraft({ ...draft, name: '', label: '' })
+      return
+    }
     onAdd(draft.type === 'text'
       ? { id, type: 'text', label, text: name, submit: draft.submit }
       : { id, type: draft.type, label, text: base, submit: draft.submit }, target)
@@ -697,15 +800,18 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
   }
 
   return <details class="rail-add">
-    <summary>Add custom action<small>a skill, slash command, text macro, or prompt-template button</small></summary>
+    <summary>Add custom action<small>a skill, slash command, text macro, prompt-template button, or pad</small></summary>
     <div class="rail-add-form">
       <label>Type<Dropdown value={draft.type} onChange={value => setDraft({ ...draft, type: value as RailItemType })} options={[
         { value: 'skill', label: 'Skill' },
         { value: 'slash', label: 'Slash command' },
         { value: 'text', label: 'Text macro' },
         { value: 'prompt', label: 'Prompt template' },
+        { value: 'pad', label: 'Pad (four actions in one chip)' },
       ]}/></label>
-      {draft.type === 'prompt'
+      {draft.type === 'pad'
+        ? <label>Button label<input value={draft.name} placeholder="Jump" onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>
+        : draft.type === 'prompt'
         ? <label>Template<Dropdown value={draft.name} onChange={value => setDraft({ ...draft, name: value })} options={[
           { value: '', label: 'Choose a template…' },
           // Every row says which library it is in, because a Project template
@@ -716,14 +822,20 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
           })),
         ]}/></label>
         : <label>{draft.type === 'text' ? 'Text to insert' : 'Name'}<input value={draft.name} placeholder={draft.type === 'skill' ? 'commit' : draft.type === 'slash' ? 'new' : 'literal text'} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
-      <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>
+      {draft.type !== 'pad' && <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>}
       {projectName && <label>For<Dropdown value={draft.target} onChange={value => setDraft({ ...draft, target: value as RailAddTarget })} options={[
         { value: 'project', label: `${projectName} only` },
         { value: 'global', label: 'All projects' },
       ]}/></label>}
-      {draft.type !== 'prompt' && <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
+      {draft.type !== 'prompt' && draft.type !== 'pad' && <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
       <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add action</button>
     </div>
+    {draft.type === 'pad' && <p class="rail-add-note">
+      A pad is one chip holding up to four actions plus a centre, each reached by pressing it
+      and dragging that way. It arrives empty: open it under “All actions” below to bind its
+      directions, choose corners instead of up/down/left/right, and set which of them repeat
+      while held or wait for release.
+    </p>}
     {draft.type === 'prompt' && <p class="rail-add-note">{prompts.length
       ? 'A prompt button points at the template, so editing the template updates the button - including its name, unless you give the button one here. It inserts without sending; templates with {{fields}} open Prompt templates in Actions to be filled in first.'
       : 'No prompt templates yet. Create one from Actions → Prompt templates → Manage, then it appears here.'}</p>}

@@ -16,9 +16,10 @@
 // by (device, surface, rowId, index) rather than by id.
 
 import {
-  defaultRowId, isBuiltinRailId, newRailRowId,
+  defaultRowId, isBuiltinRailId, newRailRowId, normalizeRailPad, padDirections,
   RAIL_DEVICES, RAIL_SURFACES,
-  type RailConfig, type RailDevice, type RailItem, type RailRow, type RailSurface,
+  type RailConfig, type RailDevice, type RailItem, type RailPadConfig, type RailPadOrientation,
+  type RailPadSlotKey, type RailPadTriggerMode, type RailRow, type RailSurface,
 } from './commandRail.ts'
 
 /** A stored position: which chip, on which device's which surface. */
@@ -261,6 +262,66 @@ export function updateRailItemPresentation(
   }
   if (!patch.display || patch.display === 'auto') delete next.items[index].display
   if (!patch.displayLabel?.trim()) delete next.items[index].displayLabel
+  return next
+}
+
+/**
+ * Bind, rebind, re-mode or clear one direction of a pad.
+ *
+ * Open to built-in pads, unlike `updateRailCatalogItem`, and that is the deliberate
+ * exception rather than an oversight. A pad is a *container*: which four things it holds
+ * is the same kind of choice as which chips sit in a row, not a behaviour the app owns
+ * the way it owns what `endSession` does. Locking the shipped four would leave the slot
+ * editor able to build new pads and unable to adjust any of the ones anybody has.
+ *
+ * `item: null` clears the slot. Everything is rebuilt through `normalizeRailPad`, so the
+ * stored shape stays canonical and a pad the operator never actually changed compares
+ * equal to the shipped definition (see `normalizeRailPad`).
+ */
+export function updateRailPadSlot(
+  config: RailConfig,
+  itemId: string,
+  slot: RailPadSlotKey,
+  binding: { item: string | null; mode?: RailPadTriggerMode },
+): RailConfig {
+  const index = config.items.findIndex(entry => entry.id === itemId)
+  if (index < 0 || config.items[index].type !== 'pad') return config
+  const next = cloneConfig(config)
+  const pad = next.items[index].pad ?? { orientation: 'cardinal' as const, slots: {} }
+  const slots = { ...pad.slots }
+  if (binding.item === null) delete slots[slot]
+  else slots[slot] = { item: binding.item, ...(binding.mode ? { mode: binding.mode } : {}) }
+  next.items[index] = { ...next.items[index], pad: normalizeRailPad({ ...pad, slots }) }
+  return next
+}
+
+/**
+ * Turn a pad between cardinal and diagonal.
+ *
+ * The four bindings are carried across in order rather than dropped, because the two
+ * orientations are the same four choices carved differently and losing them would make
+ * the toggle a destructive control nobody would touch twice.
+ */
+export function setRailPadOrientation(
+  config: RailConfig,
+  itemId: string,
+  orientation: RailPadOrientation,
+): RailConfig {
+  const index = config.items.findIndex(entry => entry.id === itemId)
+  const current = index >= 0 ? config.items[index] : undefined
+  if (!current || current.type !== 'pad') return config
+  const pad = current.pad ?? { orientation: 'cardinal' as const, slots: {} }
+  if (pad.orientation === orientation) return config
+  const from = padDirections(pad.orientation)
+  const to = padDirections(orientation)
+  const slots: RailPadConfig['slots'] = {}
+  from.forEach((direction, position) => {
+    const binding = pad.slots[direction]
+    if (binding) slots[to[position]] = binding
+  })
+  if (pad.slots.center) slots.center = pad.slots.center
+  const next = cloneConfig(config)
+  next.items[index] = { ...next.items[index], pad: normalizeRailPad({ orientation, slots }) }
   return next
 }
 

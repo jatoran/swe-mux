@@ -16,9 +16,15 @@ const MOBILE_AT = CSS.search(/@media\(max-width:760px\)\{\s*:root\{--rail-gap/)
 function block(selector: string, mobile: boolean): string {
   if (mobile && MOBILE_AT < 0) throw new Error('style.css has no mobile rail density group')
   const source = mobile ? CSS.slice(MOBILE_AT) : CSS
-  const found = new RegExp(`${selector.replace(/[[\]"]/g, String.raw`\$&`)}\\{([^}]*)\\}`).exec(source)
-  if (!found) throw new Error(`style.css has no ${mobile ? 'mobile ' : ''}rail density block for ${selector}`)
-  return found[1]
+  // The *density* block for this selector, not merely the first block that shares the
+  // selector: bare `:root` is also where several unrelated token groups live (the rail's
+  // glass opacities among them), and taking the first match read one of those instead and
+  // reported the whole group missing. Anchored the same way `MOBILE_AT` already is.
+  const all = source.matchAll(new RegExp(`${selector.replace(/[[\]"]/g, String.raw`\$&`)}\\{([^}]*)\\}`, 'g'))
+  for (const found of all) {
+    if (found[1].includes('--rail-gap')) return found[1]
+  }
+  throw new Error(`style.css has no ${mobile ? 'mobile ' : ''}rail density block for ${selector}`)
 }
 
 test('a config the daemon never sent, and any value it does not know, is Comfortable', () => {
@@ -77,9 +83,12 @@ test('configured text chips size to their label; min-width is a floor, not a tar
   assert.match(rule[1], /padding:0 var\(--rail-text-pad\)/)
   // The shared 74px is right for the fixed built-in wording and wrong for a user's label.
   assert.match(CSS, /\.terminal-action-rail button\{min-width:calc\(74px\*var\(--ui-scale\)\)/)
-  // Applied to the four configured types and to no built-in.
+  // Applied to the four configured types and to no built-in. Counted on the class
+  // expression rather than the whole `class={…}` attribute: the pane resolves an item's
+  // class through `railItemView` now, so the attribute is written once for every chip and
+  // only these two branches put `rail-text` in it.
   const pane = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
-  assert.equal(pane.split('class={`rail-text ${item.className||\'\'}`.trim()}').length - 1, 2)
+  assert.equal(pane.split('`rail-text ${item.className||\'\'}`.trim()').length - 1, 2)
 })
 
 test('the daemon and the browser agree on the steps', () => {

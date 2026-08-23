@@ -21,6 +21,7 @@
 // Kept DOM-free so the cadence, the slop, and the tap/hold split are testable without a
 // browser. TerminalPane owns the listeners and the button; this owns one pointer's state.
 
+import { BUILTIN_RAIL } from './commandRail.ts'
 import { claimPointerDrag } from './pointerDragClaim.ts'
 import { RAIL_PAN_SLOP_PX } from './railOverflow.ts'
 
@@ -30,10 +31,14 @@ export const RAIL_KEY_REPEAT_INTERVAL_MS = 75
  *  threshold: both decisions are about the same pixels and must not disagree. */
 export const RAIL_KEY_HOLD_SLOP_PX = RAIL_PAN_SLOP_PX
 
-const REPEATABLE_RAIL_KEYS = new Set(['up', 'down', 'left', 'right'])
-
+/** Whether a *standalone* chip for this id holds to repeat.
+ *
+ *  Read off the catalog's own `repeatable` flag rather than a list kept here, because a
+ *  pad slot's default trigger mode reads the same flag (`defaultPadTriggerMode`) and the
+ *  two must not be able to disagree about the same button - an arrow that repeats as a
+ *  chip and not inside a pad would be a difference nobody chose. */
 export function isRepeatableRailKey(id:string):boolean {
-  return REPEATABLE_RAIL_KEYS.has(id)
+  return !!BUILTIN_RAIL.find(item=>item.id===id)?.repeatable
 }
 
 export interface RailKeyRepeater {

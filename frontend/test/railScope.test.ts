@@ -109,16 +109,19 @@ test('an edit to a project row stays project state', () => {
   const blob = deltaBlob()
   const resolved = resolveRail(blob, P)
   const projectRow = resolved.config.layouts.desktop.strip.at(-1)!
-  // Drag a *global* item into the project row: legal, and project-local.
+  // Drag a *global* item into the project row: legal, and project-local. Any directly
+  // placed built-in would do; `esc` is one the default rail still carries as its own
+  // chip rather than inside a pad.
   const globalRow = resolved.config.layouts.desktop.strip[0]
-  const homeIndex = globalRow.items.indexOf('home')
+  const escIndex = globalRow.items.indexOf('esc')
+  assert.ok(escIndex >= 0)
   const next = moveRailEntry(resolved.config,
-    { device: 'desktop', surface: 'strip', rowId: globalRow.id, index: homeIndex },
+    { device: 'desktop', surface: 'strip', rowId: globalRow.id, index: escIndex },
     { device: 'desktop', surface: 'strip', rowId: projectRow.id, index: 0 })
   const written = applyScopedRail(blob, P, resolved, next)
-  assert.equal(railConfigFromBlob(written).layouts.desktop.strip[0].items.includes('home'), false)
+  assert.equal(railConfigFromBlob(written).layouts.desktop.strip[0].items.includes('esc'), false)
   const effective = railConfigFromBlob(written, P)
-  assert.deepEqual(effective.layouts.desktop.strip.at(-1)?.items, ['home', 'custom:skill:ship'])
+  assert.deepEqual(effective.layouts.desktop.strip.at(-1)?.items, ['esc', 'custom:skill:ship'])
   // The other project never sees the project row.
   assert.equal(railConfigFromBlob(written, OTHER).layouts.desktop.strip.some(row => row.items.includes('custom:skill:ship')), false)
 })

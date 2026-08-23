@@ -7,7 +7,8 @@ Design: `../../../design/features/terminal-input.md`.
 
 `TerminalPane.tsx`, `terminalInputDiagnostics.ts`, `terminalCaretPlacement.ts`, `composerText.ts`,
 `composerInsertion.ts`,
-`railKeyRepeat.ts`, `RailRepeatKey.tsx`, `terminalAttachments.ts`, `terminalProtocol.ts`,
+`railKeyRepeat.ts`, `RailRepeatKey.tsx`, `railPadGesture.ts`, `RailPad.tsx`, `railModifiers.ts`,
+`terminalAttachments.ts`, `terminalProtocol.ts`,
 `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts`, `terminalRenderPause.ts`,
 `mobileInput.ts`
 

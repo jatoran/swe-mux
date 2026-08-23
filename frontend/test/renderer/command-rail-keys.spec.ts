@@ -1,5 +1,6 @@
 import { expect, test, type Page } from 'playwright/test'
 import { RAIL_KEY_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS } from '../../src/railKeyRepeat.ts'
+import { keyPoint, scrollLeft, sends, touch } from './railTouch.ts'
 
 /**
  * What an Action rail key does with a finger that is not simply tapping it.
@@ -28,46 +29,6 @@ const UP_KEY = '.rail-key-repeat[title^="Up"]'
 const PLAIN_KEY = '[data-key="restoreInput"]'
 const UP_SEQUENCE = '\x1b[A'
 
-async function touch(page: Page) {
-  const cdp = await page.context().newCDPSession(page)
-  type TouchType = 'touchStart' | 'touchMove' | 'touchEnd'
-  const send = (type: TouchType, points: Array<{ x: number; y: number }>) =>
-    cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(point => ({ x: point.x, y: point.y })) })
-  return {
-    down: (x: number, y: number) => send('touchStart', [{ x, y }]),
-    move: (x: number, y: number) => send('touchMove', [{ x, y }]),
-    up: () => send('touchEnd', []),
-  }
-}
-
-/**
- * The centre of one rail key, clamped into the part of the strip a finger can actually
- * reach. The strip is scrolled and clipped, and the overflow controls are drawn *over* its
- * ends, so a key's layout box can sit somewhere a touch aimed at its centre would land on
- * an edge button instead.
- */
-async function keyPoint(page: Page, selector: string) {
-  const point = await page.evaluate((keySelector: string) => {
-    const strip = document.querySelector<HTMLElement>('.terminal-action-scroll')!
-    const key = strip.querySelector<HTMLElement>(keySelector)
-    if (!key) return null
-    const stripBox = strip.getBoundingClientRect()
-    const keyBox = key.getBoundingClientRect()
-    let left = Math.max(keyBox.left, stripBox.left)
-    let right = Math.min(keyBox.right, stripBox.right)
-    const before = document.querySelector<HTMLElement>('.overflow-rail-left')
-    const after = document.querySelector<HTMLElement>('.overflow-rail-right')
-    if (before) left = Math.max(left, before.getBoundingClientRect().right)
-    if (after) right = Math.min(right, after.getBoundingClientRect().left)
-    return right - left < 8 ? null : { x: (left + right) / 2, y: keyBox.top + keyBox.height / 2 }
-  }, selector)
-  if (!point) throw new Error(`rail key ${selector} is not reachable inside the strip`)
-  return point
-}
-
-const sends = (page: Page) => page.evaluate(() => window.railSends)
-const scrollLeft = (page: Page) => page.evaluate(() => document.querySelector('.terminal-action-scroll')!.scrollLeft)
-
 async function swipeLeftFrom(page: Page, selector: string) {
   const finger = await touch(page)
   const centre = await keyPoint(page, selector)
@@ -78,7 +39,9 @@ async function swipeLeftFrom(page: Page, selector: string) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/command-rail-harness.html')
-  await expect(page.locator('.terminal-action-scroll > button')).toHaveCount(16)
+  // Sixteen keys plus the two pads (`command-rail-pad.spec.ts`), which share this strip
+  // precisely because the arbitration is between them and this scroller's pointer capture.
+  await expect(page.locator('.terminal-action-scroll > button')).toHaveCount(18)
   // Park the arrows in the middle of the visible window: room to drag towards on the left,
   // room to scroll into on the right. Both are prerequisites for the swipe tests meaning
   // anything, so they are asserted rather than assumed.

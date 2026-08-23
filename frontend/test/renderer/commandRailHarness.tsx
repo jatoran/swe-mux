@@ -15,15 +15,27 @@
 import { render } from 'preact'
 import { RailScroller } from '../../src/RailScroller'
 import { RailRepeatKey, useRailKeyRepeat } from '../../src/RailRepeatKey'
+import { RailPad, useRailPad, type RailPadSlotView } from '../../src/RailPad'
+import { pointerDragOwnsPointer } from '../../src/pointerDragClaim'
+import { normalizeRailPad, type RailItem } from '../../src/commandRail'
 import '../../src/style.css'
 
 declare global {
   interface Window {
     /** Every sequence the rail has written, oldest first. */
     railSends: string[]
+    /** Whether a drag owned the pointer, sampled on every window pointer move.
+     *
+     *  This is the arbitration under test and it cannot be observed after the fact: the
+     *  claim is released on `pointerup`, which lands *before* the `touchend` where the
+     *  mobile recognizer would otherwise classify the same motion as the rail's
+     *  swipe-up-opens-the-menu gesture. Sampling mid-drag is the only way to see it. */
+    railClaims: boolean[]
   }
 }
 window.railSends = []
+window.railClaims = []
+window.addEventListener('pointermove', () => { window.railClaims.push(pointerDragOwnsPointer()) })
 
 const ARROWS = [
   { id: 'up', label: '↑', title: 'Up', bytes: '\x1b[A' },
@@ -55,8 +67,73 @@ const PlainKey = ({ id, label, bytes }: { id: string; label: string; bytes: stri
   <button class="term-key" data-key={id} title={label} onClick={() => window.railSends.push(bytes)}>{label}</button>
 )
 
+// Two pads, in the same strip as the arrows they exist to replace, because the arbitration
+// under test is between the pad and *this* scroller's pointer capture.
+//
+// The cardinal one deliberately mixes every trigger mode: `up` repeats while held, `right`
+// and `down` fire on entry, and `left` waits for the lift so the escape hatch has something
+// real to escape from. Its centre is bound too, so a tap has an answer.
+const CARDINAL_PAD: RailItem = {
+  id: 'padCardinal',
+  type: 'pad',
+  label: 'Pad',
+  className: 'term-key',
+  title: 'Pad',
+  pad: normalizeRailPad({
+    orientation: 'cardinal',
+    slots: {
+      up: { item: 'up', mode: 'enter-repeat' },
+      right: { item: 'right', mode: 'enter' },
+      down: { item: 'down', mode: 'enter' },
+      left: { item: 'kill', mode: 'release' },
+      center: { item: 'centre', mode: 'enter' },
+    },
+  }),
+}
+const DIAGONAL_PAD: RailItem = {
+  id: 'padDiagonal',
+  type: 'pad',
+  label: 'Jump',
+  className: 'term-key',
+  title: 'Jump',
+  pad: normalizeRailPad({
+    orientation: 'diagonal',
+    slots: {
+      upLeft: { item: 'home', mode: 'enter' },
+      upRight: { item: 'ctrlHome', mode: 'enter' },
+      downLeft: { item: 'end', mode: 'enter' },
+      downRight: { item: 'ctrlEnd', mode: 'enter' },
+    },
+  }),
+}
+const PAD_BYTES: Record<string, string> = {
+  up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+  home: '\x1b[H', end: '\x1b[F', ctrlHome: '\x1b[1;5H', ctrlEnd: '\x1b[1;5F',
+  kill: 'KILL', centre: 'CENTRE', dead: 'DEAD',
+}
+
+function padSlots(item: RailItem): RailPadSlotView[] {
+  const pad = item.pad!
+  return (Object.keys(pad.slots) as (keyof typeof pad.slots)[]).map(key => {
+    const slot = pad.slots[key]!
+    // One slot is disabled on purpose: a dead direction has to stay where it is and let
+    // nothing through, rather than the others sliding over to fill the gap.
+    const disabled = slot.item === 'dead'
+    return {
+      key,
+      itemId: slot.item,
+      label: slot.item,
+      title: slot.item,
+      mode: slot.mode || 'enter',
+      disabled,
+      run: () => { window.railSends.push(PAD_BYTES[slot.item] || slot.item) },
+    }
+  })
+}
+
 function Rail() {
   const repeat = useRailKeyRepeat(sequence => { window.railSends.push(sequence) }, 'harness')
+  const padControl = useRailPad('harness')
   return <div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions">
     <div class="terminal-action-rows">
       <RailScroller>
@@ -69,6 +146,16 @@ function Rail() {
             label={key.label}
             title={key.title}
             className="term-key"
+          />
+        ))}
+        {[CARDINAL_PAD, DIAGONAL_PAD].map(item => (
+          <RailPad
+            key={item.id}
+            controller={padControl}
+            item={item}
+            slots={padSlots(item)}
+            className="term-key"
+            content={item.label}
           />
         ))}
         {TRAILING.map(key => <PlainKey key={key.id} {...key} />)}
