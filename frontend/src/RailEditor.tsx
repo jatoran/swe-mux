@@ -3,18 +3,19 @@ import type { JSX } from 'preact'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
 import {
-  allRailBackends, defaultPadTriggerMode, defaultRailConfig, isBuiltinRailId, padSlotKeys,
+  allRailBackends, defaultPadTriggerMode, defaultRailConfig, isBuiltinRailId,
+  PAD_CENTER, padRingCount, padSlotKey, padWedgeCount, padWedgeName, parsePadSlotKey,
   railItemDisplayLabel, railItemDisplayMode,
   railItemVisible, railPadSlotMode, railPayload,
   railProjectScopeKind, railRowKey,
-  RAIL_DEVICES, RAIL_PAD_DIRECTION_LABELS, RAIL_PAD_TRIGGER_MODES, RAIL_SURFACES,
+  RAIL_DEVICES, RAIL_PAD_MAX_WEDGES, RAIL_PAD_TRIGGER_MODES, RAIL_SURFACES,
   type RailBackend, type RailBlob, type RailConfig, type RailDevice, type RailItem,
-  type RailItemDisplay, type RailItemType, type RailPadOrientation, type RailPadSlotKey,
+  type RailItemDisplay, type RailItemType, type RailPadSlotKey,
   type RailPadTriggerMode, type RailRow, type RailSurface,
 } from './commandRail'
 import {
   addRailRow, copyRailSurface, moveRailEntry, moveRailRow, railPlacementCounts,
-  removeRailEntry, removeRailRow, setRailPadOrientation, setRailRowLabel, updateRailCatalogItem,
+  removeRailEntry, removeRailRow, setRailPadShape, setRailRowLabel, updateRailCatalogItem,
   updateRailItemPresentation, updateRailPadSlot,
   type RailDropTarget, type RailRef,
 } from './railLayout'
@@ -456,7 +457,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
           item={item}
           items={resolved.config.items}
           promptTitleOf={promptTitleOf}
-          onOrientation={orientation => commitConfig(setRailPadOrientation(resolved.config, item.id, orientation))}
+          onShape={shape => commitConfig(setRailPadShape(resolved.config, item.id, shape))}
           onSlot={(slot, binding) => commitConfig(updateRailPadSlot(resolved.config, item.id, slot, binding))}
         />}
         <fieldset class="rail-detail-group">
@@ -644,33 +645,36 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
 }
 
 const TRIGGER_LABEL: Record<RailPadTriggerMode, string> = {
-  'enter': 'On entering the direction',
+  'enter': 'On entering the wedge',
   'enter-repeat': 'On entering, repeating while held',
-  'release': 'Only on release, in this direction',
+  'release': 'Only on release, in this wedge',
 }
 
 /**
- * The pad's directions, drawn as the pad.
+ * The pad's wedges, drawn as the pad.
  *
- * A picture rather than a list of four rows, because the thing being configured is
- * spatial: "which action is up" is a question about a position, and a list makes you
- * translate every answer back into one. So the four slots sit where they will be reached
- * from, the orientation control rotates them, and the centre sits in the middle where a
- * tap lands.
+ * A picture rather than a list of rows, because the thing being configured is spatial:
+ * "which action is up" is a question about a position, and a list makes you translate every
+ * answer back into one. So the wedges sit across the top in the order they are reached, a
+ * far ring sits above its near one because it is further out, and the centre sits underneath
+ * where a tap lands.
  *
- * Each position carries two controls and no more: what it runs, and when it fires. The
- * mode defaults from the action itself (`defaultPadTriggerMode`), so an arrow arrives
- * already repeating and anything destructive already waiting for release - the select is
- * there to override a default, not to make every binding a two-step.
+ * Each position carries two controls and no more: what it runs, and when it fires. The mode
+ * defaults from the action and the ring count (`defaultPadTriggerMode`), so an arrow arrives
+ * already repeating, anything destructive already waiting for release, and every slot of a
+ * ringed pad waiting too - the select is there to override a default, not to make every
+ * binding a two-step.
  */
-function RailPadSlotEditor({ item, items, promptTitleOf, onOrientation, onSlot }: {
+function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
   item: RailItem
   items: readonly RailItem[]
   promptTitleOf: (item: RailItem) => string
-  onOrientation: (orientation: RailPadOrientation) => void
+  onShape: (shape: { wedges?: number; rings?: number }) => void
   onSlot: (slot: RailPadSlotKey, binding: { item: string | null; mode?: RailPadTriggerMode }) => void
 }) {
-  const pad = item.pad ?? { orientation: 'cardinal' as const, slots: {} }
+  const pad = item.pad
+  const wedges = padWedgeCount(pad)
+  const rings = padRingCount(pad)
   // A pad may not hold a pad. One level is a control; two is a menu with a hidden second
   // page, and the gesture has no way to say "and then" without the dwell the whole design
   // is built to avoid.
@@ -683,12 +687,15 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onOrientation, onSlot }
     .sort((a, b) => a.label.localeCompare(b.label))
 
   const slotCell = (key: RailPadSlotKey) => {
-    const binding = pad.slots[key]
+    const binding = pad?.slots[key]
     const target = binding ? items.find(entry => entry.id === binding.item) : undefined
-    const mode = railPadSlotMode(binding, target, pad.orientation)
-    const auto = defaultPadTriggerMode(target, pad.orientation)
-    return <div class={`rail-pad-cell rail-pad-cell-${key}`} key={key}>
-      <span class="rail-pad-cell-name">{key === 'center' ? 'Centre (tap)' : RAIL_PAD_DIRECTION_LABELS[key]}</span>
+    const mode = railPadSlotMode(binding, target, rings)
+    const auto = defaultPadTriggerMode(target, rings)
+    const at = parsePadSlotKey(key)
+    return <div class="rail-pad-cell" key={key}>
+      <span class="rail-pad-cell-name">
+        {at ? padWedgeName(at.wedge, wedges, at.ring) : 'Centre (tap)'}
+      </span>
       <Dropdown
         value={binding?.item || ''}
         onChange={value => onSlot(key, { item: value || null, mode: binding?.mode })}
@@ -706,23 +713,48 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onOrientation, onSlot }
     </div>
   }
 
+  // Drawn left to right, which is the reverse of the wedge index: wedge 0 is the rightmost,
+  // because the fan's angles grow counter-clockwise from due east. The far ring is the top
+  // row for the same literal reason - it is further from the finger.
+  const rows: RailPadSlotKey[][] = []
+  for (let ring = rings - 1; ring >= 0; ring -= 1) {
+    const row: RailPadSlotKey[] = []
+    for (let wedge = wedges - 1; wedge >= 0; wedge -= 1) row.push(padSlotKey(ring, wedge))
+    rows.push(row)
+  }
+
   return <fieldset class="rail-detail-group rail-pad-editor">
-    <legend>Directions</legend>
-    <label>Layout<Dropdown
-      value={pad.orientation}
-      onChange={value => onOrientation(value as RailPadOrientation)}
+    <legend>Wedges</legend>
+    <label>Wedges<Dropdown
+      value={String(wedges)}
+      onChange={value => onShape({ wedges: Number(value) })}
+      title="How many ways the fan above the chip is divided"
+      options={Array.from({ length: RAIL_PAD_MAX_WEDGES }, (_, index) => ({
+        value: String(index + 1),
+        label: `${index + 1}`,
+      }))}
+    /></label>
+    <label>Rings<Dropdown
+      value={String(rings)}
+      onChange={value => onShape({ rings: Number(value) })}
+      title="A second ring doubles the slots without using more angle, but everything on a ringed pad waits for the lift"
       options={[
-        { value: 'cardinal', label: 'Up / down / left / right' },
-        { value: 'diagonal', label: 'Corners (NW / NE / SE / SW)' },
+        { value: '1', label: '1 — fires as you cross in' },
+        { value: '2', label: '2 — fires on release' },
       ]}
     /></label>
-    <div class={`rail-pad-grid rail-pad-grid-${pad.orientation}`}>
-      {padSlotKeys(pad.orientation).map(slotCell)}
-    </div>
+    {rows.map((row, index) => <div class="rail-pad-grid" key={index} style={{ gridTemplateColumns: `repeat(${wedges}, minmax(0, 1fr))` }}>
+      {row.map(slotCell)}
+    </div>)}
+    <div class="rail-pad-grid rail-pad-grid-centre">{slotCell(PAD_CENTER)}</div>
     <p class="rail-add-note">
-      Press the chip and drag a direction. An empty direction is inert, which also makes it a
-      safe place to abort a drag into. A direction whose action this session does not offer
-      stays where it is and goes dim rather than letting the others move.
+      Press the chip and drag a wedge; pull straight down to cancel. The centre is what a tap
+      does, and it is where an action with no direction of its own belongs — Down, on the
+      arrows pad. An empty wedge is inert, which also makes it a safe place to abort into, and
+      a wedge whose action this session does not offer goes dim where it is rather than
+      letting the others move.
+      {rings > 1 && ' Reaching the far ring crosses the near one, which is why a ringed pad waits for the lift rather than firing on the way past.'}
+      {wedges >= 5 && ' Five wedges is ±22° each: easy enough to hit while looking at the dial, harder without.'}
     </p>
   </fieldset>
 }
@@ -789,7 +821,7 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
     // job from naming one and cramming both into this form would make every other type
     // pay for it.
     if (draft.type === 'pad') {
-      onAdd({ id, type: 'pad', label, className: 'term-key', pad: { orientation: 'cardinal', slots: {} } }, target)
+      onAdd({ id, type: 'pad', label, className: 'term-key', pad: { wedges: 3, rings: 1, slots: {} } }, target)
       setDraft({ ...draft, name: '', label: '' })
       return
     }

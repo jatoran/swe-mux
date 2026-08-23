@@ -16,9 +16,10 @@
 // by (device, surface, rowId, index) rather than by id.
 
 import {
-  defaultRowId, isBuiltinRailId, newRailRowId, normalizeRailPad, padDirections,
+  defaultRowId, isBuiltinRailId, newRailRowId, normalizeRailPad,
+  padRingCount, padSlotKey, padSlotKeys, padWedgeCount, parsePadSlotKey,
   RAIL_DEVICES, RAIL_SURFACES,
-  type RailConfig, type RailDevice, type RailItem, type RailPadConfig, type RailPadOrientation,
+  type RailConfig, type RailDevice, type RailItem, type RailPadConfig,
   type RailPadSlotKey, type RailPadTriggerMode, type RailRow, type RailSurface,
 } from './commandRail.ts'
 
@@ -287,7 +288,7 @@ export function updateRailPadSlot(
   const index = config.items.findIndex(entry => entry.id === itemId)
   if (index < 0 || config.items[index].type !== 'pad') return config
   const next = cloneConfig(config)
-  const pad = next.items[index].pad ?? { orientation: 'cardinal' as const, slots: {} }
+  const pad = next.items[index].pad ?? { wedges: 3, rings: 1, slots: {} }
   const slots = { ...pad.slots }
   if (binding.item === null) delete slots[slot]
   else slots[slot] = { item: binding.item, ...(binding.mode ? { mode: binding.mode } : {}) }
@@ -296,35 +297,40 @@ export function updateRailPadSlot(
 }
 
 /**
- * Turn a pad between cardinal and diagonal.
+ * Change how many wedges or rings a pad divides its fan into.
  *
- * Bindings are carried across **position for position**, as far as the new orientation has
- * positions: a three-wedge pad and a two-wedge-two-ring one do not hold the same number of
- * things, so one direction of the toggle always leaves one behind. Carrying what fits beats
- * dropping everything, which would make the control something nobody touches twice, and it
- * beats stacking two actions on one wedge, which would be a silent conflict.
+ * Bindings are carried across **position for position**, as far as the new shape has
+ * positions: shrinking always leaves some behind, and dropping those is the honest answer -
+ * the alternatives are stacking two actions on one wedge (a silent conflict) or refusing the
+ * change (a control nobody touches twice). Growing keeps everything and adds empty wedges,
+ * which is the common direction and costs nothing.
+ *
+ * The centre is untouched by either, because it has no wedge or ring to lose.
  */
-export function setRailPadOrientation(
+export function setRailPadShape(
   config: RailConfig,
   itemId: string,
-  orientation: RailPadOrientation,
+  shape: { wedges?: number; rings?: number },
 ): RailConfig {
   const index = config.items.findIndex(entry => entry.id === itemId)
   const current = index >= 0 ? config.items[index] : undefined
   if (!current || current.type !== 'pad') return config
-  const pad = current.pad ?? { orientation: 'cardinal' as const, slots: {} }
-  if (pad.orientation === orientation) return config
-  const from = padDirections(pad.orientation)
-  const to = padDirections(orientation)
+  const pad = current.pad
+  const wedges = shape.wedges ?? padWedgeCount(pad)
+  const rings = shape.rings ?? padRingCount(pad)
+  if (wedges === padWedgeCount(pad) && rings === padRingCount(pad)) return config
   const slots: RailPadConfig['slots'] = {}
-  from.forEach((direction, position) => {
-    const target = to[position]
-    const binding = pad.slots[direction]
-    if (target && binding) slots[target] = binding
-  })
-  if (pad.slots.center) slots.center = pad.slots.center
+  for (const key of padSlotKeys(pad)) {
+    const binding = pad?.slots[key]
+    if (!binding) continue
+    const at = parsePadSlotKey(key)
+    // The centre survives every reshape; a wedge survives only if the new shape still has
+    // that position.
+    if (!at) { slots[key] = binding; continue }
+    if (at.wedge < wedges && at.ring < rings) slots[padSlotKey(at.ring, at.wedge)] = binding
+  }
   const next = cloneConfig(config)
-  next.items[index] = { ...next.items[index], pad: normalizeRailPad({ orientation, slots }) }
+  next.items[index] = { ...next.items[index], pad: normalizeRailPad({ wedges, rings, slots }) }
   return next
 }
 

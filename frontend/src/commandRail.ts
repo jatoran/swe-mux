@@ -105,16 +105,29 @@ export function migratedRailItemId(id: string): string {
   return RETIRED_RAIL_IDS[id] ?? id
 }
 
-export type RailPadOrientation = 'cardinal' | 'diagonal'
-export type RailPadDirection = 'up' | 'right' | 'left' | 'upLeft' | 'upRight' | 'upLeftFar' | 'upRightFar'
-export type RailPadSlotKey = RailPadDirection | 'center'
-/** Which radial band a direction lives in. Only `diagonal` has a far one. */
-export type RailPadRing = 'near' | 'far'
+/**
+ * A slot's address on the fan: `ring:wedge`, or the centre.
+ *
+ * Positional rather than named ("up", "upLeft") because the wedge count is the operator's
+ * choice: a name that means up-left on a four-wedge pad means something else on a three-
+ * wedge one, and a table of names could not cover five. The human-readable name is derived
+ * from the geometry instead (`padWedgeName`), so it is always true of the pad it is on.
+ */
+export type RailPadSlotKey = string
+
+export const PAD_CENTER: RailPadSlotKey = 'center'
+export const padSlotKey = (ring: number, wedge: number): RailPadSlotKey => `${ring}:${wedge}`
+
+/** `null` for the centre, which has no wedge or ring. */
+export function parsePadSlotKey(key: RailPadSlotKey): { ring: number; wedge: number } | null {
+  const match = /^(\d+):(\d+)$/.exec(key)
+  return match ? { ring: Number(match[1]), wedge: Number(match[2]) } : null
+}
 
 /**
  * When a slot fires.
  *
- *  * `enter`        - the instant the press crosses into this direction, once.
+ *  * `enter`        - the instant the press crosses into this wedge, once.
  *  * `enter-repeat` - the same, then repeating while held.
  *  * `release`      - only if the press is *still* latched here when it ends, which
  *                     is what makes dragging back out an escape hatch. The mode for
@@ -122,43 +135,21 @@ export type RailPadRing = 'near' | 'far'
  */
 export type RailPadTriggerMode = 'enter' | 'enter-repeat' | 'release'
 
-export const RAIL_PAD_ORIENTATIONS: readonly RailPadOrientation[] = ['cardinal', 'diagonal']
 export const RAIL_PAD_TRIGGER_MODES: readonly RailPadTriggerMode[] = ['enter', 'enter-repeat', 'release']
 
-// Wedge order is **wedge-major within a ring**: the near ring's wedges left to right by
-// sector index, then the far ring's. `railPadDirectionAt` indexes straight into this, and
-// `normalizeRailPad` rebuilds stored slots in it.
-export const CARDINAL_PAD_DIRECTIONS: readonly RailPadDirection[] = ['right', 'up', 'left']
-export const DIAGONAL_PAD_DIRECTIONS: readonly RailPadDirection[] = ['upRight', 'upLeft', 'upRightFar', 'upLeftFar']
-
-export const RAIL_PAD_DIRECTION_LABELS: Readonly<Record<RailPadDirection, string>> = {
-  up: 'Up',
-  right: 'Right',
-  left: 'Left',
-  upLeft: 'Up-left',
-  upRight: 'Up-right',
-  upLeftFar: 'Up-left, far',
-  upRightFar: 'Up-right, far',
-}
-
-/** How many angular wedges this orientation divides the fan into. Rings multiply it. */
-export const padSectorCount = (orientation: RailPadOrientation): number =>
-  orientation === 'diagonal' ? 2 : 3
-
-/** The directions this orientation offers: three wedges of one ring, or two of two. */
-export function padDirections(orientation: RailPadOrientation): readonly RailPadDirection[] {
-  return orientation === 'diagonal' ? DIAGONAL_PAD_DIRECTIONS : CARDINAL_PAD_DIRECTIONS
-}
-
-/** Every addressable slot: the directions, then the centre. */
-export function padSlotKeys(orientation: RailPadOrientation): readonly RailPadSlotKey[] {
-  return [...padDirections(orientation), 'center']
-}
-
-const FAR_DIRECTIONS = new Set<RailPadDirection>(['upLeftFar', 'upRightFar'])
-
-export const padRingOf = (direction: RailPadDirection): RailPadRing =>
-  FAR_DIRECTIONS.has(direction) ? 'far' : 'near'
+/**
+ * How many wedges a pad may divide its fan into.
+ *
+ * Five is the ceiling, and the number that sets it is angular tolerance rather than target
+ * size: the fan is 220° wide, so five wedges is ±22° of slop - the same tolerance that made
+ * an eight-way full circle a bad control. Arc length is comfortable well past five (57px at
+ * six), so it is not what runs out first. Three and four stay easy to hit without looking;
+ * five is for a pad you glance at.
+ */
+export const RAIL_PAD_MAX_WEDGES = 5
+export const RAIL_PAD_MIN_WEDGES = 1
+/** Two rings at most. A third would mean two bands of transit rather than one. */
+export const RAIL_PAD_MAX_RINGS = 2
 
 // Down the middle of each wedge, which is also where its label sits. Derived from the fan's
 // own division rather than written out, so a change to the skirt or the wedge count moves
@@ -166,37 +157,70 @@ export const padRingOf = (direction: RailPadDirection): RailPadRing =>
 const SKIRT_DEG = 20
 const FAN_SPAN_DEG = 180 + SKIRT_DEG * 2
 
-function wedgeUnit(orientation: RailPadOrientation, index: number): { x: number; y: number } {
-  const width = FAN_SPAN_DEG / padSectorCount(orientation)
-  const degrees = -SKIRT_DEG + width * (index + 0.5)
-  const radians = degrees * Math.PI / 180
-  // Screen axes: `y` grows down, so the upward fan is a negative sine.
+/** Centre angle of a wedge, in degrees counter-clockwise from due east with up positive. */
+export function padWedgeCentreDeg(wedge: number, wedges: number): number {
+  const width = FAN_SPAN_DEG / Math.max(1, wedges)
+  return -SKIRT_DEG + width * (wedge + 0.5)
+}
+
+/** Unit vector down the middle of a wedge. Screen axes, so `y` grows down. */
+export function padWedgeUnit(wedge: number, wedges: number): { x: number; y: number } {
+  const radians = padWedgeCentreDeg(wedge, wedges) * Math.PI / 180
   return { x: Math.cos(radians), y: -Math.sin(radians) }
 }
 
-const PAD_UNITS: Readonly<Record<RailPadDirection, { x: number; y: number }>> = {
-  right: wedgeUnit('cardinal', 0),
-  up: wedgeUnit('cardinal', 1),
-  left: wedgeUnit('cardinal', 2),
-  upRight: wedgeUnit('diagonal', 0),
-  upLeft: wedgeUnit('diagonal', 1),
-  upRightFar: wedgeUnit('diagonal', 0),
-  upLeftFar: wedgeUnit('diagonal', 1),
+/**
+ * What to call a wedge out loud, derived from where it actually points.
+ *
+ * Read off the centre angle rather than the index, so the name is true of the pad it is on
+ * however many wedges that pad has - the thing a fixed table of names could not do once the
+ * count became a choice.
+ */
+export function padWedgeName(wedge: number, wedges: number, ring = 0): string {
+  const degrees = padWedgeCentreDeg(wedge, wedges)
+  const compass = degrees < 30 ? 'Right'
+    : degrees < 70 ? 'Up-right'
+      : degrees < 110 ? 'Up'
+        : degrees < 150 ? 'Up-left'
+          : 'Left'
+  return ring > 0 ? `${compass}, far` : compass
 }
 
-/** Unit vector down the middle of a direction's wedge. Screen axes, so `y` grows down. */
-export const padDirectionUnit = (direction: RailPadDirection): { x: number; y: number } => PAD_UNITS[direction]
-
 export interface RailPadSlot {
-  /** Catalog item id this direction runs. */
+  /** Catalog item id this wedge runs. */
   item: string
   /** Omitted means the item's own default (`defaultPadTriggerMode`). */
   mode?: RailPadTriggerMode
 }
 
 export interface RailPadConfig {
-  orientation: RailPadOrientation
-  slots: Partial<Record<RailPadSlotKey, RailPadSlot>>
+  /** Angular divisions of the fan, `RAIL_PAD_MIN_WEDGES`..`RAIL_PAD_MAX_WEDGES`. */
+  wedges: number
+  /** Radial bands, 1 or 2. A second ring buys a slot per wedge without spending any angle,
+   *  at the cost of making the near one transit (`defaultPadTriggerMode`). */
+  rings: number
+  slots: Record<RailPadSlotKey, RailPadSlot>
+}
+
+export const padWedgeCount = (pad: RailPadConfig | undefined): number =>
+  clampPadCount(pad?.wedges, RAIL_PAD_MIN_WEDGES, RAIL_PAD_MAX_WEDGES, 3)
+export const padRingCount = (pad: RailPadConfig | undefined): number =>
+  clampPadCount(pad?.rings, 1, RAIL_PAD_MAX_RINGS, 1)
+
+function clampPadCount(value: unknown, low: number, high: number, fallback: number): number {
+  const count = Math.round(Number(value))
+  if (!Number.isFinite(count)) return fallback
+  return Math.min(high, Math.max(low, count))
+}
+
+/** Every addressable slot in canonical order: wedge-major within a ring, then the centre. */
+export function padSlotKeys(pad: RailPadConfig | undefined): RailPadSlotKey[] {
+  const keys: RailPadSlotKey[] = []
+  for (let ring = 0; ring < padRingCount(pad); ring += 1) {
+    for (let wedge = 0; wedge < padWedgeCount(pad); wedge += 1) keys.push(padSlotKey(ring, wedge))
+  }
+  keys.push(PAD_CENTER)
+  return keys
 }
 
 /**
@@ -214,11 +238,8 @@ export interface RailPadConfig {
  * and transit costs nothing. The one-ring pad has no transit and keeps entry-firing, which
  * is what makes the arrows fast.
  */
-export function defaultPadTriggerMode(
-  item: RailItem | undefined,
-  orientation: RailPadOrientation = 'cardinal',
-): RailPadTriggerMode {
-  if (orientation === 'diagonal') return 'release'
+export function defaultPadTriggerMode(item: RailItem | undefined, rings = 1): RailPadTriggerMode {
+  if (rings > 1) return 'release'
   if (!item) return 'enter'
   if (item.repeatable) return 'enter-repeat'
   if (item.className?.includes('rail-danger')) return 'release'
@@ -231,10 +252,10 @@ export function defaultPadTriggerMode(
 export function railPadSlotMode(
   slot: RailPadSlot | undefined,
   item: RailItem | undefined,
-  orientation: RailPadOrientation = 'cardinal',
+  rings = 1,
 ): RailPadTriggerMode {
   if (slot?.mode && RAIL_PAD_TRIGGER_MODES.includes(slot.mode)) return slot.mode
-  return defaultPadTriggerMode(item, orientation)
+  return defaultPadTriggerMode(item, rings)
 }
 
 /**
@@ -248,31 +269,76 @@ export function railPadSlotMode(
  * than being quietly deleted by the round trip. Ids are migrated on the way through,
  * for the same reason rows migrate theirs.
  *
- * A slot key that does not belong to the orientation is dropped, because that one is
- * unreachable by construction rather than merely unresolved right now.
+ * A slot key that does not belong to the pad's own wedge and ring counts is dropped,
+ * because that one is unreachable by construction rather than merely unresolved right now -
+ * which is also how shrinking a pad's wedge count lets go of the bindings that no longer
+ * have anywhere to be.
  */
 export function normalizeRailPad(raw: unknown): RailPadConfig {
-  // Slots are rebuilt in `padDirections` order rather than the order they were written
-  // in. That is not tidiness: a fork stores a *copy* of a shipped item and reattach asks
-  // whether the copy still equals the shipped definition, so a pad whose literal was
-  // authored in reading order and whose saved copy came back in canonical order would
-  // report as edited by the operator when nothing had been. The shipped pads are run
-  // through here at their definition site for exactly that reason.
+  // Slots are rebuilt in `padSlotKeys` order rather than the order they were written in.
+  // That is not tidiness: a fork stores a *copy* of a shipped item and reattach asks whether
+  // the copy still equals the shipped definition, so a pad whose literal was authored in
+  // reading order and whose saved copy came back in canonical order would report as edited
+  // by the operator when nothing had been. The shipped pads are run through here at their
+  // definition site for exactly that reason.
   const source = isRecord(raw) ? raw : {}
-  const orientation = RAIL_PAD_ORIENTATIONS.includes(source.orientation as RailPadOrientation)
-    ? source.orientation as RailPadOrientation
-    : 'cardinal'
-  const slots: Partial<Record<RailPadSlotKey, RailPadSlot>> = {}
+  const migrated = migratedPadShape(source)
+  const shape: RailPadConfig = { wedges: migrated.wedges, rings: migrated.rings, slots: {} }
   const rawSlots = isRecord(source.slots) ? source.slots : {}
-  for (const key of padSlotKeys(orientation)) {
-    const entry = rawSlots[key]
+  for (const key of padSlotKeys(shape)) {
+    const entry = rawSlots[key] ?? migrated.aliases[key]
     if (!isRecord(entry) || typeof entry.item !== 'string' || !entry.item) continue
     const mode = RAIL_PAD_TRIGGER_MODES.includes(entry.mode as RailPadTriggerMode)
       ? entry.mode as RailPadTriggerMode
       : undefined
-    slots[key] = { item: migratedRailItemId(entry.item), ...(mode ? { mode } : {}) }
+    shape.slots[key] = { item: migratedRailItemId(entry.item), ...(mode ? { mode } : {}) }
   }
-  return { orientation, slots }
+  return shape
+}
+
+/**
+ * Wedge and ring counts for a stored pad, and the named slot keys a pre-positional save
+ * used, mapped onto their positions.
+ *
+ * The first shipped pads addressed slots by compass name, which stopped scaling the moment
+ * the wedge count became the operator's choice. Both spellings are read here forever, for
+ * the same reason `RETIRED_RAIL_IDS` exists: a layout is device-local, per-Project and
+ * arbitrarily old, and an unrecognised key is silently a binding the operator loses.
+ */
+function migratedPadShape(source: Record<string, unknown>): {
+  wedges: number
+  rings: number
+  aliases: Record<string, unknown>
+} {
+  const orientation = source.orientation
+  if (orientation === 'diagonal') {
+    return {
+      wedges: 2,
+      rings: 2,
+      aliases: {
+        '0:0': isRecord(source.slots) ? source.slots.upRight : undefined,
+        '0:1': isRecord(source.slots) ? source.slots.upLeft : undefined,
+        '1:0': isRecord(source.slots) ? source.slots.upRightFar : undefined,
+        '1:1': isRecord(source.slots) ? source.slots.upLeftFar : undefined,
+      },
+    }
+  }
+  if (orientation === 'cardinal') {
+    return {
+      wedges: 3,
+      rings: 1,
+      aliases: {
+        '0:0': isRecord(source.slots) ? source.slots.right : undefined,
+        '0:1': isRecord(source.slots) ? source.slots.up : undefined,
+        '0:2': isRecord(source.slots) ? source.slots.left : undefined,
+      },
+    }
+  }
+  return {
+    wedges: clampPadCount(source.wedges, RAIL_PAD_MIN_WEDGES, RAIL_PAD_MAX_WEDGES, 3),
+    rings: clampPadCount(source.rings, 1, RAIL_PAD_MAX_RINGS, 1),
+    aliases: {},
+  }
 }
 
 /**
@@ -299,7 +365,7 @@ export function railPadSlotLabel(
  *  which have to see a padded action as placed. */
 export function railPadSlotItemIds(item: RailItem): string[] {
   if (item.type !== 'pad' || !item.pad) return []
-  return padSlotKeys(item.pad.orientation)
+  return padSlotKeys(item.pad)
     .map(key => item.pad?.slots[key]?.item)
     .filter((id): id is string => !!id)
 }
@@ -510,34 +576,52 @@ export const BUILTIN_RAIL: RailItem[] = [
     type: 'pad',
     label: 'Arrows',
     className: 'term-key',
-    title: 'Left, up and right. Drag a direction; hold to repeat.',
+    title: 'Left, up and right; tap for Down. Hold a direction to repeat.',
+    // Down is the centre, which is the one non-spatial mapping in the whole design and is
+    // deliberate: the fan opens upward, so there is no south wedge to put it in, and the
+    // alternatives were a chip of its own (costing rail width and separating it from Up) or
+    // a fourth wedge pointing somewhere that is not down (spatially false). "The one with no
+    // direction is the one you tap" is a rule you learn once, and it keeps the arrow pair
+    // together on one chip.
     pad: normalizeRailPad({
-      orientation: 'cardinal',
-      slots: { up: { item: 'up' }, right: { item: 'right' }, left: { item: 'left' } },
+      wedges: 3,
+      rings: 1,
+      slots: {
+        '0:0': { item: 'right' },
+        '0:1': { item: 'up' },
+        '0:2': { item: 'left' },
+        center: { item: 'down' },
+      },
     }),
   },
-  // Two wedges over two rings, because this is not four directions but two independent
-  // binary choices - line-or-document crossed with start-or-end - and the ring division is
-  // what gives each choice an axis of its own: left/right is the scope, near/far is the end.
+  // Four flat wedges rather than two over two rings. A ring buys a slot without spending
+  // angle, but it costs *fire-on-entry*: the near ring is transit, so everything on a ringed
+  // pad has to wait for the lift. A fourth wedge costs only angular tolerance, which at four
+  // is still +/-27 degrees. So Jump fires the instant you cross into a wedge again.
+  //
+  // Left to right the four read as one gradient: document-start, line-start, line-end,
+  // document-end - so the outer pair is the document and the inner pair is the line, and
+  // left is always a start.
   {
     id: 'padJump',
     type: 'pad',
     label: 'Jump',
     className: 'term-key',
-    title: 'Line and document jumps. Drag up-left or up-right, near or far.',
+    title: 'Line and document jumps. Drag a direction.',
     pad: normalizeRailPad({
-      orientation: 'diagonal',
+      wedges: 4,
+      rings: 1,
       slots: {
-        upLeft: { item: 'home' },
-        upRight: { item: 'ctrlHome' },
-        upLeftFar: { item: 'end' },
-        upRightFar: { item: 'ctrlEnd' },
+        '0:0': { item: 'ctrlEnd' },
+        '0:1': { item: 'end' },
+        '0:2': { item: 'home' },
+        '0:3': { item: 'ctrlHome' },
       },
     }),
   },
   // Not `agentOnly`, though two of its three slots effectively are: a slot whose item
-  // this backend does not admit renders as a dead direction rather than removing the
-  // pad, because directions are positional and a pad that rearranged itself per
+  // this backend does not admit renders as a dead wedge rather than removing the
+  // pad, because wedges are positional and a pad that rearranged itself per
   // backend would be worse than one with three live slots.
   {
     id: 'padCopy',
@@ -545,25 +629,30 @@ export const BUILTIN_RAIL: RailItem[] = [
     label: 'Copy',
     title: 'Copy from this session. Drag a direction.',
     pad: normalizeRailPad({
-      orientation: 'cardinal',
-      slots: { left: { item: 'copyReply' }, up: { item: 'copyInput' }, right: { item: 'copyResume' } },
+      wedges: 3,
+      rings: 1,
+      slots: {
+        '0:0': { item: 'copyResume' },
+        '0:1': { item: 'copyInput' },
+        '0:2': { item: 'copyReply' },
+      },
     }),
   },
-  // Diagonal, purely to keep all four pickers in one chip: three wedges would have left one
-  // of them outside, and the four are the same gesture with the same shape, so splitting
-  // them across two chips would be the arbitrary choice rather than this.
+  // Four wedges for the same reason Jump has them: all four pickers stay on one chip *and*
+  // each still opens the moment you reach it.
   {
     id: 'padPickers',
     type: 'pad',
     label: 'Pick',
-    title: 'Clipboard, prompts, skills, Actions. Drag up-left or up-right, near or far.',
+    title: 'Clipboard, skills, prompts, Actions. Drag a direction.',
     pad: normalizeRailPad({
-      orientation: 'diagonal',
+      wedges: 4,
+      rings: 1,
       slots: {
-        upLeft: { item: 'clipboardHistory' },
-        upRight: { item: 'prompts' },
-        upLeftFar: { item: 'skills' },
-        upRightFar: { item: 'actionsDrawer' },
+        '0:0': { item: 'actionsDrawer' },
+        '0:1': { item: 'prompts' },
+        '0:2': { item: 'skills' },
+        '0:3': { item: 'clipboardHistory' },
       },
     }),
   },
@@ -594,9 +683,6 @@ export const DEFAULT_RAIL_ORDER: readonly string[] = [
   'shiftTab',
   'ctrlC',
   'padArrows',
-  // Down has no wedge: the pad's fan opens upward, so the one arrow that points the other
-  // way keeps a chip of its own, next to the pad holding the other three.
-  'down',
   'padJump',
   'modCtrl',
   'modAlt',
