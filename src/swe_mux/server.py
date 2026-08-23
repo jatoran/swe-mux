@@ -16211,6 +16211,13 @@ CLIENT_INPUT_DIAGNOSTIC_PHASES = frozenset(
 )
 CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS = 1.0
 CLIENT_DIAGNOSTIC_DETAIL_LIMIT = 512
+# The paste trace (frontend pasteTrace.ts) deliberately carries bounded pasted-content
+# evidence — a head/tail excerpt, flagged codepoints, and two composer snapshots — because
+# the payload's invisible characters ARE the diagnosis it exists for. It therefore
+# persists as its own event type instead of joining the content-free
+# `terminal_input_diagnostic` phases, and its clamp is sized for the two snapshots.
+CLIENT_PASTE_TRACE_PHASE = "terminal_paste_trace"
+CLIENT_PASTE_TRACE_DETAIL_LIMIT = 4096
 
 
 async def _repaint_when_resize_settles(request: web.Request, session: Session) -> None:
@@ -16368,7 +16375,7 @@ def _handle_client_diagnostic(
     """
     phase = frame.get("phase")
     if not isinstance(phase, str) or phase not in (
-        CLIENT_REPAIR_PHASES | CLIENT_INPUT_DIAGNOSTIC_PHASES
+        CLIENT_REPAIR_PHASES | CLIENT_INPUT_DIAGNOSTIC_PHASES | {CLIENT_PASTE_TRACE_PHASE}
     ):
         return
     now = time.monotonic()
@@ -16378,15 +16385,21 @@ def _handle_client_diagnostic(
     session.client_diagnostic_timestamps[phase] = now
     detail = frame.get("detail")
     payload = json.dumps(detail) if isinstance(detail, dict) else ""
-    event_type = (
-        "terminal_client_repair" if phase in CLIENT_REPAIR_PHASES else "terminal_input_diagnostic"
-    )
+    if phase == CLIENT_PASTE_TRACE_PHASE:
+        event_type = CLIENT_PASTE_TRACE_PHASE
+        detail_limit = CLIENT_PASTE_TRACE_DETAIL_LIMIT
+    elif phase in CLIENT_REPAIR_PHASES:
+        event_type = "terminal_client_repair"
+        detail_limit = CLIENT_DIAGNOSTIC_DETAIL_LIMIT
+    else:
+        event_type = "terminal_input_diagnostic"
+        detail_limit = CLIENT_DIAGNOSTIC_DETAIL_LIMIT
     request.app["events"].emit_background(
         event_type,
         session_id=session.record.id,
         source="browser",
         phase=phase,
-        detail=payload[:CLIENT_DIAGNOSTIC_DETAIL_LIMIT],
+        detail=payload[:detail_limit],
         input_owner=session.input_owner == connection_id,
         owner_device=session.input_owner_device,
     )

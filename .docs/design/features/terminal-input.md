@@ -209,6 +209,13 @@ A single 250 ms page clock also reports an input-adjacent main-thread stall at 5
 Pending correlations expire after 30 seconds and are capped at 128, diagnostic detail is clamped by the daemon, each phase is rate-limited independently, and no diagnostic contains terminal input text.
 The phase breakdown and incident procedure live in `../../development/TERMINAL_INPUT_INCIDENT_RUNBOOK.md`.
 
+**Every paste into a readable composer records a paste trace, and it is the one diagnostic that carries content.**
+It exists for a transient field defect - after a paste the caret sits a few characters before the end of the pasted text - whose evidence (the clipboard, the composer, the cursor) is gone before anyone can look.
+The pane (`pasteTrace.ts`) recognizes a paste by its native event source or by the bracketed-paste wrapper alone, so rail-button and voice pastes are caught, and records one report per paste: a payload summary (codepoint count, wrapper presence, bounded head/tail excerpt, every non-printable-ASCII codepoint flagged by position) plus the composer region, its bounded row text, and the hardware cursor - captured before the paste and again 600 ms later, after the echo.
+The content it carries is the point: an invisible U+200B in the payload, or a cursor cell that disagrees with the region's text end, is the diagnosis.
+That is a deliberate exception to the no-input-text rule above, so the report persists as its own `terminal_paste_trace` event type - never as a `terminal_input_diagnostic` phase - under a wider daemon clamp sized for its two snapshots, and is read back with `GET /api/events?session=<id>`.
+It fires only for a backend `composerRegionForBackend` can read, only on the live (non-replaying) input path, and inherits the `client_diagnostic` per-phase rate limit.
+
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
 session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm

@@ -989,6 +989,7 @@ The daemon writes the input before replying with `{type:"input_ack", input_seq, 
 Latency phases `input_event_delay`, `input_main_thread_stall`, `input_socket_backlog`, `input_ack_latency`, and `input_echo_latency` use the same `client_diagnostic` frame and persist as `terminal_input_diagnostic`.
 Each phase has its own one-second rate window, so a renderer repair cannot suppress input evidence.
 Diagnostic payloads contain timing, counts, connection state, visibility, ownership, device, and renderer context but never the input text.
+The one deliberate exception is the paste trace: phase `terminal_paste_trace` on the same frame persists as its own `terminal_paste_trace` event type under a wider clamp, and its detail carries a bounded pasted-payload summary (codepoint count, flagged non-ASCII codepoints, head/tail excerpt) plus before/after composer snapshots, because that content is the evidence the trace exists to keep (`features/terminal-input.md`).
 
 ### Multi-device arbitration
 

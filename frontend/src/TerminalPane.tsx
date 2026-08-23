@@ -117,6 +117,7 @@ import {
 import {
   caretResolverForBackend,
   caretSteerCommand,
+  composerRegionForBackend,
   dispatchTerminalMouseTap,
   resolveAnchoredCaretTarget,
   terminalCaretAtPoint,
@@ -125,6 +126,13 @@ import {
   type TerminalCaretPosition,
   type TerminalCaretSnapshot,
 } from './terminalCaretPlacement'
+import {
+  composerTraceSnapshot,
+  inputIsTraceablePaste,
+  PASTE_TRACE_AFTER_MS,
+  PASTE_TRACE_PHASE,
+  summarizePastePayload,
+} from './pasteTrace'
 import { composerIsReadable, readComposerText } from './composerText'
 import { ClipboardDropup } from './ClipboardDropup'
 import { SkillsDropup } from './SkillsDropup'
@@ -1129,6 +1137,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           renderer: activeRenderer,
         },
       }))
+    }
+    // The paste-trace instrument (pasteTrace.ts): one bounded, content-carrying
+    // record per paste — payload shape plus the composer and cursor before the
+    // paste and after its echo settles — for the caret-lands-short-of-the-tail
+    // field report that never survives until someone can look at it live.
+    const tracePaste = (data: string) => {
+      const readRegion = composerRegionForBackend(backendRef.current)
+      if (!readRegion) return
+      const payload = summarizePastePayload(data)
+      const before = composerTraceSnapshot(terminalCaretSnapshot(term), readRegion)
+      window.setTimeout(() => {
+        if (disposed) return
+        const after = composerTraceSnapshot(terminalCaretSnapshot(term), readRegion)
+        reportInputDiagnostic(PASTE_TRACE_PHASE, { afterMs: PASTE_TRACE_AFTER_MS, payload, before, after })
+      }, PASTE_TRACE_AFTER_MS)
     }
     const stopInputStallWatch = watchMainThreadStalls(stall => {
       if (lastHumanInputAt === null || paneIsHidden()) return
@@ -2375,6 +2398,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       wheelPacer.flush()
+      if (inputIsTraceablePaste(data, capture?.source ?? null)) tracePaste(data)
       sendInput(data, false, shouldBroadcast, false, capture)
     })
     // View keys skip xterm's `input()` so they are never broadcast, and are dropped rather
