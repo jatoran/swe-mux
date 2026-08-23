@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
@@ -17,6 +18,7 @@ import {
   padSlotKeys,
   railConfigFromBlob,
   railPadSlotItemIds,
+  railPadSlotLabel,
   railPadSlotMode,
   writeRailConfigBlob,
   type RailItem,
@@ -119,6 +121,47 @@ test('the four shipped pads hold what they say they hold', () => {
   // Diagonal purely to keep all four pickers in one chip.
   assert.deepEqual(railPadSlotItemIds(padOf(config, 'padPickers')), ['prompts', 'clipboardHistory', 'actionsDrawer', 'skills'])
   assert.deepEqual(railPadSlotItemIds(BUILTIN_RAIL.find(item => item.id === 'esc')!), [])
+})
+
+test('a wedge label is a label, never a title', () => {
+  // Shipped live once: the fallback chain reached for `title` when an item had no short
+  // override, so the Pick dial drew "Insert one of this session's skills", "Insert one of
+  // your prompt templates" and "Open Actions temporarily" across each other.
+  const config = defaultRailConfig()
+  const byId = new Map(config.items.map(item => [item.id, item]))
+  for (const item of config.items) {
+    for (const id of railPadSlotItemIds(item)) {
+      const target = byId.get(id)
+      const label = railPadSlotLabel(undefined, target, id)
+      assert.ok(label.length <= 14, `${item.id} → ${id} draws a ${label.length}-char label: "${label}"`)
+      assert.notEqual(label, target?.title, `${item.id} → ${id} fell through to its tooltip`)
+    }
+  }
+})
+
+test('the pane resolves a wedge label through the helper rather than its own chain', () => {
+  // The helper can only hold the rule for callers that use it, and the bug was at the call
+  // site: `view?.padLabel || view?.title || …`. So the call site is pinned too, the same way
+  // `railDensity.test.ts` pins where `rail-text` is applied.
+  const pane = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  const slots = pane.slice(pane.indexOf('const railPadSlots='), pane.indexOf('const renderRailItem='))
+  assert.ok(slots.includes('railPadSlotLabel('), 'the pad slot label must come from the helper')
+  assert.equal(
+    /label\s*[:=][^\n]*view\?\.title/.test(slots),
+    false,
+    'a wedge label must never fall through to a tooltip',
+  )
+})
+
+test('the wedge label chain cannot land on a sentence', () => {
+  const skills = BUILTIN_RAIL.find(item => item.id === 'skills')!
+  // The item whose title is longest, resolved by every route into this helper.
+  assert.equal(railPadSlotLabel(undefined, skills, 'skills'), 'Skills')
+  assert.equal(railPadSlotLabel('Pick', skills, 'skills'), 'Pick', 'an explicit short override wins')
+  assert.equal(railPadSlotLabel('   ', skills, 'skills'), 'Skills', 'and a blank one does not')
+  // A slot naming something this resolution cannot see shows the id rather than nothing:
+  // a wedge with no face reads as a bug, and the id says which binding to go and fix.
+  assert.equal(railPadSlotLabel(undefined, undefined, 'custom:skill:ship'), 'custom:skill:ship')
 })
 
 test('every shipped pad slot names an action that exists, and no pad holds a pad', () => {

@@ -275,6 +275,26 @@ export function normalizeRailPad(raw: unknown): RailPadConfig {
   return { orientation, slots }
 }
 
+/**
+ * The short face a pad wedge shows.
+ *
+ * **Never a title.** A `title` is a sentence written for a tooltip - "Insert one of this
+ * session's skills", "Open Actions temporarily" - and three of those laid across a dial is
+ * a wall of overlapping prose rather than four labels. That is exactly what happened when
+ * the fallback chain reached for one, so the chain is written here, once, with no way to
+ * land on a sentence: an explicit short override, then the item's own display label, then
+ * the raw id for a slot naming something this resolution cannot see.
+ */
+export function railPadSlotLabel(
+  override: string | undefined,
+  item: RailItem | undefined,
+  itemId: string,
+): string {
+  const short = override?.trim()
+  if (short) return short
+  return item ? railItemDisplayLabel(item) : itemId
+}
+
 /** Catalog ids a pad reaches. Used by placement checks and the voice adapter, both of
  *  which have to see a padded action as placed. */
 export function railPadSlotItemIds(item: RailItem): string[] {

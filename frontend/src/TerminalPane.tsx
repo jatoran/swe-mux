@@ -36,7 +36,7 @@ import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsMan
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
-import { padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
+import { padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { RailPad, useRailPad, type RailPadSlotView } from './RailPad'
@@ -3687,11 +3687,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(!slot)continue
       const target=railItems.get(slot.item)
       const view=target&&railItemVisible(target,session.backend as RailBackend)?railItemView(target):null
-      const label=view?.padLabel||view?.title||target?.label||slot.item
+      const label=railPadSlotLabel(view?.padLabel,target,slot.item)
       views.push({
         key,
         itemId:slot.item,
-        label:railItemDisplayLabel(target||{id:slot.item,type:'text',label},label),
+        label,
+        // The sentence belongs here and only here: a tooltip has room for one and a wedge
+        // does not.
         title:view?.title||label,
         mode:railPadSlotMode(slot,target,pad.orientation),
         disabled:!view||!!view.disabled,
