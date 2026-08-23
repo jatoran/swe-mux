@@ -103,14 +103,52 @@ test('a row with room for everything keeps its permanent drawer route', async ({
   expect(scrolls).toBeLessThanOrEqual(1)
 })
 
-test('right glow wedges align across rows even when the bottom row has status text', async ({ page }) => {
-  await page.goto('/rail-overflow-harness.html?rows=2')
+/** Each row's right wedge paired with the strip it is supposed to be marking the end of. */
+async function wedgesAgainstStrips(page: Page) {
   await expect(page.locator('.rail-row')).toHaveCount(2)
   await expect(page.locator('.terminal-action-rows .overflow-rail-right')).toHaveCount(2)
-  const rightEdges = await page.locator('.terminal-action-rows .overflow-rail-right').evaluateAll(edges =>
-    edges.map(edge => Math.round(edge.getBoundingClientRect().right)),
-  )
-  expect(new Set(rightEdges).size).toBe(1)
+  return page.locator('.terminal-action-rows > .rail-row').evaluateAll(rows => rows.map(row => ({
+    wedge: Math.round(row.querySelector('.overflow-rail-right')!.getBoundingClientRect().right),
+    strip: Math.round(row.querySelector('.terminal-action-scroll')!.getBoundingClientRect().right),
+  })))
+}
+
+test('a right wedge marks its own strip, not a column shared with the row above', async ({ page }) => {
+  // The wedge says "content continues past here", so "here" has to be where this row's
+  // content is actually cut. Positioned from the *row* edge instead, it had to name the
+  // trailing cluster's width — and a row carrying status text has a wider one, so the wedge
+  // was drawn past its strip, over furniture that answers to no tap. That is the bug: not a
+  // background painted over a chip, but an indicator standing off the end of its own rail.
+  await page.goto('/rail-overflow-harness.html?rows=2')
+  await expect(page.locator('.rail-row-trailing > span')).toHaveText(['Copied'])
+  const rows = await wedgesAgainstStrips(page)
+  for (const row of rows) expect(row.wedge).toBe(row.strip - 1)
+  // And the two rows genuinely disagree here, so this is not the aligned case restated:
+  // the status row's strip ends earlier, and its wedge goes with it.
+  expect(rows[1].wedge).toBeLessThan(rows[0].wedge)
+})
+
+test('rows whose trailing furniture matches keep their wedges in one column', async ({ page }) => {
+  // The alignment the old row-relative rule was reaching for, now falling out of the strips
+  // themselves — and reaching further than that rule did, since it holds for the empty
+  // status string production passes on the readout row nearly all the time.
+  await page.goto('/rail-overflow-harness.html?rows=2&status=')
+  await expect(page.locator('.rail-row-trailing > span')).toHaveCount(0)
+  const rows = await wedgesAgainstStrips(page)
+  for (const row of rows) expect(row.wedge).toBe(row.strip - 1)
+  expect(rows[1].wedge).toBe(rows[0].wedge)
+})
+
+test('an empty status readout gives its width back to the chips', async ({ page }) => {
+  // The caller marks the readout row by passing a string, and that string is empty unless
+  // there is something to say. Rendered anyway it was a silent tax on the busiest row: its
+  // own padding plus the cluster's gap, taken out of the scrolling strip.
+  await expect(page.locator('.rail-row-trailing > span')).toHaveCount(0)
+  const gap = await page.locator('.rail-row').evaluate(row => {
+    const strip = row.querySelector('.terminal-action-scroll')!.getBoundingClientRect()
+    return Math.round(row.querySelector('.rail-more')!.getBoundingClientRect().left - strip.right)
+  })
+  expect(gap).toBe(0)
 })
 
 test('the drawer count is the stable full-row count at every width', async ({ page }) => {

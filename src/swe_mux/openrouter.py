@@ -48,7 +48,15 @@ RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
 RETRY_ATTEMPTS = 5
 RETRY_BASE_SECONDS = 0.5
 MAX_RETRY_SLEEP_SECONDS = 8.0
-SAFE_ERROR_DETAIL_STATUSES = RETRY_STATUSES | {404, 412, 413, 422}
+# 400 is here for the same reason 422 is: it is the provider rejecting the request
+# we built, and the body is the only place that says which part. Without it every
+# malformed schema, unsupported parameter, and over-long prompt persists as the
+# identical string "request failed with HTTP 400", which is not a diagnosis - a
+# `strict` json_schema missing one key from `required` cost the adaptive titler
+# every call it ever made, and reading the row could not tell anyone that. A 400 is
+# a request error rather than an auth error, and key-shaped text is scrubbed from
+# the detail regardless (`_provider_error`).
+SAFE_ERROR_DETAIL_STATUSES = RETRY_STATUSES | {400, 404, 412, 413, 422}
 # A provider that understood the request and rejected its streaming parameters
 # can still answer unstreamed, so these statuses fall back rather than fail.
 STREAM_UNSUPPORTED_STATUSES = {400, 422}

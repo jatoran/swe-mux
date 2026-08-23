@@ -223,6 +223,8 @@ and hysteresis) and drives **adaptive titling** (`continuous_title`) and **phase
 A fault in either is contained by the scan service and never breaks scanning.
 Adaptive titling's re-title count is surfaced in the snapshot's `adaptive_title` field, so a
 stable-subject run's zero re-titles is a measured number.
+A zero is not a health reading, though: a titler whose every call is rejected measures zero too, and
+bills nothing either, so the observer-call rows are what separate the two.
 Design detail for both lives in `automation.md`.
 
 Three consumers are pull-only reads over stored records:

@@ -97,6 +97,7 @@ The daemon publishes that multiplier as `touch_scroll_rows_per_report` through t
 Nothing on this side rate limits or discards travel: shedding a fast flick's excess belongs to the wheel pacer above, which bounds it against the CLI's measured repaint rate rather than a fixed interval, and a second limiter here could only drop travel a drag asked for.
 That is not hypothetical - a 120 ms minimum report interval, tried once to absorb pacer delay, capped every drag at three rows per 120 ms and read as a viewport ignoring the finger.
 Travel is first scaled by the user's `mobile_scroll_sensitivity`, and each completed application gesture records aggregate input pixels and report count in `mobile_application_scroll` without terminal content.
+Forwarded scroll is what the pane can count, not everything that moves the application's viewport: a submission moves it too, which is why a harness declares `app_tail_reset` and the jump-to-latest estimate is dropped on one (`features/ui.md`, `features/backends.md`).
 
 ### Geometry
 

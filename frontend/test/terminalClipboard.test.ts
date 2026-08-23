@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, claimTerminalTextPaste, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing } from '../src/terminalClipboard.ts'
 
 test('ordinary paste events prefer an image file when one is present', () => {
@@ -153,3 +156,39 @@ test('an empty native paste remains available to non-text handlers', () => {
   assert.equal(claimTerminalTextPaste(event as unknown as ClipboardEvent, text => calls.push(text)), false)
   assert.deepEqual(calls, [])
 })
+
+test('a copy or paste confirmation is drawn over the terminal, never inside the rail', () => {
+  const root = dirname(fileURLToPath(import.meta.url))
+  const pane = readFileSync(join(root, '..', 'src', 'TerminalPane.tsx'), 'utf8')
+  const styles = readFileSync(join(root, '..', 'src', 'style.css'), 'utf8')
+
+  // The rail row keeps the selection readout, which is a state, and no longer carries the
+  // momentary one, which narrowed the scrolling strip for as long as it was up.
+  assert.match(pane, /\{clipboardStatus&&<div class="terminal-clip-toast" role="status">\{clipboardStatus\}<\/div>\}/)
+  const railStatus = /status=\{index===renderedRailRows\.length-1\?([^}]*)\}/.exec(pane)?.[1] ?? ''
+  assert.ok(railStatus, 'the rail row no longer takes a status prop')
+  assert.doesNotMatch(railStatus, /clipboardStatus/)
+  assert.match(railStatus, /selectionText/)
+
+  const rule = declarations(styles, /\.terminal-clip-toast\{([^}]*)\}/)
+  // Sharing the terminal's own grid cell is what keeps it from displacing anything: it
+  // stacks over the pane's bottom-right corner, on the rail's top edge.
+  assert.match(rule, /grid-row:1/)
+  assert.match(rule, /grid-column:1/)
+  assert.match(rule, /align-self:end/)
+  assert.match(rule, /justify-self:end/)
+  assert.match(rule, /margin:0 9px 0 0/)
+  // It covers the jump-to-latest and peek chips rather than moving them, so it has to draw
+  // above both and must never take a tap meant for one.
+  assert.match(rule, /pointer-events:none/)
+  const chip = declarations(styles, /\.terminal-jump-latest\{([^}]*)\}/)
+  const zIndex = (declaration: string) => Number(/z-index:(\d+)/.exec(declaration)?.[1] ?? NaN)
+  assert.ok(zIndex(rule) > zIndex(chip), 'the confirmation must draw over the chips it overlaps')
+})
+
+/** One CSS rule's declarations, or a failure naming the selector that went missing. */
+function declarations(styles: string, pattern: RegExp): string {
+  const rule = pattern.exec(styles)
+  if (!rule) throw new Error(`style.css no longer has a rule matching ${pattern}`)
+  return rule[1]
+}

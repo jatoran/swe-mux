@@ -2267,12 +2267,20 @@ Each is independently toggleable through the same per-Project/per-run enablement
 - [x] Adaptive titling is off by default and independently toggleable; with it off (or the scan timeline off) titling is exactly the current one-shot behavior.
 - [x] Each near-term consumer is independently toggleable, returns empty rather than a low-confidence guess, attributes every result to its `agent_run_id`, and never merges two runs. Adaptive titling and phase-transition signals share one pivot definition.
 
-**Live-verification note (open):** the adaptive-titler synthesis call and the phase-transition
-signals exercise the real OpenRouter scan producer, which an isolated test daemon cannot reach; the
-in-tree suite proves the pivot gate, the derivations, the endpoints (gating + attribution), the
-summarizer retirement, and the config-load tolerance deterministically. Semantic re-title behavior
-is to be confirmed live on the frozen app after landing, matching the scan-timeline verification
-stance.
+**Live-verification note (closed 2026-08-23, and it found a defect):** the adaptive-titler synthesis
+call and the phase-transition signals exercise the real OpenRouter scan producer, which an isolated
+test daemon cannot reach; the in-tree suite proves the pivot gate, the derivations, the endpoints
+(gating + attribution), the summarizer retirement, and the config-load tolerance deterministically.
+The deferred live check was the only thing that could have caught what shipped: `TITLE_SCHEMA`
+declared `confidence` without requiring it, which strict-mode structured outputs reject outright, so
+every synthesis call the titler ever made returned HTTP 400 and it re-titled nothing. Measured on the
+primary host before the fix: 111 scan records across 7 runs, 14 pivots correctly detected and
+escalated, 14 rejected calls, 0 re-titles, and no spend row at all - a rejected call bills nothing,
+so the feature was invisible in the spend table rather than visibly broken. The pivot gate itself
+behaved exactly as specified throughout. Fixed with the schema, a source-scanning strict-schema guard
+(`tests/test_llm_schemas.py`), failure-path diagnostics parity for the observer row, and retention of
+the provider's explanation on HTTP 400. Semantic re-title *quality* remains to be observed live now
+that the call succeeds.
 
 ## Phase 7.8 — Git provenance re-attribution: committer and contributors, not shared-head ambiguity
 

@@ -14,7 +14,9 @@ interface RailStripProps {
   /** The row's chips, in configured order. The popover receives a cloned complete list. */
   chips: VNode[]
   /** The status readout, on whichever row carries it. Shrinks and ellipsises rather than
-   *  taking room from the chips, so its text changing never moves one. */
+   *  taking room from the chips, so its text changing never moves one. Empty is not the
+   *  same as absent to the caller — it marks the row that *would* carry a readout — but it
+   *  is the same to the row, so it renders nothing (see below). */
   status?: string
   /** Opens the full Configure Actions modal. */
   onConfigure: () => void
@@ -44,7 +46,12 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
       {chips}
     </OverflowRail>
     <div class="rail-row-trailing" ref={trailingRef}>
-      {status !== undefined && <span aria-live="polite">{status}</span>}
+      {/* Truthiness, not `!== undefined`. The caller marks the status row by passing a
+          string, and that string is empty most of the time — an empty readout still
+          carried its own `padding-right` plus the cluster's `gap`, taking ~23px of scroll
+          width from the row's chips for nothing. Unmounting it costs no announcement that
+          `display:none` would not have cost either: both leave the accessibility tree. */}
+      {status ? <span aria-live="polite">{status}</span> : null}
       <button
         type="button"
         class={`rail-more${open ? ' rail-more-open' : ''}`}

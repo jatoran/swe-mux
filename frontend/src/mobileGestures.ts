@@ -7,7 +7,8 @@
 // One region is the exception, and it is a region rather than a whole-screen channel:
 // the command rail has no vertical scroll of its own to protect, so the single-finger
 // upward swipe that would be reserved anywhere else is a real slot *there*
-// (`classifyRailGesture`). See `RAIL_GESTURE_SELECTOR`.
+// (`classifyRailGesture`). See `RAIL_GESTURE_SELECTOR`. An overlay opened *from* that
+// rail does have one, and is excluded by name — `GESTURE_SHADOWING_SELECTORS`.
 //
 // This module is pure so the classification thresholds can be unit-tested without a DOM.
 
@@ -261,6 +262,45 @@ const REGION_GESTURES: Partial<Record<GestureRegion, Partial<Record<GestureDirec
 }
 
 /**
+ * Surfaces painted *over* a region that shadow its gesture entirely.
+ *
+ * A region answers to a swipe because the channel it claims is dead there — the command
+ * rail claims single-finger vertical because a strip that only pans sideways has no
+ * vertical scroll of its own to protect. An overlay opened from that rail breaks the
+ * premise while still living inside it: `RailStrip` renders the overflow popover as a DOM
+ * child of `.rail-row`, and its `.rail-overflow-grid` is a real vertical scroller, so
+ * scrolling the folded row to reach a chip *was* an upward swipe on the rail and opened
+ * the app menu.
+ *
+ * The veto is on surface identity, not on scroll state. A short popover that does not
+ * overflow is no more a place to open the app menu than a long one, and `overflow-y` is
+ * the wrong question to ask: what settles it is that the panel is its own surface, drawn
+ * on top, so a gesture inside it can only mean something about it. That is the same rule
+ * `resolveGestureCommand` applies to the dismiss stack, one level down.
+ *
+ * Checked per path element, nearest-first, so a shadowing surface *inside* a region wins
+ * over the region and a region nested inside chrome is unaffected.
+ *
+ * Drop-ups (`.rail-dropup`) are deliberately absent: they mount under `.terminal-surface`,
+ * outside `.terminal-action-rail`, so no region ever matches them in the first place.
+ */
+export const GESTURE_SHADOWING_SELECTORS: readonly string[] = [
+  '.rail-overflow-popover',
+]
+
+/**
+ * Whether a touch began on a surface that shadows everything under it.
+ *
+ * The recognizer drops the sequence outright on this, rather than merely declining to
+ * call it a region gesture. Declining would hand the touch to the *workspace* slots,
+ * where a horizontal swipe is `mobileTab.next` — so scrolling the folded rail sideways
+ * would change tabs behind the panel, trading one wrong gesture for a worse one.
+ */
+export function pathShadowsGesture(path: readonly { matches: (selector: string) => boolean }[]): boolean {
+  return path.some(element => GESTURE_SHADOWING_SELECTORS.some(selector => element.matches(selector)))
+}
+
+/**
  * The region a touch began in, or null.
  *
  * Composed path for the same reason `pathOwnsHorizontalScroll` uses one: a window
@@ -269,6 +309,9 @@ const REGION_GESTURES: Partial<Record<GestureRegion, Partial<Record<GestureDirec
  */
 export function regionForPath(path: readonly { matches: (selector: string) => boolean }[]): GestureRegion | null {
   for (const element of path) {
+    for (const selector of GESTURE_SHADOWING_SELECTORS) {
+      if (element.matches(selector)) return null
+    }
     for (const [region, selector] of GESTURE_REGION_SELECTORS) {
       if (element.matches(selector)) return region
     }

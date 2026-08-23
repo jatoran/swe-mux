@@ -18,7 +18,7 @@
  *
  * That last rule is the one that matters here and the reason this is not `shlex`.
  * swe-mux is Windows-first and its arguments are full of paths; a POSIX tokenizer
- * would silently eat every separator in `C:\Users\Jatora\Projects`, and the damage
+ * would silently eat every separator in `C:\Users\you\Projects`, and the damage
  * would land in an argument the user never inspected again.
  */
 

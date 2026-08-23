@@ -55,7 +55,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "width_envelope": true,
         "min_desktop_columns": null,
         "suppresses_late_color_response": false,
-        "touch_scroll_rows_per_report": 3
+        "touch_scroll_rows_per_report": 3,
+        "app_tail_reset": "submit"
       }
     },
     {
@@ -100,7 +101,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "width_envelope": false,
         "min_desktop_columns": 80,
         "suppresses_late_color_response": true,
-        "touch_scroll_rows_per_report": 1
+        "touch_scroll_rows_per_report": 1,
+        "app_tail_reset": "none"
       }
     },
     {
@@ -143,7 +145,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "width_envelope": false,
         "min_desktop_columns": null,
         "suppresses_late_color_response": false,
-        "touch_scroll_rows_per_report": 1
+        "touch_scroll_rows_per_report": 1,
+        "app_tail_reset": "none"
       }
     },
     {
@@ -187,7 +190,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "width_envelope": false,
         "min_desktop_columns": null,
         "suppresses_late_color_response": false,
-        "touch_scroll_rows_per_report": 1
+        "touch_scroll_rows_per_report": 1,
+        "app_tail_reset": "none"
       }
     },
     {
@@ -228,7 +232,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "width_envelope": false,
         "min_desktop_columns": null,
         "suppresses_late_color_response": false,
-        "touch_scroll_rows_per_report": 1
+        "touch_scroll_rows_per_report": 1,
+        "app_tail_reset": "none"
       }
     }
   ]
