@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { requestSetting } from './settingTargets'
-import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, HOLD_ENTER_PHRASES, HOLD_RELEASE_PHRASES, isPlaybackControl, matchesBarePhrase, PersistentVoiceCapture } from './conversation'
+import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, HOLD_ENTER_PHRASES, HOLD_RELEASE_PHRASES, isPlaybackControl, matchesBarePhrase, PersistentVoiceCapture, playbackTranscriptVerdict } from './conversation'
 import type { CaptureDetector, ParsedMuxVoice } from './conversation'
 import { appendUtterance, clearDraft, editDraft, EMPTY_DRAFT, undoUtterance } from './conversationDraft'
 import type { Draft } from './conversationDraft'
@@ -845,22 +845,34 @@ export function useConversation(
       // copy up would show the same sentence twice, once badly.
       settleProvisional(marks.utteranceId)
       recordHistory('you',decoded.text)
-      if(marks.playbackAtStart&&!isPlaybackControl(decoded.parsed.command)){
-        const spoken=marks.playbackOriginAtStart==='system'
-          ?extractWakeIntent(decoded.text,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
-          :null
-        if(spoken!==null&&safeDuringSystemPlayback(spoken)){
-          bargeInPlayback()
-          await handleTranscript({command:null,text:''},decoded.text)
-        }else{
-          setPhase('listening')
-          respond(marks.playbackOriginAtStart==='system'
-            ?spoken===null
-              ?`Playback command ignored. Say “${wakeRef.current}” before a read-only lookup or navigation command.`
-              :'Playback command ignored. During application speech, only read-only lookup and navigation commands are allowed.'
-            :`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`)
-        }
-      }else await handleTranscript(decoded.parsed,decoded.text)
+      // The echo policy applies to *unconfirmed* overlap only, and the rule now
+      // lives in `playbackTranscriptVerdict` so it can be asserted rather than
+      // read: refusing a *confirmed* barge-in is how a full spoken sentence came
+      // to be transcribed and then answered with "Playback command ignored"
+      // (measured 2026-08-23: 2,688 ms of audio, 35 characters decoded, no turn).
+      const spoken=marks.playbackOriginAtStart==='system'
+        ?extractWakeIntent(decoded.text,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
+        :null
+      const verdict=playbackTranscriptVerdict({
+        playbackAtStart:marks.playbackAtStart,
+        bargeInConfirmed:marks.bargeInConfirmed,
+        playbackOriginAtStart:marks.playbackOriginAtStart,
+        isPlaybackControl:isPlaybackControl(decoded.parsed.command),
+        wakeIntent:spoken,
+        wakeIntentIsSafeQuery:spoken!==null&&safeDuringSystemPlayback(spoken),
+      })
+      if(verdict.action==='deliver')await handleTranscript(decoded.parsed,decoded.text)
+      else if(verdict.action==='deliver-query'){
+        bargeInPlayback()
+        await handleTranscript({command:null,text:''},decoded.text)
+      }else{
+        setPhase('listening')
+        respond(verdict.reason==='agent-echo'
+          ?`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`
+          :verdict.reason==='system-unaddressed'
+            ?`Playback command ignored. Say “${wakeRef.current}” before a read-only lookup or navigation command.`
+            :'Playback command ignored. During application speech, only read-only lookup and navigation commands are allowed.')
+      }
     }
     finally{
       reportLatency(buildLatencySample({

@@ -1316,7 +1316,10 @@ async def test_dry_run_is_repeatable_and_writes_no_automation_records(tmp_path: 
         "input_tokens": 0,
         "cached_tokens": 0,
         "cache_write_tokens": 0,
-        "cache_discount_usd": 0.0,
+        # `None`, not 0.0: no call reported a discount, and a zero would claim a
+        # measurement that nobody made.
+        "cache_discount_usd": None,
+        "cache_discount_calls": 0,
         "unpriced_calls": 0,
     }
     store.close()
@@ -2107,7 +2110,11 @@ async def test_an_old_ledger_gains_the_cache_columns_without_losing_its_rows(
         today = await migrated.spend(rule_id="builtin:assistant")
         assert today["input_tokens"] == 100
         assert today["cache_write_tokens"] == 0
-        assert today["cache_discount_usd"] == 0.0
+        # Unmeasured rather than zero, and the two must stay distinguishable:
+        # no provider reports `cache_discount` on a completion, so a 0.0 here
+        # would be a saving nobody computed.
+        assert today["cache_discount_usd"] is None
+        assert today["cache_discount_calls"] == 0
     finally:
         migrated.close()
 
@@ -2377,5 +2384,83 @@ async def test_spend_breakdown_window_excludes_older_days_from_today(tmp_path: P
         narrow = await store.spend_breakdown(days=1)
         assert narrow["rules"] == []
         assert narrow["totals"]["cost_usd"] == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_not_null_discount_column_is_relaxed_without_losing_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """The column shipped `NOT NULL DEFAULT 0` and had to stop being that.
+
+    Every value it held was an unmeasured zero - no provider reports
+    `cache_discount` on a completion - and SQLite cannot relax a constraint in
+    place, so the migration drops and re-adds it. The rows beside it must
+    survive, and the re-add must not repeat on the next start.
+    """
+    path = tmp_path / "mux.db"
+    store = AutomationStore(path)
+    try:
+        await store.add_spend(
+            rule_id="builtin:assistant", model="openai/gpt-5.6-terra",
+            input_tokens=8100, output_tokens=19, cached_tokens=0,
+            cache_write_tokens=8100, cost_usd=0.0205, call_id="call-1",
+        )
+    finally:
+        store.close()
+    with sqlite3.connect(path) as db:
+        db.execute("ALTER TABLE automation_budget_ledger DROP COLUMN cache_discount_usd")
+        db.execute(
+            "ALTER TABLE automation_budget_ledger "
+            "ADD COLUMN cache_discount_usd REAL NOT NULL DEFAULT 0"
+        )
+        db.commit()
+
+    migrated = AutomationStore(path)
+    try:
+        today = await migrated.spend(rule_id="builtin:assistant")
+        assert today["input_tokens"] == 8100, "the ledger row survived the column swap"
+        assert today["cache_discount_usd"] is None
+        await migrated.add_spend(
+            rule_id="builtin:assistant", model="openai/gpt-5.6-terra",
+            input_tokens=10, output_tokens=1, cost_usd=0.001, call_id="call-2",
+        )
+        assert (await migrated.spend(rule_id="builtin:assistant"))["input_tokens"] == 8110
+    finally:
+        migrated.close()
+
+    # Idempotent: a second start finds a nullable column and leaves it alone.
+    again = AutomationStore(path)
+    try:
+        assert (await again.spend(rule_id="builtin:assistant"))["input_tokens"] == 8110
+    finally:
+        again.close()
+
+
+@pytest.mark.asyncio
+async def test_the_breakdown_carries_cache_tokens_per_model_for_pricing(
+    tmp_path: Path,
+) -> None:
+    # Two models in one rule have different read and write rates, so a rule-level
+    # token total could only be priced by guessing which one earned it.
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="builtin:assistant", model="openai/gpt-5.6-terra",
+            input_tokens=6000, output_tokens=20, cached_tokens=4975,
+            cache_write_tokens=1025, cost_usd=0.004, call_id="call-1",
+        )
+        await store.add_spend(
+            rule_id="builtin:assistant", model="openai/gpt-5.6-luna",
+            input_tokens=6000, output_tokens=20, cached_tokens=4975,
+            cache_write_tokens=1025, cost_usd=0.0004, call_id="call-2",
+        )
+        breakdown = await store.spend_breakdown(days=7)
+        usage = {row["model"]: row for row in breakdown["rules"][0]["cache_usage_by_model"]}
+        assert set(usage) == {"openai/gpt-5.6-terra", "openai/gpt-5.6-luna"}
+        assert usage["openai/gpt-5.6-terra"]["cached_tokens"] == 4975
+        assert usage["openai/gpt-5.6-luna"]["cache_write_tokens"] == 1025
+        assert usage["openai/gpt-5.6-luna"]["today_cached_tokens"] == 4975
     finally:
         store.close()

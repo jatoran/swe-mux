@@ -94,6 +94,50 @@ export function isPlaybackControl(command:MuxVoiceCommand|null):boolean{
   return command==='mute'||command==='stop'||command==='interrupt'
 }
 
+/** What the echo policy does with one transcript captured over app audio. */
+export type PlaybackTranscriptVerdict=
+  |{action:'deliver'}
+  /** A wake-worded read-only query, allowed to interrupt trusted app speech. */
+  |{action:'deliver-query'}
+  |{action:'refuse';reason:'system-unaddressed'|'system-unsafe'|'agent-echo'}
+
+/**
+ * Whether a transcript captured while the app was speaking reaches the assistant.
+ *
+ * Pure and separate from the component because the rule is the whole feature and
+ * it was wrong in a way nothing could assert: a confirmed barge-in - the
+ * operator interrupting and speaking a full sentence - was transcribed and then
+ * answered with "Playback command ignored", because the policy read only
+ * "was audio playing when this started".
+ *
+ * The distinction it now makes is between suspicion and measurement.
+ * `playbackAtStart` is the suspicion, and it is a good one: the microphone does
+ * hear the speaker, and feeding the assistant its own words is the failure this
+ * guard exists to prevent. `bargeInConfirmed` is the measurement - capture muted
+ * playback and then required clean speech frames against the silence - and where
+ * it exists there is nothing left to suspect.
+ *
+ * The remaining refusals are unchanged and still narrow: unconfirmed overlap
+ * during agent speech is echo, and unconfirmed overlap during the app's own
+ * speech may interrupt only as a wake-worded read-only query.
+ */
+export function playbackTranscriptVerdict(input:{
+  playbackAtStart?:boolean
+  bargeInConfirmed?:boolean
+  playbackOriginAtStart?:'agent'|'system'|null
+  isPlaybackControl:boolean
+  /** The text after the wake word, or `null` when it was not addressed. */
+  wakeIntent:string|null
+  /** Whether that intent is one of the read-only kinds trusted speech may yield to. */
+  wakeIntentIsSafeQuery:boolean
+}):PlaybackTranscriptVerdict{
+  if(!input.playbackAtStart||input.bargeInConfirmed||input.isPlaybackControl)return{action:'deliver'}
+  if(input.playbackOriginAtStart!=='system')return{action:'refuse',reason:'agent-echo'}
+  if(input.wakeIntent===null)return{action:'refuse',reason:'system-unaddressed'}
+  if(!input.wakeIntentIsSafeQuery)return{action:'refuse',reason:'system-unsafe'}
+  return{action:'deliver-query'}
+}
+
 export type ConversationCapability={available:boolean;secureContext:boolean;mediaDevices:boolean;audioContext:boolean;reason:string}
 
 export function conversationCapability():ConversationCapability{
@@ -123,7 +167,21 @@ export type CaptureDetector='silero'|'energy'
 
 export const PLAYBACK_PROBE_SETTLE_FRAMES=3
 export const PLAYBACK_PROBE_CONFIRM_FRAMES=3
-export const PLAYBACK_PROBE_REJECT_FRAMES=3
+/**
+ * Trailing silence, in 32 ms frames, that abandons a probe and restores playback.
+ *
+ * Was 3 frames - 96 ms - which is shorter than the gap between two ordinary
+ * words. Measured on 2026-08-23: five rejections against three confirmations in
+ * one session, including four in 3.6 seconds at peak RMS up to 0.29, which is a
+ * person talking loudly and being told four times that they were not. Each
+ * rejection un-mutes the speaker and discards the frames collected so far, so
+ * the next syllable competes with full-volume playback again.
+ *
+ * Eight frames is 256 ms: longer than a stop consonant or an inter-word gap,
+ * still shorter than the 352 ms tail that ends an utterance outright, so a probe
+ * cannot outlive the speech it is probing.
+ */
+export const PLAYBACK_PROBE_REJECT_FRAMES=8
 
 export type PlaybackProbeAction='none'|'duck'|'restore'|'confirm'
 export type PlaybackProbeStep={action:PlaybackProbeAction;collect:boolean}
@@ -131,9 +189,12 @@ export type PlaybackProbeStep={action:PlaybackProbeAction;collect:boolean}
 /**
  * Confirm speech against a quiet microphone instead of demanding that it beat the speaker.
  *
- * The first credible frame ducks app audio. Three frames are then ignored while
- * speaker echo drains, after which three consecutive speech frames confirm a
- * barge-in. Echo that disappears under the duck restores playback.
+ * The first credible frame ducks app audio. Three frames are then held back from
+ * the decision while speaker echo drains - kept as audio, because they are the
+ * operator's first word - after which three consecutive speech frames confirm a
+ * barge-in. Echo that disappears under the duck restores playback, but only
+ * after `PLAYBACK_PROBE_REJECT_FRAMES` of quiet, which is deliberately longer
+ * than the gap between two words.
  */
 export class PlaybackSpeechProbe{
   private active=false
@@ -153,7 +214,13 @@ export class PlaybackSpeechProbe{
       return{action:'duck',collect:false}
     }
     if(!playing){this.clear();return{action:'restore',collect:false}}
-    if(this.settleFrames>0){this.settleFrames--;return{action:'none',collect:false}}
+    // Collected, not discarded. These frames are the operator's first word: the
+    // duck is already applied, so what they carry is draining echo over live
+    // speech rather than playback at volume, and throwing them away clipped
+    // ~128 ms off the head of every confirmed barge-in. The one frame still
+    // dropped is the ducking frame itself, which was captured before the mute
+    // took effect and is the only one that certainly holds full-volume audio.
+    if(this.settleFrames>0){this.settleFrames--;return{action:'none',collect:true}}
     if(candidate){
       this.confirmFrames++
       this.rejectFrames=0
@@ -707,6 +774,7 @@ export class PersistentVoiceCapture{
         speculative,
         playbackAtStart:this.utterancePlayback,
         playbackOriginAtStart:this.utterancePlaybackOrigin,
+        bargeInConfirmed:this.bargeInConfirmed,
       })
     }catch(cause){this.handlers.onError(cause instanceof Error?cause.message:String(cause))}
   }

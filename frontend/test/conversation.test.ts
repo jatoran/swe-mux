@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import test from 'node:test'
 import {
   BARGE_IN_CONFIRM_FRAMES,
   CAPTURE_STALL_MS,
@@ -15,7 +16,10 @@ import {
   nextBargeInFrameCount,
   parseMuxVoice,
   playbackProbeCandidate,
+  playbackTranscriptVerdict,
 } from '../src/conversation.ts'
+import { VAD_FRAME_MS } from '../src/audioFrames.ts'
+import { SILERO_GATE } from '../src/speechGate.ts'
 
 // Bare hold phrases match only when the utterance IS the phrase: a sentence
 // merely containing "go ahead" must never be eaten by the release check.
@@ -87,8 +91,11 @@ assert.equal(playbackProbeCandidate(.9,.007,.004),false)
 const confirmedProbe=new PlaybackSpeechProbe()
 assert.deepEqual(confirmedProbe.step(false,true),{action:'none',collect:false})
 assert.deepEqual(confirmedProbe.step(true,true),{action:'duck',collect:false})
+// The settle frames are held back from the *decision* while echo drains, but
+// kept as audio: they are the operator's first word, and discarding them clipped
+// ~128 ms off the head of every confirmed barge-in.
 for(let index=0;index<PLAYBACK_PROBE_SETTLE_FRAMES;index++){
-  assert.deepEqual(confirmedProbe.step(true,true),{action:'none',collect:false})
+  assert.deepEqual(confirmedProbe.step(true,true),{action:'none',collect:true})
 }
 for(let index=1;index<PLAYBACK_PROBE_CONFIRM_FRAMES;index++){
   assert.deepEqual(confirmedProbe.step(true,true),{action:'none',collect:true})
@@ -104,6 +111,29 @@ for(let index=1;index<PLAYBACK_PROBE_REJECT_FRAMES;index++){
 }
 assert.deepEqual(rejectedProbe.step(false,true),{action:'restore',collect:false})
 assert.equal(rejectedProbe.probing,false)
+
+// Registered as a subtest rather than asserted at module scope: a top-level
+// throw in this file aborts the remaining imports, and the runner then reports
+// the shortened run as a pass. Measured while writing these - a deliberate
+// failure took the suite from 1,806 tests to 951 and still exited 0.
+test('a probe outlives the gap between two words', () => {
+  assert.ok(PLAYBACK_PROBE_REJECT_FRAMES*VAD_FRAME_MS>=200,
+    'a reject window shorter than an inter-word gap rejects real speech')
+  assert.ok(PLAYBACK_PROBE_REJECT_FRAMES*VAD_FRAME_MS<SILERO_GATE.endpointSilenceMs,
+    'a probe must not outlive the utterance it is probing')
+  // At three frames this rejected real speech: five rejections against three
+  // confirmations in one measured session, four inside 3.6 seconds while the
+  // operator was audibly talking (peak RMS 0.29).
+  const patient=new PlaybackSpeechProbe()
+  patient.step(true,true)
+  for(let index=0;index<PLAYBACK_PROBE_SETTLE_FRAMES;index++)patient.step(true,true)
+  // Four quiet frames - 128 ms, a stop consonant - then speech resumes.
+  for(let index=0;index<4;index++){
+    assert.deepEqual(patient.step(false,true),{action:'none',collect:false})
+  }
+  for(let index=1;index<PLAYBACK_PROBE_CONFIRM_FRAMES;index++)patient.step(true,true)
+  assert.deepEqual(patient.step(true,true),{action:'confirm',collect:true})
+})
 
 const endedProbe=new PlaybackSpeechProbe()
 assert.deepEqual(endedProbe.step(true,true),{action:'duck',collect:false})
@@ -140,3 +170,31 @@ assert.equal(captureWatchdog.check().action,'stall','a fresh outage is reported 
 assert.equal(captureWatchdog.recoveryAttempts,1,'and restarts the attempt counter')
 
 console.log('conversation tests passed')
+
+test('the echo policy refuses suspicion, not measurement', () => {
+  // A confirmed barge-in is a measurement: capture muted playback and then
+  // required clean speech frames against the silence. Refusing it transcribed a
+  // full spoken sentence and answered "Playback command ignored".
+  const verdict=(over:Record<string,unknown>)=>playbackTranscriptVerdict({
+    playbackAtStart:true,bargeInConfirmed:false,playbackOriginAtStart:'system',
+    isPlaybackControl:false,wakeIntent:null,wakeIntentIsSafeQuery:false,...over,
+  } as Parameters<typeof playbackTranscriptVerdict>[0])
+
+  assert.deepEqual(verdict({bargeInConfirmed:true}),{action:'deliver'},
+    'a confirmed barge-in is ordinary speech and reaches the assistant')
+  assert.deepEqual(verdict({bargeInConfirmed:true,playbackOriginAtStart:'agent'}),{action:'deliver'},
+    'the proof holds whichever audio was interrupted')
+  assert.deepEqual(verdict({playbackAtStart:false}),{action:'deliver'},'no overlap, no policy')
+  assert.deepEqual(verdict({isPlaybackControl:true}),{action:'deliver'},
+    '"stop" and "mute" always get through, confirmed or not')
+
+  // Unconfirmed overlap keeps every refusal it had: this is the guard that stops
+  // the assistant being fed its own words.
+  assert.deepEqual(verdict({}),{action:'refuse',reason:'system-unaddressed'})
+  assert.deepEqual(verdict({wakeIntent:'delete everything'}),
+    {action:'refuse',reason:'system-unsafe'},
+    'the wake word alone does not license a mutation during app speech')
+  assert.deepEqual(verdict({playbackOriginAtStart:'agent'}),{action:'refuse',reason:'agent-echo'})
+  assert.deepEqual(verdict({wakeIntent:'fleet status',wakeIntentIsSafeQuery:true}),
+    {action:'deliver-query'})
+})

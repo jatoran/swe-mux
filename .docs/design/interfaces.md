@@ -2084,8 +2084,10 @@ row has `rule_id`, `calls`, `tokens`, `input_tokens`, `cached_tokens`, `cache_wr
 requested models, and `last_at`.
 `cached_tokens` is the prompt-cache hit and is a *subset* of `input_tokens`, never added to it;
 `cache_write_tokens` is the disjoint other subset - tokens written into the cache rather than
-served from it - and `cache_discount_usd` is signed, positive for a saving and negative for a
-write premium that was never read back;
+served from it. Two signed dollar figures sit beside them and mean different things:
+`cache_discount_usd` is what the provider reported and is `null` unless one did, while
+`cache_saving_usd` is derived from the token counts and the model catalog's published prices.
+Both are positive for a saving and negative for a write premium that was never read back;
 `input_tokens` rides along because it is the only honest denominator for a hit rate, `tokens`
 being input plus output and output never cacheable.
 `unpriced_calls` counts the calls whose provider reported no cost at all, which a bring-your-own

@@ -162,10 +162,33 @@ test('cache economics separate a cold prefix from no caching at all', () => {
   assert.match(cacheEconomicsDetail(read), /saved/)
 })
 
+test('a derived price stands in for the discount no provider reports', () => {
+  // `cache_discount` lives in OpenRouter's /generation stats, not in a
+  // completion's usage, so the reported field is absent on every call the
+  // assistant makes. The catalog's published read and write prices are not.
+  const derived = cacheEconomics(null, 1041, 4975, 0.0092)
+  assert.ok(derived)
+  assert.equal(derived.discount, 0.0092)
+  assert.equal(derived.source, 'derived')
+  assert.match(cacheEconomicsDetail(derived), /priced from the model catalog/)
+
+  // A reported figure wins when there is one: it is the provider's own answer.
+  const reported = cacheEconomics(0.02, 1041, 4975, 0.0092)
+  assert.equal(reported?.discount, 0.02)
+  assert.equal(reported?.source, 'reported')
+
+  // Cache activity nobody could price says so rather than showing $0.
+  const unpriced = cacheEconomics(null, 1041, 4975, null)
+  assert.equal(unpriced?.discount, null)
+  assert.equal(unpriced?.source, null)
+  assert.match(cacheEconomicsDetail(unpriced), /no published price/)
+})
+
 test('a provider that reports no cache figures is unmeasured, not zero', () => {
   // Inventing a $0.00 saving would put a confident number where there is no
   // measurement, which is the same mistake as pricing an unpriced call at zero.
   assert.equal(cacheEconomics(undefined, undefined, undefined), null)
   assert.equal(cacheEconomics(0, 0, 0), null)
+  assert.equal(cacheEconomics(null, 0, 0, null), null)
   assert.equal(cacheEconomicsDetail(null), 'this provider reports no cache figures')
 })

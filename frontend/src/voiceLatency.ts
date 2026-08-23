@@ -28,6 +28,17 @@ export type CaptureMarks = {
   playbackAtStart?: boolean
   /** Trusted app speech can accept read-only navigation; agent speech cannot. */
   playbackOriginAtStart?: 'agent' | 'system' | null
+  /**
+   * Capture proved this was a person and not the speaker, by muting playback and
+   * then demanding clean speech frames against the silence.
+   *
+   * It travels with the utterance because the echo policy above is a *guess* made
+   * from "audio was playing", and this is the measurement that settles the same
+   * question. Without it the router refused a barge-in it had already confirmed:
+   * the operator interrupted, spoke a full sentence, watched it transcribe, and
+   * got "Playback command ignored" (2026-08-23).
+   */
+  bargeInConfirmed?: boolean
 }
 
 /** The daemon's half, echoed back on the transcribe response. */

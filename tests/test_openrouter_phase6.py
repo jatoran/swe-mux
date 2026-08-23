@@ -22,6 +22,7 @@ from swe_mux.openrouter import (
     _retry_after,
     apply_session_routing,
     cache_discount_usd,
+    cache_saving_usd,
     cache_stable_message,
     cache_write_prompt_tokens,
     cached_prompt_tokens,
@@ -1156,3 +1157,74 @@ async def test_the_catalog_carries_each_model_s_caching_economics() -> None:
     # does not cache, which the read price is what tells apart.
     assert catalog["deepseek/deepseek-v4-pro"]["cache_write_price"] is None
     assert catalog["deepseek/deepseek-v4-pro"]["cache_read_price"] == pytest.approx(0.000000033)
+
+
+def test_the_cache_saving_is_priced_from_the_catalog_including_the_write_premium() -> None:
+    """Derived because nothing reports it, and signed because a write can cost more.
+
+    `cache_discount` lives in OpenRouter's `/generation` stats and not in a
+    completion's usage payload, so the measured column is `None` on every call
+    the assistant makes. The catalog's published prices are always there.
+    """
+    catalog = {
+        "openai/gpt-5.6-terra": {
+            "prompt_price": 0.000002, "cache_read_price": 0.0000002,
+            "cache_write_price": 0.0000025,
+        },
+        "deepseek/deepseek-v4-pro": {
+            "prompt_price": 0.0000004, "cache_read_price": 0.000000033,
+        },
+    }
+    # 4,975 read at 0.1x saves 4,975 x 1.8e-6; 1,025 written at 1.25x costs
+    # 1,025 x 0.5e-6 on top of ordinary input.
+    saving, priced = cache_saving_usd(
+        [{"model": "openai/gpt-5.6-terra", "cached_tokens": 4975, "cache_write_tokens": 1025}],
+        catalog,
+    )
+    assert priced == 1
+    assert saving == pytest.approx(4975 * 0.0000018 - 1025 * 0.0000005)
+
+    # A cold prefix: everything written, nothing read. The premium is the whole
+    # figure and it is negative, which is the reading that says the breakpoint
+    # sits above content that changes every call.
+    cold, _ = cache_saving_usd(
+        [{"model": "openai/gpt-5.6-terra", "cached_tokens": 0, "cache_write_tokens": 8100}],
+        catalog,
+    )
+    assert cold is not None and cold < 0
+
+    # A provider that publishes no write price charges nothing for one, which is
+    # a real reading rather than a missing one.
+    free_writes, _ = cache_saving_usd(
+        [{"model": "deepseek/deepseek-v4-pro", "cached_tokens": 1000, "cache_write_tokens": 9000}],
+        catalog,
+    )
+    assert free_writes == pytest.approx(1000 * (0.0000004 - 0.000000033))
+
+
+def test_an_unpriceable_model_contributes_nothing_rather_than_zero() -> None:
+    # A total assembled from no prices is not a total, and a `0` would read as
+    # "caching saved nothing" rather than "nobody could price this".
+    catalog: dict[str, dict[str, object]] = {"vendor/known": {
+        "prompt_price": 0.000001, "cache_read_price": 0.0000001,
+    }}
+    absent, priced = cache_saving_usd(
+        [{"model": "vendor/unknown", "cached_tokens": 5000, "cache_write_tokens": 0}], catalog
+    )
+    assert absent is None and priced == 0
+    # A model in the catalog with no cache pricing is equally unpriceable.
+    uncacheable, _ = cache_saving_usd(
+        [{"model": "vendor/plain", "cached_tokens": 5000, "cache_write_tokens": 0}],
+        {"vendor/plain": {"prompt_price": 0.000001}},
+    )
+    assert uncacheable is None
+    # Partial coverage still answers, and says how much of it was priced.
+    mixed, count = cache_saving_usd(
+        [
+            {"model": "vendor/known", "cached_tokens": 1000, "cache_write_tokens": 0},
+            {"model": "vendor/unknown", "cached_tokens": 9000, "cache_write_tokens": 0},
+        ],
+        catalog,
+    )
+    assert count == 1
+    assert mixed == pytest.approx(1000 * 0.0000009)

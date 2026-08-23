@@ -168,7 +168,8 @@ test('at phone width every table row becomes a labelled card', async ({ page }) 
       ? [...document.querySelectorAll('.cost-table tbody tr:first-child td')]
         .map(cell => cell.getAttribute('data-label'))
       : [])
-  expect(labels).toEqual(['automation', 'today', '7 days', 'calls', 'tokens', 'cached', 'model'])
+  expect(labels).toEqual(
+    ['automation', 'today', '7 days', 'calls', 'tokens', 'cached', 'cache $', 'model'])
   await expect(page.locator('.cost-table thead')).toBeHidden()
 })
 

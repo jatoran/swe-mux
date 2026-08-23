@@ -1259,6 +1259,54 @@ def cache_discount_usd(usage: Any) -> float | None:
     return _number(usage.get("cache_discount"))
 
 
+def cache_saving_usd(
+    usage_by_model: list[dict[str, Any]], catalog: dict[str, dict[str, Any]]
+) -> tuple[float | None, int]:
+    """What caching did to a bill, priced from the catalog rather than reported.
+
+    Derived because nothing reports it. OpenRouter carries `cache_discount` in
+    its `/generation` stats and not in a completion's usage payload, so the
+    measured column is `None` on every call the assistant makes - and reading
+    that as `$0.00` would state a saving nobody computed.
+
+    The arithmetic is exact against published prices and needs only what the
+    ledger already stores:
+
+        saving = cached x (prompt - read)  -  written x (write - prompt)
+
+    Both terms are signed and both matter. The first is the discount on tokens
+    served from cache. The second is the **premium** on tokens written into it,
+    which GPT-5.6 and Anthropic bill at 1.25x input - so a prefix written every
+    turn and never read back makes the total negative, which is the reading that
+    says a breakpoint is in the wrong place.
+
+    Returns the saving and how many of the model rows could be priced. A model
+    absent from the catalog contributes nothing rather than a zero, and `None`
+    comes back when none of them could be priced at all, because a total assembled
+    from no prices is not a total.
+    """
+    total = 0.0
+    priced = 0
+    for row in usage_by_model:
+        entry = catalog.get(str(row.get("model") or ""))
+        if not entry:
+            continue
+        prompt_price = _number(entry.get("prompt_price"))
+        read_price = _number(entry.get("cache_read_price"))
+        if prompt_price is None or read_price is None:
+            continue
+        priced += 1
+        # An unpriced write is a free write (DeepSeek, Z.AI, Moonshot, xAI), which
+        # is a real reading rather than a missing one: those providers publish no
+        # write price because they do not charge for one.
+        write_price = _number(entry.get("cache_write_price")) or 0.0
+        total += max(0, _integer(row.get("cached_tokens"))) * (prompt_price - read_price)
+        total -= max(0, _integer(row.get("cache_write_tokens"))) * max(
+            0.0, write_price - prompt_price
+        )
+    return (round(total, 8) if priced else None), priced
+
+
 def apply_session_routing(
     body: dict[str, Any], session_id: str, *, endpoint: LlmEndpoint
 ) -> dict[str, Any]:

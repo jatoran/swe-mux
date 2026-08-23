@@ -338,14 +338,22 @@ install-wide, so the tab edits them directly for the focused session.
   `claimRequestedStream` is the non-interrupting counterpart to `beginRequestedStream`, for app-initiated speech that is *additional* rather than superseding.
 - Barge-in is a hard stream stop.
   The first credible speech frame sidechain-mutes the singleton audio element instead of requiring the user's voice to overpower the phone speaker.
-  Capture ignores three 32 ms frames while speaker echo drains, then requires three consecutive speech frames against the quiet microphone.
+  Capture holds three 32 ms frames back from the *decision* while speaker echo drains, then requires three consecutive speech frames against the quiet microphone.
+  Those settle frames are kept as audio rather than discarded: they are the operator's first word, and dropping them clipped ~128 ms off the head of every confirmed barge-in.
+  Only the ducking frame itself is dropped, being the one captured before the mute took effect.
   Confirmation stops and abandons the current clip, clears the queue, and suppresses later clips from the same stream.
-  The clean confirmation frames become the start of the new utterance and playback-contaminated pre-roll is discarded.
-  If speech disappears when playback is muted, the sound was echo and playback is restored.
+  If speech disappears when playback is muted, the sound was echo and playback is restored - but only after `PLAYBACK_PROBE_REJECT_FRAMES` of quiet, deliberately longer than the gap between two words.
+  At three frames (96 ms) that window was shorter than an ordinary inter-word pause and rejected real speech: five rejections against three confirmations in one measured session, four inside 3.6 seconds at peak RMS 0.29, each one un-muting the speaker and discarding the frames collected so far.
+  It is bounded above by the utterance endpoint, so a probe cannot outlive the speech it is probing.
   Push-to-talk is already an explicit gesture, so it stops playback immediately without waiting for frame confirmation.
   Any confirmed speech stops playback before transcription finishes, even when the utterance is not a command.
   Bare `Mux, stop` maps to the playback-stop action and keeps Talk listening, while the explicit `stop listening` action releases capture.
   Playback controls retain their normal meaning when the utterance began over audio, so `stop listening` and `interrupt agent` cannot be discarded as playback echo after they already silenced it.
+- **The echo policy refuses suspicion, not measurement** (`playbackTranscriptVerdict`).
+  `playbackAtStart` says audio was playing when speech began, which is a reason to suspect the microphone heard the speaker; `bargeInConfirmed` says capture already settled that question by muting playback and demanding clean frames against the silence.
+  Refusing a *confirmed* barge-in is how a full spoken sentence came to be transcribed and then answered with "Playback command ignored" - measured 2026-08-23: 2,688 ms of audio, 35 characters decoded, no turn, and the operator's workaround was to interrupt, wait, and speak again so the next utterance began with no playback.
+  A confirmed barge-in is therefore ordinary speech whichever audio it interrupted, and the rule is a pure function so it can be asserted rather than read.
+  Unconfirmed overlap keeps every refusal it had: agent speech is echo, and the app's own speech may be interrupted only by a wake-worded read-only query.
 - **Turning read aloud off is immediate, at all three scopes.** The singleton element is
   shared, so clips are tagged with the session that owns them and each "off" switch stops
   exactly what it turns off: the session's mode going to `off` (from the `tts` tab, the session
@@ -607,7 +615,7 @@ install-wide, so the tab edits them directly for the focused session.
   released over another window cannot latch the microphone open.
 - **Playback keeps the microphone open with confirmed-speech barge-in.**
   A possible voice clears the normal 0.5 Silero threshold and a low RMS floor, then immediately ducks app audio.
-  Capture records the playback origin for diagnostics, waits three frames for echo to drain, and requires three consecutive accepted frames on the quiet microphone before treating the sound as human speech.
+  Capture records the playback origin for diagnostics, holds three frames back for echo to drain while still keeping their audio, and requires three consecutive accepted frames on the quiet microphone before treating the sound as human speech.
   Confirmation stops and suppresses the complete stream, trims contaminated pre-roll, and continues through the ordinary dictation and deterministic wake-word rules.
   Rejected echo restores playback without producing an utterance.
   Completed probes post bounded confirmed/rejected diagnostics to the daemon log, including detector, playback origin, peak probability, and peak RMS.

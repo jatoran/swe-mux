@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS automation_budget_ledger (
   requested_model TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
   cached_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_discount_usd REAL NOT NULL DEFAULT 0,
+  cache_discount_usd REAL,
   cost_usd REAL NOT NULL, cost_known INTEGER NOT NULL DEFAULT 1,
   observer_call_id TEXT, created_at REAL NOT NULL
 );
@@ -330,6 +330,20 @@ class AutomationStore:
             str(row["name"]) for row in self._db.execute(f"PRAGMA table_info({table})").fetchall()
         }
 
+    def _column_notnull(self, table: str, column: str) -> bool | None:
+        """Whether one column is `NOT NULL`, or `None` when it does not exist.
+
+        Three answers rather than two because a migration that has to *relax* a
+        constraint needs to tell "absent" from "present and already nullable" -
+        SQLite cannot alter a constraint in place, so the only route is drop and
+        re-add, and doing that to an already-correct column would discard live
+        data every time the daemon started.
+        """
+        for row in self._db.execute(f"PRAGMA table_info({table})").fetchall():
+            if str(row["name"]) == column:
+                return bool(row["notnull"])
+        return None
+
     def _migrate_schema(self) -> None:
         """Bring a database created by an older build up to the current schema.
 
@@ -398,14 +412,29 @@ class AutomationStore:
                 "ALTER TABLE automation_budget_ledger "
                 "ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0"
             )
-        if budget_ledger and "cache_discount_usd" not in budget_ledger:
-            # Signed, and zero means "caching changed this call's price by
-            # nothing" - which is the true reading for a historical row, because
-            # the discount was already inside the `cost_usd` beside it.
-            self._db.execute(
-                "ALTER TABLE automation_budget_ledger "
-                "ADD COLUMN cache_discount_usd REAL NOT NULL DEFAULT 0"
-            )
+        # Nullable, and NULL rather than 0 is the whole point. OpenRouter returns
+        # `cache_discount` in its `/generation` stats and *not* in the
+        # chat-completions usage payload, so it arrives as `None` on every call -
+        # measured 2026-08-23, 50 calls, `discount=None` throughout. Recording
+        # 0.0 for that put a confident zero where there was no measurement, the
+        # same mistake `cost_known` exists to prevent one column over. The dollar
+        # effect is derived from the token counts and the model's catalog pricing
+        # instead (`automationCost.ts`).
+        #
+        # The column shipped `NOT NULL DEFAULT 0` earlier the same day, and SQLite
+        # cannot relax a constraint in place, so that version is dropped and
+        # replaced. Nothing is lost: every value it holds is one of those
+        # unmeasured zeroes.
+        if budget_ledger:
+            discount = self._column_notnull("automation_budget_ledger", "cache_discount_usd")
+            if discount is True:
+                self._db.execute(
+                    "ALTER TABLE automation_budget_ledger DROP COLUMN cache_discount_usd"
+                )
+            if discount is not False:
+                self._db.execute(
+                    "ALTER TABLE automation_budget_ledger ADD COLUMN cache_discount_usd REAL"
+                )
         if budget_ledger and "cost_known" not in budget_ledger:
             # Backfilled to 1, which is the opposite direction to `cached_tokens`
             # above and for the same reason - it is the *true* reading, not a
@@ -891,7 +920,10 @@ class AutomationStore:
                     # count: a token was either served from the cache or written
                     # into it on this call, never both.
                     max(0, int(cache_write_tokens)),
-                    float(cache_discount_usd) if cache_discount_usd is not None else 0.0,
+                    # NULL, not 0.0: no provider currently reports this on a
+                    # completion, and a zero would read as "caching changed the
+                    # price by nothing" - a measurement nobody made.
+                    float(cache_discount_usd) if cache_discount_usd is not None else None,
                     float(cost_usd) if cost_usd is not None else 0.0,
                     1 if measured else 0,
                     call_id,
@@ -930,13 +962,14 @@ class AutomationStore:
         rule_id: str | None = None,
         project_id: str | None = None,
         agent_run_id: str | None = None,
-    ) -> dict[str, float | int]:
+    ) -> dict[str, float | int | None]:
         sql = (
             "SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
             "COALESCE(SUM(input_tokens),0) input_tokens,"
             "COALESCE(SUM(cached_tokens),0) cached_tokens,"
             "COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,"
-            "COALESCE(SUM(cache_discount_usd),0) cache_discount,"
+            "SUM(cache_discount_usd) cache_discount,"
+            "COALESCE(SUM(cache_discount_usd IS NOT NULL),0) cache_discount_calls,"
             "COALESCE(SUM(cost_usd),0) cost,"
             "COALESCE(SUM(CASE WHEN cost_known=0 THEN 1 ELSE 0 END),0) unpriced "
             "FROM automation_budget_ledger WHERE day=?"
@@ -952,7 +985,7 @@ class AutomationStore:
             sql += " AND agent_run_id=?"
             args.append(agent_run_id)
 
-        def op() -> dict[str, float | int]:
+        def op() -> dict[str, float | int | None]:
             row = self._db.execute(sql, args).fetchone()
             return {
                 "tokens": int(row["tokens"]),
@@ -963,10 +996,17 @@ class AutomationStore:
                 "input_tokens": int(row["input_tokens"]),
                 "cached_tokens": int(row["cached_tokens"]),
                 "cache_write_tokens": int(row["cache_write_tokens"]),
-                # Signed: negative is the write premium exceeding the read
-                # saving, which is what a breakpoint above volatile content
-                # produces and the only figure that makes it visible.
-                "cache_discount_usd": float(row["cache_discount"]),
+                # Signed where it exists: negative is the write premium exceeding
+                # the read saving, which is what a breakpoint above volatile
+                # content produces. `None` means no call in the window reported
+                # one, which every OpenRouter completion currently does - the
+                # figure lives in `/generation` stats, not in usage - so a caller
+                # derives the effect from the token counts instead of reading a
+                # zero as a measurement.
+                "cache_discount_usd": (
+                    float(row["cache_discount"]) if row["cache_discount"] is not None else None
+                ),
+                "cache_discount_calls": int(row["cache_discount_calls"]),
                 # How many of the calls behind `cost_usd` reported no cost at
                 # all. Nonzero means the dollar figure is a floor, which is what
                 # `budget.py` renders as `cost_blind` and what stops a dollar cap
@@ -1219,10 +1259,10 @@ class AutomationStore:
 
         return await self._run(op)
 
-    async def scan_project_spend(self, project_id: str) -> dict[str, float | int]:
+    async def scan_project_spend(self, project_id: str) -> dict[str, float | int | None]:
         return await self.spend(rule_id="builtin:scan-timeline", project_id=project_id)
 
-    async def scan_run_spend(self, agent_run_id: str) -> dict[str, float | int]:
+    async def scan_run_spend(self, agent_run_id: str) -> dict[str, float | int | None]:
         return await self.spend(rule_id="builtin:scan-timeline", agent_run_id=agent_run_id)
 
     async def save_scan_backfill(self, state: dict[str, Any]) -> None:
@@ -1822,7 +1862,8 @@ class AutomationStore:
                 "COALESCE(SUM(input_tokens),0) input_tokens,"
                 "COALESCE(SUM(cached_tokens),0) cached_tokens,"
                 "COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,"
-                "COALESCE(SUM(cache_discount_usd),0) cache_discount_usd,"
+                "SUM(cache_discount_usd) cache_discount_usd,"
+                "COALESCE(SUM(cache_discount_usd IS NOT NULL),0) cache_discount_calls,"
                 "COALESCE(SUM(cost_usd),0) cost,"
                 "COALESCE(SUM(CASE WHEN day=? THEN 1 ELSE 0 END),0) today_calls,"
                 "COALESCE(SUM(CASE WHEN day=? THEN input_tokens+output_tokens ELSE 0 END),0)"
@@ -1833,8 +1874,7 @@ class AutomationStore:
                 " today_cached_tokens,"
                 "COALESCE(SUM(CASE WHEN day=? THEN cache_write_tokens ELSE 0 END),0)"
                 " today_cache_write_tokens,"
-                "COALESCE(SUM(CASE WHEN day=? THEN cache_discount_usd ELSE 0 END),0)"
-                " today_cache_discount_usd,"
+                "SUM(CASE WHEN day=? THEN cache_discount_usd END) today_cache_discount_usd,"
                 "COALESCE(SUM(CASE WHEN day=? THEN cost_usd ELSE 0 END),0) today_cost,"
                 "COALESCE(SUM(CASE WHEN cost_known=0 THEN 1 ELSE 0 END),0) unpriced_calls,"
                 "COALESCE(SUM(CASE WHEN day=? AND cost_known=0 THEN 1 ELSE 0 END),0)"
@@ -1844,15 +1884,35 @@ class AutomationStore:
                 "GROUP BY rule_id ORDER BY cost DESC,calls DESC",
                 (today, today, today, today, today, today, today, today, start),
             ).fetchall()
+            # Per (rule, model) rather than per rule, because pricing what caching
+            # saved needs the model beside the tokens: two models in one rule have
+            # different read and write rates, and a rule-level total could only be
+            # priced by guessing which one earned it.
             models = self._db.execute(
-                "SELECT rule_id,requested_model,COUNT(*) calls "
+                "SELECT rule_id,requested_model,COUNT(*) calls,"
+                "COALESCE(SUM(input_tokens),0) input_tokens,"
+                "COALESCE(SUM(cached_tokens),0) cached_tokens,"
+                "COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN cached_tokens ELSE 0 END),0)"
+                " today_cached_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN cache_write_tokens ELSE 0 END),0)"
+                " today_cache_write_tokens "
                 "FROM automation_budget_ledger WHERE day>=? AND requested_model IS NOT NULL "
                 "GROUP BY rule_id,requested_model ORDER BY calls DESC",
-                (start,),
+                (today, today, start),
             ).fetchall()
             by_rule: dict[str, list[str]] = {}
+            usage_by_rule: dict[str, list[dict[str, Any]]] = {}
             for row in models:
-                by_rule.setdefault(str(row["rule_id"]), []).append(str(row["requested_model"]))
+                rule = str(row["rule_id"])
+                by_rule.setdefault(rule, []).append(str(row["requested_model"]))
+                usage_by_rule.setdefault(rule, []).append({
+                    "model": str(row["requested_model"]),
+                    "cached_tokens": int(row["cached_tokens"]),
+                    "cache_write_tokens": int(row["cache_write_tokens"]),
+                    "today_cached_tokens": int(row["today_cached_tokens"]),
+                    "today_cache_write_tokens": int(row["today_cache_write_tokens"]),
+                })
             return {
                 "rules": [
                     {
@@ -1862,14 +1922,21 @@ class AutomationStore:
                         "input_tokens": int(row["input_tokens"]),
                         "cached_tokens": int(row["cached_tokens"]),
                         "cache_write_tokens": int(row["cache_write_tokens"]),
-                        "cache_discount_usd": float(row["cache_discount_usd"]),
+                        "cache_discount_usd": (
+                            float(row["cache_discount_usd"])
+                            if row["cache_discount_usd"] is not None else None
+                        ),
+                        "cache_discount_calls": int(row["cache_discount_calls"]),
                         "cost_usd": float(row["cost"]),
                         "today_calls": int(row["today_calls"]),
                         "today_tokens": int(row["today_tokens"]),
                         "today_input_tokens": int(row["today_input_tokens"]),
                         "today_cached_tokens": int(row["today_cached_tokens"]),
                         "today_cache_write_tokens": int(row["today_cache_write_tokens"]),
-                        "today_cache_discount_usd": float(row["today_cache_discount_usd"]),
+                        "today_cache_discount_usd": (
+                            float(row["today_cache_discount_usd"])
+                            if row["today_cache_discount_usd"] is not None else None
+                        ),
                         "today_cost_usd": float(row["today_cost"]),
                         # Calls this rule made whose cost the provider never
                         # reported. A nonzero count is why `cost_usd` beside it
@@ -1877,6 +1944,10 @@ class AutomationStore:
                         "unpriced_calls": int(row["unpriced_calls"]),
                         "today_unpriced_calls": int(row["today_unpriced_calls"]),
                         "models": by_rule.get(str(row["rule_id"]), []),
+                        # The raw material for pricing the saving. Left unpriced
+                        # here because this store knows nothing about providers;
+                        # `server.py` applies the model catalog to it.
+                        "cache_usage_by_model": usage_by_rule.get(str(row["rule_id"]), []),
                         "last_at": float(row["last_at"] or 0),
                     }
                     for row in rows
@@ -1892,16 +1963,23 @@ class AutomationStore:
             key: sum(rule[key] for rule in rules)
             for key in (
                 "calls", "tokens", "input_tokens", "cached_tokens", "cache_write_tokens",
+                "cache_discount_calls",
                 "today_calls", "today_tokens", "today_input_tokens", "today_cached_tokens",
                 "today_cache_write_tokens",
                 "unpriced_calls", "today_unpriced_calls",
             )
         } | {
             key: round(sum(rule[key] for rule in rules), 6)
-            for key in (
-                "cost_usd", "today_cost_usd",
-                "cache_discount_usd", "today_cache_discount_usd",
+            for key in ("cost_usd", "today_cost_usd")
+        } | {
+            # Summed only across the rules that reported one, and `None` when no
+            # rule did. Treating an unreported discount as 0 in a *total* is how
+            # "nobody measured this" becomes "caching saved nothing".
+            key: (
+                round(sum(rule[key] for rule in rules if rule[key] is not None), 6)
+                if any(rule[key] is not None for rule in rules) else None
             )
+            for key in ("cache_discount_usd", "today_cache_discount_usd")
         }
         return result
 

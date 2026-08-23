@@ -188,7 +188,7 @@ from .observation import (
     hook_event_scope,
     note_interrupt_intent,
 )
-from .openrouter import OpenRouterClient, OpenRouterError
+from .openrouter import OpenRouterClient, OpenRouterError, cache_saving_usd
 from .operational_telemetry import OperationalTelemetryStore
 from .path_identity import same_path
 from .posix_firewall import inspect_posix_firewall, posix_firewall_supported
@@ -4182,6 +4182,64 @@ def _label_spend_rows(
     return labelled
 
 
+async def _price_cache_saving(request: web.Request, breakdown: dict[str, Any]) -> None:
+    """Price what caching saved each rule, from the persisted model catalog.
+
+    Derived rather than reported, and separated from the store because pricing is
+    provider knowledge: `automation_store` deliberately knows nothing about
+    OpenRouter, so it hands over the token counts per (rule, model) and this
+    applies the catalog to them.
+
+    The measured field beside it (`cache_discount_usd`) stays whatever the
+    provider said, which today is nothing at all - `cache_discount` lives in
+    OpenRouter's `/generation` stats, not in a completion's usage payload. Keeping
+    the two apart is the point: one is a measurement that is usually absent, the
+    other is arithmetic over prices that are always published, and collapsing
+    them would leave nobody able to say which they were reading.
+    """
+    store: AutomationStore = request.app["automation_store"]
+    try:
+        catalog = {
+            str(entry["id"]): entry
+            for entry in (await store.model_cache())["models"]
+            if isinstance(entry, dict) and entry.get("id")
+        }
+    except Exception:  # noqa: BLE001 - a cost view must not fail over its own annotation
+        log.debug("cache saving pricing skipped: model catalog unavailable", exc_info=True)
+        return
+    window_total = 0.0
+    today_total = 0.0
+    priced_any = False
+    for rule in breakdown.get("rules") or []:
+        usage = rule.pop("cache_usage_by_model", [])
+        saving, priced = cache_saving_usd(usage, catalog)
+        today, _ = cache_saving_usd(
+            [
+                {
+                    "model": row.get("model"),
+                    "cached_tokens": row.get("today_cached_tokens"),
+                    "cache_write_tokens": row.get("today_cache_write_tokens"),
+                }
+                for row in usage
+            ],
+            catalog,
+        )
+        rule["cache_saving_usd"] = saving
+        rule["today_cache_saving_usd"] = today
+        # How many of this rule's models the catalog could price. A partial
+        # figure is still worth showing and must still be readable as partial.
+        rule["cache_saving_models_priced"] = priced
+        rule["cache_saving_models"] = len(usage)
+        if saving is not None:
+            priced_any = True
+            window_total += saving
+        if today is not None:
+            today_total += today
+    totals = breakdown.setdefault("totals", {})
+    totals["cache_saving_usd"] = round(window_total, 6) if priced_any else None
+    totals["today_cache_saving_usd"] = round(today_total, 6) if priced_any else None
+
+
 async def automation_dashboard(request: web.Request) -> web.Response:
     store: AutomationStore = request.app["automation_store"]
     engine = request.app["automation"].status()
@@ -4189,6 +4247,7 @@ async def automation_dashboard(request: web.Request) -> web.Response:
     breakdown["rules"] = _label_spend_rows(
         breakdown["rules"], engine, request.app["config"]
     )
+    await _price_cache_saving(request, breakdown)
     return json_response(
         {
             **await store.dashboard(),

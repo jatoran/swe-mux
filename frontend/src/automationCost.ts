@@ -44,13 +44,22 @@ export type SpendRule = {
   /** Prompt tokens written *into* the cache. Also a subset of `input_tokens`, and disjoint
    *  from `cached_tokens`: a token was either served from the cache or written into it. */
   cache_write_tokens?: number
-  /** Signed price effect of caching. Positive saved money; negative is the write premium
-   *  (1.25x input on GPT-5.6 and Anthropic) exceeding what was read back. */
-  cache_discount_usd?: number
+  /** Signed price effect of caching as the *provider* reported it. Absent on every
+   *  OpenRouter completion - `cache_discount` lives in its `/generation` stats, not in a
+   *  completion's usage - so `cache_saving_usd` is normally the figure to read. */
+  cache_discount_usd?: number | null
+  /** The same effect, derived by the daemon from the token counts and the model catalog's
+   *  published read and write prices. Signed: negative is a write premium never read back. */
+  cache_saving_usd?: number | null
+  today_cache_saving_usd?: number | null
+  /** How many of this row's models the catalog could price, out of how many it used. A
+   *  partial figure is still worth showing and must still read as partial. */
+  cache_saving_models_priced?: number
+  cache_saving_models?: number
   today_input_tokens?: number
   today_cached_tokens?: number
   today_cache_write_tokens?: number
-  today_cache_discount_usd?: number
+  today_cache_discount_usd?: number | null
   /** Calls whose provider reported no cost at all. Their `cost_usd` contribution is 0
    *  because nobody measured it, not because it was free, so a nonzero count here means
    *  the money beside it is a floor. See `src/swe_mux/budget.py`. */
@@ -75,11 +84,13 @@ export type SpendBreakdown = {
     input_tokens?: number
     cached_tokens?: number
     cache_write_tokens?: number
-    cache_discount_usd?: number
+    cache_discount_usd?: number | null
+    cache_saving_usd?: number | null
+    today_cache_saving_usd?: number | null
     today_input_tokens?: number
     today_cached_tokens?: number
     today_cache_write_tokens?: number
-    today_cache_discount_usd?: number
+    today_cache_discount_usd?: number | null
     unpriced_calls?: number
     today_unpriced_calls?: number
   }
@@ -179,8 +190,11 @@ export const cacheHitDetail = (hit: CacheHit | null) =>
 
 /** What caching did to the bill, as opposed to how often it hit. */
 export type CacheEconomics = {
-  /** Signed dollars: positive saved, negative is a write premium never read back. */
-  discount: number
+  /** Signed dollars: positive saved, negative is a write premium never read back.
+   *  `null` when neither the provider nor the catalog could put a price on it. */
+  discount: number | null
+  /** Where that figure came from, because the two are not equally authoritative. */
+  source: 'reported' | 'derived' | null
   written: number
   cached: number
   /** True when the cache cost more than it returned - the shape of a breakpoint
@@ -194,32 +208,53 @@ export type CacheEconomics = {
  * A run whose every call writes a cache and never reads one reports 0% hit and
  * looks exactly like a run with no caching at all - while costing 25% more per
  * prompt token, because GPT-5.6 and Anthropic bill a write at 1.25x input. The
- * write count is what separates those two, and the signed discount is what
- * prices the difference.
+ * write count separates those two, and the signed dollar figure prices the
+ * difference.
  *
- * `null` when the provider reported neither figure, which is not zero: it means
- * this endpoint says nothing about caching, and inventing a $0.00 saving for it
- * would put a confident number where there is no measurement.
+ * That figure has two possible provenances and they are kept apart. `reported`
+ * is the provider's own `cache_discount`, authoritative and - on every OpenRouter
+ * completion measured so far - absent, because it lives in `/generation` stats
+ * rather than in a completion's usage. `derived` is the daemon's arithmetic over
+ * the token counts and the catalog's published read and write prices: exact
+ * against those prices, and always available. A reader has to be able to tell
+ * which one they are looking at, so the label travels with the number.
+ *
+ * `null` throughout means no cache activity was reported at all, which is not
+ * zero: it means this endpoint says nothing about caching, and inventing a $0.00
+ * saving would put a confident number where there is no measurement.
  */
 export function cacheEconomics(
-  discountUsd: number | undefined,
+  discountUsd: number | null | undefined,
   writeTokens: number | undefined,
   cachedTokens: number | undefined,
+  derivedUsd?: number | null,
 ): CacheEconomics | null {
-  const discount = Number(discountUsd || 0)
   const written = Number(writeTokens || 0)
   const cached = Number(cachedTokens || 0)
+  const reported = discountUsd === null || discountUsd === undefined ? null : Number(discountUsd)
+  const derived = derivedUsd === null || derivedUsd === undefined ? null : Number(derivedUsd)
+  const discount = reported ?? derived
+  const source = reported !== null ? 'reported' : derived !== null ? 'derived' : null
+  // Nothing cached, nothing written, and no money either way is not a cache
+  // reading at all - it is a rule that never touched one, and a row of zeroes
+  // beside it would read as a measurement.
   if (!discount && !written && !cached) return null
-  return { discount, written, cached, netLoss: discount < 0 }
+  return { discount, source, written, cached, netLoss: discount !== null && discount < 0 }
 }
 
 /** The tile's second line: what the cache cost or saved, and how much it wrote. */
 export const cacheEconomicsDetail = (economics: CacheEconomics | null) => {
   if (!economics) return 'this provider reports no cache figures'
+  const counts = `${integer.format(economics.written)} tokens written, `
+    + `${integer.format(economics.cached)} read`
+  if (economics.discount === null) return `${counts} · no published price for these models`
   const money = economics.discount >= 0
     ? `${formatMoney(economics.discount)} saved`
     : `${formatMoney(Math.abs(economics.discount))} of write premium not read back`
-  return `${money} · ${integer.format(economics.written)} tokens written, ${integer.format(economics.cached)} read`
+  const source = economics.source === 'derived'
+    ? ' (priced from the model catalog; providers report no discount on a completion)'
+    : ' (reported by the provider)'
+  return `${money}${source} · ${counts}`
 }
 
 /**

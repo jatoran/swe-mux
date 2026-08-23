@@ -193,7 +193,10 @@ and the declared minimum observation capability.
   and nothing more (`assistant.md` for where the breakpoint that earns a nonzero rate is
   placed).
   Beside the rate sits what caching did to the *bill*, which the rate cannot say: the write
-  count and the signed `cache_discount_usd`. A run writing a cache on every call and reading it
+  count and a signed dollar figure. That figure has two provenances and the view keeps them
+  apart, because they are not equally authoritative: `cache_discount_usd` is the provider's own
+  reading and is currently absent on every completion, while `cache_saving_usd` is derived from
+  the token counts and the catalog's published read and write prices. A run writing a cache on every call and reading it
   on none reports 0% and costs 25% more per prompt token than not caching at all, because
   GPT-5.6 and Anthropic bill a write at 1.25x input - so a negative discount is flagged as the
   placement bug it is rather than averaged into a hit rate.

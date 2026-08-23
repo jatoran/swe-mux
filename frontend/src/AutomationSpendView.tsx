@@ -80,6 +80,7 @@ export function AutomationSpendView() {
     spendTotals?.today_cache_discount_usd,
     spendTotals?.today_cache_write_tokens,
     spendTotals?.today_cached_tokens,
+    spendTotals?.today_cache_saving_usd,
   )
   // Calls the provider never priced. Their contribution to every dollar figure on this
   // page is zero because nobody measured it, so saying "$0.0043" without saying "and N
@@ -98,7 +99,10 @@ export function AutomationSpendView() {
           {/* Beside the money, because the hit rate is only ever read as "is this spend
               avoidable". Today first: a breakpoint that started working this morning is
               invisible in a seven-day average. */}
-          <article><span>prompt cache</span><strong title={cacheHitDetail(todayCache)}>{todayCache?formatPercent(todayCache.rate):'—'}</strong><small class={todayEconomics?.netLoss?'warn':''} title={cacheEconomicsDetail(todayEconomics)}>{todayEconomics
+          <article><span>prompt cache</span><strong title={cacheHitDetail(todayCache)}>{todayCache?formatPercent(todayCache.rate):'—'}</strong><small class={todayEconomics?.netLoss?'warn':''} title={cacheEconomicsDetail(todayEconomics)}>{todayEconomics&&todayEconomics.discount!==null
+            // Money displaces the window rate only when there is money to state.
+            // An unpriced cache still has a hit rate worth reading, and "unpriced"
+            // in its place would be a worse line than the one it replaced.
             ?`${todayEconomics.discount>=0?formatMoney(todayEconomics.discount)+' saved':formatMoney(Math.abs(todayEconomics.discount))+' write premium'} today · ${formatCount(todayEconomics.written)} written`
             :windowCache?`${formatPercent(windowCache.rate)} over ${spendDays}d · ${formatCount(windowCache.cached)} tokens cached`:'no billed prompt tokens yet'}</small></article>
           <article><span>call outcomes</span><strong>{formatCount(calls.total)}</strong><small class={calls.failed?'warn':''}>{formatCount(calls.failed)} failed or cancelled · {formatPercent(calls.failureRate)}</small></article>
@@ -111,7 +115,7 @@ export function AutomationSpendView() {
           <p>Every billed observer call of the last {spendDays} days, grouped by what asked for it and ranked by the window rather than by today. Same ledger as the headline, so the rows add up to it exactly.</p>
           {spendRows.length?<div class="usage-table-scroll"><table class="data-table cost-table">
             <thead><tr><th>automation</th><th>today</th><th>{spendDays} days</th><th>calls</th><th>tokens</th><th>cached</th><th>cache $</th><th>model</th></tr></thead>
-            <tbody>{spendRows.map(row=>{const hit=cacheHit(row.input_tokens,row.cached_tokens); const economics=cacheEconomics(row.cache_discount_usd,row.cache_write_tokens,row.cached_tokens); return <tr class={row.enabled?'':'disabled'} key={row.rule_id}>
+            <tbody>{spendRows.map(row=>{const hit=cacheHit(row.input_tokens,row.cached_tokens); const economics=cacheEconomics(row.cache_discount_usd,row.cache_write_tokens,row.cached_tokens,row.cache_saving_usd); return <tr class={row.enabled?'':'disabled'} key={row.rule_id}>
               <td data-label="automation">
                 <div class="cost-name"><strong>{row.label}</strong><span class={`automation-pill ${row.kind}`}>{row.kind}</span>{row.enabled?null:<span class="automation-pill off">off</span>}</div>
                 <div class="cost-bar" style={`--share:${Math.max(0.015,costShareTotal>0?row.share:row.callShare)}`}/>
@@ -124,7 +128,7 @@ export function AutomationSpendView() {
               <td data-label="cached" title={cacheHitDetail(hit)}>{hit?formatPercent(hit.rate):'—'}</td>
               {/* Signed, and the sign is the point: a negative row is paying a write
                   premium for a prefix nothing reads back. */}
-              <td data-label="cache $" class={economics?.netLoss?'warn':''} title={cacheEconomicsDetail(economics)}>{economics?formatMoney(economics.discount):'—'}</td>
+              <td data-label="cache $" class={economics?.netLoss?'warn':''} title={cacheEconomicsDetail(economics)}>{economics&&economics.discount!==null?formatMoney(economics.discount):'—'}</td>
               <td data-label="model" class="cost-model">{row.models?.length?row.models.map(model=><ModelName model={model}/>):'—'}</td>
             </tr>})}</tbody>
             <tfoot><tr><td data-label="automation">all automation</td><td data-label="today" title={exactMoney(spendTotals?.today_cost_usd||0)}>{formatMoney(spendTotals?.today_cost_usd||0)}</td><td data-label={`${spendDays} days`} title={exactMoney(spendTotals?.cost_usd||0)}>{formatMoney(spendTotals?.cost_usd||0)}</td><td data-label="calls">{formatCount(spendTotals?.calls||0)}</td><td data-label="tokens">{formatCount(spendTotals?.tokens||0)}</td><td/></tr></tfoot>

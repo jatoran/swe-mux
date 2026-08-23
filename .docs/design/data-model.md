@@ -211,9 +211,16 @@
   cache, a subset of `input_tokens` and never added to it, backfilled to 0 on an existing
   database because every pre-migration row was billed by a request that carried no cache
   breakpoint.
-  Beside it, `cache_write_tokens` and the signed `cache_discount_usd` (schema 12): the tokens
-  written *into* the cache, a disjoint subset of the same input, and what caching did to this
-  call's price.
+  Beside it, `cache_write_tokens` and the signed, **nullable** `cache_discount_usd` (schema 12):
+  the tokens written *into* the cache, a disjoint subset of the same input, and what caching did
+  to this call's price as the provider reported it.
+  That last one is NULL on every call so far and the column is nullable for exactly that reason:
+  OpenRouter carries `cache_discount` in its `/generation` stats and not in a completion's usage
+  payload, so recording 0.0 would state a saving nobody computed - the same mistake `cost_known`
+  exists to prevent one column over.
+  The figure surfaces are derived instead, from these token counts and the model catalog's
+  published read and write prices (`cache_saving_usd` in `openrouter.py`, applied in
+  `server.py`), which is exact against those prices and always available.
   Reads alone are not enough to act on - a run that writes on every call and reads on none
   reports zero cached and looks exactly like a run with no caching, while costing 25% more per
   prompt token, since GPT-5.6 and Anthropic bill a write at 1.25x input.
