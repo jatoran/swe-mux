@@ -242,8 +242,22 @@ test('the terminal rail keeps the scroller that owns its touch-drag click suppre
   assert.match(strip, /<OverflowRail className="terminal-action-scroll" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard>/)
 })
 
-test('command rail edge wedges use one row-relative trailing alignment', () => {
+test('command rail edge wedges align to the strip, not to a guessed trailing width', () => {
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
-  assert.match(styles, /\.terminal-action-rows>\.rail-row>\.overflow-rail\{[^}]*position:static[^}]*overflow:visible/)
-  assert.match(styles, /\.terminal-action-rows>\.rail-row \.overflow-rail-right\{right:calc\(var\(--rail-more-width\) \+ var\(--rail-pad-x\) \+ 1px\)\}/)
+  // The wrapper is the strip's own box, so it has to be the containing block. Positioned
+  // from the *row* instead, the right wedge had to name the trailing cluster's width — and
+  // that width is not one number: the row carrying the status readout is wider, so the
+  // wedge landed past the strip, over chrome that answers to no tap.
+  assert.match(styles, /\.terminal-action-rows>\.rail-row>\.overflow-rail\{[^}]*position:relative[^}]*overflow:visible/)
+  assert.match(styles, /\.terminal-action-rows>\.rail-row \.overflow-rail-right\{right:1px\}/)
+  assert.doesNotMatch(styles, /\.overflow-rail-right\{right:calc\(var\(--rail-more-width\)/)
+})
+
+test('an empty status readout takes no room from the row it sits on', () => {
+  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  // `status` is an empty string on the status row most of the time — the caller uses it to
+  // mark which row *would* carry a readout. Rendered anyway it cost the chips ~23px of
+  // scroll width (its own `padding-right`, plus the trailing cluster's `gap`) for nothing.
+  assert.match(strip, /\{status \? <span aria-live="polite">\{status\}<\/span> : null\}/)
+  assert.doesNotMatch(strip, /status !== undefined && <span/)
 })

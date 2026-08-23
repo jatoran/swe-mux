@@ -164,7 +164,7 @@ test('a copy or paste confirmation is drawn over the terminal, never inside the 
 
   // The rail row keeps the selection readout, which is a state, and no longer carries the
   // momentary one, which narrowed the scrolling strip for as long as it was up.
-  assert.match(pane, /<div class="terminal-clip-toast" role="status">\{clipboardStatus\|\|null\}<\/div>/)
+  assert.match(pane, /\{clipboardStatus&&<div class="terminal-clip-toast" role="status">\{clipboardStatus\}<\/div>\}/)
   const railStatus = /status=\{index===renderedRailRows\.length-1\?([^}]*)\}/.exec(pane)?.[1] ?? ''
   assert.ok(railStatus, 'the rail row no longer takes a status prop')
   assert.doesNotMatch(railStatus, /clipboardStatus/)
@@ -184,9 +184,6 @@ test('a copy or paste confirmation is drawn over the terminal, never inside the 
   const chip = declarations(styles, /\.terminal-jump-latest\{([^}]*)\}/)
   const zIndex = (declaration: string) => Number(/z-index:(\d+)/.exec(declaration)?.[1] ?? NaN)
   assert.ok(zIndex(rule) > zIndex(chip), 'the confirmation must draw over the chips it overlaps')
-  // Emptied rather than unmounted, so the live region is in the accessibility tree before
-  // the text it has to announce arrives.
-  assert.match(styles, /\.terminal-clip-toast:empty\{display:none\}/)
 })
 
 /** One CSS rule's declarations, or a failure naming the selector that went missing. */
