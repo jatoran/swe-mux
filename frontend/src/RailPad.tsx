@@ -11,16 +11,20 @@ import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import {
-  padDirections,
-  padRingOf,
-  padSectorCount,
-  RAIL_PAD_DIRECTION_LABELS,
+  PAD_CENTER,
+  padRingCount,
+  padSlotKey,
+  padSlotKeys,
+  padWedgeCentreDeg,
+  padWedgeCount,
+  padWedgeName,
+  padWedgeUnit,
+  parsePadSlotKey,
   type RailItem,
-  type RailPadDirection,
   type RailPadSlotKey,
   type RailPadTriggerMode,
 } from './commandRail'
-import { holdSoftKeyboard } from './mobileKeyboard'
+import { holdSoftKeyboard, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
   createRailPadGesture,
   RAIL_PAD_DIAL_DELAY_MS,
@@ -204,11 +208,13 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [dial, setDial] = useState<Dial>(null)
   const dialTimer = useRef<number | null>(null)
-  const orientation = item.pad?.orientation ?? 'cardinal'
-  const directions = padDirections(orientation)
-  const sectors = padSectorCount(orientation)
+  const wedges = padWedgeCount(item.pad)
+  const rings = padRingCount(item.pad)
   const byKey = new Map(slots.map(slot => [slot.key, slot]))
-  const centre = byKey.get('center')
+  const centre = byKey.get(PAD_CENTER)
+  /** The field holding the soft keyboard up when this press began, and the dismissal count
+   *  at that moment, so the keyboard can be handed back when the gesture ends. */
+  const keyboardRef = useRef<{ holder: HTMLElement | null; dismissals: number } | null>(null)
 
   useEffect(() => () => { if (dialTimer.current !== null) window.clearTimeout(dialTimer.current) }, [])
 
@@ -224,6 +230,20 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   }
 
   const beginPress = (event: PointerEvent) => {
+    // **The keyboard hold has to happen here, not on `mousedown`.**
+    //
+    // Every other rail chip acts on `click`, so its `onMouseDown` focus refusal has
+    // necessarily already run. A pad acts on `pointermove`, and a touch that turns into a
+    // drag delivers *no mouse events at all* - measured through CDP: a tap gives
+    // `pointerdown, touchstart, touchend, mousedown, mouseup, click`, a drag gives only
+    // `pointerdown, touchstart, touchend`. So on the one gesture the pad exists for, the
+    // guard every other chip relies on never fires, nothing refuses focus, and Android drops
+    // the keyboard.
+    //
+    // Capture-and-restore rather than refusal, because there is no event left to refuse:
+    // the same shape `RailScroller` uses for its pan, which has the identical problem. The
+    // dismissal count comes along so a *deliberate* dismissal during the gesture still wins.
+    keyboardRef.current = { holder: softKeyboardHolder(), dismissals: softKeyboardDismissals() }
     const specs: Partial<Record<RailPadSlotKey, RailPadSlotSpec>> = {}
     for (const slot of slots) specs[slot.key] = { mode: slot.mode, disabled: slot.disabled }
     // Room above the finger, measured against the *visual* viewport. The fan opens upward,
@@ -233,7 +253,8 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     const view = railOverlayView()
     const roomAbove = Math.max(0, event.clientY - view.top - DIAL_EDGE_MARGIN_PX)
     const opened = controller.gesture.press(event.pointerId, event.clientX, event.clientY, {
-      orientation,
+      wedges,
+      rings,
       slots: specs,
       roomAbovePx: roomAbove,
     })
@@ -252,8 +273,14 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       },
       // Torn down here rather than from the chip's own `pointerup`: by the time a real
       // gesture ends the finger is well off the chip, and that event belongs to whatever is
-      // under it.
-      end: closeDial,
+      // under it. The keyboard goes back on the same signal, and on a frame later so it
+      // lands after the slot's own action has done whatever it does with focus.
+      end: () => {
+        closeDial()
+        const held = keyboardRef.current
+        keyboardRef.current = null
+        if (held?.holder) requestAnimationFrame(() => restoreSoftKeyboard(held.holder, held.dismissals))
+      },
     })
     // Client coordinates go in raw because the dial is portalled to `document.body`, which
     // is the one mount where they mean screen pixels. Rendering it inside the chip is not an
@@ -263,7 +290,7 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     setDial({
       x: event.clientX,
       y: event.clientY,
-      scale: railPadScaleFor(orientation, roomAbove),
+      scale: railPadScaleFor(rings, roomAbove),
       latch: null,
       armed: false,
       visible: false,
@@ -277,30 +304,53 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     }, RAIL_PAD_DIAL_DELAY_MS)
   }
 
-  const keyDirection = (key: string): RailPadDirection | null => {
-    if (orientation === 'cardinal') {
-      return key === 'ArrowUp' ? 'up' : key === 'ArrowLeft' ? 'left' : key === 'ArrowRight' ? 'right' : null
+  /**
+   * The keyboard route, which has no pointer and therefore no wedge to aim at.
+   *
+   * Number keys rather than arrows, because the wedge count is a choice: three arrows could
+   * only ever address three of up to five wedges, and which three would depend on the pad.
+   * `1` is the leftmost wedge, reading the dial the way it is drawn; a second ring continues
+   * the count from where the first left off. Arrows stay as a shorthand for the three-wedge
+   * case, where left/up/right *are* the wedges and the mapping is honest.
+   */
+  const keySlot = (key: string): RailPadSlotKey | null => {
+    const digit = /^[1-9]$/.test(key) ? Number(key) - 1 : -1
+    if (digit >= 0) {
+      const ring = Math.floor(digit / wedges)
+      const wedge = wedges - 1 - (digit % wedges)
+      return ring < rings ? padSlotKey(ring, wedge) : null
     }
-    return key === 'Home' ? 'upLeft' : key === 'PageUp' ? 'upRight'
-      : key === 'End' ? 'upLeftFar' : key === 'PageDown' ? 'upRightFar' : null
+    if (wedges !== 3 || rings !== 1) return null
+    return key === 'ArrowLeft' ? padSlotKey(0, 2)
+      : key === 'ArrowUp' ? padSlotKey(0, 1)
+        : key === 'ArrowRight' ? padSlotKey(0, 0) : null
   }
 
-  const populated = directions.filter(direction => byKey.has(direction))
+  // Drawn and read left to right, which is the reverse of the wedge index: wedge 0 is the
+  // rightmost, because the fan's angles grow counter-clockwise from due east.
+  const drawn = padSlotKeys(item.pad).filter(key => key !== PAD_CENTER)
+  const populated = drawn.filter(key => byKey.has(key))
   const accessible = [
     modifierPrefix ? `${modifierPrefix} pad` : 'Pad',
-    ...populated.map(direction => `${RAIL_PAD_DIRECTION_LABELS[direction]}: ${byKey.get(direction)?.label}`),
+    ...populated.map(key => {
+      const at = parsePadSlotKey(key)!
+      return `${padWedgeName(at.wedge, wedges, at.ring)}: ${byKey.get(key)?.label}`
+    }),
+    ...(centre ? [`Centre: ${centre.label}`] : []),
   ].join('. ')
 
-  const bands = railPadBands(orientation, dial?.scale ?? 1)
-  const outerOf = (ring: 'near' | 'far') => ring === 'far' || !Number.isFinite(bands.ring) ? bands.outer : bands.ring
-  const innerOf = (ring: 'near' | 'far') => ring === 'far' ? bands.ring : bands.dead
+  const bands = railPadBands(rings, dial?.scale ?? 1)
+  const innerOf = (ring: number) => ring > 0 ? bands.ring : bands.dead
+  const outerOf = (ring: number) => ring > 0 || !Number.isFinite(bands.ring) ? bands.outer : bands.ring
 
   return <button
     ref={buttonRef}
     type="button"
-    class={`${className || 'term-key'} rail-pad rail-pad-${orientation}${dial ? ' rail-pad-pressed' : ''}`}
+    class={`${className || 'term-key'} rail-pad rail-pad-w${wedges} rail-pad-r${rings}${dial ? ' rail-pad-pressed' : ''}`}
     title={item.title || 'Drag a direction'}
     aria-label={accessible}
+    // Still here for the *tap*, which does deliver a `mousedown`. The drag is covered by the
+    // capture-and-restore in `beginPress`, because a drag delivers none.
     onMouseDown={event => { event.preventDefault(); holdSoftKeyboard(event) }}
     onContextMenu={event => event.preventDefault()}
     onPointerDown={event => {
@@ -311,24 +361,39 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     onPointerCancel={closeDial}
     onLostPointerCapture={closeDial}
     onKeyDown={event => {
-      const direction = keyDirection(event.key)
-      if (!direction || !byKey.has(direction)) return
+      const key = keySlot(event.key)
+      if (!key || !byKey.has(key)) return
       event.preventDefault()
-      runSlot(direction)
+      runSlot(key)
     }}
     onClick={() => {
       closeDial()
       // A press the gesture already answered - any drag at all, and a centre tap it fired
       // itself - leaves nothing for the click. Everything else is a plain tap.
       if (controller.gesture.consumeHandledClick()) return
-      if (centre) runSlot('center')
+      if (centre) runSlot(PAD_CENTER)
     }}
   >
     {content}
-    {/* Populated directions, marked inside the chip's own border. Drawn rather than laid
-        out, so the chip is exactly the size it would be without them. */}
+    {/* Populated wedges, marked inside the chip's own border. Drawn rather than laid out, so
+        the chip is exactly the size it would be without them. One tick per wedge, angled the
+        way that wedge points; a far-ring one sits inboard of its near partner, which is the
+        only thing on the chip that says a wedge has two depths. */}
     <span class="rail-pad-marks" aria-hidden="true">
-      {populated.map(direction => <span key={direction} class={`rail-pad-mark rail-pad-mark-${direction}`}/>)}
+      {populated.map(key => {
+        const at = parsePadSlotKey(key)!
+        const unit = padWedgeUnit(at.wedge, wedges)
+        const reach = at.ring > 0 ? 0.62 : 0.86
+        return <span
+          key={key}
+          class="rail-pad-mark"
+          style={{
+            left: `${50 + unit.x * reach * 50}%`,
+            top: `${50 + unit.y * reach * 50}%`,
+            transform: `translate(-50%,-50%) rotate(${-padWedgeCentreDeg(at.wedge, wedges) - 45}deg)`,
+          }}
+        />
+      })}
     </span>
     {dial && createPortal(<div
       class={`rail-pad-dial${dial.visible ? ' rail-pad-dial-shown' : ''}`}
@@ -344,18 +409,17 @@ export function RailPad({ controller, item, slots, className, content, modifierP
         height={bands.outer * 2}
         viewBox={`${-bands.outer} ${-bands.outer} ${bands.outer * 2} ${bands.outer * 2}`}
       >
-        {directions.map((direction, position) => {
-          const slot = byKey.get(direction)
-          const index = position % sectors
-          const ring = padRingOf(direction)
-          const { from, to } = railPadWedgeBounds(orientation, index)
+        {drawn.map(key => {
+          const slot = byKey.get(key)
+          const { ring, wedge } = parsePadSlotKey(key)!
+          const { from, to } = railPadWedgeBounds(wedge, wedges)
           const inner = innerOf(ring)
           const outer = outerOf(ring)
-          const active = dial.latch === direction
-          const at = polar(inner + (outer - inner) * LABEL_AT, railPadWedgeCentre(orientation, index))
+          const active = dial.latch === key
+          const at = polar(inner + (outer - inner) * LABEL_AT, railPadWedgeCentre(wedge, wedges))
           const label = slot ? (modifierPrefix ? `${modifierPrefix}+${slot.label}` : slot.label) : ''
           return <g
-            key={direction}
+            key={key}
             class={`rail-pad-wedge${active ? ' rail-pad-wedge-active' : ''}`
               + `${active && dial.armed ? ' rail-pad-wedge-armed' : ''}`
               + `${!slot || slot.disabled ? ' rail-pad-wedge-off' : ''}`

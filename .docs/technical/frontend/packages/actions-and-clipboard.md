@@ -85,36 +85,49 @@ It is its own module because the rail's pointer capture retargets moves away fro
 `railPadGesture.ts` is the browser-free gesture for a pad chip; `RailPad.tsx` is the element, its listeners, the dial and the haptics.
 The model - orientations, directions, rings, slot bindings, trigger modes and `normalizeRailPad` - lives in `commandRail.ts`, so `railPadGesture.ts` imports from it and never the reverse.
 
-**The fan opens upward and has no downward slot.**
+**The fan opens upward and has no downward wedge.**
 The rail is on the bottom edge of the screen, so the 180° above the finger is divided instead (plus `RAIL_PAD_SKIRT_DEG` at each end) and the lower half is the abort zone.
-Four slots still fit because the fan is divided twice: `padSectorCount` wedges by angle, and `railPadBands` rings by distance.
+An action with no direction of its own goes in the centre, which is also what a tap runs.
+
+**The fan is divided two ways, and they cost different things.**
+`padWedgeCount` divides it by angle (1..`RAIL_PAD_MAX_WEDGES`), costing angular tolerance; `padRingCount` divides it by distance (1 or 2), costing fire-on-entry.
+Wedges are the cheaper axis, so every shipped pad is one ring.
+`RAIL_PAD_MAX_WEDGES` is 5 because five is ±22° - the tolerance that made an eight-way circle poor - and *not* because of target size, which is still comfortable at six.
+
+**Slot keys are positional**: `` `${ring}:${wedge}` ``, or `PAD_CENTER`.
+Named compass keys could not survive the wedge count becoming a choice, so `padWedgeName` derives a readable name from the wedge's centre angle instead.
+`normalizeRailPad` reads the original compass spellings forever, mapping them onto positions - same durability rule as `RETIRED_RAIL_IDS`, because an unrecognised key is a binding the operator silently loses.
 
 **The only threshold is distance.**
 The gesture is live from the first pixel; the sole timer repeats an already-committed direction, and `RAIL_PAD_DIAL_DELAY_MS` governs only when the dial is *drawn*.
 `RAIL_PAD_DEAD_RADIUS_PX` is the commit distance and is deliberately unrelated to the wedge sizes, which is what lets the targets be thumb-sized without the control being slow.
 
-`railPadResolve` is the whole geometry: it biases the point back along the latched direction before reading its angle, which is one expression for both orientations even though their boundaries sit in different places, then reads the ring off the raw radius with a margin that moves **both ways**.
+`railPadResolve` is the whole geometry: it biases the point back along the latched wedge's own centre line before reading its angle, which is one expression covering every boundary at every wedge count, then reads the ring off the raw radius with a margin that moves **both ways**.
 A one-sided ring margin makes crossing outward free, which is the direction it happens by accident.
 `railPadScaleFor` shrinks both radii to the room above the press, and `peek()` exposes the resulting bands so the dial is drawn from exactly what the gesture is using.
 
 Arbitration reuses `pointerDragClaim` and adds nothing to `RailScroller` or the mobile recognizer.
 A pad claims only the axes its bound wedges span; a single-axis pad defers to the pan, decided at `RAIL_PAN_SLOP_PX` so exactly one of them takes the pointer.
-Two consequences are invisible to a unit test and are covered by `test/renderer/command-rail-pad.spec.ts` instead.
+Three consequences are invisible to a unit test and are covered by `test/renderer/command-rail-pad.spec.ts` instead.
 The chip needs `touch-action:none`, or the strip's own `pan-x` answers a horizontal drag natively and `pointercancel`s the press.
-And the press's end is announced through the gesture's `end` callback rather than the chip's `pointerup`, which by then belongs to whatever the finger has moved over.
+The press's end is announced through the gesture's `end` callback rather than the chip's `pointerup`, which by then belongs to whatever the finger has moved over.
+And **a drag delivers no mouse events at all**, so the `onMouseDown` focus refusal every other chip relies on never runs - which is why `RailPad` captures `softKeyboardHolder()` at pointer-down and calls `restoreSoftKeyboard` on a frame after the gesture ends, the same shape `RailScroller` uses for its pan.
+The spec asserts the missing `mousedown` directly, because a keyboard test alone passes with the fix removed: desktop Chromium never drops focus during a pad drag, so the spec blurs the field mid-gesture to reproduce what Android does.
 
 Ownership rules the rest of the layer relies on:
 
-- **A slot's mode belongs to the binding, not the Action** - and its default also belongs to the *orientation*.
-  `defaultPadTriggerMode` returns `release` for every slot of a ringed pad, because the near ring is unavoidably transit: reaching the far ring crosses it, so a near slot firing on entry would fire on every pass and again on the way back in.
+- **A slot's mode belongs to the binding, not the Action** - and its default also belongs to the *ring count*.
+  `defaultPadTriggerMode` returns `release` for every slot of a two-ring pad, because the near ring is unavoidably transit: reaching the far ring crosses it, so a near slot firing on entry would fire on every pass and again on the way back in.
   A ring you must pass through cannot be a fire-on-entry target. An explicit per-slot mode still wins.
-- **Slots are stored canonically**: `normalizeRailPad` rebuilds them in `padDirections` order, which is wedge-major within a ring so `railPadDirectionAt` can index straight into it.
+- **Slots are stored canonically**: `normalizeRailPad` rebuilds them in `padSlotKeys` order, which is wedge-major within a ring so `railPadResolve` can address them arithmetically.
   A fork stores a copy of a shipped pad and `planForkReattach` asks whether the copy still equals the definition, so a pad authored in reading order and reloaded in canonical order would report as edited by an operator who changed nothing.
   The shipped pads are run through `normalizeRailPad` at their definition site for that reason, which is also why `RETIRED_RAIL_IDS` sits above `BUILTIN_RAIL` - the canonicalization migrates slot ids while the catalog is still being evaluated.
-- **An unresolvable slot is kept, an unreachable one is dropped.** A slot naming an absent Action survives the round trip (it may simply be missing from *this* resolution); a slot key that does not belong to the orientation cannot be reached at all and goes, which is also how a stored `down` binding falls away.
-- **`railPadSlotItemIds` is how the rest of the app sees through a pad.** `railVoice.ts` walks it so a padded arrow keeps its spoken alias, which matters because the default rail reaches three of the four arrows only through `padArrows`.
-- `updateRailPadSlot` and `setRailPadOrientation` in `railLayout.ts` are open to built-in pads, unlike `updateRailCatalogItem`.
-  Turning a pad carries its bindings across position for position, as far as the new orientation has positions - the two shapes hold different numbers of things, so one direction of the toggle always leaves one behind, which beats dropping everything or stacking two Actions on one wedge.
+- **An unresolvable slot is kept, an unreachable one is dropped.** A slot naming an absent Action survives the round trip (it may simply be missing from *this* resolution); a slot key outside the pad's own wedge and ring counts cannot be reached at all and goes, which is how shrinking a pad releases what no longer has a position and how a stored `down` binding falls away.
+- **`railPadSlotItemIds` is how the rest of the app sees through a pad.** `railVoice.ts` walks it so a padded arrow keeps its spoken alias, which matters because the default rail reaches all four arrows only through `padArrows`.
+- **`railPadSlotLabel` is the only route to a wedge's face**, and it cannot land on a `title`.
+  A title is a sentence written for a tooltip, and four of them across a dial is prose rather than four labels - which shipped once, from a fallback chain that reached for one.
+- `updateRailPadSlot` and `setRailPadShape` in `railLayout.ts` are open to built-in pads, unlike `updateRailCatalogItem`.
+  Reshaping carries bindings across position for position as far as the new shape has positions: growing keeps everything, shrinking drops the rest, and the centre survives either.
 
 ### Sticky modifiers
 

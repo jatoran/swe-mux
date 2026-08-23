@@ -36,7 +36,7 @@ import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsMan
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
-import { padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
+import { padRingCount, padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { RailPad, useRailPad, type RailPadSlotView } from './RailPad'
@@ -3682,7 +3682,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const pad=item.pad
     if(!pad)return []
     const views:RailPadSlotView[]=[]
-    for(const key of padSlotKeys(pad.orientation)){
+    for(const key of padSlotKeys(pad)){
       const slot=pad.slots[key]
       if(!slot)continue
       const target=railItems.get(slot.item)
@@ -3695,7 +3695,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // The sentence belongs here and only here: a tooltip has room for one and a wedge
         // does not.
         title:view?.title||label,
-        mode:railPadSlotMode(slot,target,pad.orientation),
+        mode:railPadSlotMode(slot,target,padRingCount(pad)),
         disabled:!view||!!view.disabled,
         run:anchor=>view?.run(anchor),
       })

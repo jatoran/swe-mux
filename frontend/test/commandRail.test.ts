@@ -27,7 +27,7 @@ test('the default layout seeds one rail row, identical on both devices', () => {
 test('default rail places the four pads instead of what they hold, and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
     'relaunch', 'padCopy', 'branch', 'approveOnce', 'paste', 'padPickers', 'kbdToggle',
-    'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'padArrows', 'down', 'padJump',
+    'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'padArrows', 'padJump',
     'modCtrl', 'modAlt', 'modShift',
     'markdownDivider', 'markdownCodeFence', 'ctrlU', 'restoreInput',
     'newline', 'rewind', 'endSession', 'attach',
