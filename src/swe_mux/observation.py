@@ -756,6 +756,49 @@ def _recall_tool_call(
     return _tool_names(session).pop(call_id, fallback), _tool_targets(session).pop(call_id, None)
 
 
+# Attach replay is read in bounded windows rather than whole-file. A resumed
+# Claude conversation's transcript is routinely tens of MB, and reading all of it
+# and running `json.loads` over every line is a single uninterruptible span on the
+# event loop: measured on the primary host before this was chunked, a 24 MiB
+# transcript stalled the loop for 290ms and a 48 MiB one for 691ms, once per attach
+# and again per rebind, with the loop never serviced in between. The window is also
+# what bounds peak memory to a chunk and its decoded records instead of to the file.
+_TAIL_CHUNK_BYTES = 512 * 1024
+# The file's leading bytes, kept as a content identity. A provider that rewrites the
+# transcript in place to the same length changes nothing `stat()` is *guaranteed* to
+# report, and these bytes are the only evidence of that case.
+_TAIL_PREFIX_BYTES = 64
+# How long the tailer will go without re-reading that prefix while `stat()` reports
+# that nothing whatsoever has changed. Any rewrite that moves the size, the file id,
+# or the write time is caught on the very next poll by the identity check; this
+# backstop covers only the rewrite that moves none of them, which on Windows
+# includes a same-length rewrite whose mtime stays frozen (see `initial_size`).
+_TAIL_IDENTITY_PROBE_SECONDS = 2.0
+
+# `stat()` fields that are trustworthy as a *change* signal. Membership is
+# deliberately one-directional: a field moving proves the file changed, but no field
+# staying put is allowed to prove it did not - `st_mtime_ns` in particular can stay
+# frozen at creation for hours on Windows while the file is being written.
+_TailIdentity = tuple[int, int, int, int]
+
+
+def _read_transcript_window(
+    path: Path, offset: int, length: int, prefix_len: int
+) -> tuple[bytes, bytes]:
+    """Read the leading `prefix_len` bytes and the `length` bytes at `offset`.
+
+    One open serves both, so verifying the file's identity never costs a second
+    one. Called from a worker thread: on a multi-tens-of-MB transcript the open,
+    the seek and the read together are long enough to be felt as a loop stall.
+    """
+    with path.open("rb") as handle:
+        prefix = handle.read(prefix_len) if prefix_len > 0 else b""
+        if length <= 0:
+            return prefix, b""
+        handle.seek(offset)
+        return prefix, handle.read(length)
+
+
 class JsonlTailer:
     def __init__(self, path: Path, on_growth: Callable[[], None] | None = None) -> None:
         self.path = path
@@ -776,10 +819,44 @@ class JsonlTailer:
         except OSError:
             self.initial_size = 0
         self._caught_up = self.initial_size == 0
+        self._identity: _TailIdentity | None = None
+        self._prefix_checked_at = 0.0
 
     def _note_growth(self) -> None:
         if self.on_growth is not None:
             self.on_growth()
+
+    def _prefix_differs(self, current: bytes) -> bool:
+        """True when the file's leading bytes are no longer the ones we read."""
+        if self.prefix is None:
+            return False
+        compared = min(len(self.prefix), len(current))
+        return current[:compared] != self.prefix[:compared]
+
+    def _begin_replacement(self, size: int) -> None:
+        self.offset = 0
+        self.decoder.reset()
+        self.prefix = None
+        # Replacement content is a fresh historical snapshot.  Never compare its
+        # byte positions with the original attach size; doing so suppresses live
+        # records until the rewritten file grows past its former length.
+        self.initial_size = size
+        self._caught_up = False
+        # Truncated or rewritten under us: whoever owns this file is demonstrably
+        # still writing it.
+        self._note_growth()
+
+    def _read_and_decode(
+        self, offset: int, length: int, prefix_len: int
+    ) -> tuple[bytes, bytes, list[tuple[int, dict[str, Any]]]]:
+        """Read one bounded window and decode it, both in the calling thread.
+
+        Handed to `asyncio.to_thread` so the decode travels with its read instead
+        of costing a second hop. Mutating `self.decoder` off the loop is safe only
+        because `_drain` is strictly sequential - one window is in flight at a time.
+        """
+        prefix, chunk = _read_transcript_window(self.path, offset, length, prefix_len)
+        return prefix, chunk, self.decoder.feed_with_positions(chunk)
 
     async def events(self, stop: asyncio.Event):  # type: ignore[no-untyped-def]
         """Yield records plus explicit replay-boundary markers.
@@ -796,46 +873,96 @@ class JsonlTailer:
                 pass
         while not stop.is_set():
             try:
-                size = self.path.stat().st_size
-                reset = size < self.offset
-                if not reset and self.offset and self.prefix is not None:
-                    with self.path.open("rb") as handle:
-                        current_prefix = handle.read(min(64, size))
-                    compared = min(len(self.prefix), len(current_prefix))
-                    reset = current_prefix[:compared] != self.prefix[:compared]
-                if reset:
-                    self.offset = 0
-                    self.decoder.reset()
-                    self.prefix = None
-                    # Replacement content is a fresh historical snapshot.  Never
-                    # compare its byte positions with the original attach size;
-                    # doing so suppresses live records until the rewritten file
-                    # grows past its former length.
-                    self.initial_size = size
-                    self._caught_up = False
-                    # Truncated or rewritten under us: whoever owns this file is
-                    # demonstrably still writing it.
-                    self._note_growth()
-                    yield None, True
-                if size > self.offset:
-                    with self.path.open("rb") as handle:
-                        if self.prefix is None or len(self.prefix) < 64:
-                            self.prefix = handle.read(min(64, size))
-                        handle.seek(self.offset)
-                        chunk = handle.read(size - self.offset)
-                    self.offset = size
-                    # Only bytes past the attach snapshot are evidence of a *live*
-                    # writer; replaying what was already there proves nothing.
-                    if size > self.initial_size:
-                        self._note_growth()
-                    for position, item in self.decoder.feed_with_positions(chunk):
-                        yield item, position <= self.initial_size
-                if not self._caught_up and self.offset >= self.initial_size:
-                    self._caught_up = True
-                    yield None, False
+                async for item in self._poll(stop):
+                    yield item
             except FileNotFoundError:
                 pass
             await asyncio.sleep(0.25)
+
+    async def _poll(self, stop: asyncio.Event):  # type: ignore[no-untyped-def]
+        """One tick: settle whether the file was replaced, then drain new bytes."""
+        stat = self.path.stat()
+        size = stat.st_size
+        identity: _TailIdentity = (size, stat.st_ino, stat.st_dev, stat.st_mtime_ns)
+        probe_due = identity != self._identity or (
+            time.monotonic() - self._prefix_checked_at >= _TAIL_IDENTITY_PROBE_SECONDS
+        )
+        self._identity = identity
+        reset = size < self.offset
+        if not reset and size <= self.offset and self.offset and self.prefix is not None:
+            # No unread bytes, so an in-place rewrite is only visible in the bytes
+            # themselves. Reading them used to cost a dedicated open on every 250ms
+            # tick of every observed session, forever, purely to catch a rewrite
+            # that happened to land on the same length. Take that open only when
+            # `stat()` stopped describing the file we last read - or when the
+            # backstop is due, because on Windows `stat()` is allowed to describe a
+            # changed file unchanged.
+            if probe_due:
+                self._prefix_checked_at = time.monotonic()
+                current_prefix, _chunk = await asyncio.to_thread(
+                    _read_transcript_window, self.path, 0, 0, _TAIL_PREFIX_BYTES
+                )
+                reset = self._prefix_differs(current_prefix)
+        if reset:
+            self._begin_replacement(size)
+            yield None, True
+        async for item in self._drain(stop, size, verified=reset):
+            yield item
+        if not self._caught_up and self.offset >= self.initial_size:
+            self._caught_up = True
+            yield None, False
+
+    async def _drain(  # type: ignore[no-untyped-def]
+        self, stop: asyncio.Event, size: int, *, verified: bool
+    ):
+        """Yield every record in ``self.offset..size``, one bounded window at a time.
+
+        `verified` says the file's identity is already settled for this tick. When
+        it is not, the first window carries the prefix and is compared before its
+        records are released: a rewrite that also grew past our offset would
+        otherwise be replayed as if it were an append to the file it replaced.
+        """
+        noted = False
+        while not stop.is_set() and self.offset < size:
+            want_prefix = (
+                not verified or self.prefix is None or len(self.prefix) < _TAIL_PREFIX_BYTES
+            )
+            prefix, chunk, records = await asyncio.to_thread(
+                self._read_and_decode,
+                self.offset,
+                min(_TAIL_CHUNK_BYTES, size - self.offset),
+                _TAIL_PREFIX_BYTES if want_prefix else 0,
+            )
+            if want_prefix:
+                self._prefix_checked_at = time.monotonic()
+                if not verified and self._prefix_differs(prefix):
+                    # The window we just decoded belongs to a file that no longer
+                    # exists. `_begin_replacement` resets the decoder, so the bytes
+                    # it consumed leave no trace; the loop re-reads from zero.
+                    self._begin_replacement(size)
+                    verified = True
+                    yield None, True
+                    continue
+                if self.prefix is None or len(self.prefix) < _TAIL_PREFIX_BYTES:
+                    self.prefix = prefix
+            verified = True
+            if not chunk:
+                # Shrunk between the stat and the read; the next tick's `size <
+                # offset` check is what resolves that, not a partial replay here.
+                break
+            if not noted and size > self.initial_size:
+                # Only bytes past the attach snapshot are evidence of a *live*
+                # writer; replaying what was already there proves nothing. Read
+                # after the reset check, so a replacement reports its arrival once
+                # (from `_begin_replacement`) rather than twice.
+                self._note_growth()
+                noted = True
+            self.offset += len(chunk)
+            for position, item in records:
+                yield item, position <= self.initial_size
+            if not self._caught_up and self.offset >= self.initial_size:
+                self._caught_up = True
+                yield None, False
 
 
 class IncrementalJsonlDecoder:

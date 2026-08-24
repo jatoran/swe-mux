@@ -21,6 +21,8 @@ const GRID = '.rail-overflow-grid'
 const STRIP = '.overflow-rail .terminal-action-scroll'
 const ROW_CHIPS = `${STRIP} > [data-key]`
 const DROPUP = '.rail-dropup'
+const TOAST = '.terminal-clip-toast'
+const HUD = '.interaction-hud'
 
 test.use({ viewport: { width: 520, height: 420 } })
 
@@ -116,39 +118,85 @@ async function wedgesAgainstStrips(page: Page) {
 test('a right wedge marks its own strip, not a column shared with the row above', async ({ page }) => {
   // The wedge says "content continues past here", so "here" has to be where this row's
   // content is actually cut. Positioned from the *row* edge instead, it had to name the
-  // trailing cluster's width — and a row carrying status text has a wider one, so the wedge
-  // was drawn past its strip, over furniture that answers to no tap. That is the bug: not a
-  // background painted over a chip, but an indicator standing off the end of its own rail.
+  // trailing cluster's width in a `calc` and could only be right for one cluster width.
+  // Resolved against each strip's own wrapper it cannot be wrong for any of them, which is
+  // what this measures — the alignment between rows is a consequence, not the rule.
   await page.goto('/rail-overflow-harness.html?rows=2')
-  await expect(page.locator('.rail-row-trailing > span')).toHaveText(['Copied'])
-  const rows = await wedgesAgainstStrips(page)
-  for (const row of rows) expect(row.wedge).toBe(row.strip - 1)
-  // And the two rows genuinely disagree here, so this is not the aligned case restated:
-  // the status row's strip ends earlier, and its wedge goes with it.
-  expect(rows[1].wedge).toBeLessThan(rows[0].wedge)
-})
-
-test('rows whose trailing furniture matches keep their wedges in one column', async ({ page }) => {
-  // The alignment the old row-relative rule was reaching for, now falling out of the strips
-  // themselves — and reaching further than that rule did, since it holds for the empty
-  // status string production passes on the readout row nearly all the time.
-  await page.goto('/rail-overflow-harness.html?rows=2&status=')
-  await expect(page.locator('.rail-row-trailing > span')).toHaveCount(0)
   const rows = await wedgesAgainstStrips(page)
   for (const row of rows) expect(row.wedge).toBe(row.strip - 1)
   expect(rows[1].wedge).toBe(rows[0].wedge)
 })
 
-test('an empty status readout gives its width back to the chips', async ({ page }) => {
-  // The caller marks the readout row by passing a string, and that string is empty unless
-  // there is something to say. Rendered anyway it was a silent tax on the busiest row: its
-  // own padding plus the cluster's gap, taken out of the scrolling strip.
+test('a rail row carries no message of its own, so nothing takes a chip\'s width', async ({ page }) => {
+  // The selection readout used to live in the trailing cluster, which does not shrink, under
+  // a `34vw` cap — viewport units inside a pane that is usually a fraction of the viewport.
+  // In a split narrower than that cap it took the entire row and the chips went with it.
+  // The cluster is the drawer control alone now, and the strip runs right up to it.
+  await page.goto('/rail-overflow-harness.html?rows=2')
   await expect(page.locator('.rail-row-trailing > span')).toHaveCount(0)
-  const gap = await page.locator('.rail-row').evaluate(row => {
+  const gaps = await page.locator('.terminal-action-rows > .rail-row').evaluateAll(rows => rows.map(row => {
     const strip = row.querySelector('.terminal-action-scroll')!.getBoundingClientRect()
     return Math.round(row.querySelector('.rail-more')!.getBoundingClientRect().left - strip.right)
+  }))
+  expect(gaps).toEqual([0, 0])
+})
+
+/** The rail's box and the toast's, which is the only pair the placement rule is about. */
+async function toastAgainstRail(page: Page) {
+  await expect(page.locator(TOAST)).toBeVisible()
+  return page.evaluate(() => {
+    const toast = document.querySelector('.terminal-clip-toast')!.getBoundingClientRect()
+    const rail = document.querySelector('.terminal-action-rail')!.getBoundingClientRect()
+    const pane = document.querySelector('.terminal-surface')!.getBoundingClientRect()
+    return {
+      toast: { left: toast.left, right: toast.right, bottom: toast.bottom, width: toast.width },
+      rail: { left: rail.left, right: rail.right, top: rail.top },
+      pane: { left: pane.left, right: pane.right, width: pane.width },
+    }
   })
-  expect(gap).toBe(0)
+}
+
+test('a terminal message sits above the command rail, never on it', async ({ page }) => {
+  // Where the selection readout went, and the rule the whole change exists to state: a
+  // message is drawn over the buffer and stops at the rail's top edge. It shares that edge
+  // rather than clearing it, because the toast has no bottom border and reads as a tab
+  // growing off the rail.
+  await page.goto('/rail-overflow-harness.html?rows=2&toast=1,284 selected')
+  const { toast, rail } = await toastAgainstRail(page)
+  expect(Math.round(toast.bottom)).toBe(Math.round(rail.top))
+  // Right-aligned with the rail's trailing edge, give or take the toast's own margin.
+  expect(toast.right).toBeLessThanOrEqual(rail.right)
+})
+
+test('a long terminal message is capped by its pane, not by the viewport', async ({ page }) => {
+  // The defect the readout had, restated where the readout now lives: a cap in `vw` is a
+  // claim about the window, and a pane in a split is not the window. 180px of a 520px
+  // viewport is narrower than the old `34vw`/`60vw` caps, so a viewport-relative cap would
+  // overrun the pane here and a pane-relative one cannot.
+  const message = 'x'.repeat(400)
+  await page.goto(`/rail-overflow-harness.html?rows=2&pane=180&toast=${message}`)
+  const { toast, pane } = await toastAgainstRail(page)
+  expect(pane.width).toBe(180)
+  expect(toast.width).toBeLessThanOrEqual(pane.width)
+  expect(toast.left).toBeGreaterThanOrEqual(pane.left - 1)
+  expect(toast.right).toBeLessThanOrEqual(pane.right + 1)
+})
+
+test('an app-level message pinned to the viewport is lifted clear of the rail', async ({ page }) => {
+  // `.interaction-hud` is fixed to the viewport's bottom-right corner, which is exactly where
+  // a maximised window puts the command rail, so it landed *on* the chips - and its
+  // neighbours in that corner, the notification toast and the error stack, take pointer
+  // events, so the same overlap was stealing taps. The lift is measured rather than named
+  // because rail height is a row count times a density variable.
+  await page.goto('/rail-overflow-harness.html?rows=2&hud=Copied to clipboard')
+  await expect(page.locator(HUD)).toBeVisible()
+  const boxes = await page.evaluate(() => ({
+    hud: document.querySelector('.interaction-hud')!.getBoundingClientRect().bottom,
+    rail: document.querySelector('.terminal-action-rail')!.getBoundingClientRect().top,
+    published: getComputedStyle(document.documentElement).getPropertyValue('--rail-clearance').trim(),
+  }))
+  expect(boxes.published).not.toBe('0px')
+  expect(boxes.hud).toBeLessThanOrEqual(boxes.rail)
 })
 
 test('the drawer count is the stable full-row count at every width', async ({ page }) => {

@@ -13,11 +13,12 @@ export type PointerDragActivation=
 export type PointerDragMoveDecision='wait'|'activate'|'cancel'
 
 export const POINTER_MOVE_DRAG:PointerDragActivation={mode:'movement',threshold:5}
-export const MOBILE_PROJECT_HOLD_DRAG:PointerDragActivation={mode:'hold',delayMs:325,slop:8}
-// The mobile reorder activation for the sidebar/tab surfaces: hold still and the row lifts,
-// then drag it or release in place for the menu. Lifting on stillness (not on a move) is what
-// keeps the swipe recognizer from racing the drag. Slop is generous so ordinary hold jitter
-// does not read as the scroll that cancels the lift.
+// The mobile reorder activation for every hold-to-lift surface — sidebar rows, tab strips,
+// and the Action editor's chips and catalog: hold still and the item lifts, then drag it or
+// release in place. Lifting on stillness (not on a move) is what keeps the swipe recognizer
+// from racing the drag. Slop is generous so ordinary hold jitter does not read as the scroll
+// that cancels the lift; the narrower 8px it replaced sat inside a resting finger's jitter,
+// and past-slop is a *cancel*, so the drag did not merely wait — it died.
 export const MOBILE_HOLD_DRAG:PointerDragActivation={mode:'hold',delayMs:350,slop:16}
 // Kept for the drawer strip, whose touch-action:none tabs never scroll under a pending hold.
 export const MOBILE_HOLD_MOVE_DRAG:PointerDragActivation={mode:'hold-move',delayMs:250,slop:8}

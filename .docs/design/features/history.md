@@ -177,20 +177,31 @@
   history reports only how many there were.
   Both transcript views can additionally disclose native tool names and input arguments behind a default-off toggle.
   Tool results, operational telemetry, and extra transcript persistence are excluded from that disclosure.
-- **The single-conversation view is transcript-first, and everything above it collapses.**
-  The detail view is an action bar over five bands - the run's figures, its commits, its work
-  lineage, its run notes, and its behavioural timeline - and each band is a disclosure whose
-  closed line already says what a reader would open it to find: the state, model, final message
-  time and cost for the run; the commit count and the newest commit; the number of links, notes,
-  or timeline entries.
-  Only the transcript grows; every band is bounded and scrolls when open, so a run with forty
-  commits cannot push the conversation off the view by being expanded.
+- **The single-conversation view is transcript-first, and every band collapses - including the
+  transcript.**
+  The detail view is an action bar over six bands - the run's figures, its commits, its work
+  lineage, its run notes, its behavioural timeline, and the conversation itself - and each band
+  is a disclosure whose closed line already says what a reader would open it to find: the state,
+  model, final message time and cost for the run; the number of links, notes, timeline entries,
+  or messages.
+  **A conversation opens on its transcript and on nothing else**, on every device.
+  Every other band is metadata about the run, its closed line already carries the fact most
+  readers want, and expanding is one click - so the cheaper default is closed, and the
+  conversation outweighs every band above it put together.
+  Only the transcript grows; every metadata band is bounded and scrolls when open, so a run with
+  forty commits cannot push the conversation off the view by being expanded.
   Defaults are applied when a conversation is opened rather than tracked on a media query, so a
   reader who expands a band keeps it expanded while they read and a window dragged across the
   mobile breakpoint does not fold up what they were reading.
-  A phone opens every band closed, because the transcript is the view there and each open band
-  is subtracted from the only viewport there is; a desktop opens the run's figures and its
-  behavioural timeline and leaves the three list-shaped bands closed.
+- **The Commits band is the one whose closed line is suppressed.** Every other closed line is a
+  count, which is one short line; Commits carries a whole commit subject, so on any realistic
+  width the "collapsed" band wrapped to a taller block than several of the bands it sits between
+  - the opposite of what collapsing it was for. Open, its rows say the same thing per commit.
+- **The transcript's control is a sibling of the conversation, not a `<details>` around it.**
+  A `<details>` interposes a UA-owned content box between the element and its children, and that
+  box is the flex item, so a conversation inside one sizes to its own text and leaves the bottom
+  of the view empty. The band and the conversation are tied together by `aria-controls` instead,
+  and the band is drawn to match the five above it exactly.
 - **The behavioural timeline previews its two newest entries.** The rest are behind a second
   disclosure inside the band, and the preview is sorted here rather than trusted from the
   transcript route, which returns a run's records oldest-first: a mis-ordered preview is
