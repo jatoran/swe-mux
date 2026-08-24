@@ -130,9 +130,25 @@ Pure moves plus the AppKey migration; no behavior changes, so review is structur
 
 ### S6 - session.py and observation follow-ups (after wave 1 lands; conflicts with S2 otherwise)
 
-- [ ] S6.1 Attach replay off-loop (F10): move the whole-file read and per-line JSON decode of transcript attach into a thread with chunked yielding, so a multi-ten-MB transcript cannot stall the event loop; bound peak memory to a chunk, not the file.
-- [ ] S6.2 Poll-path cheapening (F10): stop re-opening the file for the 64-byte prefix probe on every 250ms poll where a cheaper identity check suffices.
-- [ ] S6.T Tests: attach a large synthetic transcript and assert loop responsiveness (use the `until` settle helpers, no fixed sleeps); rewrite-detection regression.
+- [x] S6.1 Attach replay off-loop (F10): move the whole-file read and per-line JSON decode of transcript attach into a thread with chunked yielding, so a multi-ten-MB transcript cannot stall the event loop; bound peak memory to a chunk, not the file.
+- [x] S6.2 Poll-path cheapening (F10): stop re-opening the file for the 64-byte prefix probe on every 250ms poll where a cheaper identity check suffices.
+- [x] S6.T Tests: attach a large synthetic transcript and assert loop responsiveness (use the `until` settle helpers, no fixed sleeps); rewrite-detection regression.
+
+Done 2026-08-24, entirely inside `observation.py`; the tailer's call sites in `session.py` needed no change.
+
+Measured on the primary host with a synthetic Claude transcript, worst event-loop gap across one attach replay:
+
+| transcript | before | after |
+| --- | --- | --- |
+| 24 MiB (40,329 records) | 290 ms, loop serviced once | 11-16 ms, serviced ~10,000 times |
+| 48 MiB (80,659 records) | 691 ms, loop serviced once | 9-17 ms, serviced ~19,000 times |
+
+Replay wall time did not regress (it improved slightly: 691 ms to ~460-650 ms at 48 MiB), so the loop time is given back rather than moved.
+
+Two things are worth carrying forward.
+The replay boundary is unchanged by construction: a record's historical/live label is still its decoded byte position against the attach snapshot, and a test drives five-byte windows so a boundary falls inside every record and asserts the emitted sequence is byte-for-byte the one an unwindowed read produced.
+And S6.2 could not be a pure `stat()` check - Windows freezes `st_mtime` on a file its writer holds open, so a same-length in-place rewrite is entitled to leave every readable field unchanged.
+The identity check is therefore one-directional (a field moving proves change; nothing staying still proves the absence of it) and a 2 s prefix backstop closes the case, taking an idle session from four opens a second to at most one every two seconds.
 
 ### D2 - deploy checkpoint (primary; no reap)
 
