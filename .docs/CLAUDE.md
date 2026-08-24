@@ -151,6 +151,29 @@
 - Changing Windows desktop packaging, WebView, tray, login startup, or daemon shutdown:
   `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
   `design/features/remote-access.md`, `technical/backend/packages.md`
+- **Adding, removing, or upgrading any dependency** - Python or frontend:
+  `packaging/license_audit.py` (the allowlist and the closure walk),
+  `THIRD-PARTY-NOTICES.md` and `packaging/third_party_licenses.json` (both generated,
+  never hand-edited), `design/features/desktop-shell.md`, `CONTRIBUTING.md`.
+  The rule the gate exists to enforce: **a dependency's declared license does not describe
+  what its wheel ships.** PyAV declares BSD-3-Clause and links GPL x264/x265; sherpa-onnx
+  declares Apache-2.0 and statically links espeak-ng. So the check has two halves that must
+  both stay alive - `license_audit.py --check` reads the resolved closure's metadata and runs
+  in the verification gate, and `build_desktop.verify_bundle_licenses` reads the built tree
+  for the payloads by artifact name. Neither substitutes for the other.
+  GPL and AGPL may never enter. LGPL needs an `ALLOWLIST` entry *and* must ship as
+  replaceable source under `_internal/<pkg>/`, which is why `pystray` and `num2words` sit in
+  the spec's `collect_all` loop. No espeak-ng in any form, which is a dependency-review rule
+  rather than a preference (`development/ROADMAP.md` Phase 10.5 holds the measurements).
+  After any dependency change: `uv sync --extra desktop` then
+  `uv run python packaging/license_audit.py --write`, and commit both generated files.
+- Changing the project's own license, trademark posture, contribution terms, or how swe-mux
+  describes its relationship to the agent vendors: `LICENSE`, `NOTICE`, `TRADEMARK.md`,
+  `CONTRIBUTING.md`, `README.md`, `site/index.html`,
+  `design/features/provider-accounts.md` ("Scope and terms"),
+  `development/ROADMAP.md` Phase 10.5 (the recorded decisions and why MIT, AGPL, and a CLA
+  were each rejected). Contributions arrive under a DCO sign-off, not a CLA; that choice is
+  what makes relicensing the core impossible later, and it is deliberate.
 - Changing reusable prompt templates: `design/features/prompt-library.md`,
   `design/interfaces.md`, `design/data-model.md`
 - Changing the prompt queue (message model, states, head-of-line, send-next, stranding,

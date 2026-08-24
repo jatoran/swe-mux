@@ -97,6 +97,15 @@ Only authentication is copied. Existing provider config, skills, projects, trans
 running processes stay in their shared normal directories. Quotas refresh for all accounts
 every 15 minutes; transient failures retain the last success for 30 minutes.
 
+This is a convenience for **one person switching between accounts they personally own
+and pay for** - a personal subscription and a work one, say - replacing the manual
+logout/login cycle the provider CLIs otherwise require. It is not account pooling and
+not a way around a usage limit: accounts are never shared between people, saved
+credentials are stored locally and sent nowhere but the provider's own endpoints,
+sessions are never load-balanced across accounts to extend a quota, and switching is
+always an explicit user action rather than something the daemon does when a limit is
+reached. Each account remains subject to your own agreement with that provider.
+
 Configuration lives in `~/.mux/config.toml`; meta-hooks live in
 `~/.mux/hooks.toml`. By default the daemon listens on localhost and the machine's
 detected Tailscale IPv4 address. Open the tailnet URL reported by Settings → Remote and
@@ -128,3 +137,30 @@ the read-only History browser (disable with `reconcile_external_history = false`
 The original transcript files are never moved or deleted.
 
 The maintained design contract starts at [`.docs/design/00_OVERVIEW.md`](.docs/design/00_OVERVIEW.md).
+
+## License
+
+swe-mux is licensed under the [Apache License 2.0](LICENSE). See [`NOTICE`](NOTICE)
+for attribution and [`TRADEMARK.md`](TRADEMARK.md) for what the license's trademark
+reservation does and does not allow.
+
+Third-party software redistributed with swe-mux is listed in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), generated from the lockfiles by
+`packaging/license_audit.py` so it cannot drift. swe-mux ships no GPL or AGPL code.
+It ships two LGPL libraries, `pystray` and `num2words`, each as replaceable source
+inside the bundle; the notices file says how to substitute your own build.
+
+Contributions are welcome under a [DCO sign-off](CONTRIBUTING.md) - `git commit -s`,
+no CLA.
+
+### Not affiliated with the agent vendors
+
+swe-mux launches and observes coding-agent CLIs published by other vendors,
+including Anthropic's Claude Code and OpenAI's Codex CLI. It is **not affiliated
+with, endorsed by, or sponsored by** Anthropic, OpenAI, or any other such vendor,
+and it uses their names only to identify which tool a feature works with.
+
+You run those CLIs under your own account and your own agreement with each vendor.
+The same is true of the optional OpenRouter and Hugging Face integrations: they use
+your own API key and consume your own quota, under your agreement with those
+services. swe-mux proxies nothing and resells nothing.

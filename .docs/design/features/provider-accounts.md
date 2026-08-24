@@ -14,6 +14,38 @@
 - Continuous durable quota tracking for every saved account. Selection never creates isolated
   config, skill, project, or transcript directories.
 
+## Scope and terms
+
+The feature is **one operator switching between accounts they personally own**, replacing
+the manual logout/login cycle the provider CLIs otherwise require.
+Read cold - by a reviewer, an investor's diligence scan, or a provider - it could instead be
+read as account pooling or rate-limit circumvention, so the boundaries that make it the
+former are design constraints rather than incidental behaviour, and each is enforced by the
+model rather than by convention.
+
+- **One live system login per provider, always.** There is no concurrent multi-account
+  execution: sessions run against whatever single credential is in the provider's normal auth
+  file. Selection replaces that file; it does not multiplex over it.
+- **Switching is an explicit user action.** No code path selects an account in response to a
+  quota reading, an exhausted limit, or a failed request. Quota polling is observation that
+  informs the operator, never an input to selection.
+- **No pooling and no sharing.** Saved snapshots live in the operator's own data directory on
+  their own machine. Nothing distributes credentials between people or machines, and the
+  tailnet surface exposes no credential material.
+- **Credentials are sent only to the provider that issued them**, for identity verification
+  and quota reads (`CLAUDE_USAGE_URL`, `CLAUDE_PROFILE_URL`, `CODEX_USAGE_URL` in
+  `provider_accounts.py`). swe-mux proxies no provider traffic and resells no access.
+- **Each account remains subject to the operator's own agreement with that provider**, which
+  swe-mux neither modifies nor mediates. The same holds for the optional OpenRouter and
+  Hugging Face integrations: the user's own key, the user's own quota, the user's own
+  agreement.
+
+Quota polling reaches the endpoints the provider CLIs themselves use rather than a documented
+public API, so those endpoints can change or be withdrawn without notice.
+The **Failure modes** rule "provider/network/auth failure ⇒ stale-retention policy; no account
+switch" is what keeps that dependency from being load-bearing: an unreadable quota degrades to
+the last good reading and changes no state.
+
 ## Key concepts
 
 - Saved account: identity metadata plus one private provider auth-file snapshot.
