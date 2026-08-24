@@ -297,11 +297,49 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 
 ### S8 - subprocess and process consolidation (usage, provider_accounts, git_monitor, harness, agent_environment, processes)
 
-- [ ] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
-- [ ] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
-- [ ] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
-- [ ] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
-- [ ] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
+- [x] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
+- [x] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
+- [x] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
+- [x] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
+- [x] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
+
+Delivered as `src/swe_mux/bounded_subprocess.py` (`run_bounded`, `bounded_read`) and
+`src/swe_mux/cli_version.py` (`probe`, `CliVersion`), with
+`tests/test_bounded_subprocess.py`, `tests/test_cli_version_probe.py`,
+`tests/test_processes_snapshot_grouping.py`, and six additions to
+`tests/test_worktree_graveyard.py`.
+
+Four decisions worth knowing before D3:
+
+- **`run_bounded` raises `OSError` from the spawn rather than folding it into an
+  outcome.** Every caller already phrases its own "could not start" diagnostic
+  (`install ccusage`, `Could not start codex`), and swallowing the error would have
+  made each of them re-derive it from a string field. Everything *after* the spawn
+  reaps the tree on its way out, `CancelledError` included - which is the gap the
+  audit correctly identified, against a timeout leak that did not exist.
+- **The cap is per stream and reported, never hidden.** `usage.py` raises its
+  existing "exceeded 10 MiB" on `stdout_truncated` (same message, but the limit now
+  bounds memory instead of describing it after the fact), while `git_monitor._git`
+  returns a new code **125** beside its reserved 124: every Git caller parses what it
+  gets back, so a capture that lost its middle has to read as a failure rather than
+  as a smaller repository.
+- **The two `probe_cli_version` bodies were unified at the mechanism and kept apart
+  at the presentation.** One subprocess per resolved executable per 5-minute TTL,
+  `which_real` resolution for both (which additionally stops the agent-environment
+  path from ever probing a mux shim); the registry still returns the version *token*
+  because `version_is_untested` compares it against a bound, and the inventory still
+  returns the CLI's own line and still requires a zero exit because it is shown to a
+  person and used as an MCP catalog cache key. Collapsing those would have changed a
+  displayed string and a cache key for nothing.
+- **The graveyard's retry bound is in memory and dies with the daemon**, which is the
+  point: a restart is a cheap deliberate "try that again", so a lock held by a process
+  that has since exited gets a fresh budget while a live one stops writing the same
+  warning forever. An absent path now counts as purged and says nothing at all.
+
+One behavior difference worth watching in the D3 soak: `git_monitor` now spawns Git
+with `stdin=DEVNULL` (it previously inherited the daemon's), so a Git invocation that
+decides to prompt fails fast instead of blocking on a stdin nothing will ever write.
+No query here reads stdin, so this should be invisible.
 
 ### S9 - MCP and automation consumers (mcp.py, deterministic_consumers.py)
 

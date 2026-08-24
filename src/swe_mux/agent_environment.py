@@ -24,7 +24,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import threading
 import time
 import tomllib
@@ -39,7 +38,6 @@ from .adapters.codex import codex_data_home
 from .agent_skills import discover_skills, parse_frontmatter
 from .harness import Backend, descriptor, is_agent_harness, require_backend
 from .path_identity import same_path
-from .subprocess_flags import background_creation_flags
 
 Scope = Literal["built_in", "managed", "user", "project", "local", "session", "unknown"]
 
@@ -47,10 +45,8 @@ SCHEMA_VERSION = 1
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_ITEMS_PER_SECTION = 256
 CACHE_SECONDS = 10.0
-VERSION_CACHE_SECONDS = 3600.0
 
 _CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
-_VERSION_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
 _CACHE_LOCK = threading.Lock()
 _SAFE_KEY = re.compile(r"[A-Za-z0-9_.-]{1,160}\Z")
 
@@ -455,44 +451,28 @@ def _runtime(backend: str, executable: str, args: list[str], model: str | None) 
 
 
 def probe_cli_version(backend: str, executable: str, *, refresh: bool = False) -> str | None:
-    """The cached `--version` string for a harness binary.
+    """The cached `--version` line for a harness binary.
 
     Public because the CLI's identity is part of an MCP tool catalog's cache key
     as well as of the inventory header: a CLI upgrade can change which servers a
     session has and what they publish, and a fingerprint that ignored it would
     keep serving the old catalog after the upgrade.
+
+    The probe itself is `cli_version.py`, shared with the harness registry. What
+    stays here is this surface's own contract: the name check that refuses to run a
+    binary the session did not say was its harness, the CLI's *own line* rather than
+    a bare token (it is shown to a person), and the requirement that the CLI exited
+    zero - a fingerprint drawn from a failed run would change on every failure.
     """
+    from .cli_version import probe
+
     name = Path(executable).name.casefold()
     if backend not in name:
         return None
-    key = (backend, executable)
-    now = time.monotonic()
-    with _CACHE_LOCK:
-        cached = _VERSION_CACHE.get(key)
-    if cached and not refresh and now - cached[0] < VERSION_CACHE_SECONDS:
-        return cached[1]
-    version: str | None = None
-    try:
-        completed = subprocess.run(
-            [executable, "--version"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=2,
-            check=False,
-            creationflags=background_creation_flags(),
-        )
-        first = completed.stdout.strip().splitlines()[0][:120] if completed.stdout.strip() else ""
-        if completed.returncode == 0 and first:
-            version = first
-    except (OSError, subprocess.SubprocessError):
-        version = None
-    with _CACHE_LOCK:
-        _VERSION_CACHE[key] = (now, version)
-    return version
+    result = probe(executable, refresh=refresh)
+    if result is None or result.exit_code != 0:
+        return None
+    return result.first_line[:120] or None
 
 
 def _config_sources(backend: Backend, cwd: Path, args: list[str]) -> list[ConfigSource]:
@@ -1793,6 +1773,8 @@ def discover_agent_environment(
 
 
 def clear_cache() -> None:
+    from .cli_version import clear_cache as clear_version_cache
+
     with _CACHE_LOCK:
         _CACHE.clear()
-        _VERSION_CACHE.clear()
+    clear_version_cache()

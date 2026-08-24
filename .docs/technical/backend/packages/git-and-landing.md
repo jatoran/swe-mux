@@ -30,7 +30,10 @@ Project-scoped comparison-ref inference and bounded review reads.
 Bounded read-only (`--no-optional-locks`) polling of every session's checkout for full HEAD, branch, dirty count, upstream divergence, worktree identity, root, HEAD-scoped diffstat, and merge-base comparison counts.
 Also same-checkout previous-HEAD event evidence; bounded commit-range, changed-file, combined-merge-diff, excluded-range, and blob-digest readers for attribution; deduplication by `(cwd, comparison override)`; and memoization of both diffstats and of ref inference.
 
-**Not:** comparison-ref inference itself (`git_review`), Project registry lookups (injected as a callable), or Git mutations.
+Every query runs through `bounded_subprocess.run_bounded`, so a repository large enough to answer with hundreds of megabytes cannot be held in the daemon's memory and a poll cancelled at shutdown cannot leave `git` running.
+Three codes, and they are not interchangeable to a caller: `124` is a timeout, `125` a capture that hit the output cap (every caller here parses what it gets, so a truncated answer must read as a failure rather than as a smaller repository), and anything else is Git's own.
+
+**Not:** comparison-ref inference itself (`git_review`), Project registry lookups (injected as a callable), the execution mechanics (`bounded_subprocess.py`), or Git mutations.
 
 ## `git_operations.py`
 

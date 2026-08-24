@@ -68,7 +68,7 @@ class VerifyStep:
 class VerifyProgress:
     """Live reading of a gate's output stream, fed the bytes as they arrive.
 
-    Fed from `worktree_exec.bounded_output`, which is already reading the merged
+    Fed from `bounded_subprocess.bounded_read`, which is already reading the merged
     stdout/stderr pipe to EOF. Observing that stream costs one split per chunk and
     changes nothing about it: the bytes handed back, and the exit status reported beside
     them, are exactly what they were.
