@@ -1098,6 +1098,95 @@ async def test_codex_subagent_activity_arms_and_ttl_decays() -> None:
     assert replay.session.status_health_counters["standing_activity_expired"] == 1
 
 
+async def test_codex_0_149_item_envelope_arms_the_same_annotation() -> None:
+    # Provider drift, captured from a real 0.149 rollout: codex stopped writing a
+    # top-level `sub_agent_activity` payload on 2026-08-06 and from 2026-08-07
+    # nests the identical fields inside `item_completed`'s `item`. Only the
+    # envelope moved, so the annotation, its evidence, and its count must not.
+    replay = DetectionReplay("codex")
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {"type": "event_msg", "payload": {"type": "task_started"}},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "thread_id": "01a03542-f5a9-7693-906c-b0c277663aa8",
+                    "turn_id": "01a03542-f726-7a11-87bc-5520732b44ad",
+                    "item": {
+                        "type": "SubAgentActivity",
+                        "id": "call_1WGe8Pvy3FpyQX1T9nbcl5nG",
+                        "kind": "started",
+                        "agent_thread_id": "01a03543-1379-7fc3-99b0-bb2529d5667a",
+                        "agent_path": "/root/child_check",
+                    },
+                },
+            },
+        }
+    )
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.kind, activity.count, activity.evidence) == (
+        "subagents",
+        1,
+        "transcript:sub_agent_activity",
+    )
+    (emitted,) = [
+        item for item in replay.normalized if item["type"] == "subagent_activity"
+    ]
+    assert emitted["kind"] == "started"
+
+
+async def test_codex_item_envelope_without_subagent_activity_is_not_a_subagent() -> None:
+    # `item_completed` is the envelope for every item codex completes — a
+    # reasoning block, a command, a message. Only the SubAgentActivity item is a
+    # subagent signal; treating the envelope itself as one would open the
+    # annotation on ordinary turn traffic.
+    replay = DetectionReplay("codex")
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {"type": "event_msg", "payload": {"type": "task_started"}},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"type": "Reasoning", "id": "item_0", "text": "thinking"},
+                },
+            },
+        }
+    )
+    assert replay.session.record.standing_activity == []
+    assert not [item for item in replay.normalized if item["type"] == "subagent_activity"]
+
+
+async def test_codex_subagent_depth_counts_path_segments_not_characters() -> None:
+    # `agent_path` is a slash-joined string on the wire, so a length is a
+    # character count; the depth is how many agents below the root it names.
+    from swe_mux.observation import _codex_subagent_depth
+
+    assert _codex_subagent_depth("/root/child_check") == 1
+    assert _codex_subagent_depth("/root/child/grandchild") == 2
+    assert _codex_subagent_depth("/root") == 0
+    assert _codex_subagent_depth(None) == 0
+    # The detection fixtures author it as a list; both stay readable.
+    assert _codex_subagent_depth(["a"]) == 1
+
+
 async def test_codex_trailing_subagent_record_does_not_reopen_after_hook_stop() -> None:
     replay = DetectionReplay("codex")
     await replay.step(

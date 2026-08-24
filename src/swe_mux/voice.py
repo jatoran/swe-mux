@@ -230,6 +230,36 @@ CREATE INDEX IF NOT EXISTS idx_voice_clips_stream
 # expression covers both and no listing has to special-case the unstreamed case.
 GROUP_KEY = "COALESCE(stream_id, id)"
 
+# The same membership test as `GROUP_KEY=?`, written so SQLite can answer it from
+# an index. A predicate over `COALESCE(stream_id, id)` is opaque to both indexes
+# on this table, so every per-stream lookup was a full scan of `voice_clips` -
+# and eviction does one per candidate stream, which is where the cost showed.
+# Split into its two cases, SQLite takes the MULTI-INDEX OR path: a seek on
+# `idx_voice_clips_stream` unioned with one on the `id` primary key. Measured
+# 2026-08-24 over 60,000 rows: 2.337ms per lookup against 0.002ms.
+#
+# The `stream_id IS NULL` guard is what keeps it *exactly* equivalent rather than
+# merely almost: a bare `id=?` arm would also match a row that belongs to some
+# other stream and happens to carry this key as its own id. That collision needs
+# two uuid4s to coincide, but the guard costs nothing and it is the difference
+# between a rewrite that preserves the predicate and one that widens it.
+GROUP_MATCH = "(stream_id=? OR (stream_id IS NULL AND id=?))"
+
+
+def group_match_args(keys: Sequence[str]) -> tuple[str, list[str]]:
+    """`GROUP_MATCH` widened to a set of stream keys, with its bound arguments."""
+    placeholders = ",".join("?" for _ in keys)
+    sql = f"(stream_id IN ({placeholders}) OR (stream_id IS NULL AND id IN ({placeholders})))"
+    return sql, [*keys, *keys]
+
+
+#: Streams one eviction DELETE takes before committing and releasing the
+#: process-wide database lock. Each key is bound twice by `group_match_args`, so
+#: this stays far inside SQLite's 999-variable ceiling; the smaller reason for
+#: the bound is that an over-cap cache can hold hundreds of streams and the
+#: history and PTY writers share that lock (`sqlite.md`).
+_EVICTION_BATCH_STREAMS = 100
+
 # A clip's life on the daemon. `synthesizing` is written before the engine runs, so a
 # backlog the operator is waiting on is visible while it is being made rather than
 # appearing only once it can play. `held`, `played` and `dismissed` are deliberately
@@ -917,12 +947,11 @@ class VoiceStore:
             ]
             if not keys:
                 return []
-            placeholders = ",".join("?" for _ in keys)
+            match, match_args = group_match_args(keys)
             rows = self._db.execute(
-                f"SELECT * FROM voice_clips WHERE superseded_at IS NULL "
-                f"AND {GROUP_KEY} IN ({placeholders}) "
+                f"SELECT * FROM voice_clips WHERE superseded_at IS NULL AND {match} "
                 "ORDER BY segment_index ASC, created_at ASC",
-                keys,
+                match_args,
             ).fetchall()
             buckets: dict[str, list[dict[str, Any]]] = {key: [] for key in keys}
             for row in rows:
@@ -1059,9 +1088,9 @@ class VoiceStore:
                 return []
             key = str(row["stream_id"] or clip_id)
             rows = self._db.execute(
-                f"SELECT file_path FROM voice_clips WHERE {GROUP_KEY}=?", (key,)
+                f"SELECT file_path FROM voice_clips WHERE {GROUP_MATCH}", (key, key)
             ).fetchall()
-            self._db.execute(f"DELETE FROM voice_clips WHERE {GROUP_KEY}=?", (key,))
+            self._db.execute(f"DELETE FROM voice_clips WHERE {GROUP_MATCH}", (key, key))
             self._db.commit()
             return [str(item["file_path"]) for item in rows if item["file_path"]]
 
@@ -1103,39 +1132,70 @@ class VoiceStore:
         leave a reply holding its last two segments and not its first, which reads
         in the list as a clip that opens mid-sentence and cannot be repaired.
         Returns file paths whose backing audio should be removed.
+
+        Two phases rather than one transaction: sweep and choose, then delete the
+        chosen streams in committed batches. The whole eviction used to run inside
+        a single operation holding the process-wide `mux.db` lock, and an over-cap
+        cache can name hundreds of victim streams (`sqlite.md`). Choosing before
+        deleting is also what makes each victim an indexed lookup rather than a
+        table scan - see `GROUP_MATCH`.
         """
 
-        def op() -> list[str]:
+        def choose() -> list[str]:
+            """Sweep stale failures and name the streams the cap has to take."""
             day_ago = time.time() - 24 * 3600
             self._db.execute(
                 "DELETE FROM voice_clips WHERE status='failed' AND created_at<?", (day_ago,)
             )
-            removed: list[str] = []
+            self._db.commit()
             total = int(
                 self._db.execute(
                     "SELECT COALESCE(SUM(size_bytes),0) FROM voice_clips WHERE status='ready'"
                 ).fetchone()[0]
             )
-            if total > max_bytes:
-                groups = self._db.execute(
-                    f"SELECT {GROUP_KEY} AS group_key, MIN(created_at) AS started, "
-                    "COALESCE(SUM(size_bytes),0) AS bytes FROM voice_clips "
-                    "WHERE status='ready' GROUP BY group_key ORDER BY started ASC"
-                ).fetchall()
-                for group in groups:
-                    if total <= max_bytes:
-                        break
-                    key = str(group["group_key"])
-                    rows = self._db.execute(
-                        f"SELECT file_path FROM voice_clips WHERE {GROUP_KEY}=?", (key,)
-                    ).fetchall()
-                    self._db.execute(f"DELETE FROM voice_clips WHERE {GROUP_KEY}=?", (key,))
-                    removed.extend(str(row["file_path"]) for row in rows if row["file_path"])
-                    total -= int(group["bytes"])
-            self._db.commit()
-            return removed
+            if total <= max_bytes:
+                return []
+            # One grouped pass, oldest stream first, deciding the whole victim
+            # list before anything is deleted. It used to re-read and delete each
+            # victim inside this same scan, which meant a full table scan per
+            # victim on top of the group scan itself.
+            groups = self._db.execute(
+                f"SELECT {GROUP_KEY} AS group_key, MIN(created_at) AS started, "
+                "COALESCE(SUM(size_bytes),0) AS bytes FROM voice_clips "
+                "WHERE status='ready' GROUP BY group_key ORDER BY started ASC"
+            ).fetchall()
+            victims: list[str] = []
+            for group in groups:
+                if total <= max_bytes:
+                    break
+                victims.append(str(group["group_key"]))
+                total -= int(group["bytes"])
+            return victims
 
-        return await self._run(op)
+        victims = await self._run(choose)
+        removed: list[str] = []
+        for start in range(0, len(victims), _EVICTION_BATCH_STREAMS):
+            chunk = victims[start : start + _EVICTION_BATCH_STREAMS]
+            match, args = group_match_args(chunk)
+
+            def evict(match: str = match, args: list[str] = args) -> list[str]:
+                rows = self._db.execute(
+                    f"SELECT file_path FROM voice_clips WHERE {match}", args
+                ).fetchall()
+                self._db.execute(f"DELETE FROM voice_clips WHERE {match}", args)
+                self._db.commit()
+                return [str(row["file_path"]) for row in rows if row["file_path"]]
+
+            removed.extend(await self._run(evict))
+        if victims:
+            log.info(
+                "voice_cache_evicted streams=%d files=%d cap_bytes=%d batches=%d",
+                len(victims),
+                len(removed),
+                max_bytes,
+                (len(victims) + _EVICTION_BATCH_STREAMS - 1) // _EVICTION_BATCH_STREAMS,
+            )
+        return removed
 
     def close(self) -> None:
         # Idempotent like every sibling store: a second close would otherwise

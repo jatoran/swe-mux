@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   commitsSummary, countLabel, defaultHistorySections, historyKeyStats, HISTORY_SECTION_KEYS,
-  HISTORY_TIMELINE_PREVIEW, speakerLabel, splitRecentScans,
+  HISTORY_TIMELINE_PREVIEW, sectionKeysVisible, speakerLabel, splitRecentScans,
 } from '../src/historyDetail.ts'
 
 const source=readFileSync(join(import.meta.dirname,'..','src','HistoryBrowser.tsx'),'utf8')
@@ -21,6 +21,13 @@ test('history detail actions stay ahead of the collapsible run sections',()=>{
   assert.match(css,/\.transcript-section \{[^}]*flex:none/)
   assert.match(css,/\.transcript-section-body \{[^}]*max-height:[^;}]+;[^}]*overflow-y:auto/)
   assert.match(css,/\.transcript-section-body small \{[^}]*overflow-wrap:anywhere/)
+  // The transcript's own band is a sibling of `.messages`, never a `<details>` around it:
+  // a `<details>` interposes a UA-owned content box that becomes the flex item, and the
+  // conversation inside one sizes to its text instead of taking the leftover height.
+  assert.match(css,/\.transcript-section-toggle \{[^}]*flex:none/)
+  assert.match(source,/<button type="button" class="transcript-section-toggle" aria-expanded=\{sections\.transcript\} aria-controls="history-transcript-body"/)
+  assert.match(source,/\{sections\.transcript&&<div class="messages" id="history-transcript-body"/)
+  assert.ok(!/<details[^>]*>\s*<summary>[^]{0,400}?class="messages"/.test(source))
 })
 
 test('the detail view drops cross-vendor review and renames the two resume actions',()=>{
@@ -50,18 +57,26 @@ test('the filter block wraps content-width controls instead of stretching them',
   }
 })
 
-test('a phone opens a conversation with every section above the transcript closed',()=>{
-  const mobile=defaultHistorySections(true)
-  assert.deepEqual(Object.values(mobile).filter(Boolean),[])
-  assert.deepEqual(Object.keys(mobile).sort(),[...HISTORY_SECTION_KEYS].sort())
-  const desktop=defaultHistorySections(false)
-  assert.equal(desktop.stats,true)
-  assert.equal(desktop.timeline,true)
-  // The list-shaped sections stay closed on both, because their summary already carries
-  // the count and the newest entry.
-  assert.equal(desktop.commits,false)
-  assert.equal(desktop.lineage,false)
-  assert.equal(desktop.notes,false)
+test('a conversation opens on its transcript and on nothing else',()=>{
+  const opened=defaultHistorySections()
+  assert.deepEqual(Object.keys(opened).sort(),[...HISTORY_SECTION_KEYS].sort())
+  // The transcript is a band now, and it is the only one that starts open. Everything else
+  // is metadata about the run, and each band that opened by itself was height taken from
+  // the one thing the reader came for.
+  assert.equal(opened.transcript,true)
+  assert.deepEqual(Object.entries(opened).filter(([,open])=>open).map(([key])=>key),['transcript'])
+  // No device split: the view a reader learns on a phone is the view they get on a desktop.
+  assert.deepEqual(defaultHistorySections(),opened)
+})
+
+test('a closed band keeps its count and drops a whole commit subject',()=>{
+  // A count is one short line and stays visible while closed; the commits line carries a
+  // commit subject and wraps to a taller block than the band it labels.
+  for(const key of HISTORY_SECTION_KEYS)assert.equal(sectionKeysVisible(key,true),true,key)
+  assert.equal(sectionKeysVisible('commits',false),false)
+  for(const key of HISTORY_SECTION_KEYS.filter(item=>item!=='commits')){
+    assert.equal(sectionKeysVisible(key,false),true,key)
+  }
 })
 
 test('the behavioural timeline previews the two newest entries and hides the rest',()=>{

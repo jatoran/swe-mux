@@ -21,6 +21,8 @@ from .spawn_contract import infer_agent_executable_backend
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
+    escape_like,
+    like_contains,
     run_sqlite_operation,
 )
 from .transcript_view import (
@@ -46,13 +48,12 @@ _AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
 _NAMING_ROW_CHUNK = 400
 
 
-def _escape_like(value: str) -> str:
-    """Make a user's text literal inside a SQL `LIKE` pattern.
-
-    `%` and `_` are wildcards there, so a commit subject search for `100%` would
-    otherwise match everything after `100`. Paired with `ESCAPE '\\'` at the call site.
-    """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+#: Kept as module-local names because this file's call sites read better with
+#: them, but the implementations now live in `sqlite_store` — every store that
+#: searches text needs them, and three private copies is how two of them ended up
+#: with none (`_like_pattern` is `sqlite_store.like_contains`).
+_escape_like = escape_like
+_like_pattern = like_contains
 
 
 def _public_history_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -401,12 +402,6 @@ def _trigram_query(value: str) -> str:
     if len(text) < 3:
         return ""
     return f'"{text.replace(chr(34), chr(34) * 2)}"'
-
-
-def _like_pattern(value: str) -> str:
-    """Literal case-insensitive LIKE pattern with wildcard characters escaped."""
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
 
 
 def _like_query_predicate(
@@ -2761,8 +2756,15 @@ class HistoryIndex:
         sql = f"SELECT * FROM history WHERE agent_visible=1 AND backend IN ({_AGENT_BACKEND_SQL})"
         args: list[Any] = list(_AGENT_BACKEND_ARGS)
         if query:
-            sql += " AND (name LIKE ? OR cwd LIKE ? OR COALESCE(project_label,'') LIKE ?)"
-            args += [f"%{query}%", f"%{query}%", f"%{query}%"]
+            # Escaped like every other LIKE in this module: a session name or a
+            # cwd is full of `_`, and an unescaped one silently widens the
+            # filter - `swe_mux` also matched `swe-mux`, and a `%` anywhere in
+            # the query matched everything after it.
+            sql += (
+                " AND (name LIKE ? ESCAPE '\\' OR cwd LIKE ? ESCAPE '\\'"
+                " OR COALESCE(project_label,'') LIKE ? ESCAPE '\\')"
+            )
+            args += [_like_pattern(query)] * 3
         if backend:
             sql += " AND backend=?"
             args.append(backend)
@@ -3236,8 +3238,15 @@ class HistoryIndex:
         args: list[Any] = list(_AGENT_BACKEND_ARGS)
         match_query = _fts_query(query)
         if query:
-            metadata_sql = "(h.name LIKE ? OR h.cwd LIKE ? OR COALESCE(h.project_label,'') LIKE ?)"
-            metadata_args = [f"%{query}%", f"%{query}%", f"%{query}%"]
+            # The metadata half of agent search skipped this module's own
+            # escaping while the message half beside it (`_like_query_predicate`)
+            # applied it, so one query was two different literalness rules
+            # depending on which column matched.
+            metadata_sql = (
+                "(h.name LIKE ? ESCAPE '\\' OR h.cwd LIKE ? ESCAPE '\\'"
+                " OR COALESCE(h.project_label,'') LIKE ? ESCAPE '\\')"
+            )
+            metadata_args: list[Any] = [_like_pattern(query)] * 3
             if search_index_ready:
                 message_sql = (
                     "EXISTS (SELECT 1 FROM history_messages hm "

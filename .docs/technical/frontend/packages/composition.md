@@ -66,7 +66,9 @@ Pure or narrowly stateful reusable behavior: modified-Tab classification, focuse
 ### Drag and drop
 
 `dragReorder.ts` owns movement-versus-hold activation decisions, reorder targets, and edge auto-scroll velocity.
-Mobile sidebar Projects use its 325 ms hold with 8 px slop; other pointer drags keep the 5 px movement threshold.
+Every touch hold-to-lift surface - sidebar Projects and sessions, the mobile tab bar, and the Configure Actions editor's chips and catalog - uses the single `MOBILE_HOLD_DRAG` constant (350 ms, 16 px slop); the drawer strip keeps `MOBILE_HOLD_MOVE_DRAG`, and other pointer drags keep the 5 px movement threshold.
+The hold slop is wide because a past-slop move is a *cancel* rather than a deferral, so a narrow one reads a resting finger's jitter as a scroll and the lift silently never happens.
+One constant rather than a per-surface value is the point: a surface that picks its own drifts from the hardening the shared one accumulates.
 `listDropTargetForPoint` is the sidebar-session variant, where a row is both a slot boundary and a target in its own right: the outer `insertionEdge` of each row (30% of its height, floored at 5 px and capped at 12 px, so a 44 px phone row and a dense desktop row both stay aimable) reads as insertion and the middle as grouping.
 A `groupable` predicate turns a row that cannot be grouped with into pure insertion over its whole height, rather than a middle band that quietly does nothing.
 `DROP_LIST_MARGIN` is how far outside a list the pointer may stray before the drop resolves to nothing, which keeps a session drag from committing to a Project the pointer has left.

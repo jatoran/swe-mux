@@ -236,6 +236,16 @@ CREATE INDEX IF NOT EXISTS idx_queue_messages_sender
 -- Retry-safe correlation (`ROADMAP.md` Phase 5, mailbox): a sender that
 -- retries the same logical message reuses its correlation id and gets the
 -- original row back instead of a second copy in the target's queue.
+--
+-- **The index is not what enforces that**, and reading it as the guarantee is
+-- how the real one nearly got optimized away. SQLite treats NULLs as distinct
+-- inside a UNIQUE index, so two rows with the same `sender_kind` and
+-- `correlation_id` and a NULL `sender_id` - which is every sender that is not a
+-- session, the `rule` and `assistant` senders included - both satisfy it. The
+-- guard that actually dedups is `create_message`'s SELECT-before-INSERT, which
+-- compares `IFNULL(sender_id,'')` and therefore does treat two NULL senders as
+-- the same sender. This index is a real constraint for non-NULL senders and a
+-- lookup index for the rest.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_messages_correlation
   ON queue_messages(sender_kind, sender_id, correlation_id)
   WHERE correlation_id IS NOT NULL;
@@ -478,6 +488,12 @@ class PromptQueueStore:
     def _renumber(self, target_session_id: str, ordered_ids: list[str] | None = None) -> None:
         """Assign gap-free positions across all visible messages for a target.
 
+        Only for the operations that actually move rows: an anchor insert, a
+        reorder, and a delete. A tail append writes one position past the highest
+        and leaves every other row alone, because rewriting each of them with the
+        value it already held is O(n) writes per append on a surface whose normal
+        use is appending.
+
         Sent/terminal items keep their place in the visible queue. Deleted
         tombstones retain no visible position and are excluded from ordering.
         """
@@ -534,20 +550,34 @@ class PromptQueueStore:
                 ).fetchone()
                 if existing is not None:
                     return {**_row_to_message(existing), "deduplicated": True}
-            rows = self._db.execute(
-                "SELECT id FROM queue_messages WHERE target_session_id=? AND state!='deleted'"
-                " ORDER BY position",
-                (target_session_id,),
-            ).fetchall()
-            ordered = [str(row["id"]) for row in rows]
-            if insert_after is not None:
+            # A tail append does not renumber. The row goes one past the highest
+            # position in the queue, which leaves every existing row's position
+            # already correct - so reading them back only to rewrite each one with
+            # the value it already held cost an `UPDATE` per visible message on
+            # every enqueue, for a queue that is append-mostly. An anchor insert
+            # genuinely moves everything after the anchor, and still does.
+            ordered: list[str] = []
+            if insert_after is None:
+                next_position = int(
+                    self._db.execute(
+                        "SELECT COALESCE(MAX(position)+1,0) next FROM queue_messages"
+                        " WHERE target_session_id=? AND state!='deleted'",
+                        (target_session_id,),
+                    ).fetchone()["next"]
+                )
+            else:
+                rows = self._db.execute(
+                    "SELECT id FROM queue_messages WHERE target_session_id=? AND state!='deleted'"
+                    " ORDER BY position",
+                    (target_session_id,),
+                ).fetchall()
+                ordered = [str(row["id"]) for row in rows]
                 if insert_after not in ordered:
                     raise QueueError(
                         "unknown_anchor", "insert_after names no message in this queue", status=400
                     )
                 ordered.insert(ordered.index(insert_after) + 1, identity)
-            else:
-                ordered.append(identity)
+                next_position = len(ordered) - 1
             self._db.execute(
                 "INSERT INTO queue_messages"
                 "(id,target_session_id,target_agent_run_id,target_backend,target_label,"
@@ -562,7 +592,7 @@ class PromptQueueStore:
                     target_backend,
                     target_label,
                     project_id,
-                    len(ordered) - 1,
+                    next_position,
                     state,
                     body,
                     sender_kind,
@@ -581,7 +611,8 @@ class PromptQueueStore:
                     now if armed else None,
                 ),
             )
-            self._renumber(target_session_id, ordered)
+            if ordered:
+                self._renumber(target_session_id, ordered)
             self._db.commit()
             row = self._db.execute(
                 "SELECT * FROM queue_messages WHERE id=?", (identity,)

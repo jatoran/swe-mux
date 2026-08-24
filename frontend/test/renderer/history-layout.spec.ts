@@ -19,7 +19,7 @@ for(const viewport of [{name:'compact desktop',width:820,height:500},{name:'mobi
       const bounds=(selector:string)=>document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().toJSON()
       return {
         modal:bounds('.history-modal'),resume:bounds('.transcript-actions .primary'),actions:bounds('.transcript-actions'),
-        sections:[...document.querySelectorAll<HTMLElement>('.transcript-section')].map(node=>node.getBoundingClientRect().toJSON()),
+        sections:[...document.querySelectorAll<HTMLElement>('.transcript-section,.transcript-section-toggle')].map(node=>node.getBoundingClientRect().toJSON()),
         messages:bounds('.messages'),
       }
     })
@@ -78,21 +78,51 @@ test('the filter block wraps compact controls instead of stretching them full wi
   }
 })
 
-test('a phone opens a conversation on the transcript with the sections closed',async({page})=>{
-  await page.setViewportSize({width:390,height:720})
+for(const viewport of [{name:'desktop',width:1200,height:800},{name:'mobile',width:390,height:720}]){
+  test(`a conversation opens on the transcript with every other band closed on ${viewport.name}`,async({page})=>{
+    await page.setViewportSize({width:viewport.width,height:viewport.height})
+    await page.goto('/history-harness.html')
+    await openConversation(page)
+
+    const geometry=await page.evaluate(()=>({
+      openMetadata:[...document.querySelectorAll<HTMLDetailsElement>('.transcript-section')].filter(node=>node.open).length,
+      sections:document.querySelectorAll('.transcript-section').length,
+      transcriptOpen:document.querySelector<HTMLElement>('.transcript-section-toggle')!.getAttribute('aria-expanded'),
+      messages:document.querySelector<HTMLElement>('.messages')!.getBoundingClientRect().toJSON(),
+      bandStrip:[...document.querySelectorAll<HTMLElement>('.transcript-section,.transcript-section-toggle')]
+        .reduce((total,node)=>total+node.getBoundingClientRect().height,0),
+    }))
+    expect(geometry.sections).toBeGreaterThan(1)
+    expect(geometry.openMetadata).toBe(0)
+    expect(geometry.transcriptOpen).toBe('true')
+    // The transcript, not a strip at the bottom under a stack of expanded bands: the
+    // conversation outweighs every band above it put together, which is the whole point of
+    // opening them closed and is the thing a new default-open band would break.
+    expect(geometry.messages.height).toBeGreaterThan(geometry.bandStrip)
+  })
+}
+
+test('the transcript folds away and comes back as the thing that grows',async({page})=>{
+  await page.setViewportSize({width:1200,height:800})
   await page.goto('/history-harness.html')
   await openConversation(page)
 
-  const geometry=await page.evaluate(()=>({
-    open:[...document.querySelectorAll<HTMLDetailsElement>('.transcript-section')].filter(node=>node.open).length,
-    sections:document.querySelectorAll('.transcript-section').length,
-    messages:document.querySelector<HTMLElement>('.messages')!.getBoundingClientRect().toJSON(),
-    main:document.querySelector<HTMLElement>('.history-body>main')!.getBoundingClientRect().toJSON(),
-  }))
-  expect(geometry.sections).toBeGreaterThan(1)
-  expect(geometry.open).toBe(0)
-  // The transcript, not a strip at the bottom under five expanded bands.
-  expect(geometry.messages.height).toBeGreaterThan(geometry.main.height * 0.5)
+  const toggle=page.locator('.transcript-section-toggle')
+  const messages=page.locator('.messages')
+  const grown=(await messages.boundingBox())!.height
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded','false')
+  await expect(messages).toHaveCount(0)
+  // The bands it leaves behind are all one line, so the band strip is a fraction of what
+  // the conversation occupied.
+  const strip=await page.evaluate(()=>{
+    const bands=[...document.querySelectorAll<HTMLElement>('.transcript-section,.transcript-section-toggle')]
+    return bands.reduce((total,node)=>total+node.getBoundingClientRect().height,0)
+  })
+  expect(strip).toBeLessThan(grown)
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded','true')
+  expect((await messages.boundingBox())!.height).toBeGreaterThan(grown * 0.9)
 })
 
 test('the commits section opens into rows that each expand, not a sideways strip',async({page})=>{
@@ -100,9 +130,12 @@ test('the commits section opens into rows that each expand, not a sideways strip
   await page.goto('/history-harness.html')
   await openConversation(page)
 
+  // Closed, the band is its title and nothing else: the summary carries a whole commit
+  // subject, which wrapped to a taller block than the band it was labelling.
   const summary=page.locator('.transcript-section-commits>summary')
-  await expect(summary).toContainText('6 commits · latest')
+  await expect(summary).toHaveText('Commits')
   await summary.click()
+  await expect(summary).toContainText('6 commits · latest')
 
   const rows=page.locator('.transcript-section-commits .transcript-row')
   await expect(rows).toHaveCount(6)
@@ -120,9 +153,9 @@ test('the commits section opens into rows that each expand, not a sideways strip
   await expect(page.locator('.transcript-section-commits .transcript-row').first()).not.toHaveAttribute('open','')
 
   // The bands are controlled `<details>`, so a toggle that never reached state would be
-  // reverted by the next render somewhere else. Collapse a different band and check.
+  // reverted by the next render somewhere else. Open a different band and check.
   await page.locator('.transcript-section-stats>summary').click()
-  await expect(page.locator('.transcript-section-stats')).not.toHaveAttribute('open','')
+  await expect(page.locator('.transcript-section-stats')).toHaveAttribute('open','')
   await expect(page.locator('.transcript-section-commits')).toHaveAttribute('open','')
 })
 
@@ -132,6 +165,8 @@ test('the behavioural timeline shows two entries and hides the rest behind a dis
   await openConversation(page)
 
   const section=page.locator('.transcript-section-timeline')
+  await expect(section).not.toHaveAttribute('open','')
+  await section.locator('>summary').click()
   await expect(section).toHaveAttribute('open','')
   const preview=section.locator('.transcript-section-body>.transcript-row')
   await expect(preview).toHaveCount(2)

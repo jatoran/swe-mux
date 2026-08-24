@@ -157,18 +157,20 @@ test('an empty native paste remains available to non-text handlers', () => {
   assert.deepEqual(calls, [])
 })
 
-test('a copy or paste confirmation is drawn over the terminal, never inside the rail', () => {
+test('every terminal message is drawn over the terminal, never inside the rail', () => {
   const root = dirname(fileURLToPath(import.meta.url))
   const pane = readFileSync(join(root, '..', 'src', 'TerminalPane.tsx'), 'utf8')
   const styles = readFileSync(join(root, '..', 'src', 'style.css'), 'utf8')
 
-  // The rail row keeps the selection readout, which is a state, and no longer carries the
-  // momentary one, which narrowed the scrolling strip for as long as it was up.
+  // One toast, and nothing left in the rail to compete with it. The selection readout was
+  // the last message living there, in a trailing cluster that does not shrink and under a
+  // `34vw` cap, so a split pane narrower than that lost its chips behind the readout.
   assert.match(pane, /\{clipboardStatus&&<div class="terminal-clip-toast" role="status">\{clipboardStatus\}<\/div>\}/)
-  const railStatus = /status=\{index===renderedRailRows\.length-1\?([^}]*)\}/.exec(pane)?.[1] ?? ''
-  assert.ok(railStatus, 'the rail row no longer takes a status prop')
-  assert.doesNotMatch(railStatus, /clipboardStatus/)
-  assert.match(railStatus, /selectionText/)
+  assert.doesNotMatch(pane, /<RailStrip[^\n]*status=/)
+  assert.match(pane, /showClipboardStatus\(`\$\{text\.length\.toLocaleString\(\)\} selected/)
+  // A readout goes when its selection goes; a confirmation is about something that already
+  // happened and runs out its own timer instead.
+  assert.match(pane, /const clearSelectionStatus = \(\) => \{\n\s*if\(clipboardStatusKindRef\.current!=='selection'\)return/)
 
   const rule = declarations(styles, /\.terminal-clip-toast\{([^}]*)\}/)
   // Sharing the terminal's own grid cell is what keeps it from displacing anything: it
@@ -178,6 +180,10 @@ test('a copy or paste confirmation is drawn over the terminal, never inside the 
   assert.match(rule, /align-self:end/)
   assert.match(rule, /justify-self:end/)
   assert.match(rule, /margin:0 9px 0 0/)
+  // Capped against the *pane*, not the window. A `vw` cap is a claim about the viewport, and
+  // a pane in a split is a fraction of it - which is exactly how the readout came to bury a
+  // narrow rail before it moved here.
+  assert.match(rule, /max-width:min\(60%,340px\)/)
   // It covers the jump-to-latest and peek chips rather than moving them, so it has to draw
   // above both and must never take a tap meant for one.
   assert.match(rule, /pointer-events:none/)
