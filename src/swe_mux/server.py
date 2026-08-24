@@ -80,7 +80,14 @@ from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
 from .behavioral_consumers import ADAPTIVE_TITLE_RULE_ID, BehavioralConsumerService
-from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
+from .bundle_locks import (
+    REDEPLOY_LOCK_NAME,
+    bundle_lock_holders,
+    describe_holders,
+    frozen_bundle_root,
+    live_redeploy_lock_pid,
+    write_redeploy_lock,
+)
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
 from .composer_input import (
@@ -3245,16 +3252,16 @@ def _redeploy_lock_pid(config: Config) -> int | None:
 
     The lock is claimed by whoever starts the redeploy - this daemon for a
     UI/API trigger, the script itself when run straight from a terminal - and
-    always names the *script* process, so pid liveness is the authority and
-    nothing has to clean it up after a crash.
-    """
-    import psutil
+    always names the *script* process, so the process is the authority and
+    nothing has to clean the file up after a crash.
 
-    try:
-        pid = int((config.data_dir / "redeploy.lock").read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
-        return None
-    return pid if psutil.pid_exists(pid) else None
+    "The process" means its identity rather than its number: a bare
+    `pid_exists` made a completed redeploy's lock read as live forever once
+    Windows recycled the pid, silently refusing every redeploy afterwards
+    (`bundle_locks.REDEPLOY_LOCK_NAME`). Both readers share that rule so they
+    cannot disagree about whether a redeploy is happening.
+    """
+    return live_redeploy_lock_pid(config.data_dir / REDEPLOY_LOCK_NAME)
 
 
 #: Said in the same breath as the interruption list, every time. The reflex when
@@ -3420,7 +3427,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
                 },
                 409,
             )
-    lock_path = config.data_dir / "redeploy.lock"
+    lock_path = config.data_dir / REDEPLOY_LOCK_NAME
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     # `_redeploy_lock_pid` already reported no live redeploy, so any file still
     # here is stale (a crash between claiming the lock and writing the pid).
@@ -3479,7 +3486,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         with suppress(OSError):
             lock_path.unlink(missing_ok=True)
         raise
-    lock_path.write_text(str(process.pid), encoding="ascii")
+    write_redeploy_lock(lock_path, process.pid)
     # Told to every client now, minutes before the daemon can actually go away,
     # which is what lets them show progress instead of discovering the redeploy
     # as failed requests. The script does not announce a run spawned from here.
@@ -3544,7 +3551,7 @@ def _redeploy_log_tail(config: Config, *, running: bool) -> str:
     log_path = config.data_dir / "redeploy.log"
     try:
         if running:
-            lock_mtime = (config.data_dir / "redeploy.lock").stat().st_mtime
+            lock_mtime = (config.data_dir / REDEPLOY_LOCK_NAME).stat().st_mtime
             if log_path.stat().st_mtime < lock_mtime:
                 return ""
         return log_path.read_bytes()[-8192:].decode("utf-8", "replace")

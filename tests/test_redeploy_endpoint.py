@@ -599,7 +599,7 @@ def test_a_terminal_launched_redeploy_claims_the_same_lock(tmp_path: Path) -> No
     module = _redeploy_module()
     config = SimpleNamespace(data_dir=tmp_path)
     assert module.claim_lock(config, already_held=False) is True
-    assert (tmp_path / "redeploy.lock").read_text(encoding="ascii") == str(os.getpid())
+    assert (tmp_path / "redeploy.lock").read_text(encoding="ascii").split()[0] == str(os.getpid())
     # The daemon-spawned path was handed a lock that already names it.
     (tmp_path / "redeploy.lock").write_text("12345", encoding="ascii")
     assert module.claim_lock(config, already_held=True) is True
@@ -616,7 +616,73 @@ def test_a_second_redeploy_is_refused_while_one_is_live(tmp_path: Path) -> None:
     # A stale lock (dead pid) is taken over rather than blocking forever.
     lock.write_text("999999999", encoding="ascii")
     assert module.claim_lock(config, already_held=False) is True
-    assert lock.read_text(encoding="ascii") == str(os.getpid())
+    # Claimed for this process, *and* stamped with its start: a pid alone made a
+    # finished redeploy's lock read as live forever once Windows reused the
+    # number (`bundle_locks.REDEPLOY_LOCK_NAME`).
+    assert lock.read_text(encoding="ascii").split()[0] == str(os.getpid())
+    assert module.live_lock_pid(config) is None  # ours to take, not a blocker
+
+
+def test_a_recycled_pid_does_not_hold_the_lock_forever(tmp_path: Path) -> None:
+    """The bug that silently refused every redeploy for twenty hours.
+
+    A redeploy that *succeeded* on 2026-08-23 left its lock naming pid 50760, as
+    designed - the file is never removed, and the process is meant to be the
+    authority. By morning Windows had reused 50760 for an `svchost`, so
+    `pid_exists` said "live", and every redeploy after that aborted with "a
+    redeploy is already running". Nothing surfaced it: the abort is a clean
+    refusal, and the operator sees a redeploy that simply never happens.
+
+    Recording the process's start alongside its number is what makes the number
+    an identity. Same pid, different start, different process.
+    """
+    from swe_mux.bundle_locks import live_redeploy_lock_pid, write_redeploy_lock
+
+    lock = tmp_path / "redeploy.lock"
+    write_redeploy_lock(lock, os.getpid())
+    assert live_redeploy_lock_pid(lock) == os.getpid()
+
+    # The same pid, stamped with a start this process does not have: exactly what
+    # a recycled pid looks like from the outside.
+    lock.write_text(f"{os.getpid()} 1.0", encoding="ascii")
+    assert live_redeploy_lock_pid(lock) is None
+
+
+def test_a_lock_from_an_older_build_still_blocks_a_live_redeploy(tmp_path: Path) -> None:
+    """Degrading to plain liveness is deliberate for the one transitional lock.
+
+    A pid-only lock is what the previous bundle wrote, and treating it as stale
+    would let the upgrade decide an in-flight redeploy had stopped - starting a
+    second one against the same staging tree, which is the failure single-flight
+    exists to prevent. A stale one of these is cleared by hand, once.
+    """
+    from swe_mux.bundle_locks import live_redeploy_lock_pid
+
+    lock = tmp_path / "redeploy.lock"
+    lock.write_text(str(os.getpid()), encoding="ascii")
+    assert live_redeploy_lock_pid(lock) == os.getpid()
+    lock.write_text("999999999", encoding="ascii")
+    assert live_redeploy_lock_pid(lock) is None
+
+
+def test_an_unreadable_lock_never_reads_as_a_running_redeploy(tmp_path: Path) -> None:
+    """Every way a lock can mean nothing has to mean nothing.
+
+    The empty case is real rather than defensive: the daemon claims the file with
+    `O_EXCL` and writes the pid a moment later, so a reader can genuinely catch
+    it blank.
+    """
+    from swe_mux.bundle_locks import live_redeploy_lock_pid
+
+    lock = tmp_path / "redeploy.lock"
+    assert live_redeploy_lock_pid(lock) is None
+    lock.write_text("", encoding="ascii")
+    assert live_redeploy_lock_pid(lock) is None
+    lock.write_text("not-a-pid", encoding="ascii")
+    assert live_redeploy_lock_pid(lock) is None
+    lock.write_text(f"{os.getpid()} not-a-time", encoding="ascii")
+    # An unreadable stamp falls back to liveness rather than refusing the read.
+    assert live_redeploy_lock_pid(lock) == os.getpid()
 
 
 def _a_live_foreign_pid() -> int:

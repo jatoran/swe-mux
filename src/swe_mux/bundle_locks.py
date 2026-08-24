@@ -52,6 +52,113 @@ APP_IMAGE_NAME = "swe-mux.exe"
 # Bounded so a pathological parent chain (or a psutil loop) cannot hang a gate.
 _ANCESTOR_WALK_LIMIT = 16
 
+#: The single-flight lock both redeploy entry points claim, and the marker that
+#: identifies the process it names.
+#:
+#: The lock is deliberately never removed on exit: a crash mid-redeploy would
+#: otherwise leave a file claiming a run that is not happening, and the design
+#: instead makes the *process* the authority, so a dead one releases the lock for
+#: free. That reasoning is right and the implementation of it was not.
+#:
+#: **A pid is not an identity on Windows.** Pids are recycled aggressively, and a
+#: `pid_exists` check therefore says "live" forever once something unrelated
+#: inherits the number. Measured on the primary host 2026-08-24: a redeploy that
+#: completed successfully at 18:35 the previous day left its lock naming pid
+#: 50760, which by morning was an `svchost`. Every redeploy since had been
+#: refused - and the refusal exits 0, so nothing upstream noticed. The same
+#: hazard is already recorded for sessions (`SessionRecord.root_started_at`).
+#:
+#: So the lock names the process *and* its creation time, which settles recycling
+#: exactly: the same number with a different start is a different process.
+#:
+#: Deliberately **not** also checked against the process's command line, though
+#: that would have caught this particular lock on its own. A `cmdline()` read can
+#: be slow or refused on Windows, and a false negative there means "no redeploy
+#: is running" while one is - which starts a second redeploy racing the first for
+#: the same staging tree and the same swap. That is a worse failure than the one
+#: being fixed, and single-flight is the whole reason this lock exists.
+#:
+#: A lock written by an older build carries only a pid and falls back to plain
+#: liveness, so an in-flight redeploy from the previous bundle is still
+#: respected across the upgrade that introduces this. Exactly one such lock can
+#: exist per machine, and a stale one is cleared by hand once.
+REDEPLOY_LOCK_NAME = "redeploy.lock"
+#: Tolerance on the creation-time comparison. A float survives a decimal
+#: round-trip well inside this, and no two processes share a pid within a second
+#: of each other.
+_CREATED_AT_TOLERANCE_SECONDS = 1.0
+
+
+def write_redeploy_lock(path: Path, pid: int) -> None:
+    """Claim `path` for `pid`, recording the identity a reader will check.
+
+    Written as ``"<pid> <create_time>"``. The creation time is best effort: a
+    process that has already exited, or whose creation time cannot be read,
+    yields a pid-only lock, which is the older format and still readable.
+    """
+    stamp = _process_created_at(pid)
+    body = str(pid) if stamp is None else f"{pid} {stamp:.6f}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="ascii")
+
+
+def live_redeploy_lock_pid(path: Path) -> int | None:
+    """PID of a redeploy that is genuinely in flight, or None.
+
+    None covers every way a lock can fail to mean anything: missing, empty
+    (claimed by `O_EXCL` a moment before the pid was written), unparseable, or
+    naming a process that has exited, been recycled, or is plainly not a
+    redeploy.
+    """
+    try:
+        raw = path.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    parts = raw.split()
+    try:
+        pid = int(parts[0])
+    except ValueError:
+        return None
+    recorded = None
+    if len(parts) > 1:
+        try:
+            recorded = float(parts[1])
+        except ValueError:
+            recorded = None
+    if not _is_redeploy_process(pid, recorded):
+        return None
+    return pid
+
+
+def _process_created_at(pid: int) -> float | None:
+    try:
+        import psutil
+
+        return float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 - identity is an optimization, never a gate
+        return None
+
+
+def _is_redeploy_process(pid: int, recorded_created_at: float | None) -> bool:
+    """Is `pid` still the process this lock was written for?
+
+    With a recorded creation time this is exact. Without one - a lock from a
+    build that predates the stamp - it degrades to plain liveness, which is what
+    that build meant by it, so an upgrade cannot decide an in-flight redeploy has
+    stopped.
+    """
+    import psutil
+
+    if recorded_created_at is None:
+        return bool(psutil.pid_exists(pid))
+    try:
+        actual = float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 - gone or unreadable is not live
+        return False
+    return abs(actual - recorded_created_at) <= _CREATED_AT_TOLERANCE_SECONDS
+
 
 def frozen_bundle_root() -> Path | None:
     """The bundle directory when this process runs frozen, else None."""

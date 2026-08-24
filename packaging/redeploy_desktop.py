@@ -67,7 +67,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_desktop  # noqa: E402 - sibling packaging module
 
-from swe_mux.bundle_locks import bundle_lock_holders  # noqa: E402
+from swe_mux.bundle_locks import (  # noqa: E402
+    REDEPLOY_LOCK_NAME,
+    bundle_lock_holders,
+    live_redeploy_lock_pid,
+    write_redeploy_lock,
+)
 from swe_mux.config import load_config  # noqa: E402
 from swe_mux.spawn_contract import scrub_claude_session_markers  # noqa: E402
 from swe_mux.subprocess_flags import popen_outside_job  # noqa: E402
@@ -211,13 +216,18 @@ def claim_lock(config, *, already_held: bool) -> bool:  # noqa: ANN001 - Config
     CLI redeploys could race the same staging tree and swap, and the UI had no
     way to know it should stop trusting the daemon.
 
-    Never removed on exit. The lock names this process and every reader tests pid
-    liveness, so a crash releases it for free and a half-deleted file can never
-    make a live redeploy look finished.
+    Never removed on exit. The lock names this process and every reader tests
+    whether that process is still *this redeploy*, so a crash releases it for
+    free and a half-deleted file can never make a live redeploy look finished.
+
+    "This redeploy" rather than "a pid that exists": a completed run's lock read
+    as live forever once Windows recycled its pid, and the refusal below exits 0,
+    so every redeploy for the next twenty hours was silently declined
+    (`bundle_locks.REDEPLOY_LOCK_NAME`).
     """
     if already_held:
         return True
-    path = config.data_dir / "redeploy.lock"
+    path = config.data_dir / REDEPLOY_LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     live = live_lock_pid(config)
     if live is not None:
@@ -238,21 +248,18 @@ def claim_lock(config, *, already_held: bool) -> bool:  # noqa: ANN001 - Config
         log(f"WARNING: could not claim {path} ({exc}); continuing without single-flight")
         return True
     os.close(handle)
-    path.write_text(str(os.getpid()), encoding="ascii")
+    write_redeploy_lock(path, os.getpid())
     return True
 
 
 def live_lock_pid(config) -> int | None:  # noqa: ANN001 - Config
-    """PID named by a live `redeploy.lock`, or None (missing/stale/ours-to-take)."""
-    import psutil
+    """PID named by a live `redeploy.lock`, or None (missing/stale/ours-to-take).
 
-    try:
-        pid = int((config.data_dir / "redeploy.lock").read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
-        return None
-    if pid == os.getpid():
-        return None
-    return pid if psutil.pid_exists(pid) else None
+    One shared rule with the daemon's reader (`bundle_locks`), so the two cannot
+    disagree about whether a redeploy is in flight.
+    """
+    pid = live_redeploy_lock_pid(config.data_dir / REDEPLOY_LOCK_NAME)
+    return None if pid == os.getpid() else pid
 
 
 def announce_start(config) -> None:  # noqa: ANN001 - Config

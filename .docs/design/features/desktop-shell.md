@@ -162,8 +162,25 @@ continues to own every terminal.
   The endpoint validates source checkout + `uv`, requires the
   attached supervisor (or `force`), and is single-flight via `<data_dir>/redeploy.lock` with
   output in `<data_dir>/redeploy.log`.
-  The lock names the *script* process and every reader tests pid liveness, so a crash releases it
-  and nothing has to clean it up.
+  The lock names the *script* process and is never removed on exit, so a crash releases it and
+  nothing has to clean it up: the process is the authority.
+  **It names the process's start time as well as its pid, and that is load-bearing.**
+  A pid is not an identity on Windows - numbers are recycled aggressively - so a bare liveness
+  check made a *successful* redeploy's lock read as live forever once something unrelated
+  inherited the number. Measured on the primary host: a run that completed at 18:35 on
+  2026-08-23 left pid 50760, which by the next morning was an `svchost`, and every redeploy in
+  between was refused with "a redeploy is already running". Nothing surfaced it, because a
+  refusal is a clean exit-2 abort rather than a failure - the operator simply sees a redeploy
+  that never happens. Same pid with a different start is a different process
+  (`bundle_locks.REDEPLOY_LOCK_NAME`, one rule shared by both readers).
+  The identity is deliberately *not* also checked against the process's command line, though
+  that would have caught this one: a `cmdline()` read can be slow or refused on Windows, and a
+  false negative there starts a second redeploy racing the first for the same staging tree,
+  which is worse than the failure being fixed and is the exact thing single-flight exists to
+  prevent.
+  A lock written by an older bundle carries only a pid and falls back to plain liveness, so the
+  upgrade that introduces the stamp cannot decide an in-flight redeploy has stopped; exactly one
+  such lock can exist per machine and a stale one is cleared by hand, once.
   A run started straight from a terminal claims the same lock itself (`--lock-held` tells the
   script the endpoint already did), which makes a CLI redeploy single-flight too and makes it
   visible to `GET /api/daemon/redeploy` exactly like a UI one.
