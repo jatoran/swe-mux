@@ -150,7 +150,17 @@ The replay boundary is unchanged by construction: a record's historical/live lab
 And S6.2 could not be a pure `stat()` check - Windows freezes `st_mtime` on a file its writer holds open, so a same-length in-place rewrite is entitled to leave every readable field unchanged.
 The identity check is therefore one-directional (a field moving proves change; nothing staying still proves the absence of it) and a 2 s prefix backstop closes the case, taking an idle session from four opens a second to at most one every two seconds.
 
+### W2.5 - live-tier repair (added from the D1 soak findings; parallel with S3-S6, lands before D2)
+
+The three live-tier failures D1 recorded are pre-existing and none touch the supervisor; their files are disjoint from S3-S6, so this runs alongside Wave 2.
+
+- [ ] W2.5.1 `request_land` live coverage: fix the `_spawn_agent() cwd` TypeError (introduced ef9ccb9) so `test_request_land_enqueues_the_callers_own_worktree` executes at all, then run it on the live wire for every harness - it has never once run, so treat what it finds as a fresh result, not a regression.
+- [ ] W2.5.2 opencode canary diagnosability: stop sending the CLI's stdout/stderr to `DEVNULL` in `_run`; capture bounded output into the failure message, then diagnose the intermittency from actual evidence.
+- [ ] W2.5.3 codex subagent drift: the canary consistently finds `tool_use`/`tool_result` but no `subagent_activity` - investigate whether current codex stopped emitting those records, and if so adapt swe-mux's subagent-visibility detection to the new transcript shape and update the canary to match. This is potentially a live product defect, not a test fix; report the investigation outcome either way.
+
 ### D2 - deploy checkpoint (primary; no reap)
+
+Precondition: W2.5 landed, so the live tiers D2.2 exercises are trustworthy.
 
 - [ ] D2.1 Full gate on master, `redeploy_desktop.py` (normal session-preserving flow).
 - [ ] D2.2 Live soak: UI regression pass on desktop and mobile (fleet refresh under a simulated hung endpoint, palette, sidebar tick); MCP `scan_search` against a >2000-record project; a land-queue cycle end-to-end; confirm retention runs without visible stalls.
