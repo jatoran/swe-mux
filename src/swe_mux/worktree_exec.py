@@ -28,8 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from .bounded_subprocess import run_bounded
 from .spawn_contract import base_session_env
-from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
 
@@ -132,44 +132,6 @@ def resolve_worktree_command(
     return convention_command(worktree / script_name)
 
 
-async def bounded_output(
-    stream: asyncio.StreamReader, limit: int, *, label: str,
-    on_chunk: Callable[[bytes], None] | None = None,
-) -> tuple[bytes, bool]:
-    """Read a stream to EOF, retaining its head and tail within `limit` bytes.
-
-    `on_chunk` observes the bytes as they arrive and changes nothing about them: this is
-    the only place a caller can watch a long command make progress, because everything
-    downstream sees the capture once, after the process has already exited. An observer
-    that raises is a bug in the observer, so it is contained here rather than allowed to
-    abandon the pipe mid-read - a half-read pipe would block the process it is draining.
-    """
-    half = limit // 2
-    prefix = bytearray()
-    tail = bytearray()
-    total = 0
-    while chunk := await stream.read(64 * 1024):
-        if on_chunk is not None:
-            try:
-                on_chunk(chunk)
-            except Exception:  # noqa: BLE001 - watching output must not stop reading it
-                log.debug("worktree_command_observer_failed label=%s", label)
-        total += len(chunk)
-        if len(prefix) < half:
-            take = min(half - len(prefix), len(chunk))
-            prefix.extend(chunk[:take])
-            chunk = chunk[take:]
-        if chunk:
-            tail.extend(chunk)
-            if len(tail) > half:
-                del tail[: len(tail) - half]
-    truncated = total > limit
-    if not truncated:
-        return bytes(prefix + tail), False
-    omitted = f"\n[swe-mux] ... {label} output omitted ...\n".encode()
-    return bytes(prefix) + omitted + bytes(tail), True
-
-
 async def run_bounded_command(
     command: WorktreeCommand,
     cwd: Path,
@@ -187,54 +149,33 @@ async def run_bounded_command(
     inside its own pipeline has already shipped a failing suite green in this
     repository once, and the fix was to stop touching the status, not to touch it more
     carefully.
+
+    The mechanics - the cap, the timeout, the tree reap - are `bounded_subprocess`;
+    what this adds is the worktree-command contract: the merged stream both callers
+    display, the session environment a repository-declared command runs under, and a
+    failure reported *as an outcome* rather than raised, because "the gate did not
+    run" is a thing the land queue has to be able to say.
     """
     loop = asyncio.get_running_loop()
     started = loop.time()
-    process: asyncio.subprocess.Process | None = None
-    output_task: asyncio.Task[tuple[bytes, bool]] | None = None
 
     def elapsed() -> float:
         return (loop.time() - started) * 1000
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command.argv,
-            cwd=str(cwd),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+        outcome = await run_bounded(
+            command.argv,
+            label=label,
+            timeout_seconds=timeout_seconds,
+            output_limit=output_limit,
+            merge_stderr=True,
+            cwd=cwd,
             env=env if env is not None else base_session_env(os.environ, "shell"),
-            creationflags=background_creation_flags(),
+            on_chunk=on_chunk,
         )
-        assert process.stdout is not None
-        output_task = asyncio.create_task(
-            bounded_output(process.stdout, output_limit, label=label, on_chunk=on_chunk)
-        )
-        try:
-            exit_code = await asyncio.wait_for(process.wait(), timeout_seconds)
-        except TimeoutError:
-            await reap_process_tree(process)
-            output, truncated = await output_task
-            return CommandOutcome(
-                None,
-                output,
-                truncated,
-                elapsed(),
-                timed_out=True,
-                error=f"timed out after {timeout_seconds:g}s",
-            )
-        output, truncated = await output_task
-        return CommandOutcome(exit_code, output, truncated, elapsed())
     except asyncio.CancelledError:
-        if process is not None and process.returncode is None:
-            await reap_process_tree(process)
-        if output_task is not None:
-            output_task.cancel()
-            await asyncio.gather(output_task, return_exceptions=True)
         raise
     except Exception as exc:  # noqa: BLE001 - a failed run is a reported outcome, not a fault
-        if process is not None and process.returncode is None:
-            await reap_process_tree(process)
         log.warning(
             "worktree_command_error label=%s cwd=%s source=%s error_type=%s",
             label,
@@ -243,3 +184,15 @@ async def run_bounded_command(
             type(exc).__name__,
         )
         return CommandOutcome(None, b"", False, elapsed(), error=str(exc))
+    if outcome.timed_out:
+        return CommandOutcome(
+            None,
+            outcome.stdout,
+            outcome.stdout_truncated,
+            outcome.duration_ms,
+            timed_out=True,
+            error=f"timed out after {timeout_seconds:g}s",
+        )
+    return CommandOutcome(
+        outcome.exit_code, outcome.stdout, outcome.stdout_truncated, outcome.duration_ms
+    )

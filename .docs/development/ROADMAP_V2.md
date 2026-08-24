@@ -297,11 +297,49 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 
 ### S8 - subprocess and process consolidation (usage, provider_accounts, git_monitor, harness, agent_environment, processes)
 
-- [ ] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
-- [ ] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
-- [ ] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
-- [ ] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
-- [ ] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
+- [x] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
+- [x] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
+- [x] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
+- [x] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
+- [x] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
+
+Delivered as `src/swe_mux/bounded_subprocess.py` (`run_bounded`, `bounded_read`) and
+`src/swe_mux/cli_version.py` (`probe`, `CliVersion`), with
+`tests/test_bounded_subprocess.py`, `tests/test_cli_version_probe.py`,
+`tests/test_processes_snapshot_grouping.py`, and six additions to
+`tests/test_worktree_graveyard.py`.
+
+Four decisions worth knowing before D3:
+
+- **`run_bounded` raises `OSError` from the spawn rather than folding it into an
+  outcome.** Every caller already phrases its own "could not start" diagnostic
+  (`install ccusage`, `Could not start codex`), and swallowing the error would have
+  made each of them re-derive it from a string field. Everything *after* the spawn
+  reaps the tree on its way out, `CancelledError` included - which is the gap the
+  audit correctly identified, against a timeout leak that did not exist.
+- **The cap is per stream and reported, never hidden.** `usage.py` raises its
+  existing "exceeded 10 MiB" on `stdout_truncated` (same message, but the limit now
+  bounds memory instead of describing it after the fact), while `git_monitor._git`
+  returns a new code **125** beside its reserved 124: every Git caller parses what it
+  gets back, so a capture that lost its middle has to read as a failure rather than
+  as a smaller repository.
+- **The two `probe_cli_version` bodies were unified at the mechanism and kept apart
+  at the presentation.** One subprocess per resolved executable per 5-minute TTL,
+  `which_real` resolution for both (which additionally stops the agent-environment
+  path from ever probing a mux shim); the registry still returns the version *token*
+  because `version_is_untested` compares it against a bound, and the inventory still
+  returns the CLI's own line and still requires a zero exit because it is shown to a
+  person and used as an MCP catalog cache key. Collapsing those would have changed a
+  displayed string and a cache key for nothing.
+- **The graveyard's retry bound is in memory and dies with the daemon**, which is the
+  point: a restart is a cheap deliberate "try that again", so a lock held by a process
+  that has since exited gets a fresh budget while a live one stops writing the same
+  warning forever. An absent path now counts as purged and says nothing at all.
+
+One behavior difference worth watching in the D3 soak: `git_monitor` now spawns Git
+with `stdin=DEVNULL` (it previously inherited the daemon's), so a Git invocation that
+decides to prompt fails fast instead of blocking on a stdin nothing will ever write.
+No query here reads stdin, so this should be invisible.
 
 ### S9 - MCP and automation consumers (mcp.py, deterministic_consumers.py)
 
@@ -349,14 +387,18 @@ this next:
 
 ## Wave 4 - hygiene, dependencies, gates (S11, S12 in parallel, then D4)
 
-### S11 - dependencies and licensing
+### S11 - dependencies and hygiene (rewritten 2026-08-24 against the locked Phase 10.5 licensing posture)
 
-- [ ] S11.1 num2words (F15): depend on `misaki[en]` (or add an explicit LGPL allowlist entry plus notice text) and update the roadmap license-gate wording; do not fork misaki.
-- [ ] S11.2 voice-local extra (F16): move the voice/NLP closure (spacy, misaki, onnxruntime, faster-whisper, en-core-web-sm, num2words chain) behind an extra; `redeploy_desktop.py` preflight must assert the extra is installed before building, or the frozen bundle silently ships without voice.
+Phase 10.5 landed as this roadmap started and supersedes the audit's licensing findings: Apache-2.0 plus DCO, and a two-half license gate (`packaging/license_audit.py --check` over the resolved closure in verification, `build_desktop.verify_bundle_licenses` over the built tree), with LGPL requiring an `ALLOWLIST` entry AND replaceable-source shipping under `_internal/<pkg>/` - which pystray and num2words both already satisfy via the spec's `collect_all` loop.
+The original S11.1 (audit F15) assumed a pystray-only allowlist and is closed; do NOT swap num2words for `misaki[en]` - the closure resolves it either way, the compliance mechanism is identical, and the explicit declaration documents the runtime requirement the frozen build's `collect_all` depends on.
+Any task here that changes a dependency must run the mandated flow: `uv sync --extra desktop`, then `uv run python packaging/license_audit.py --write`, and commit both generated files (`THIRD-PARTY-NOTICES.md`, `packaging/third_party_licenses.json`).
+
+- [ ] S11.1 num2words posture verification (F15, superseded by Phase 10.5): no dependency change. Confirm the allowlist entry, notice text, and replaceable-source shipping are green through both gate halves, and add a pyproject comment on the num2words line saying why it is a direct dep (misaki's English G2P at runtime; frozen build `collect_all`s it as replaceable LGPL source).
+- [ ] S11.2 voice-local extra (F16): move the voice/NLP closure (spacy, misaki, onnxruntime, faster-whisper, en-core-web-sm, num2words chain) behind an extra. Three gate interactions are load-bearing: `license_audit.py`'s closure walk must be defined over the union of extras (or the desktop build's extra set), not whatever happens to be synced; the frozen build REQUIRES the extra present (num2words' replaceable-source `collect_all` is license compliance, not just voice function), so `redeploy_desktop.py` preflight must assert it before building; and the frozen-app round-trip verify must stay green.
 - [ ] S11.3 Vendor cleanup (F28): remove the 13 unreferenced `frontend/vendor/continuity-editor-*.tgz`.
-- [ ] S11.4 Line endings (F28): `.gitattributes` entries (`.worktree-verify`/`.worktree-setup` `text eol=lf`) and renormalize.
+- [ ] S11.4 Line endings (F28): `.gitattributes` entries (`.worktree-verify`/`.worktree-setup` `text eol=lf`) and renormalize. Check first whether this already landed - an uncommitted `.gitattributes` change existed in the primary on 2026-08-24.
 - [ ] S11.5 `git_provenance_backfill.py` (F28): move to a tools/ location or document it as a one-shot migration so it stops reading as dead code.
-- [ ] S11.T Verification: fresh `uv sync` matrix (base, `--extra voice-local`, desktop) each building and starting; license inventory check against the roadmap gate.
+- [ ] S11.T Verification: fresh `uv sync` matrix (base, `--extra voice-local`, desktop) each building and starting; both halves of the Phase 10.5 license gate green; frozen-app round-trip verify; generated notice files regenerated and committed for any dependency change.
 
 ### S12 - test infrastructure and ratchets
 

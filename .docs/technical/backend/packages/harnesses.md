@@ -9,7 +9,9 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 
 Declared harness identity, capability axes, derived display level, delivery etiquette, tool catalogs, hook event sets, per-machine installation detection (`detect_installation`/`detect_installations`, via `shim_paths.which_real` plus the data-home signal), and the three-state launcher filter (`enabled_backends`).
 
-**Not:** adapter process behavior, provider parsing, state arbitration, or enablement policy storage (`config.py` owns `harness_enabled`).
+`probe_cli_version` is the registry's *presentation* of the shared probe in `cli_version.py`: the version token, so `version_is_untested` can compare it against a tested bound, with the CLI's own first line as the fallback when nothing in the banner parses as a version, and the exit status deliberately not consulted.
+
+**Not:** adapter process behavior, provider parsing, state arbitration, running the `--version` subprocess or caching it (`cli_version.py`), or enablement policy storage (`config.py` owns `harness_enabled`).
 
 `tests/test_harness_adapter_matrix.py` fails when a harness is added to the registry with no adapter or spawn coverage.
 
@@ -33,7 +35,8 @@ A bounded passive inventory of one live CLI generation.
 - Retained runtime options, known policy keys, feature overrides, source drift, and diagnostics.
 - Documented built-ins, current skills, configured MCP, installed and configured plugins, and custom agents.
 - Hooks grouped by lifecycle event, with their handler target and `swe_mux` ownership marked.
-- A ten-second response cache and a one-hour version cache.
+- A ten-second response cache; the CLI version behind it is the shared probe (`cli_version.py`, one subprocess per resolved executable per five minutes, shared with the harness registry).
+  This surface's own contract on top of it: the name check that refuses to run a binary the session did not say was its harness, the CLI's own line rather than a bare token because it is shown to a person, and a required zero exit because a fingerprint drawn from a failed run would change on every failure.
 
 **Not:** starting or health-checking MCP, importing plugins, or executing hooks.
 It never exposes hook command lines, arguments, inline shell bodies, environment, or credentials.
@@ -56,11 +59,12 @@ The `mcp` client is imported inside the probe, so the daemon never pays for it a
 ## `provider_accounts.py`
 
 Saved auth snapshots, explicit switching, and safe quota reads.
+One-shot CLI invocations (login, status) go through `bounded_subprocess.run_bounded`; the Codex quota read is a JSON-RPC `app-server` over a held stdin and stays hand-rolled, because it is a conversation rather than a command.
 
 **Not:** concurrent provider homes.
 
 ## `usage.py`
 
-One bounded ccusage `--by-agent` collector, dynamic historical source normalization, cache migration, atomic last-known-good persistence, and collector freshness.
+One bounded ccusage `--by-agent` collector (through `bounded_subprocess.run_bounded`, so the 10 MiB limit bounds memory while reading rather than describing an error after `communicate()` already buffered the answer), dynamic historical source normalization, cache migration, atomic last-known-good persistence, and collector freshness.
 
 **Not:** harness launchability, saved provider-account identity, or quota telemetry.
