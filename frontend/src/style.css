@@ -2690,6 +2690,8 @@ body {
 .rail-pad-wedge-off>path{fill:color-mix(in srgb,var(--panel2) 70%,transparent);stroke:color-mix(in srgb,var(--text) 22%,transparent)}
 .rail-pad-wedge-off>text{fill:var(--muted)}
 .rail-pad-dial-hub{fill:color-mix(in srgb,var(--panel2) 88%,transparent);stroke:var(--line);stroke-width:1.5}
+/* The press itself, marked low in the hub because the fan is centred above the finger. */
+.rail-pad-dial-grip{fill:color-mix(in srgb,var(--text) 45%,transparent)}
 /* The push-out band of a wedge that streams. Drawn as a separate, dimmer arc so the two
    halves of the wedge read as the two different things they are - one send inside, a stream
    beyond - and lit only while the finger is actually out there repeating. */

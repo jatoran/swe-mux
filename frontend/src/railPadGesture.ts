@@ -20,6 +20,18 @@
 //
 // Wedges are therefore the cheaper axis to grow on, and the shipped pads use one ring.
 //
+// **The fan is centred above the finger, not on it** (`RAIL_PAD_LIFT_PX`), and the hub it
+// opens from is large (`RAIL_PAD_DEAD_RADIUS_PX`). One decision, two numbers, and the reason
+// is the same for both: with the origin under the finger and a 14px hub, the press landed at
+// the common vertex of every wedge with 14px of tolerance in every direction, so a thumb
+// settling onto the glass or a mouse drifting a few pixels committed an action nobody chose.
+// The lift moves the press *below* the whole fan, into the abort zone's own half-plane, so a
+// press is neutral by construction and sideways drift has to clear the skirt (about 93px)
+// before it can reach any wedge at all; the hub widens the base of each wedge from 18px to
+// 51px, which is the tolerance between two *neighbouring* actions once the finger is up
+// there. The deliberate cost is the one direction the lift works against: committing
+// straight up is `lift + dead` of travel rather than `dead`.
+//
 // The rule the whole thing is built on: **the only threshold is distance, never time.** A
 // press is live from the first pixel, a direction commits the instant travel crosses the
 // dead radius, and nothing waits on a clock to decide what the finger meant. That is what
@@ -58,10 +70,38 @@ import { claimPointerDrag } from './pointerDragClaim.ts'
 import { RAIL_KEY_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS } from './railKeyRepeat.ts'
 import { RAIL_PAN_SLOP_PX } from './railOverflow.ts'
 
-/** Travel that leaves the centre and commits a direction. Small on purpose: the wedges are
- *  thumb-sized but the *commitment* still happens mid-flick, which is what keeps the pad
- *  fast. Size and speed are separate decisions here and only one of them is this number. */
-export const RAIL_PAD_DEAD_RADIUS_PX = 14
+/**
+ * The hub: the neutral disc at the fan's origin, inside which nothing is selected.
+ *
+ * Large rather than small, and that is the deliberate reversal. A 14px hub put the wedge
+ * boundaries 14px from the origin, where a 220° fan divided three ways gives each wedge an
+ * 18px base - so the finger that opened the press was already within a twitch of two
+ * different actions, and mouse jitter or a thumb settling onto the glass committed one. The
+ * base of a wedge is `dead × wedgeWidth`, so this number *is* the tolerance between
+ * neighbouring actions, and it is the cheapest one to buy.
+ */
+export const RAIL_PAD_DEAD_RADIUS_PX = 40
+/**
+ * How far above the press the fan's origin sits.
+ *
+ * The second half of the same decision. Centring the fan on the finger meant the finger
+ * covered the hub *and* sat at the common vertex of every wedge, so the shortest distance to
+ * an unintended action was the dead radius in any direction. Lifting the origin puts the
+ * press below the fan entirely, in the abort zone's own half-plane: a press starts neutral by
+ * construction, and reaching *any* wedge by drifting sideways now requires clearing the
+ * skirt, which is `lift / tan(RAIL_PAD_SKIRT_DEG)` - about 93px at full size, against 14px
+ * before.
+ *
+ * Strictly less than the hub at every scale, so the press itself always lands *inside* the
+ * hub rather than in the abort zone below it: "nothing is selected" and "you are in the
+ * middle" have to be the same state, or the dial would open already describing an escape.
+ */
+export const RAIL_PAD_LIFT_PX = 34
+/** Finger travel that makes a press no longer a tap. Its own number rather than the dead
+ *  radius, which used to serve as one: the hub no longer sits under the finger, so hub
+ *  membership stopped answering "did this press move at all". Kept at the old dead radius,
+ *  so what counts as a tap is exactly what it always was. */
+export const RAIL_PAD_TAP_SLOP_PX = 14
 /** Where the near ring ends and the far one begins, on a two-ring pad. */
 export const RAIL_PAD_RING_PX = 104
 /** Outer drawn edge of a two-ring pad. Travel past it is still the far ring. */
@@ -111,6 +151,10 @@ export function railPadAxes(slots: Iterable<RailPadSlotKey>, wedges: number): Ra
 export interface RailPadBands {
   /** Inner hole: below this the press is at the centre. */
   dead: number
+  /** How far above the press the origin these radii are measured from actually sits.
+   *  Carried here rather than read from the constant, so the dial is drawn around the same
+   *  point the gesture resolves against at every squeeze. */
+  lift: number
   /** Near/far boundary, or `Infinity` on a one-ring pad. */
   ring: number
   /** Outer drawn edge. */
@@ -126,10 +170,18 @@ export interface RailPadBands {
  */
 export function railPadBands(banded: boolean, scale = 1): RailPadBands {
   const clamped = Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, scale))
+  // The hub scales now. It did not, back when it was 14px and the stated reason was that it
+  // was already small enough that shrinking it would fire on a press that never really moved.
+  // At 40px that reasoning inverts: an unscaled hub inside a squeezed dial eats the wedge
+  // annulus it is supposed to open into. `RAIL_PAD_MIN_SCALE` is what the old reason buys
+  // instead - the smallest hub any squeeze can produce is still larger than the whole
+  // full-size hub used to be.
+  const dead = RAIL_PAD_DEAD_RADIUS_PX * clamped
+  const lift = RAIL_PAD_LIFT_PX * clamped
   if (banded) {
-    return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: RAIL_PAD_RING_PX * clamped, outer: RAIL_PAD_OUTER_PX * clamped }
+    return { dead, lift, ring: RAIL_PAD_RING_PX * clamped, outer: RAIL_PAD_OUTER_PX * clamped }
   }
-  return { dead: RAIL_PAD_DEAD_RADIUS_PX, ring: Infinity, outer: RAIL_PAD_SINGLE_OUTER_PX * clamped }
+  return { dead, lift, ring: Infinity, outer: RAIL_PAD_SINGLE_OUTER_PX * clamped }
 }
 
 /**
@@ -138,10 +190,15 @@ export function railPadBands(banded: boolean, scale = 1): RailPadBands {
  * The one direction that can run out, now that the fan opens upward: a pad in a short pane
  * near the top of the window has less than the outer band's reach above it, and a boundary
  * you cannot travel to is a slot - or a repeat - that does not exist.
+ *
+ * The lift is part of that reach and is inside the same scale, which is why it is added to
+ * the denominator rather than subtracted from the room. A lift held at full size in a short
+ * pane would spend the scarce pixels pushing the origin off the top of the window, and a fan
+ * whose hub is off screen is one no finger can travel into at all.
  */
 export function railPadScaleFor(banded: boolean, roomAbovePx: number): number {
   if (!Number.isFinite(roomAbovePx)) return 1
-  const wanted = banded ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX
+  const wanted = RAIL_PAD_LIFT_PX + (banded ? RAIL_PAD_OUTER_PX : RAIL_PAD_SINGLE_OUTER_PX)
   return Math.min(1, Math.max(RAIL_PAD_MIN_SCALE, Math.max(0, roomAbovePx) / wanted))
 }
 
@@ -301,8 +358,13 @@ export function createRailPadGesture<T>(
   cancelTimer: (timer: T) => void,
 ): RailPadGesture {
   let pointer: number | null = null
+  /** Where the finger went down. Arbitration and "was this a tap" are about the finger. */
   let startX = 0
   let startY = 0
+  /** Where the fan is centred: the press, lifted. Every wedge and ring is measured from here,
+   *  and it is the only origin `railPadResolve` ever sees. */
+  let originX = 0
+  let originY = 0
   let options: RailPadPressOptions | null = null
   let shape: RailPadShape = { wedges: 3, rings: 1, bands: railPadBands(false) }
   let latched: RailPadLatch = null
@@ -312,9 +374,10 @@ export function createRailPadGesture<T>(
   let timer: T | null = null
   let releaseClaim: (() => void) | null = null
   let handledClick = false
-  /** Whether the press ever left the hub. Not "ever latched a wedge": pulling straight down
+  /** Whether the finger ever really moved. Not "ever latched a wedge": pulling straight down
    *  into the abort zone latches nothing, and firing the centre for that would turn the one
-   *  escape a bottom-edge rail can always complete into a different action. */
+   *  escape a bottom-edge rail can always complete into a different action. Measured from the
+   *  press rather than from the fan's origin, which the lift moved out from under it. */
   let leftCentre = false
   let axes: RailPadAxes = { horizontal: false, vertical: false }
 
@@ -413,6 +476,10 @@ export function createRailPadGesture<T>(
       }
       startX = x
       startY = y
+      // The fan is centred above the finger, never on it. Applied once here so every later
+      // reading - the wedge, the ring, the band, the dial - is measured from one origin.
+      originX = x
+      originY = y - shape.bands.lift
       latched = null
       beyond = false
       axes = railPadAxes(Object.keys(next.slots), next.wedges)
@@ -424,13 +491,14 @@ export function createRailPadGesture<T>(
     },
     move(pointerId, x, y) {
       if (pointer !== pointerId || !options) return false
-      const dx = x - startX
-      const dy = y - startY
+      // Travel, which the arbitration and the tap test are about...
+      const travelX = x - startX
+      const travelY = y - startY
       if (!releaseClaim) {
         // The one-axis case. Whichever way this drag went, it settles here, at the same
         // distance the pan would start at, so the two can never both take it.
-        if (Math.max(Math.abs(dx), Math.abs(dy)) < RAIL_PAN_SLOP_PX) return false
-        const wantsThis = Math.abs(dx) >= Math.abs(dy) ? axes.horizontal : axes.vertical
+        if (Math.max(Math.abs(travelX), Math.abs(travelY)) < RAIL_PAN_SLOP_PX) return false
+        const wantsThis = Math.abs(travelX) >= Math.abs(travelY) ? axes.horizontal : axes.vertical
         if (!wantsThis) {
           // Travel on an axis this pad does not use. Stand down for the whole press:
           // re-entering later would take a pan the strip has already begun.
@@ -439,11 +507,16 @@ export function createRailPadGesture<T>(
         }
         claim()
       }
-      // Recorded on distance alone, before any wedge is resolved: a drag straight down
-      // reaches no wedge at all, and it still has to count as having left the hub or the
-      // lift would run the centre.
+      // Recorded on travel alone, before any wedge is resolved: a drag straight down reaches
+      // no wedge at all, and it still has to count as movement or the lift would run the
+      // centre.
+      if (Math.hypot(travelX, travelY) >= RAIL_PAD_TAP_SLOP_PX) leftCentre = true
+      // ...and displacement from the fan's own origin, which every geometric reading is
+      // against. The two differ by exactly the lift, and conflating them is the bug this
+      // split exists to prevent: a press that has not moved is `lift` pixels from the origin.
+      const dx = x - originX
+      const dy = y - originY
       const radius = Math.hypot(dx, dy)
-      if (radius >= shape.bands.dead) leftCentre = true
       // Leaving for the centre uses the exit ratio; everything else is `railPadResolve`,
       // which is also what the dial is drawn from.
       if (latched !== null && radius < shape.bands.dead * RAIL_PAD_EXIT_RATIO) {

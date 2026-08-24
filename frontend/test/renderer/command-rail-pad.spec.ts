@@ -1,7 +1,9 @@
 import { expect, test, type Page } from 'playwright/test'
 import { RAIL_KEY_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS } from '../../src/railKeyRepeat.ts'
 import {
+  RAIL_PAD_DEAD_RADIUS_PX,
   RAIL_PAD_DIAL_DELAY_MS,
+  RAIL_PAD_LIFT_PX,
   RAIL_PAD_OUTER_PX,
   RAIL_PAD_RING_PX,
   railPadBands,
@@ -33,15 +35,21 @@ const RING = '.rail-pad-r2'
 const STREAM = '[title="Flow"]'
 const HOLD_MS = RAIL_KEY_REPEAT_DELAY_MS + RAIL_KEY_REPEAT_INTERVAL_MS * 6
 /** Comfortably inside the near ring, and comfortably past the dead radius. */
-const NEAR_PX = 60
+const NEAR_PX = RAIL_PAD_DEAD_RADIUS_PX + 20
 /** Comfortably past the ring boundary. */
 const FAR_PX = RAIL_PAD_RING_PX + 46
 
-/** A displacement at a distance and an angle, in the dial's own convention: degrees
- *  counter-clockwise from due east, with up positive. */
+/**
+ * The finger displacement that lands on a point of the dial: `radius` from the fan's origin,
+ * at `degrees` counter-clockwise from due east with up positive.
+ *
+ * The lift is in here because the fan is centred `RAIL_PAD_LIFT_PX` *above* the press rather
+ * than on it, so a plain polar offset from the chip names a different point on the dial than
+ * the one a test means - and at these radii the difference is the whole gesture.
+ */
 const at = (radius: number, degrees: number) => ({
   dx: radius * Math.cos(degrees * Math.PI / 180),
-  dy: -radius * Math.sin(degrees * Math.PI / 180),
+  dy: -radius * Math.sin(degrees * Math.PI / 180) - RAIL_PAD_LIFT_PX,
 })
 
 /** Straight down the middle of one wedge, so a test never depends on where a boundary is. */
@@ -101,7 +109,10 @@ test('a sideways flick that dips below the horizontal still lands in its wedge',
 
 test('pulling down is the abort, and it always has room', async ({ page }) => {
   // The reason the fan gave up its lower half: a rail on the bottom edge of the screen can
-  // always complete a downward drag, and nothing down there is a target.
+  // always complete a downward drag, and nothing down there is a target. The lift makes it
+  // cheaper still - the press already sits at the bottom of the hub, so a short physical drag
+  // is deep in the abort zone - while staying well past the tap slop, which is what keeps it
+  // an abort rather than a tap.
   const { finger } = await flick(page, PAD, at(NEAR_PX, -90))
   expect(await sends(page)).toEqual([])
   await finger.up()
@@ -465,6 +476,47 @@ test('the dial is thumb-sized, and its wedges reach the radii the gesture uses',
   expect(measured.far).toBeGreaterThan(RAIL_PAD_RING_PX)
 })
 
+test('the dial opens above the finger, with the press inside its hub', async ({ page }) => {
+  // The lift, measured where it actually matters: against the drawing, not the constant. A
+  // dial centred on a different point than the one the gesture resolves against would be
+  // lying at exactly the moment the operator is reading it, so this checks the hub the
+  // *renderer* drew actually contains the press the *gesture* opened from.
+  const finger = await touch(page)
+  const centre = await keyPoint(page, PAD)
+  await finger.down(centre.x, centre.y)
+  await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
+  const drawn = await page.evaluate(() => {
+    const svg = document.querySelector<SVGSVGElement>('.rail-pad-dial-svg')!
+    const hub = svg.querySelector<SVGCircleElement>('.rail-pad-dial-hub')!.getBoundingClientRect()
+    return { originY: hub.top + hub.height / 2, radius: hub.height / 2 }
+  })
+  await finger.up()
+  // Within a pixel rather than exactly: the dial's position is rounded to whole pixels for
+  // the stylesheet, and the touch point is the chip's own half-pixel centre.
+  const lifted = centre.y - drawn.originY
+  expect(Math.abs(lifted - RAIL_PAD_LIFT_PX)).toBeLessThanOrEqual(1)
+  expect(Math.abs(drawn.radius - RAIL_PAD_DEAD_RADIUS_PX)).toBeLessThanOrEqual(1)
+  // And it is a lift *into* the hub rather than past it: "nothing is selected" and "you are
+  // in the neutral middle" have to be the same state.
+  expect(lifted).toBeLessThan(drawn.radius)
+})
+
+test('drift around the press selects nothing, in any direction', async ({ page }) => {
+  // The complaint the lift answers. Every one of these was several times the old dead radius
+  // and would have committed a wedge; from below the fan they are all still the abort zone,
+  // and a release out of one runs nothing at all - not even the centre, which is bound.
+  const finger = await touch(page)
+  const centre = await keyPoint(page, PAD)
+  await finger.down(centre.x, centre.y)
+  for (const [dx, dy] of [[26, 0], [-26, 0], [40, 6], [-40, 6], [0, 20], [18, -14]]) {
+    await finger.move(centre.x + dx, centre.y + dy)
+  }
+  expect(await sends(page)).toEqual([])
+  await finger.up()
+  await page.waitForTimeout(200)
+  expect(await sends(page)).toEqual([])
+})
+
 test('the dial escapes the strip that clips everything else', async ({ page }) => {
   const { finger } = await flick(page, PAD, intoWedge(NEAR_PX, 2, 3))
   await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
@@ -514,7 +566,13 @@ test('a squeezed pad shrinks its dial and its ring together', async ({ page }) =
     rail.style.left = '0px'
     rail.style.right = '0px'
   })
-  const { finger } = await flick(page, RING, at(30, 145))
+  // A bare press rather than a drag. What is being measured is the *squeeze*, which is
+  // decided at pointer-down from the room above the press; with the rail at the top of the
+  // window there is no room left to travel into, so a drag aimed at a wedge would be aimed
+  // off the top of the glass and CDP has nowhere to put the finger.
+  const finger = await touch(page)
+  const centre = await keyPoint(page, RING)
+  await finger.down(centre.x, centre.y)
   await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
   const width = await page.evaluate(() =>
     document.querySelector<SVGSVGElement>('.rail-pad-dial-svg')!.getBoundingClientRect().width)

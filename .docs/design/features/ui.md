@@ -1770,6 +1770,14 @@ Its rules, and what each one is defending:
   The rail sits at the bottom of its pane, and on a phone that is the bottom of the screen — so a downward wedge is drawn off the glass, dragged where a thumb cannot reach, and in competition with the system's own bottom-edge gesture.
   Rather than squeeze it, the 180° above the finger is divided instead (plus a 20° skirt at each end, so a sideways flick that dips a little still lands where it aimed), and the whole lower half becomes the abort zone.
   **Pulling down cancels**, which is the one gesture a rail on the screen's bottom edge can always complete.
+- **The fan is centred above the press, not on it, and it opens from a wide hub.**
+  One decision in two numbers — a 34 px lift and a 40 px hub — and the same reason for both.
+  A fan centred on the finger put the press at the common vertex of every wedge with only the dead radius of tolerance in any direction, so a thumb settling onto the glass or a mouse drifting a few pixels committed an action nobody chose.
+  The lift puts the press *below* the whole fan, inside the abort zone's own half-plane, so **a press is neutral by construction** and reaching any wedge by drifting sideways first has to clear the skirt — about 93 px, against 14 px before.
+  The hub is what separates two *neighbouring* actions once the finger is up there, because a wedge's base is the hub's arc across its own angle: 51 px on a three-wedge pad, against 18 px before.
+  The lift is always strictly less than the hub, at every squeeze, so the press lands *inside* the neutral disc rather than past it — "nothing is selected" and "you are in the middle" have to be the same state, or a dial would open already describing an escape.
+  The dial marks the press as a dot low in the hub, which is the one thing about the arrangement an operator has to see once.
+  The deliberate cost is the single direction the lift works against: committing straight up is lift-plus-hub of travel rather than hub alone.
 - **An action with no direction of its own goes in the centre, where a tap lands** — Down, on the arrows pad.
   It is the one non-spatial mapping in the design and it is deliberate: a fourth wedge would have to point somewhere that is not down, and a chip of its own would cost rail width and separate Down from Up.
   "The one with no direction is the one you tap" is a rule you learn once, and it keeps the arrow pair on a single chip.
@@ -1784,7 +1792,7 @@ Its rules, and what each one is defending:
   Arc length is not what runs out: even six wedges leaves 57px of arc at the label radius, comfortably past a fingertip.
   Three and four stay easy to hit without looking.
 - **The only threshold in a pad gesture is distance, never time.**
-  A press is live from the first pixel, a direction commits the instant travel crosses the 14 px dead radius, and nothing waits on a clock to decide what the finger meant — so "press, flick up, release" sends one Up as fast as the hand can do it, the key having already fired mid-flick.
+  A press is live from the first pixel, a direction commits the instant travel leaves the hub, and nothing waits on a clock to decide what the finger meant — so "press, flick up, release" sends one Up as fast as the hand can do it, the key having already fired mid-flick.
   Wedge *size* and commit *distance* are separate numbers, which is what lets the targets be thumb-sized without the control becoming slow.
   The one timer in the gesture repeats an already-committed direction; the only other one in the feature is cosmetic, holding the dial back ~150 ms so a fast operator never meets it and a hesitant one always gets the map.
   Hysteresis is asymmetric, and leaving a latched wedge for its neighbour — or crossing a ring in either direction — costs a further margin, so a finger resting on a boundary cannot chatter between two actions.
@@ -1826,14 +1834,17 @@ Its rules, and what each one is defending:
   A far-ring direction's mark sits inboard of its near one, which is the only thing on the chip that says a wedge has two depths.
 - **A pad in a short pane shrinks its dial, and the gesture shrinks with it.**
   Upward is the one direction that can run out now, and it is measured against the visual viewport so an open soft keyboard counts.
-  Both ring radii scale together, floored at 45%, so a boundary is never placed where the finger cannot travel to it and never so close that a twitch crosses it.
+  Every radius scales together — hub, lift and both ring boundaries — floored at 45%, so a boundary is never placed where the finger cannot travel to it and never so close that a twitch crosses it.
+  The lift is inside that reach rather than added on top of it, because a lift held at full size in a short pane would spend the scarce pixels pushing the origin off the top of the window, and a hub off screen is one no finger can travel into at all.
+  The hub scales for the same reason and needs no floor of its own: the 45% floor already leaves it larger than the whole full-size hub used to be.
   The wedges themselves may run off the sides of the screen and cost nothing there — a hitbox is angular — while their labels are pulled back inside the viewport, because a label off the edge is the one part of the drawing that mattered.
 - **A pad is transient and never opens.** It disappears on release, and is deliberately not a menu: an open state would make every press an overlay level, with dismissal semantics, back-button behaviour, and a gesture recognizer that resolves nothing while it stands.
   Pads and the rail's drop-ups stay distinct tools — a drop-up is for browsing a list you have to read, a pad for hitting one of a handful of things you already know.
   Keyboard and trackpad reach it without any of that: a focused pad answers the **number keys**, `1` being the leftmost wedge as the dial is drawn and a second ring continuing the count, and Enter runs the centre.
   Numbers rather than arrows because the wedge count is a choice — three arrows could only ever address three of up to five wedges, and which three would depend on the pad.
   A three-wedge pad also answers the arrows, where left/up/right genuinely *are* its wedges; at any other count they are refused rather than guessed at.
-- **A chip that both taps and pads keeps its tap**, decided by distance rather than a timer: past the deadzone is a pad gesture and the trailing click is suppressed, while a release without travel is an ordinary tap.
+- **A chip that both taps and pads keeps its tap**, decided by distance rather than a timer: reaching a wedge is a pad gesture and the trailing click is suppressed, while a release without travel is an ordinary tap.
+  What counts as travel is a **tap slop** of its own (14 px, measured from the press), not hub membership — the lift moved the hub out from under the finger, so "am I in the hub" stopped answering "did this press move at all", and a drift that reaches no wedge is still an abandoned gesture rather than a tap.
 - **A pad drag preserves the soft keyboard by capture-and-restore, because it has no event left to refuse.**
   Every other rail chip acts on `click`, so the `mousedown` focus refusal every one of them relies on has necessarily already run.
   A pad acts on `pointermove`, and a touch that becomes a drag delivers **no mouse events at all** — measured through CDP: a tap gives `pointerdown, touchstart, touchend, mousedown, mouseup, click`, a drag gives only the first three.

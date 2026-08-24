@@ -309,10 +309,16 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     // option: the rail's scroller sits between the pane's transform and the chip, and a
     // transformed ancestor makes that scroller clip even `position:fixed` descendants - the
     // dial would be cut off at the edge of the strip.
+    //
+    // `y` is the fan's *origin*, which sits `bands.lift` above the finger, not the press
+    // itself. Read from the bands rather than from the constant so the drawing and the
+    // gesture agree at every squeeze - a dial drawn around a different point than the one the
+    // wedges are resolved against would be lying at exactly the moment it is being trusted.
+    const dialScale = railPadScaleFor(banded, roomAbove)
     setDial({
       x: event.clientX,
-      y: event.clientY,
-      scale: railPadScaleFor(banded, roomAbove),
+      y: event.clientY - railPadBands(banded, dialScale).lift,
+      scale: dialScale,
       banded,
       latch: null,
       armed: false,
@@ -479,6 +485,11 @@ export function RailPad({ controller, item, slots, className, content, modifierP
           </g>
         })}
         <circle class="rail-pad-dial-hub" r={bands.dead}/>
+        {/* Where the finger actually is: low in the hub, because the fan is centred above
+            it. Drawn because otherwise the hub reads as floating for no reason, and the one
+            thing the operator has to understand about the lift is that they start inside the
+            neutral disc and every wedge is up from there. */}
+        <circle class="rail-pad-dial-grip" cy={bands.lift} r={3.5}/>
       </svg>
     </div>, document.body)}
   </button>
