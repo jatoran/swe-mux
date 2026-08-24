@@ -4382,6 +4382,89 @@ lands on a worktree session, and then it is total and permanent for that session
 - Local hazard worth carrying into the command-rail work: the rail emits arrow keys, and `←`
   into an empty Claude prompt is exactly this gesture.
 
+## Phase 19 - Worktree verification as a portable, agent-reachable contract
+
+Recorded 2026-08-24 after evaluation; not scheduled.
+The land queue is worth nothing in a repository that has no verification command: `verify` refuses
+rather than runs, and every land refuses with it.
+Everything a new repository needs in order to grow one is already written down and already
+install-agnostic - it is just not anywhere the agent doing the work can reach, and it covers only
+half of the pair.
+
+### What already exists
+
+The convention is repository-neutral: an executable `.worktree-setup` / `.worktree-verify` at the
+repository root, or `[worktree] setup_command` / `verify_command` in `.swe-mux/config.toml` as the
+override, resolved per worktree so the script travels with the branch (`worktree_exec.py`,
+`worktree_setup.py`, `worktree_verify.py`).
+The authoring guidance exists as a product artifact rather than as this repository's own lore:
+`verifySetupPrompt()` (`frontend/src/landSetupPrompt.ts`) states the contract - the branch's
+worktree is the cwd, parallel-safe, bounded, the exit code is the only verdict, never pipe a check
+through `tail`, the optional `=== name ===` step protocol - then both conventions, a
+prove-it-fails-when-it-should procedure, and the ending that keeps it a proposal.
+`SetupPromptDisclosure` (`GitLandBar.tsx`) draws it in the landing strip as text with a Copy
+button.
+
+### Why that is not yet enough
+
+- **No agent can read it.** It is a frontend constant behind a disclosure, so a human has to find
+  the strip and paste it into the repository that needs it. There is no MCP read, no CLI
+  subcommand, and nothing that writes it into the target repository.
+- **The refusal path does not hand it over.** `_refused_body` (`land_queue.py`) tells the
+  requesting agent that this Project has no verification command and that approval is a human act,
+  which is correct and is also the moment of maximum motivation to fix it - and it ships neither
+  the contract nor a pointer to it.
+- **`.worktree-setup` has no equivalent at all.** Its only guidance anywhere is the placeholder and
+  one paragraph in the Projects registry editor (`ProjectsManager.tsx`). The bootstrap half - only
+  gitignored state needs handling because tracked files come with the checkout, share the package
+  caches, it runs before the session starts, it must be idempotent and bounded - is written down
+  only in this repository's own script comments.
+- **It is discoverable inside a feature that is off by default.** The strip lives under Git → Map →
+  LANDING and the land queue is per-Project opt-in, so the surface that teaches the convention is
+  behind the switch that needs it.
+- **Nothing lands in the target repository.** After a successful setup the knowledge stays in the
+  swe-mux install, so the next agent in that repository re-derives it from scratch.
+
+### Candidate work, in the order it would be sequenced
+
+- [ ] The prompt text moves to a daemon-owned module and the frontend renders what it is served.
+  Its own comment argues it is "deliberately not fetched from the daemon", and that argument is
+  about install-invariance rather than about who may read it; the one variable it interpolates
+  (`scriptName`) already comes from the daemon through `gate.scriptName`, so the invariance
+  survives the move intact.
+- [ ] A read-only MCP tool returns it, and the `not_configured` / `unapproved` handback carries it
+  or a pointer to it.
+  This leaks no authority: the text is a description of a proposal, the daemon enforces
+  digest-approval by a human regardless of what any prompt says, and the "you cannot approve this"
+  paragraph gets *stronger* when the agent reads it first-person instead of receiving it pasted.
+- [ ] The setup half gets its own prompt on the same surfaces, stating the bootstrap contract
+  rather than a placeholder.
+- [ ] `mux doctor` gains a per-Project readiness check - no verification command, no setup command,
+  queue disabled - each naming its own fix, so the convention is reachable without first enabling
+  the feature that draws it.
+- [ ] The prompt's closing section tells the receiving agent to record the landing flow in that
+  repository's own agent-instructions file.
+  This is the part that actually answers "a new user on a new system": the contract travels with
+  the product, and the convention travels with the repository.
+
+### Deliberately not in scope
+
+A library of per-stack starter verify scripts (uv/pytest, cargo, go, plain npm).
+The contract is what a new repository is missing, not the syntax, and a template that lands unread
+is exactly the gate-that-cannot-fail the prompt's prove-it section exists to prevent.
+Stack detection may inform the prompt; it may not substitute for writing and proving the command.
+
+### Phase 19 exit criteria
+
+- [ ] An agent in a repository with no verification command can obtain the full contract without a
+  human copying anything, and a refused land or verify tells it where.
+- [ ] Both halves of the convention have authoring guidance, from one source that the browser and
+  the agent surface both read.
+- [ ] `mux doctor` names a missing verification command, a missing setup command, and a disabled
+  queue, each with its fix.
+- [ ] Approval remains a human act against the exact bytes on every one of the new paths, and no
+  new path can produce an approved command.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
