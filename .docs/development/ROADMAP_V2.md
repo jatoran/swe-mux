@@ -101,12 +101,12 @@ S3 and S4 are the conflict hubs of the codebase; landing them before waves 3-4 i
 
 Pure moves plus the AppKey migration; no behavior changes, so review is structural.
 
-- [ ] S3.1 Feature route extraction (F/codex-8): move route tables and thin handlers into per-domain route modules registered from the composition root; keep `_build_runtime_handles()` as the intentional root.
-- [ ] S3.2 Worktree/git mutation service: move the multi-stage repair/burial/rollback/quarantine/purge transaction out of the transport module into a service returning typed outcomes.
-- [ ] S3.3 Preview transport module: move Preview rewriting/proxy helpers into their own module (F21's future tree-sitter work then has a home).
-- [ ] S3.4 AppKey migration (F28): replace the ~632 string app-keys with typed `web.AppKey` handles; this also eliminates the bulk of the test-run warning noise and is the prerequisite for the warnings ratchet in S12.
-- [ ] S3.T Tests: existing suite is the harness (moves must not change behavior); add an import-boundary check so feature modules do not import the composition root.
-- [ ] S3.D Docs: update `technical/backend/packages.md` module map for every new module.
+- [x] S3.1 Feature route extraction (F/codex-8): move route tables and thin handlers into per-domain route modules registered from the composition root; keep `_build_runtime_handles()` as the intentional root.
+- [x] S3.2 Worktree/git mutation service: move the multi-stage repair/burial/rollback/quarantine/purge transaction out of the transport module into a service returning typed outcomes.
+- [x] S3.3 Preview transport module: move Preview rewriting/proxy helpers into their own module (F21's future tree-sitter work then has a home).
+- [x] S3.4 AppKey migration (F28): replace the ~632 string app-keys with typed `web.AppKey` handles; this also eliminates the bulk of the test-run warning noise and is the prerequisite for the warnings ratchet in S12.
+- [x] S3.T Tests: existing suite is the harness (moves must not change behavior); add an import-boundary check so feature modules do not import the composition root.
+- [x] S3.D Docs: update `technical/backend/packages.md` module map for every new module.
 
 ### S4 - App.tsx decomposition plus the refresh fix
 
@@ -290,7 +290,9 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 - [ ] S7.1 Structured sink: JSON (or key=value) formatter that serializes `extra` fields, so the correlation data call sites already write reaches `daemon.log`.
 - [ ] S7.2 Request correlation: contextvar request-ID middleware, ID returned in a response header and included in every log line; carry into subprocess/service logs where operation IDs already exist.
 - [ ] S7.3 Typed error translation (F5): introduce a `NotFound(KeyError)` (or typed domain exceptions) for the 30+ deliberate raise sites; let bare `TypeError` reach the 500 path; log both translation paths at debug with method, path, and request ID; stop echoing raw key reprs in 404 bodies.
-- [ ] S7.T Tests: formatter round-trip of extras; middleware test proving an accidental `KeyError` from a handler bug 500s with a traceback while a deliberate `NotFound` 404s; request-ID presence test.
+- [ ] S7.4 Restart-overlap durability (D2 finding 1): during a session-preserving restart the dying daemon's last writes hit `sqlite3.OperationalError: database is locked` (operational_telemetry, session_recovery, push, history) and are silently lost - precisely the telemetry that would explain the restart. Flush/close stores before the handoff or retry with bounded backoff during the shutdown drain, and make any final loss loud instead of silent.
+- [ ] S7.5 Planned-restart lifecycle truth (D2 finding 3): "previous daemon died without a clean shutdown" fires on every planned restart because the redeploy terminates the predecessor after asking it to detach. A planned handoff must record itself so the successor stops reporting a crash that did not happen.
+- [ ] S7.T Tests: formatter round-trip of extras; middleware test proving an accidental `KeyError` from a handler bug 500s with a traceback while a deliberate `NotFound` 404s; request-ID presence test; restart-overlap write-loss test; planned-restart-no-crash-warning test.
 - [ ] S7.D Docs: logging section of the relevant technical doc.
 
 ### S8 - subprocess and process consolidation (usage, provider_accounts, git_monitor, harness, agent_environment, processes)
@@ -298,7 +300,8 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 - [ ] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
 - [ ] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
 - [ ] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
-- [ ] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test.
+- [ ] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
+- [ ] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
 
 ### S9 - MCP and automation consumers (mcp.py, deterministic_consumers.py)
 
