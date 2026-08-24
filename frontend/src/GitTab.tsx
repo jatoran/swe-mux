@@ -53,6 +53,7 @@ import {
   type PendingRemovals,
   type RemovalAssessment,
 } from './worktreeRemoval'
+import { applySelectionClick, type SelectableRow } from './worktreeSelection'
 import { GitReviewModal } from './GitReviewModal'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import {
@@ -241,6 +242,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // open to read. One toolbar press is what turns fifty worktrees into a work list.
   const [selecting,setSelecting]=useState(false)
   const [selected,setSelected]=useState<Record<string,true>>({})
+  // The origin a Shift-click extends from: the last row checked by a plain click,
+  // normalized. Held next to the selection because it is only ever read together with
+  // it, and cleared wherever the selection is.
+  const [selectAnchor,setSelectAnchor]=useState('')
   const [bulkRemoving,setBulkRemoving]=useState(false)
   const [bulkForce,setBulkForce]=useState(false)
   const [bulkBusy,setBulkBusy]=useState(false)
@@ -592,19 +597,31 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const landPlan=planBulkLand(selectedTrees)
   const safeRemovals=removalPlan.removable.filter(item=>item.warnings.length===0)
   const removalTargets=bulkForce?removalPlan.removable:safeRemovals
-  const clearSelection=()=>{setSelected({});setBulkRemoving(false);setBulkForce(false);setBulkNote('')}
-  const toggleSelected=(path:string)=>setSelected(current=>{
-    const key=normalizePath(path),next={...current}
-    if(next[key])delete next[key]; else next[key]=true
-    return next
-  })
+  const clearSelection=()=>{setSelected({});setSelectAnchor('');setBulkRemoving(false);setBulkForce(false);setBulkNote('')}
+  /** The rows a range may sweep, in the order they are drawn - so the search box's
+   *  filtering is what a Shift-click ranges over, and a row whose checkbox is disabled
+   *  is stepped over rather than pressed. Both conditions are the checkbox's own. */
+  const selectableRows:SelectableRow[]=shownWorktrees.map(row=>({
+    path:row.path,
+    selectable:!isRemoving(pendingRemovals,row.path)&&(assessments.get(normalizePath(row.path))?.blocks.length??1)===0,
+  }))
+  const clickSelected=(path:string,extend:boolean)=>{
+    const result=applySelectionClick(selected,selectableRows,path,{extend,anchor:selectAnchor})
+    setSelected(result.selected)
+    setSelectAnchor(result.anchor)
+  }
   /** Everything the reader could act on: a blocked checkout is not a candidate, so
    *  selecting it would only be something to un-select before pressing anything. */
-  const selectAllRemovable=()=>setSelected(Object.fromEntries(
-    orderedWorktrees
-      .filter(tree=>!tree.main&&(assessments.get(normalizePath(tree.path))?.blocks.length??1)===0)
-      .map(tree=>[normalizePath(tree.path),true as const]),
-  ))
+  const selectAllRemovable=()=>{
+    setSelected(Object.fromEntries(
+      orderedWorktrees
+        .filter(tree=>!tree.main&&(assessments.get(normalizePath(tree.path))?.blocks.length??1)===0)
+        .map(tree=>[normalizePath(tree.path),true as const]),
+    ))
+    // A sweep of the whole list is not an origin anyone pointed at, so the next
+    // Shift-click has nothing to extend from and is a plain click.
+    setSelectAnchor('')
+  }
   /** One `request_land` per branch, in map order. The queue serializes them - that is
    *  the queue doing its job, and nothing here waits for or reorders a landing. */
   const runBulkLand=async()=>{
@@ -758,13 +775,17 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
               its own affordance now, and interactive content nested in a button is neither
               valid nor reliably clickable. */}
           <div class={`git-map-head${selecting?' selecting':''}`}>
-            {selecting&&<label class="git-map-select" title={blocks.length?`Cannot be removed: ${blocks.map(removalBlockLabel).join(', ')}`:`Select ${tree.branch||worktreeName}`}>
+            {selecting&&<label class="git-map-select" title={blocks.length?`Cannot be removed: ${blocks.map(removalBlockLabel).join(', ')}`:`Select ${tree.branch||worktreeName} · Shift-click to select through here`}>
+              {/* `onClick`, not `onChange`: a `change` event is not a mouse event and
+                  carries no `shiftKey`, so the range press would be indistinguishable
+                  from an ordinary one. Click fires for a press on the label and for
+                  Space on a focused box alike, so nothing is lost by reading it here. */}
               <input
                 type="checkbox"
                 checked={!!selected[normalizePath(tree.path)]}
                 disabled={removing||blocks.length>0}
                 aria-label={`Select ${tree.branch||worktreeName}`}
-                onChange={()=>toggleSelected(tree.path)}
+                onClick={event=>clickSelected(tree.path,event.shiftKey)}
               />
             </label>}
             <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>

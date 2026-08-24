@@ -478,10 +478,22 @@ Two cross-backend sources complete the set:
   depend on the transcript had never fired.
 - **Codex** (`_codex`): no loop/cron equivalents exist in the Codex CLI, so those
   annotations stay empty rather than being faked. Trusted `SubagentStart`/`SubagentStop`
-  hooks own the subagent count; before any lifecycle hook arrives, `sub_agent_activity`
-  records provide the count-1/TTL fallback. Once hooks own the count, those transcript
+  hooks own the subagent count; before any lifecycle hook arrives, the subagent records
+  provide the count-1/TTL fallback. Once hooks own the count, those transcript
   records only refresh recency and cannot reopen a stopped subagent. Background tasks
   reach Codex through the process fast-clear side only.
+
+  Those records come in two envelopes and the observer reads both. Codex wrote a top-level
+  `sub_agent_activity` payload through 2026-08-06; from 2026-08-07 (0.149) it nests the
+  identical fields - `kind`, `agent_thread_id`, `agent_path` - inside `item_completed`'s
+  `item`, typed `SubAgentActivity`. Only the envelope moved, so the annotation, its
+  `transcript:sub_agent_activity` evidence, and its count are unchanged; the older shape
+  stays readable because a resumed or archived conversation can carry records from either
+  era in one file. Reading only the older one is what left every Codex pane running
+  subagents with no standing annotation between 2026-08-07 and the repair
+  (`development/ROADMAP_V2.md` W2.5.3). `agent_path` is a slash-joined string in both
+  envelopes, so the emitted `depth` counts path segments below `/root` rather than the
+  string's length.
 
 ### Leaving `awaiting` (answered prompts)
 

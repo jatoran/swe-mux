@@ -465,6 +465,22 @@ include a registered Project nested below another Git root.
   content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
   path-ordered result list (content matches show the first matching line); clearing it restores
   the tree. Results and the tree share the same open, context-menu, and drag behavior.
+- **The search walk is breadth-first, and that is correctness rather than taste.** It is bounded
+  at 20,000 files so a huge tree cannot stall the daemon, and a depth-first walk spends that
+  whole budget on whichever subtree sorts first - a dot-directory, always - and can return
+  before ever reaching `src/`. Measured on this repository 2026-08-24, before the fix: a search
+  for `recent_files` returned 26 results, every one of them a duplicate inside
+  `.claude/worktrees/`, and the file the reader was looking for was never visited. That is not
+  a degraded search but a silent wrong answer, because a truncated list of the wrong matches
+  renders exactly like a complete list of the right ones. Breadth-first spends the budget on
+  the shallowest files first, which is both the order a person expects and the order in which a
+  Project's own code beats its vendored, generated, and duplicated trees.
+- A truncated search says **which** bound bit, because the two give opposite advice. Hitting the
+  *result* limit means there is more of what you asked for and a narrower query finds it.
+  Hitting the *file* limit means the walk gave up early, so a narrower query re-runs the same
+  walk and gives up in the same place; the notice names the folder it stopped in and points at
+  the ignore list instead. "Refine to narrow" against a file budget sends the reader retyping
+  and nothing changes, which is how the defect above stayed invisible.
 - The **Recent** subtab replaces the tree with the files Git says were touched here, at most
   twenty of them. It was a pressed clock icon beside the search-scope button until 2026-08-22;
   a search query still outranks whichever subtab is selected behind it, because searching is an
@@ -510,9 +526,40 @@ include a registered Project nested below another Git root.
 - File inspection checks the regular-file type and declared size before a bounded read, then runs
   blocking filesystem and image work off the server event loop. Refused oversized files do not
   require hashing the full body to produce a revision.
+- **A worktree placed inside the Project it branches from is hidden from the browser, in two
+  layers.** It is a sibling checkout, not Project content: it holds a second copy of every
+  tracked file, so listing it means every search answers with fourteen of everything and the
+  file budget above is spent before the walk leaves it.
+  The first layer is four shipped ignore patterns (`.claude/worktrees`, `.codex/worktrees`,
+  `.agents/worktrees`, `.worktrees`) covering where the agent providers put them. They are
+  path-shaped rather than bare names on purpose: `.claude` also holds `settings.json`,
+  `agents/`, and `skills/`, which are content a person browses.
+  The second layer asks Git (`git worktree list --porcelain`, cached ~30s) and prunes any
+  worktree registered *inside* the Project root, because `git worktree add ./scratch` is legal
+  and no static pattern will ever name it.
+  Both layers are kept, and neither subsumes the other: the dynamic half is the only thing that
+  finds an unconventional location, and the static half is the only thing that still hides an
+  **abandoned** checkout after Git stops listing it - which is the state a directory nobody uses
+  any more ends up in, and the one where hiding it matters most. Nine such directories were on
+  disk in this repository when the pair was written.
+  The Git call fails open: not a repository, Git missing, or Git slow all answer "no nested
+  worktrees" rather than raising, because a file browser must not go offline over a Git that
+  was never needed to browse files.
+- `.trash` is hidden by default for the same reason and was added in the same release. It is the
+  same complaint arriving by a second route: the convention that moves a directory there instead
+  of deleting it is exactly what fills it with abandoned checkouts, so a browser that hides
+  `.claude/worktrees` and then lists `.trash/orphaned-worktrees/` has hidden the tidy half of the
+  problem. Deleted content is also the least defensible thing for a file browser to surface by
+  default, and one line in Settings puts it back.
 - Global `project_ignore_patterns` and Project-local `ignore_patterns` compose. They filter the
   browser and watcher only, never Git. Settings preserves line breaks while editing and trims
   blank entries only on explicit Save.
+  A pattern added to the shipped defaults reaches an **existing** install only through a schema
+  migration, because the whole list is persisted per install and a new default is otherwise
+  visible to brand-new installs alone - indistinguishable, on every machine that has been
+  running swe-mux, from never having shipped it. The worktree patterns arrived that way at
+  schema 32; the migration only ever appends, and stops at the 256-pattern ceiling `_validate`
+  enforces rather than writing a config that then refuses to load.
   The two halves live one click apart and each names the other: the global list is
   Settings → Projects → Global project ignores, and the per-Project list is Manage projects →
   Repository options → Additional ignore patterns. They are one composed value edited in two

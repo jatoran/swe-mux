@@ -57,7 +57,8 @@ Nothing calls it on its own - it is reached only from the fork scope's "Reattach
 ### The rest of the layer
 
 - `railLayout.ts` is the editing algebra for placing, moving, rowing, copying a device rail, catalog add and delete, and two-dimensional drop indexing.
-- `railDrag.ts` is the DOM drag controller the modal editor mounts: the `data-rail-row`/`data-reorder-id` contract, committed-config preview recompute, and root pointer capture.
+- `railDrag.ts` is the DOM drag controller the modal editor mounts: the `data-rail-row`/`data-reorder-id` contract, committed-config preview recompute, nearest-row drop resolution within `DROP_ROW_MARGIN`, and pointer capture on `document.body`.
+  Its gesture layer is imported from `dragReorder.ts` rather than restated - activation constants, the touch-scroll cancel, and the native-`contextmenu` suppression all match `beginPointerDrag` in `App.tsx`, and drifting from them is what made the editor's mobile reorder unreliable (`design/features/workspace-layout.md` § pointer drag contract).
   Its `canDrop` gate is unset now that a delta can express a project action in a shared row; it stays because refusing-as-off-every-row is the drag's own vocabulary, not the scope rule that needed it.
 - `ActionEditorModal.tsx` owns the standalone Configure Actions surface.
   It opens on Global unless the focused Project is already detached, and passes the focused Project separately so Global can offer a one-step detach-and-edit action.
@@ -182,9 +183,10 @@ Filtering is substring, not the palette's subsequence matcher, which would match
 
 ## Clipboard capture
 
-`clipboardHistory.ts`, `InteractionHud.tsx`, `insertTarget.ts`
+`clipboardHistory.ts`, `InteractionHud.tsx`, `insertTarget.ts`, `railClearance.ts`
 
 Boot-installed copy capture (a `writeText` wrapper plus capture-phase copy/cut) with client-side dedupe, payload-free successful-copy feedback owned by an isolated HUD below `App.tsx` so clipboard gestures cannot re-render active editors or terminals, and pure last-focused-surface insert routing shared by every injecting surface.
+The HUD is pinned to the viewport's bottom-right corner, which on a maximised window is where the terminal's command rail is, so it reads `--rail-clearance` from `railClearance.ts` to sit above the rail rather than on it (`layout-and-chrome.md`).
 
 ## Clipboard history section
 

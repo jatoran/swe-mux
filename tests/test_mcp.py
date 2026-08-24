@@ -19,6 +19,7 @@ import pytest
 
 from swe_mux.agent_context import AgentContextService
 from swe_mux.git_projects import ProjectIdentity
+from swe_mux.land_queue import LandRefusal
 from swe_mux.mcp import (
     LIST_MAX_BYTES,
     TOOLS,
@@ -1537,6 +1538,36 @@ async def test_request_land_without_the_service_is_unavailable_not_a_partial_wri
     with pytest.raises(QueueError) as caught:
         await _land_service(caller, None).dispatch_tool(caller, "request_land", {})
     assert caught.value.code == "unavailable"
+
+
+class RefusingLandStub:
+    """A service that refuses, the way the real one does for an ordinary reason."""
+
+    def __init__(self, code: str = "nothing_to_land") -> None:
+        self.code = code
+
+    async def request(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        raise LandRefusal(self.code, "worktree-alpha is already on the trunk")
+
+
+@pytest.mark.parametrize("tool", ["request_land", "request_verify"])
+async def test_a_land_service_refusal_reaches_the_agent_typed(tool: str) -> None:
+    """A refusal is an answer, so it must not arrive as an internal error.
+
+    The service refuses for reasons an agent can act on - the branch is already on
+    the trunk, another request holds it, a precondition failed. Both HTTP routes
+    translate those to a typed 409; this path did not, so the live wire answered
+    `500 internal server error` and the agent learned nothing (found by the first
+    ever execution of the land wire canary, ROADMAP_V2 W2.5.1).
+    """
+    caller = live_session("s1")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    with pytest.raises(QueueError) as caught:
+        await _land_service(caller, RefusingLandStub()).dispatch_tool(caller, tool, {})
+    assert caught.value.code == "nothing_to_land"
+    assert caught.value.status == 409
+    assert "already on the trunk" in str(caught.value)
 
 
 async def test_request_land_from_an_unregistered_project_refuses() -> None:

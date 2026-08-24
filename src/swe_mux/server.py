@@ -11228,17 +11228,26 @@ async def restore_agent_context(request: web.Request) -> web.Response:
 
 
 async def list_project_files(request: web.Request) -> web.Response:
+    """List one Project folder.
+
+    Off the loop, unlike the version that shipped before: the listing was always a blocking
+    filesystem walk, and it now also asks Git which of this Project's subdirectories are
+    separate worktrees (`nested_worktrees`). Its batch sibling below has run in an executor
+    for exactly this reason; a subprocess on the event loop stalls every session's WebSocket.
+    """
     project = _request_project(request)
-    patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
+    patterns = await asyncio.to_thread(
+        effective_project_ignores,
+        project.root,
+        request.app["config"].project_ignore_patterns,
     )
-    return json_response(
-        list_project_directory(
-            project.root,
-            request.query.get("path", ""),
-            ignore_patterns=patterns,
-        )
+    result = await asyncio.to_thread(
+        list_project_directory,
+        project.root,
+        request.query.get("path", ""),
+        ignore_patterns=patterns,
     )
+    return json_response(result)
 
 
 async def post_project_resource(request: web.Request) -> web.Response:
@@ -11281,16 +11290,18 @@ async def list_project_files_tree(request: web.Request) -> web.Response:
     """
 
     project = _request_project(request)
-    patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
-    )
+    configured = request.app["config"].project_ignore_patterns
     paths = request.query.getall("path", [])
     # Always include the root, dedupe, and bound the fan-out so a hostile or
     # runaway query cannot ask us to stat thousands of directories.
     wanted = list(dict.fromkeys(["", *paths]))[:1000]
     result = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: list_project_directories(project.root, wanted, ignore_patterns=patterns),
+        lambda: list_project_directories(
+            project.root,
+            wanted,
+            ignore_patterns=effective_project_ignores(project.root, configured),
+        ),
     )
     return json_response(result)
 
@@ -11317,13 +11328,18 @@ async def search_project_files_route(request: web.Request) -> web.Response:
     if mode not in ("names", "contents", "both"):
         mode = "names"
     query = request.query.get("q", "")
-    patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
-    )
+    configured = request.app["config"].project_ignore_patterns
     # The recursive walk (and any content reads) is blocking, so keep it off the event loop.
+    # So are the Project config parse and the nested-worktree Git call it now makes, which is
+    # why the whole thing is one executor hop rather than a walk with two reads in front of it.
     result = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: search_project_files(project.root, query, mode=mode, ignore_patterns=patterns),
+        lambda: search_project_files(
+            project.root,
+            query,
+            mode=mode,
+            ignore_patterns=effective_project_ignores(project.root, configured),
+        ),
     )
     return json_response(result)
 
@@ -12998,11 +13014,12 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
     project_id = request.query.get("project_id", "").strip()
     store = request.app["automation_store"]
     if run_id:
-        records = await store.scan_records(agent_run_id=run_id, limit=2000)
+        page = await store.scan_search_page(agent_run_id=run_id)
     elif project_id:
-        records = await store.scan_records(project_id=project_id, limit=2000)
+        page = await store.scan_search_page(project_id=project_id)
     else:
         raise ValueError("scan-timeline search requires a run_id or project_id scope")
+    records = page.records
     scope_project = project_id or (str(records[0].get("project_id") or "") if records else "")
     root = _project_root_for(request.app, scope_project, "") if scope_project else ""
     enabled = await request.app["automation_gate"](root) if root else frozenset()
@@ -13012,7 +13029,18 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
         return json_response({"enabled": True, "query": query, "results": []})
     limit = max(1, min(int(request.query.get("limit", 50) or 50), 200))
     results = search_scan_records(records, query, limit=limit)
-    return json_response({"enabled": True, "query": query, "results": results})
+    return json_response(
+        {
+            "enabled": True,
+            "query": query,
+            "results": results,
+            # The read is newest-first and bounded, so an empty result over a
+            # truncated scope means "not in the recent history" rather than
+            # "never happened". The surface has to be able to say which.
+            "truncated": page.truncated,
+            "scanned": len(records),
+        }
+    )
 
 
 async def session_transcript(request: web.Request) -> web.Response:

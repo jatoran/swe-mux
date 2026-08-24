@@ -108,13 +108,37 @@ async def _probe_transcript(
     return max(candidates)[1]
 
 
+_OUTPUT_HEAD = 1500
+_OUTPUT_TAIL = 1500
+
+
+def _bounded(stream: bytes | None, label: str) -> str:
+    """One captured CLI stream, bounded to a readable prefix and tail.
+
+    A provider CLI can print megabytes (or a single enormous JSON line), so the
+    whole stream cannot go into a failure message. Both ends are kept because the
+    two carry different evidence: the prefix names the model and the flags the run
+    actually resolved, and the tail carries the error that ended it.
+    """
+    if not stream:
+        return f"{label}: <empty>"
+    text = stream.decode("utf-8", errors="replace").strip()
+    if len(text) <= _OUTPUT_HEAD + _OUTPUT_TAIL:
+        return f"{label}:\n{text}"
+    elided = len(text) - _OUTPUT_HEAD - _OUTPUT_TAIL
+    return (
+        f"{label} (bounded, {elided} chars elided):\n"
+        f"{text[:_OUTPUT_HEAD]}\n...[{elided} chars elided]...\n{text[-_OUTPUT_TAIL:]}"
+    )
+
+
 def _run(
     command: list[str],
     cwd: Path,
     timeout: int = 120,
     *,
     env: dict[str, str] | None = None,
-) -> None:
+) -> str:
     executable = Path(command[0])
     if os.name == "nt" and executable.suffix.casefold() in {".cmd", ".bat"}:
         # cmd.exe /c splits an argument at its first newline, so a multi-line prompt
@@ -127,17 +151,30 @@ def _run(
             f"harness; keep the invocation (prompt included) on one line: {multiline!r}"
         )
         command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", *command]
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=timeout,
-        check=False,
-        env=env,
+    # Captured, not discarded: a red run in this tier used to say only "exited with
+    # 1", which is unfalsifiable evidence — it cannot distinguish an auth expiry from
+    # a rate limit from a flag the CLI stopped accepting. The capture is bounded on
+    # both ends so an enormous stream still fits in a failure message.
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as expired:
+        raise AssertionError(
+            f"provider CLI did not finish within {timeout}s\n"
+            f"{_bounded(expired.stdout, 'stdout')}\n{_bounded(expired.stderr, 'stderr')}"
+        ) from expired
+    output = f"{_bounded(completed.stdout, 'stdout')}\n{_bounded(completed.stderr, 'stderr')}"
+    assert completed.returncode == 0, (
+        f"provider CLI exited with {completed.returncode}\n{output}"
     )
-    assert completed.returncode == 0, f"provider CLI exited with {completed.returncode}"
+    return output
 
 
 def _records(path: Path) -> list[dict[str, object]]:
@@ -321,6 +358,52 @@ async def test_authenticated_provider_cli_completion_conforms_to_observer(
     await _assert_transcript_conformance(backend, _records(transcript))
 
 
+#: How many times the store canary will drive the CLI before giving up on a
+#: provider that never answered. Two, not more: a retry buys past one rotation of
+#: an unhealthy endpoint, and a longer loop only spends the operator's quota
+#: waiting out an outage the tier cannot fix.
+_STORE_ATTEMPTS = 2
+
+#: The provider's relay saying it could not reach a model — opencode's own wording
+#: for it, captured live 2026-08-24 ("Error from provider (Console): Upstream
+#: request failed: Endpoint is unavailable."). Deliberately narrow: these phrases
+#: name a third party's availability, and nothing here matches the failures the
+#: canary exists to catch (a flag the CLI stopped accepting, an expired
+#: credential, a store that was never written), which must still be red.
+_PROVIDER_OUTAGE_MARKERS = (
+    "error from provider",
+    "upstream request failed",
+    "endpoint is unavailable",
+)
+
+
+def _is_provider_outage(output: str) -> bool:
+    """Whether a CLI failure was the provider being unreachable, not a mux fact."""
+    lowered = output.casefold()
+    return any(marker in lowered for marker in _PROVIDER_OUTAGE_MARKERS)
+
+
+def test_provider_outage_is_distinguished_from_a_real_cli_failure() -> None:
+    """The retry/skip path must not swallow the failures this tier is for.
+
+    Runs in the default tier, because the classifier deciding when a live run is
+    *not* evidence is exactly the thing that must not drift unwatched: widen it and
+    the store canary silently stops guarding the measurement path.
+    """
+    assert _is_provider_outage(
+        "provider CLI exited with 1\nstderr:\n> build - big-pickle\n"
+        "Error: Error from provider (Console): Upstream request failed: "
+        "Endpoint is unavailable."
+    )
+    for real_failure in (
+        "provider CLI exited with 1\nstderr: error: unknown option '--json'",
+        "provider CLI exited with 1\nstderr: Authentication failed: run `opencode auth login`",
+        "provider CLI exited with 2\nstdout: <empty>\nstderr: <empty>",
+        "provider CLI did not finish within 180s\nstdout: <empty>\nstderr: <empty>",
+    ):
+        assert not _is_provider_outage(real_failure), real_failure
+
+
 def _newest_store_session_id(database: Path) -> str | None:
     """The newest root conversation id opencode wrote to its store.
 
@@ -358,31 +441,86 @@ async def test_authenticated_store_backed_cli_measurement_reaches_the_adapter(
     """
     harness = descriptor(backend)
     assert harness.measurement_source == "database", backend
+    command = _probe_command(
+        backend, "Reply with exactly: SWEMUX_STORE_OK", None, "read_only"
+    )
     # opencode's CLI writes its store under XDG_DATA_HOME/opencode, honouring the
     # XDG base-directory spec even on Windows. OPENCODE_DATA_DIR (what mux's own
     # resolver reads) does not steer the CLI's write, so isolating the run means
     # setting XDG_DATA_HOME and pointing the adapter at the `opencode` subdirectory.
-    store_dir = tmp_path / "store"
-    store_dir.mkdir()
-    data_home = store_dir / "opencode"
-    env = {**os.environ, "XDG_DATA_HOME": str(store_dir)}
-    command = _probe_command(
-        backend, "Reply with exactly: SWEMUX_STORE_OK", None, "read_only"
-    )
-    _run(command, tmp_path, timeout=180, env=env)
+    #
+    # One store per attempt: a run that died upstream can still have written a
+    # partial `session` row, and the read below takes the newest root row — sharing
+    # one directory across attempts is how a retry comes to measure the corpse of
+    # the attempt before it.
+    refusals: list[str] = []
+    for attempt in range(_STORE_ATTEMPTS):
+        store_dir = tmp_path / f"store-{attempt}"
+        store_dir.mkdir()
+        data_home = store_dir / "opencode"
+        env = {**os.environ, "XDG_DATA_HOME": str(store_dir)}
+        try:
+            output = _run(command, tmp_path, timeout=180, env=env)
+            break
+        except AssertionError as failure:
+            if not _is_provider_outage(str(failure)):
+                raise
+            refusals.append(str(failure))
+    else:
+        # Every attempt died in the provider's own relay, before the CLI had a turn
+        # to measure. There is no mux fact in that, and asserting one would make a
+        # third party's outage read as a break in the measurement path — so the tier
+        # says what happened and stops, rather than failing or passing on nothing.
+        pytest.skip(
+            f"{backend}'s provider was unreachable on {_STORE_ATTEMPTS} attempts; "
+            f"last: {refusals[-1][-1500:]}"
+        )
 
     database = data_home / (harness.conversation_store_file or "")
-    assert database.exists(), f"{backend} wrote no store at {database}"
+    assert database.exists(), f"{backend} wrote no store at {database}\n{output}"
     native_id = _newest_store_session_id(database)
-    assert native_id is not None, f"{backend} recorded no conversation in its store"
+    assert native_id is not None, (
+        f"{backend} recorded no conversation in its store\n{output}"
+    )
 
     adapter = OpenCodeAdapter(data_home=data_home)
     measurements = adapter.session_measurements(native_id)
-    assert measurements is not None, f"{backend} adapter read no session row"
-    # A real turn produced output tokens and a model; cost is present (>= 0).
-    assert int(measurements["tokens_out"] or 0) > 0, measurements
-    assert measurements["model"], measurements
-    assert measurements["cost_usd"] is not None, measurements
+    assert measurements is not None, f"{backend} adapter read no session row\n{output}"
+    # The measurement path, not the provider's pricing policy. A real turn always
+    # produces output tokens and names the model that produced them, whichever model
+    # opencode rotated to, so those two stay strict. Cost is asserted as present and
+    # numeric rather than nonzero: a zero-priced model (a free tier, a
+    # subscription-covered one) writes 0.0 into the same column a priced one writes
+    # 0.0031 into, so a nonzero demand would fail on a provider decision.
+    assert int(measurements["tokens_out"] or 0) > 0, f"{measurements}\n{output}"
+    assert measurements["model"], f"{measurements}\n{output}"
+    assert isinstance(measurements["cost_usd"], float), f"{measurements}\n{output}"
+
+
+def _codex_subagent_envelopes(records: list[dict[str, object]]) -> set[str]:
+    """Which record envelope carried codex's subagent signal in this run.
+
+    ``sub_agent_activity`` is the payload codex wrote through 2026-08-06;
+    ``item_completed`` is where 0.149 nests the identical fields, under an ``item``
+    typed ``SubAgentActivity``. Naming the envelope is what turns the next move
+    into "the shape changed to X" instead of "there is no subagent signal", which
+    is the report this canary owed and did not give when the move happened.
+    """
+    seen: set[str] = set()
+    for record in records:
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("type") == "sub_agent_activity":
+            seen.add("sub_agent_activity")
+        item = payload.get("item")
+        if (
+            payload.get("type") == "item_completed"
+            and isinstance(item, dict)
+            and item.get("type") == "SubAgentActivity"
+        ):
+            seen.add("item_completed")
+    return seen
 
 
 @pytest.mark.live_agent
@@ -401,9 +539,17 @@ async def test_authenticated_provider_subagent_signal_conforms_to_observer(
         mode="subagent",
     )
     assert transcript.exists()
-    await _assert_transcript_conformance(
-        backend, _records(transcript), require_subagent=True
-    )
+    records = _records(transcript)
+    if backend == "codex":
+        # The current CLI's envelope, asserted as itself. The derived assertion
+        # below is satisfied by either shape, so without this a third move would
+        # again be reported only as an absence.
+        envelopes = _codex_subagent_envelopes(records)
+        assert "item_completed" in envelopes, (
+            "codex wrote no `item_completed`/`SubAgentActivity` record; envelopes "
+            f"seen: {sorted(envelopes) or 'none'}"
+        )
+    await _assert_transcript_conformance(backend, records, require_subagent=True)
 
 
 @pytest.mark.live_agent

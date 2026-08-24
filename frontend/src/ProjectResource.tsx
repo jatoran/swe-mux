@@ -26,6 +26,7 @@ import { resourceSaveIndicator } from './resourceSaveIndicator'
 import { SettingLink } from './SettingLink'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import { recentEntryTitle } from './recentFiles'
+import { searchTruncationNotice, type SearchTruncation } from './fileSearchLimit'
 import { isPreviewableDocument } from './staticPreview'
 import { currentInsertTarget } from './insertTarget'
 import { isFocusTraversalKey } from './keys'
@@ -68,7 +69,7 @@ type NoteResourceEvent={scope:'project'|'global';projectId:string;kind:'note'|'g
 type TreeMenu={item:DirectoryItem;x:number;y:number}
 type SearchMode='names'|'contents'|'both'
 type SearchHit={name:string;path:string;match:'name'|'content';line:number|null;snippet:string|null}
-type SearchPayload={items:SearchHit[];truncated:boolean}
+type SearchPayload=SearchTruncation&{items:SearchHit[];truncated:boolean}
 type CreateResourceKind='file'|'directory'
 type CreateResourcePrompt={parent:string;kind:CreateResourceKind;name:string}
 type CreatedResource=DirectoryItem&{parent:string;hidden:boolean}
@@ -191,7 +192,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [filtersOpen,setFiltersOpen]=useState(false)
   const [results,setResults]=useState<SearchHit[]|null>(null)
   const [searching,setSearching]=useState(false)
-  const [searchTruncated,setSearchTruncated]=useState(false)
+  // The whole truncation payload rather than a boolean: which bound bit decides what the
+  // notice says, and the two answers give opposite advice (`fileSearchLimit.ts`).
+  const [searchLimit,setSearchLimit]=useState<SearchTruncation|null>(null)
   const searchGeneration=useRef(0)
   // A fresh note/markdown-file load remounts the editor so a new Continuity engine is built.
   const [loadGeneration,setLoadGeneration]=useState(0)
@@ -544,13 +547,13 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   useEffect(()=>{
     if(resource.kind!=='files')return
     const q=query.trim()
-    if(!q){searchGeneration.current++;setResults(null);setSearching(false);setSearchTruncated(false);return}
+    if(!q){searchGeneration.current++;setResults(null);setSearching(false);setSearchLimit(null);return}
     setSearching(true)
     const generation=++searchGeneration.current
     const handle=window.setTimeout(()=>{
       void api<SearchPayload>('GET',`/api/projects/${project.id}/search?q=${encodeURIComponent(q)}&mode=${searchMode}`)
-        .then(payload=>{if(generation!==searchGeneration.current)return;setResults(payload.items);setSearchTruncated(payload.truncated);setError('')})
-        .catch(cause=>{if(generation!==searchGeneration.current)return;setError(cause instanceof Error?cause.message:String(cause));setResults([])})
+        .then(payload=>{if(generation!==searchGeneration.current)return;setResults(payload.items);setSearchLimit(payload);setError('')})
+        .catch(cause=>{if(generation!==searchGeneration.current)return;setError(cause instanceof Error?cause.message:String(cause));setResults([]);setSearchLimit(null)})
         .finally(()=>{if(generation===searchGeneration.current)setSearching(false)})
     },250)
     return()=>window.clearTimeout(handle)
@@ -1382,6 +1385,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     openTreeMenu(projectRootItem,event)
   }
   // Any error with a retry queued behind it says so, and offers to skip the wait.
+  const searchNotice=searchTruncationNotice(searchLimit,results?.length??0)
   const errorLine=error?<p class="resource-error">{error}{pendingRetry&&<> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>}</p>:null
   if(resource.kind==='files')return <section class="project-resource file-browser">
     {/* The header names the checkout, and now carries the one control that changes what
@@ -1425,7 +1429,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
                 <span class="file-result-line"><span>·</span><strong>{hit.name}</strong><small>{hit.path}</small></span>
                 {hit.match==='content'&&hit.snippet&&<em class="file-result-snippet">{hit.line!=null?`${hit.line}: `:''}{hit.snippet}</em>}
               </button>})}
-              {searchTruncated&&<p class="file-tree-loading">Showing the first {results.length} matches; refine to narrow.</p>}</>}
+              {searchNotice&&<p class="file-tree-loading">{searchNotice}</p>}</>}
         </div>
         :recentOpen
         ?<div class="file-results file-recent" role="list" aria-busy={recentLoading} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>

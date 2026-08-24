@@ -195,6 +195,7 @@
   input hash, requested/resolved model, generation, token counts, cost, and creation time.
   Transcript text remains in the authoritative provider transcript.
   Reads order records by source start time and then creation time, so records added by a later full-session scan appear at their historical position.
+  Semantic search reads the *newest* end of that ordering and reports when it stopped short, because it ranks in Python over the rows it is handed and a page from the oldest end cannot contain recent work (`features/scan-timeline.md`).
 - `scan_timeline_boundaries`: explicit predecessor-to-successor run boundaries for one persistent
   session, including rollover reason and time.
 - `scan_timeline_metrics`: one bounded aggregate row measuring record reads, source rehydrations,
@@ -269,12 +270,15 @@
 - `queue_messages`: the persistent manual prompt queue (`features/prompt-queue.md`).
   Keyed to `target_session_id` + the bound `target_agent_run_id` (nullable until the
   target's first run binds, then never re-bound), with a target label/backend/project
-  snapshot for stranded queues, gap-free `position` per target, state
+  snapshot for stranded queues, gap-free `position` per target (renumbered only by the operations
+  that move rows - anchor insert, reorder, delete - while a tail append takes `MAX(position)+1`),
+  state
   (`draft|armed|blocked|delivering|sent|failed|cancelled|stranded|deleted`), body, `revision`,
   and the provenance-rich sender model — `sender_kind`
   (`user|remote_user|agent|rule|queue_draft`, derived from the transport or the caller's
   MCP token, never claimed), `sender_id`/`sender_label`, `origin_session_id`,
-  `correlation_id` (partial-unique per sender: a retried send returns the original row),
+  `correlation_id` (per sender: a retried send returns the original row - enforced by the
+  SELECT-before-INSERT, which the partial unique index only backs up for non-NULL senders),
   `thread_id` (the relay exchange, assigned by the daemon at the head of a chain and
   inherited by every message continuing it — deliberately *not* the correlation id, which is
   a per-sender idempotency key and would dedup a sender's second message in one exchange),
@@ -394,6 +398,9 @@
   `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
   the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
   an originating session to attribute it to.
+  A transition and its trail entry are written in one store operation (`LandEvent`), so neither
+  can outlive the other, and the entry takes its `project_id` from the row it just updated rather
+  than from the caller.
   A request also carries `verify_gate` - `''`, `full`, `docs_only`, or `reused` - which is
   **which gate it ran**: `docs_only` is decided from the change set's paths against a closed
   documentation allowlist, `reused` means a queue-executed verdict already stood over this exact

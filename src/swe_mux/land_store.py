@@ -30,6 +30,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -280,6 +281,30 @@ def _placeholders(values: tuple[str, ...]) -> str:
     return ",".join("?" for _ in values)
 
 
+@dataclass(frozen=True, slots=True)
+class LandEvent:
+    """One audit row, carried alongside the state change it records.
+
+    Exists so the two can be written by one operation. The request row and its
+    trail were two separate commits, in either order depending on the call site,
+    and a daemon that died between them left a trail that disagreed with the
+    state machine - a step that happened with no record, or a record of a step
+    that then did not happen. Neither is a correctness failure (nothing reads
+    `land_events` to decide anything, and `restore()` re-derives from the
+    repository) and both are exactly the kind of hole an audit trail exists to
+    not have.
+
+    `project_id` is deliberately absent: the writer takes it from the request row
+    it just updated, so an event can never be filed against a different Project
+    from the request it describes.
+    """
+
+    step: str
+    outcome: str
+    reason: str = ""
+    detail: dict[str, Any] | None = None
+
+
 class LandStore:
     """SQLite store for land requests and their per-step audit trail."""
 
@@ -354,6 +379,34 @@ class LandStore:
         self._executor.submit(self._db.close).result()
         self._executor.shutdown(wait=True)
 
+    # -- coordinated writes ---------------------------------------------------
+
+    def _insert_event(
+        self, *, request_id: str, project_id: str, event: LandEvent, moment: float
+    ) -> str:
+        """Write one audit row. **Does not commit** - the caller's operation does.
+
+        That is what lets a state change and its event land in the same
+        transaction: both statements run under one `run_sqlite_operation`, so
+        either both are durable or neither is.
+        """
+        event_id = f"lev_{uuid.uuid4().hex[:16]}"
+        self._db.execute(
+            "INSERT INTO land_events(id,request_id,project_id,step,outcome,reason,"
+            "detail_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                event_id,
+                request_id,
+                project_id,
+                event.step,
+                event.outcome,
+                event.reason,
+                json.dumps(event.detail or {}, default=str),
+                moment,
+            ),
+        )
+        return event_id
+
     # -- requests -------------------------------------------------------------
 
     async def enqueue(
@@ -370,6 +423,7 @@ class LandStore:
         origin_session_id: str = "",
         origin_run_id: str = "",
         correlation_id: str = "",
+        event: LandEvent | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
         """Claim a branch for landing, or raise if it is already claimed.
@@ -381,6 +435,10 @@ class LandStore:
         The claim spans both kinds on purpose: a verify-only request and a land of the
         same branch would reconcile the same worktree and run the same gate twice over,
         so one branch has one request in flight whatever it asked for.
+
+        `event` is the request's opening audit row, written in the same transaction as
+        the claim. A queued request whose trail does not open is a row nothing accounts
+        for; see `LandEvent`.
         """
         if kind not in REQUEST_KINDS:
             raise ValueError(f"unknown land request kind: {kind}")
@@ -415,6 +473,13 @@ class LandStore:
                 raise LandConflict(
                     f"{branch} already has an active request in the land queue"
                 ) from exc
+            if event is not None:
+                self._insert_event(
+                    request_id=request_id,
+                    project_id=project_id,
+                    event=event,
+                    moment=moment,
+                )
             self._db.commit()
             row = self._db.execute(
                 "SELECT * FROM land_requests WHERE id=?", (request_id,)
@@ -533,12 +598,23 @@ class LandStore:
         trunk_before: str | None = None,
         landed_oid: str | None = None,
         handback_message_id: str | None = None,
+        event: LandEvent | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
         """Move a request, refusing when it is not in one of the expected states.
 
         Conditional on `expect` rather than read-then-write: the queue worker and an
         operator cancel can both reach one row, and the loser has to find out.
+
+        **Pass `event` and the audit row commits with the transition.** That pairing
+        is the whole reason the argument exists rather than the caller making a
+        second `record_event` call: the two used to be separate commits in whichever
+        order the call site happened to pick, and three call sites picked
+        event-then-transition, so a daemon dying between them left a trail claiming a
+        step that never took effect. The event is filed under the *updated row's*
+        `project_id`, so it cannot name a different Project from the request it
+        describes, and a refused transition raises before anything is written -
+        there is no path that records an event for a move that did not happen.
         """
         if state not in LAND_STATES:
             raise ValueError(f"unknown land state: {state}")
@@ -588,10 +664,17 @@ class LandStore:
             if cursor.rowcount == 0:
                 self._db.rollback()
                 raise LandConflict(f"{request_id} was not in {expect}")
-            self._db.commit()
             row = self._db.execute(
                 "SELECT * FROM land_requests WHERE id=?", (request_id,)
             ).fetchone()
+            if event is not None:
+                self._insert_event(
+                    request_id=request_id,
+                    project_id=str(row["project_id"]),
+                    event=event,
+                    moment=moment,
+                )
+            self._db.commit()
             return _row_to_request(row)
 
         return await self._run(op)
@@ -603,6 +686,11 @@ class LandStore:
         mid-flight. It goes back to `queued` rather than being resumed: every step is
         re-checked against the repository from scratch anyway, so re-running one is
         safe and guessing how far it got is not.
+
+        The `orphaned` events are written here rather than by the caller, in the same
+        transaction as the requeue. This is the crash-recovery path, so it is the last
+        place that should be able to requeue a step and lose the record of having done
+        so - a second crash between the two commits was the exact failure mode.
         """
         moment = time.time() if now is None else now
 
@@ -612,6 +700,17 @@ class LandStore:
                 INFLIGHT_STATES,
             ).fetchall()
             recovered = [_row_to_request(row) for row in rows]
+            for row in recovered:
+                self._insert_event(
+                    request_id=str(row["id"]),
+                    project_id=str(row["project_id"]),
+                    event=LandEvent(
+                        step=str(row["state"]),
+                        outcome="orphaned",
+                        reason="daemon restarted mid-step",
+                    ),
+                    moment=moment,
+                )
             if recovered:
                 self._db.execute(
                     "UPDATE land_requests SET state='queued',"
@@ -638,22 +737,14 @@ class LandStore:
         now: float | None = None,
     ) -> str:
         moment = time.time() if now is None else now
-        event_id = f"lev_{uuid.uuid4().hex[:16]}"
+        event = LandEvent(step=step, outcome=outcome, reason=reason, detail=detail)
 
         def op() -> str:
-            self._db.execute(
-                "INSERT INTO land_events(id,request_id,project_id,step,outcome,reason,"
-                "detail_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (
-                    event_id,
-                    request_id,
-                    project_id,
-                    step,
-                    outcome,
-                    reason,
-                    json.dumps(detail or {}, default=str),
-                    moment,
-                ),
+            event_id = self._insert_event(
+                request_id=request_id,
+                project_id=project_id,
+                event=event,
+                moment=moment,
             )
             self._db.commit()
             return event_id

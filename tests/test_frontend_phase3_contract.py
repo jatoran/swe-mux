@@ -123,7 +123,12 @@ def test_successful_clipboard_writes_use_the_shared_interaction_hud() -> None:
     assert "CLIPBOARD_COPIED_EVENT" not in app
     assert ".interaction-hud" in css and "pointer-events:none" in css
     assert "right:max(16px,calc(env(safe-area-inset-right) + 12px))" in css
-    assert "bottom:max(16px,calc(env(safe-area-inset-bottom) + 12px))" in css
+    # The bottom-right corner it is pinned to is also where a maximised window puts the
+    # terminal's command rail, so the offset carries the measured rail clearance.
+    assert (
+        "bottom:calc(max(16px,env(safe-area-inset-bottom) + 12px) + var(--rail-clearance))"
+        in css
+    )
     # Copy success has one visible owner. The rail keeps selection, paste, upload,
     # and recovery state but no longer duplicates the app-level confirmation.
     assert "showClipboardStatus('Selection copied')" not in pane
@@ -669,11 +674,16 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
     for setter in (
         "setPreparedClipboard('')",
         "setManualClipboard(false)",
-        "setSelectionText('')",
+        "setClipboardStatus('')",
         "setFindQuery('')",
         "setFindResult('')",
     ):
         assert setter in reset, setter
+    # The toast carries the selection readout as well as the copy and paste confirmations,
+    # so its pending dismissal is part of the reset: left running, the outgoing session's
+    # timer blanks a message the incoming one has just put up.
+    assert "clipboardStatusTimerRef.current=null" in reset
+    assert "clipboardStatusKindRef.current='clipboard'" in reset
     # An empty last-reply response must clear the value rather than leave the
     # previous session's text in place.
     assert "if(!disposed)setLastReply(result.text||'')" in pane

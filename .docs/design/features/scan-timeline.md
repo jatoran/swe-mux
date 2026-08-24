@@ -238,6 +238,17 @@ Three consumers are pull-only reads over stored records:
   each active session's current `blocked_on` across opted-in Projects.
 - **Semantic history search** (`semantic_history_search`) is `GET /api/history/scan-search`:
   a query over distilled `summary`/`intent`/`target` records scoped to one run or Project.
+  The read is **newest-first and reports its bound**.
+  Ranking happens in Python over whatever rows the store hands back, so the page is the real recall
+  limit: taken from the oldest end - which is what both callers did until 2026-08-24 - a Project
+  past 2,000 records could not find anything it had done recently, and because the ranking re-sorts
+  newest-first afterwards the wrong answer was indistinguishable from a correct empty one.
+  `AutomationStore.scan_search_page` reads the newest `SCAN_SEARCH_SCAN_LIMIT` records for the
+  scope and returns a `truncated` flag; the endpoint reports it as `truncated`/`scanned` and the
+  `scan_search` MCP tool as `records_truncated` plus a note naming the Projects it stopped short
+  in.
+  An empty result over a truncated read means "not in the recent history", not "never happened",
+  and no reader can tell those apart from hits alone.
 
 ## Dead-end memory
 

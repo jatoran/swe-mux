@@ -237,6 +237,12 @@ A transcript harness that also declares an `automations` probe (one that permits
 An agent harness with an MCP client (`adapter_family != "pi"`) is driven by the MCP wire canary, which stands up an isolated daemon on an ephemeral port and drives its real session through `/mcp`; pi is excluded there by its declared no-MCP-client capability.
 Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and store), `SWEMUX_RUN_LIVE_SUBAGENT_TESTS=1`, `SWEMUX_RUN_LIVE_PHASE2_TESTS=1`, `SWEMUX_RUN_LIVE_AUTOMATIONS_TESTS=1`, or `SWEMUX_RUN_LIVE_MCP_TESTS=1`.
 
+**A live tier that discards the CLI's output cannot report anything.**
+Every probe run captures stdout and stderr and puts a bounded prefix and tail into the failure message, because "provider CLI exited with 1" cannot distinguish an expired credential from a rate limit from a flag the CLI stopped accepting.
+The store canary's intermittency was undiagnosable for exactly that reason until the capture landed, and the first captured red run named it in one line: the provider's relay answering "Upstream request failed: Endpoint is unavailable" for whichever model opencode had rotated to.
+A third party's outage is not a mux fact, so that specific failure is retried once and then **skipped** with the captured evidence, on a deliberately narrow set of provider-relay phrases; every other CLI failure stays red, and a default-tier test pins the classifier so widening it cannot go unnoticed.
+The guarded assertions themselves did not move: a real turn still has to produce output tokens and name its model.
+
 ## Operations
 
 - Claude and Codex continue to use their ordinary shared home directories. Provider account
@@ -719,7 +725,9 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   unclaimed candidates remain ambiguous and do not promote; newest-file mtime is not ownership
   evidence.
 - Normalized lifecycle events carry `scope=root|subagent`. Claude sidechains and Agent/Task
-  tool lifecycles, Codex `sub_agent_activity`, and Codex child rollouts are child evidence;
+  tool lifecycles, Codex subagent records (a top-level `sub_agent_activity` payload through
+  2026-08-06, an `item_completed` record carrying a `SubAgentActivity` item from 0.149
+  onward - both read), and Codex child rollouts are child evidence;
   none can make the root idle or ready.
 - Claude is working after user/tool activity, awaiting on permission/elicitation prompts,
   and ready after `Stop`, `turn_duration`, or a final text response whose
