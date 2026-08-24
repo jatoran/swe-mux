@@ -165,11 +165,43 @@ Four decisions worth knowing before the next package touches these stores:
 
 ### S6 - session.py and observation follow-ups (after wave 1 lands; conflicts with S2 otherwise)
 
-- [ ] S6.1 Attach replay off-loop (F10): move the whole-file read and per-line JSON decode of transcript attach into a thread with chunked yielding, so a multi-ten-MB transcript cannot stall the event loop; bound peak memory to a chunk, not the file.
-- [ ] S6.2 Poll-path cheapening (F10): stop re-opening the file for the 64-byte prefix probe on every 250ms poll where a cheaper identity check suffices.
-- [ ] S6.T Tests: attach a large synthetic transcript and assert loop responsiveness (use the `until` settle helpers, no fixed sleeps); rewrite-detection regression.
+- [x] S6.1 Attach replay off-loop (F10): move the whole-file read and per-line JSON decode of transcript attach into a thread with chunked yielding, so a multi-ten-MB transcript cannot stall the event loop; bound peak memory to a chunk, not the file.
+- [x] S6.2 Poll-path cheapening (F10): stop re-opening the file for the 64-byte prefix probe on every 250ms poll where a cheaper identity check suffices.
+- [x] S6.T Tests: attach a large synthetic transcript and assert loop responsiveness (use the `until` settle helpers, no fixed sleeps); rewrite-detection regression.
+
+Done 2026-08-24, entirely inside `observation.py`; the tailer's call sites in `session.py` needed no change.
+
+Measured on the primary host with a synthetic Claude transcript, worst event-loop gap across one attach replay:
+
+| transcript | before | after |
+| --- | --- | --- |
+| 24 MiB (40,329 records) | 290 ms, loop serviced once | 11-16 ms, serviced ~10,000 times |
+| 48 MiB (80,659 records) | 691 ms, loop serviced once | 9-17 ms, serviced ~19,000 times |
+
+Replay wall time did not regress (it improved slightly: 691 ms to ~460-650 ms at 48 MiB), so the loop time is given back rather than moved.
+
+Two things are worth carrying forward.
+The replay boundary is unchanged by construction: a record's historical/live label is still its decoded byte position against the attach snapshot, and a test drives five-byte windows so a boundary falls inside every record and asserts the emitted sequence is byte-for-byte the one an unwindowed read produced.
+And S6.2 could not be a pure `stat()` check - Windows freezes `st_mtime` on a file its writer holds open, so a same-length in-place rewrite is entitled to leave every readable field unchanged.
+The identity check is therefore one-directional (a field moving proves change; nothing staying still proves the absence of it) and a 2 s prefix backstop closes the case, taking an idle session from four opens a second to at most one every two seconds.
+
+### W2.5 - live-tier repair (added from the D1 soak findings; parallel with S3-S6, lands before D2)
+
+The three live-tier failures D1 recorded are pre-existing and none touch the supervisor; their files are disjoint from S3-S6, so this runs alongside Wave 2.
+
+- [x] W2.5.1 `request_land` live coverage: fix the `_spawn_agent() cwd` TypeError (introduced ef9ccb9) so `test_request_land_enqueues_the_callers_own_worktree` executes at all, then run it on the live wire for every harness - it has never once run, so treat what it finds as a fresh result, not a regression.
+- [x] W2.5.2 opencode canary diagnosability: stop sending the CLI's stdout/stderr to `DEVNULL` in `_run`; capture bounded output into the failure message, then diagnose the intermittency from actual evidence.
+- [x] W2.5.3 codex subagent drift: the canary consistently finds `tool_use`/`tool_result` but no `subagent_activity` - investigate whether current codex stopped emitting those records, and if so adapt swe-mux's subagent-visibility detection to the new transcript shape and update the canary to match. This is potentially a live product defect, not a test fix; report the investigation outcome either way.
+
+Done 2026-08-24. All three tiers are green on the live wire, and the two questions the package was really asking - "is the canary broken or is mux broken?" - both answered "mux", in different places.
+
+- W2.5.1: the helper now takes the `cwd` its caller always passed, and the canary ran for the first time on all four control harnesses. It found two things. The scratch worktree it built was level with the trunk, so the service correctly refused it as having nothing to land - a fixture gap, now given the branch a commit of its own. And that refusal reached the agent as `500 {"error": "internal server error"}`: `LandRefusal` escaped `_enqueue_land` untranslated while both HTTP land routes already answered a typed 409. Every land-queue refusal an agent could hit - already landed, already queued, budget exhausted, detached HEAD, unapproved gate - was opaque on the MCP wire. Translated in `mcp.py` (a one-hunk `except LandRefusal` to `QueueError`), with a default-tier test per tool and the wire canary now asserting the typed code.
+- W2.5.2: `_run` captures both streams and puts a bounded prefix and tail into the failure message; the first captured red run named the cause in one line - opencode's provider relay answering `Upstream request failed: Endpoint is unavailable` for the model it had rotated to. Not a mux fact, so that narrowly-matched failure is retried once (each attempt into its own store, so a retry cannot measure the corpse of the attempt before it) and then skipped with the evidence. Every other CLI failure stays red, and a default-tier test pins the classifier. 5/5 green afterwards against 1/4 red before.
+- W2.5.3: **a live product defect, not canary drift.** Codex still emits the subagent signal; it moved it. Through 2026-08-06 it wrote a top-level `sub_agent_activity` payload, and from 2026-08-07 (0.149) it nests the identical `kind`/`agent_thread_id`/`agent_path` fields inside `item_completed`'s `item` as `SubAgentActivity` - measured across the operator's 1548 archived rollouts, the two eras do not overlap by a single file. The observer read only the older envelope, so **every Codex pane running subagents carried no standing `subagents` annotation for 17 days**, and everything gated on it (auto-delivery, delivery readiness, the idle-with-children rule) read the pane as having nothing running. Both envelopes are now read. Two adjacent findings came out of the same measurement: `agent_path` is a slash-joined string, so the emitted `depth` had been a character count; and `item_completed` was in `observation.py`'s known vocabulary but not `operational_telemetry.py`'s, which put real sessions at a 0.31-0.34 unknown ratio against the 0.25 the telemetry canary fires at - a drift signal reporting drift that had not happened.
 
 ### D2 - deploy checkpoint (primary; no reap)
+
+Precondition: W2.5 landed, so the live tiers D2.2 exercises are trustworthy.
 
 - [ ] D2.1 Full gate on master, `redeploy_desktop.py` (normal session-preserving flow).
 - [ ] D2.2 Live soak: UI regression pass on desktop and mobile (fleet refresh under a simulated hung endpoint, palette, sidebar tick); MCP `scan_search` against a >2000-record project; a land-queue cycle end-to-end; confirm retention runs without visible stalls.

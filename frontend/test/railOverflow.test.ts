@@ -208,13 +208,11 @@ test('every row has one drawer route to its complete list and full configuration
 })
 
 test('the row scrolls end to end while the trailing cluster stays pinned outside it', () => {
-  // Every chip remains in the scroller, while the readout and drawer stay fixed beside it.
+  // Every chip remains in the scroller, while the drawer stays fixed beside it.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
   const scroller = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('</OverflowRail>'))
   assert.match(scroller, /\{chips\}/)
   assert.ok(!scroller.includes('rail-row-trailing'), 'the cluster must sit outside the scroller')
-  const cluster = strip.slice(strip.indexOf('class="rail-row-trailing"'))
-  assert.ok(cluster.indexOf('aria-live="polite"') < cluster.indexOf('class={`rail-more'))
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
   const rule = declarations(styles, /\.rail-row>\.rail-row-trailing\{([^}]*)\}/)
   // Fixed furniture beside a flex:1 scroller: the cluster must never grow into the space
@@ -245,19 +243,34 @@ test('the terminal rail keeps the scroller that owns its touch-drag click suppre
 test('command rail edge wedges align to the strip, not to a guessed trailing width', () => {
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
   // The wrapper is the strip's own box, so it has to be the containing block. Positioned
-  // from the *row* instead, the right wedge had to name the trailing cluster's width — and
-  // that width is not one number: the row carrying the status readout is wider, so the
-  // wedge landed past the strip, over chrome that answers to no tap.
+  // from the *row* instead, the right wedge had to name the trailing cluster's width in a
+  // `calc`, and could only ever be right for one cluster width.
   assert.match(styles, /\.terminal-action-rows>\.rail-row>\.overflow-rail\{[^}]*position:relative[^}]*overflow:visible/)
   assert.match(styles, /\.terminal-action-rows>\.rail-row \.overflow-rail-right\{right:1px\}/)
   assert.doesNotMatch(styles, /\.overflow-rail-right\{right:calc\(var\(--rail-more-width\)/)
 })
 
-test('an empty status readout takes no room from the row it sits on', () => {
+test('a rail row carries no message of its own', () => {
+  // The selection readout used to sit in the trailing cluster. The cluster is `flex:0 0 auto`
+  // and the readout was capped at `34vw` - viewport units inside a pane that is usually a
+  // fraction of the viewport - so in a split narrower than that cap the readout took the
+  // whole row and the chips were squeezed out of it. Terminal messages go to
+  // `.terminal-clip-toast` now, over the buffer, where their width answers to the pane.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  // `status` is an empty string on the status row most of the time — the caller uses it to
-  // mark which row *would* carry a readout. Rendered anyway it cost the chips ~23px of
-  // scroll width (its own `padding-right`, plus the trailing cluster's `gap`) for nothing.
-  assert.match(strip, /\{status \? <span aria-live="polite">\{status\}<\/span> : null\}/)
-  assert.doesNotMatch(strip, /status !== undefined && <span/)
+  // Comments stripped, because the one above the component explains why the prop went and
+  // has to be free to say its name.
+  const code = strip.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
+  assert.doesNotMatch(code, /status/)
+  assert.doesNotMatch(code, /aria-live/)
+  // The drawer control is the cluster's only child: nothing sits between the opening tag and
+  // the button, which is where the readout used to be.
+  const cluster = code.slice(code.indexOf('class="rail-row-trailing"'))
+  assert.match(cluster, /class="rail-row-trailing" ref=\{trailingRef\}>\s*<button/)
+  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  assert.doesNotMatch(styles, /\.rail-row>\.rail-row-trailing>span\{/)
+  const pane = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(pane, /<RailStrip[^\n]*status=/)
+  // And it did not simply vanish: the count still goes somewhere, through the same transient
+  // toast the copy and paste confirmations use.
+  assert.match(pane, /showClipboardStatus\(`\$\{text\.length\.toLocaleString\(\)\} selected/)
 })

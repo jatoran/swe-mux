@@ -82,10 +82,20 @@ def test_every_write_tool_is_covered_by_a_live_wire_test() -> None:
 
 
 async def _spawn_agent(
-    daemon: IsolatedDaemon, project_id: str, backend: str, name: str, seed: str
+    daemon: IsolatedDaemon,
+    project_id: str,
+    backend: str,
+    name: str,
+    seed: str,
+    cwd: str | None = None,
 ) -> tuple[str, int, str]:
-    """Spawn a real agent and return (session id, pid, recovered MCP token)."""
-    snapshot = await daemon.spawn(project_id, backend, seed, name)
+    """Spawn a real agent and return (session id, pid, recovered MCP token).
+
+    ``cwd`` is the checkout the agent is spawned into. It matters for exactly one
+    tool: `request_land` reads the caller's own live cwd rather than a target
+    argument, so a canary for it has to be able to put the agent in a worktree.
+    """
+    snapshot = await daemon.spawn(project_id, backend, seed, name, cwd=cwd)
     sid = str(snapshot["id"])
     pid = int(snapshot["pid"])
     token = ""
@@ -310,6 +320,15 @@ async def test_request_land_enqueues_the_callers_own_worktree(
             cwd=daemon.root,
             check=True,
         )
+        # A branch that is level with the trunk has nothing to land, and the service
+        # says so rather than queueing a no-op — so the canary has to give the
+        # worktree a commit of its own before it can prove anything about scoping.
+        await asyncio.to_thread(
+            subprocess.run,
+            ["git", "commit", "-q", "--allow-empty", "-m", "work on the branch"],
+            cwd=worktree,
+            check=True,
+        )
         project_id = await daemon.register_project()
         _sid, pid, token = await _spawn_agent(
             daemon, project_id, backend, "brancher", _IDLE_SEED, cwd=str(worktree)
@@ -345,3 +364,8 @@ async def test_request_land_enqueues_the_callers_own_worktree(
             trunk_token, "request_land", {"reason": "wire canary"}
         )
         assert refused_error, refused
+        # Typed, because a refusal is an answer the agent has to act on. This
+        # arrived as `500 internal server error` until the service's refusals were
+        # translated on this path the way both HTTP routes already translated them.
+        assert refused.get("error") == "already_landed", refused
+        assert refused.get("message"), refused

@@ -70,6 +70,7 @@ from .deterministic_consumers import (
 )
 from .git_projects import ProjectIdentity
 from .harness import agent_harnesses, is_agent_harness
+from .land_queue import LandRefusal
 from .mcp_contract import (
     CONFIGURATOR_READ_TOOL_NAMES,
     CONFIGURATOR_WRITE_TOOL_NAMES,
@@ -4755,16 +4756,25 @@ class McpService:
                 "this session is not owned by a registered Project.",
                 status=409,
             )
-        result = await self.land_queue.request(
-            project_id=str(project.id),
-            project_root=str(project.root),
-            worktree_root=worktree_root,
-            kind=kind,
-            origin="agent",
-            origin_session_id=str(record.id),
-            origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
-            reason=str(args.get("reason") or ""),
-        )
+        try:
+            result = await self.land_queue.request(
+                project_id=str(project.id),
+                project_root=str(project.root),
+                worktree_root=worktree_root,
+                kind=kind,
+                origin="agent",
+                origin_session_id=str(record.id),
+                origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
+                reason=str(args.get("reason") or ""),
+            )
+        except LandRefusal as refusal:
+            # The service's refusals are the ordinary answers here — the branch is
+            # already on the trunk, another request holds it, a precondition failed
+            # — and every one of them is something the agent can act on. Both HTTP
+            # routes already translate them to a typed 409; without this the same
+            # refusal reached the agent as `500 internal server error`, which says
+            # nothing and reads as a daemon bug rather than as an answer.
+            raise QueueError(refusal.code, refusal.message, status=409) from refusal
         return dict(result)
 
     async def watch_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:

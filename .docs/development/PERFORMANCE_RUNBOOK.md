@@ -328,6 +328,7 @@ Frames expected in a healthy profile, so they are not mistaken for defects:
 | `_read (pty_host.py)`, supervisor only | the nonblocking reader poll; high sample share, near-zero CPU |
 | `_newest_rollouts (adapters/codex.py)` | Codex switch-watch tree walk; ~9% of a loaded profile with 3 Codex sessions |
 | `_normalize_tail_text (session.py)` | PTY screen classification for status detection |
+| `_read_and_decode (observation.py)`, worker thread only | one 512 KiB window of transcript replay; bursts at attach and rebind, silent at rest |
 
 `_newest_rollouts` is the largest remaining avoidable-looking cost and has been left alone
 deliberately.
@@ -358,4 +359,7 @@ with the longest history of subtle identity bugs in this repository.
   daemon says it stopped. Measured: the startup native-history reconcile's tree walk cost
   4.5-13.5s per in-process app teardown in the test suite, and scales with the user's transcript
   tree. Any `to_thread` call that can outlive its awaiter needs a token the worker polls
-  (`reconcile.scan_external_transcripts_async` is the pattern).
+  (`reconcile.scan_external_transcripts_async` is the pattern), or a unit of work small enough
+  that an abandoned worker finishes in milliseconds - transcript replay takes the second route,
+  bounding each worker to one 512 KiB window and checking the stop event between windows rather
+  than inside one (`observation.JsonlTailer._drain`).
