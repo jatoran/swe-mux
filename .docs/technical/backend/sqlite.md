@@ -123,6 +123,28 @@ The **tree** rather than the commit, because a reconcile that merged an unchange
 Only a run the queue executed writes one, and the store offers no other writer - an agent's own shell run is self-reported and never accepted (`../../design/features/land-queue.md`).
 Reads take a `not_before` floor rather than the table carrying a sweep: a verdict's freshness is a question the caller's configuration answers, and expiring rows out of the table would destroy the audit of what was reused when.
 
+`AutomationStore` reached schema version 13 with index-only additions: two composite indexes
+carrying `scan_timeline_records`' `ORDER BY t0` (`(project_id, t0, created_at)` and
+`(agent_run_id, t0, created_at)`, both ascending, because SQLite walks an index in either
+direction) and the four retention indexes.
+Indexes need no `PRAGMA table_info` migration — `CREATE INDEX IF NOT EXISTS` in the schema script
+reaches an existing database on the next connect — but the version still moves, because a reader
+comparing two installs has to be able to tell them apart.
+
+`queue_messages.position` is gap-free across a target's visible rows, and only the operations that
+actually move rows renumber: an anchor insert, a reorder, and a delete.
+A tail append takes `MAX(position)+1` and writes nothing else.
+It used to read every visible row and rewrite each one's position with the value it already held —
+O(n) writes per append on a surface whose normal use is appending.
+
+`idx_queue_messages_correlation` is a partial unique index over
+`(sender_kind, sender_id, correlation_id)`, and it is **not** what enforces retry-safe correlation.
+SQLite treats NULLs as distinct inside a UNIQUE index, so two rows from a NULL-`sender_id` sender —
+which is every sender that is not a session, `rule` and `assistant` included — both satisfy it.
+The guard that dedups is `create_message`'s SELECT-before-INSERT, which compares
+`IFNULL(sender_id,'')`.
+The index is a real constraint for non-NULL senders and a lookup index for the rest.
+
 `PromptQueueStore` reached schema version 6 with `queue_messages.solicited_by`, added through its own `PRAGMA table_info` migration list and nullable, because every pre-existing row was unsolicited by construction.
 It is the per-message half of the arming floor: a non-human sender other than `agent` may be staged `armed` only when it names the target's own request here (`../../design/features/agent-messaging.md`).
 Stored rather than derived for the reason the floor exists - arming must never be the sender's claim, so a row that arrived armed has to be able to name what asked for it.
@@ -134,6 +156,16 @@ The migration also carries the store's one **index ordering hazard**: the anchor
 Run before the column migration, against a pre-existing table that `CREATE TABLE IF NOT EXISTS` correctly leaves alone, the index raises `no such column` and takes the store's construction - and with it the daemon's startup - down.
 Any future store that adds both a column and an index over it has the same ordering constraint.
 
+`voice_clips` groups by `COALESCE(stream_id, id)` (`GROUP_KEY`) but never *matches* by it.
+A predicate over that expression is opaque to both of the table's indexes, so every per-stream
+lookup was a full table scan — and eviction does one per candidate stream.
+The membership test is `GROUP_MATCH`, `(stream_id=? OR (stream_id IS NULL AND id=?))`, which SQLite
+answers with a MULTI-INDEX OR: a seek on `idx_voice_clips_stream` unioned with one on the `id`
+primary key, measured 2026-08-24 over 60,000 rows at 0.002ms against 2.337ms.
+The `stream_id IS NULL` guard is what keeps the rewrite *equivalent* rather than merely fast: a
+bare `id=?` arm would also match a row belonging to a different stream that happens to carry the
+key as its own id, which the `COALESCE` form never did.
+
 The same migration retires interrupted work: `status` gained `synthesizing`, written before the engine runs so a clip is visible while it is being made, and a row still in that state at connect is swept to `failed`.
 That is not a timeout, it is a certainty - the engine runs in this daemon, so a `synthesizing` row that survived a restart belongs to a run that no longer exists.
 
@@ -143,6 +175,74 @@ The added columns are `ALTER TABLE ADD COLUMN` rather than a table rebuild becau
 Even expected uniqueness/deduplication paths must commit or roll back before return. Do not catch
 `OperationalError` and retry at the HTTP route: fix the store operation boundary so every caller
 gets the same guarantee.
+
+### Two rows that must be durable together go in one operation
+
+`LandStore.transition` and `LandStore.enqueue` both take an optional `event: LandEvent`, and
+passing it writes the request row and its audit row inside the same operation and the same commit.
+That pairing is the mechanism, not a convenience: the state change and the trail entry used to be
+two commits in whichever order the call site happened to pick, and three land-queue paths picked
+event-then-transition, so a conditional `UPDATE` that then lost its race left a `verify/skipped`
+entry standing over a request that never moved.
+The event carries no `project_id` of its own — the writer reads it off the row it just updated —
+so an event can never be filed against a different Project from the request it describes, and a
+transition that raises `LandConflict` rolls the event back with it.
+`LandStore.restore` writes its `orphaned` events the same way, because the crash-recovery path is
+the last place that should be able to requeue a step and lose the record of having done so.
+`record_event` remains for the entries that are not paired with a transition (a reconcile's
+outcome, a gate's per-attempt verdict, the change-set classification).
+
+### A retention pass is many operations, never one
+
+`AutomationStore.prune` deletes from each table in bounded batches
+(`_PRUNE_BATCH_ROWS`, 500), each its own store operation with its own commit, capped at
+`_PRUNE_MAX_BATCHES` per table per pass and logging when that cap is reached.
+It used to be one `op()` deleting from thirteen tables and committing once, which held the
+process-wide `mux.db` operation lock across the whole sweep while history, telemetry, voice, and
+PTY writes queued behind it.
+Batching means *separate coordinated operations*, never a nested transaction: the lock is taken
+and released once per batch.
+
+The batch statement is deliberately `DELETE FROM t WHERE rowid IN (SELECT rowid FROM t WHERE
+<column><? LIMIT ?)` with **no `ORDER BY`**.
+Ordering the batch by the retention column forces a temp B-tree over every matching row on a table
+that has no index on it — measured 2026-08-24 at 1563ms against 263ms for 100,000 rows — while
+without it SQLite either walks the index range or scans and stops at the batch size, and both land
+at ~260ms.
+`VoiceStore.prune` follows the same shape for cache eviction: one operation chooses the victim
+streams, then bounded batches (`_EVICTION_BATCH_STREAMS`) delete them.
+
+### Retention indexes are measured, not assumed
+
+Every prune index leads with the retention column; the scope-first indexes on the same tables
+(`(project_id, created_at)`, `(state, created_at)`, and so on) cannot serve `WHERE created_at<?`
+at all.
+Four tables carry one: `automation_observer_calls` (`idx_observer_created`, pre-existing),
+`automation_budget_ledger`, `automation_annotations`, `scan_timeline_records`, plus
+`automation_checkpoints` on `updated_at` — the column it actually prunes by, which had no index.
+
+Which four is a measurement.
+Live 2.8 GB `mux.db` after weeks of uptime, 2026-08-24: observer calls 19,309 rows, budget ledger
+7,789, checkpoints 2,966, annotations 2,472, scan records 2,400, every other prune table at or
+below 1,100.
+Against a synthetic table the batched delete costs 263ms unindexed and 220ms indexed at 200,000
+rows, and the "nothing aged out yet" probe — the common case, since retention runs hourly — costs
+8.8ms unindexed against 0.024ms indexed.
+Neither figure earns an extra B-tree per insert at a thousand rows; both do at a hundred thousand.
+The four indexed tables are the ones whose write rate and retention window (365 days for the
+durable pair, one row per agent run forever for checkpoints) can carry them there.
+
+### LIKE patterns are escaped in one place
+
+`sqlite_store.escape_like` and `sqlite_store.like_contains` are the shared helpers, and every
+`LIKE` over user text pairs them with `ESCAPE '\'` at the call site.
+The escape character is not SQLite's default, so a pattern built by these helpers and used without
+that clause matches nothing.
+They live in `sqlite_store` rather than in one store because three private copies is how two
+stores ended up with none: `automation_store`'s scan `target_fragment` and experience browse, and
+both of `history`'s metadata filters, interpolated raw text, so `land_store` also matched
+`land-store` and a `%` anywhere in a query matched everything after it.
+`history._escape_like` / `history._like_pattern` are now aliases of the shared pair.
 
 ## Read and batching rules
 
@@ -179,11 +279,15 @@ regression is valuable because these user-visible paths historically exposed lea
 
 ## Key files
 
-- `src/swe_mux/sqlite_store.py`
+- `src/swe_mux/sqlite_store.py` — the operation wrapper, the per-file lock, the integrity cache,
+  and the shared `escape_like` / `like_contains` LIKE helpers.
 - `src/swe_mux/history.py`
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/operational_telemetry.py`
 - `src/swe_mux/voice.py`
+- `src/swe_mux/prompt_queue.py`
+- `src/swe_mux/land_store.py` — land requests, their audit trail, and the `LandEvent` pairing that
+  makes a transition and its trail entry one commit.
 - `src/swe_mux/clipboard_store.py` — mirror-only participant: reads never touch SQLite (the ring
   is in memory) and writes happen only while persistence is enabled, but every write it does make
   goes through the same wrapper. `load()` also deletes rows outside the adopted window:

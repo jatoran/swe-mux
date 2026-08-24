@@ -15,7 +15,11 @@ def test_recursive_layout_and_command_surfaces_are_wired() -> None:
     assert 'role="separator"' in app
     assert "paneNeighborIds" in app
     assert "pane.swapNext" not in app
-    assert "searchCommands(commands, paletteQuery)" in app
+    # Scoring is gated on the palette being open, and the gate lives in `commands.ts`
+    # so the renderer harness exercises the same function the app does.
+    assert "paletteResults(paletteOpen, commands, paletteQuery)" in app
+    commands = (root / "frontend" / "src" / "commands.ts").read_text(encoding="utf-8")
+    assert "return open ? searchCommands(commands, query) : NO_COMMANDS" in commands
 
 
 def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
@@ -119,7 +123,12 @@ def test_successful_clipboard_writes_use_the_shared_interaction_hud() -> None:
     assert "CLIPBOARD_COPIED_EVENT" not in app
     assert ".interaction-hud" in css and "pointer-events:none" in css
     assert "right:max(16px,calc(env(safe-area-inset-right) + 12px))" in css
-    assert "bottom:max(16px,calc(env(safe-area-inset-bottom) + 12px))" in css
+    # The bottom-right corner it is pinned to is also where a maximised window puts the
+    # terminal's command rail, so the offset carries the measured rail clearance.
+    assert (
+        "bottom:calc(max(16px,env(safe-area-inset-bottom) + 12px) + var(--rail-clearance))"
+        in css
+    )
     # Copy success has one visible owner. The rail keeps selection, paste, upload,
     # and recovery state but no longer duplicates the app-level confirmation.
     assert "showClipboardStatus('Selection copied')" not in pane
@@ -636,12 +645,19 @@ def test_layout_refresh_defers_to_an_in_flight_layout_write() -> None:
     Overwriting optimistic state snapped a just-dropped tab back, and a second
     drag in that window based itself on the clobbered layout and then won the
     write — silently reverting the first move for every client.
-    """
-    app = (
-        Path(__file__).parents[1] / "frontend" / "src" / "App.tsx"
-    ).read_text(encoding="utf-8")
 
-    assert app.count("if(layoutWriteChains.current[project.id]!==undefined)continue") == 2
+    Both halves of the rule now live behind `layoutWriter.hasPendingWrite`: the
+    revision is not adopted (`adoptRevisions`) and the layout is not reconciled
+    (the planner's `hasPendingLayoutWrite`).
+    """
+    frontend = Path(__file__).parents[1] / "frontend" / "src"
+    app = (frontend / "App.tsx").read_text(encoding="utf-8")
+    writer = (frontend / "layoutWriter.ts").read_text(encoding="utf-8")
+
+    assert "layoutWriter.adoptRevisions(nextProjects)" in app
+    assert "hasPendingLayoutWrite: layoutWriter.hasPendingWrite" in app
+    assert "if (chains[project.id] !== undefined) continue" in writer
+    assert "hasPendingWrite: projectId => chains[projectId] !== undefined" in writer
 
 
 def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
@@ -658,11 +674,16 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
     for setter in (
         "setPreparedClipboard('')",
         "setManualClipboard(false)",
-        "setSelectionText('')",
+        "setClipboardStatus('')",
         "setFindQuery('')",
         "setFindResult('')",
     ):
         assert setter in reset, setter
+    # The toast carries the selection readout as well as the copy and paste confirmations,
+    # so its pending dismissal is part of the reset: left running, the outgoing session's
+    # timer blanks a message the incoming one has just put up.
+    assert "clipboardStatusTimerRef.current=null" in reset
+    assert "clipboardStatusKindRef.current='clipboard'" in reset
     # An empty last-reply response must clear the value rather than leave the
     # previous session's text in place.
     assert "if(!disposed)setLastReply(result.text||'')" in pane

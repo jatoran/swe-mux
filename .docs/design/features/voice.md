@@ -195,6 +195,10 @@ install-wide, so the tab edits them directly for the focused session.
   mirroring `HistoryIndex`, so nothing blocks the event loop. Public snapshots
   (`clip_snapshot`, `group_snapshot`) never expose daemon file paths. A byte-cap prune
   (`tts_cache_mb`) deletes the oldest streams whole; stale failed rows expire after a day.
+  Eviction chooses every victim stream in one operation and then deletes them in committed
+  batches, rather than holding the process-wide database lock across the whole sweep, and each
+  victim is an indexed lookup (`GROUP_MATCH`) rather than the table scan a
+  `COALESCE(stream_id, id)=?` predicate forces (`../../technical/backend/sqlite.md`).
 - **A clip is a reply; a row is a segment** (`stream_id`, `segment_index`, `segment_count`;
   schema version 3).
   Segmenting is a latency device and nothing else, so it stops at the store boundary: every

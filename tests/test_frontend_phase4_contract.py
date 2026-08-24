@@ -697,7 +697,9 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     assert "pendingTerminal(pendingId,target,backend,{" in app
     assert "label:'Setting up worktree…'" in app
     assert "placement:null" in app
-    assert "if(pending.projectId!==project.id||!pending.placement)continue" in app
+    # The refresh pass that replays pending placements moved into the layout planner.
+    planner = source("fleetLayouts.ts")
+    assert "if (pending.projectId !== project.id || !pending.placement) continue" in planner
     assert "selectPendingTerminal(current,session.id)" in app
     assert "setActiveId(current=>current===pendingId?next.id:current)" in app
     assert "normalizeWorktreeBranchInput(value)" in run_menu

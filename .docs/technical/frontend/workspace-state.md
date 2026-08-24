@@ -161,11 +161,18 @@ scrolled up is left alone.
 
 ## Optimistic layout writes
 
-`updateLayout(projectId, next)` first updates `layoutValues` and `layoutMap`, then appends a PATCH
-to that Project's promise chain. The request carries the latest known `layout_revision`.
+`layoutWriter.ts` is the one place a layout is written, and `updateLayout(projectId, next)` is
+its `write`. It first shows the layout locally (`layoutValues` and `layoutMap`), then appends a
+PATCH to that Project's promise chain. The request carries the latest known `layout_revision`.
 Responses update the revision and authoritative Project snapshot; only the newest local
 generation may replace the optimistic rendered layout. A stale-revision response refreshes all
 Project state and reports the conflict.
+
+The write chain, the generation guard and the revisions live inside that module; the browser's
+view of a layout (`layoutValues`, `layoutMap`) stays at the composition root, where every
+surface reads it. The refresh pass asks the writer two things rather than reaching into its
+state: `hasPendingWrite` (a Project mid-write keeps its optimistic layout) and `adoptRevisions`
+(a snapshot advances the server revision for every Project except those).
 
 Correct:
 

@@ -3,25 +3,31 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
+    escape_like,
+    like_contains,
     run_sqlite_operation,
     write_schema_version,
 )
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 12
+log = logging.getLogger(__name__)
+
+AUTOMATION_SCHEMA_VERSION = 13
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -51,6 +57,17 @@ _DURABLE_PRUNE_TABLES = (
     "scan_timeline_records",
     "scan_timeline_boundaries",
 )
+#: Rows one retention DELETE removes before committing and releasing the
+#: process-wide database lock. Small enough that an unrelated history or PTY
+#: write never waits long, large enough that a real backlog still drains in a
+#: few hundred round trips through the worker.
+_PRUNE_BATCH_ROWS = 500
+#: The most batches one table gets in one pass (200,000 rows). A backstop, not a
+#: policy: a clock jump or a mis-set window must not turn housekeeping into an
+#: unbounded loop, and whatever it leaves ages out on the next hourly sweep.
+#: Reaching it is logged, because a cap that stops early and says nothing reads
+#: exactly like a table that had nothing left to remove.
+_PRUNE_MAX_BATCHES = 400
 
 AUTOMATION_SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -198,6 +215,18 @@ CREATE INDEX IF NOT EXISTS idx_scan_records_run
   ON scan_timeline_records(agent_run_id,created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_scan_records_project
   ON scan_timeline_records(project_id,created_at ASC);
+-- `scan_records` orders by `t0,created_at`, which none of the three indexes
+-- above can serve: they lead with the scope column and then order by
+-- `created_at`, so every scoped read sorted its whole result set in a temp
+-- B-tree. These two carry the ORDER BY as well as the scope, which is what
+-- makes a bounded newest-first page (semantic scan search) a backwards index
+-- walk of `limit` rows instead of a scan-and-sort of the Project's history.
+-- Ascending only: SQLite walks an index in either direction, so one covers
+-- both the derivation reads (oldest first) and the search reads (newest).
+CREATE INDEX IF NOT EXISTS idx_scan_records_project_t0
+  ON scan_timeline_records(project_id,t0 ASC,created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_scan_records_run_t0
+  ON scan_timeline_records(agent_run_id,t0 ASC,created_at ASC);
 CREATE TABLE IF NOT EXISTS scan_timeline_boundaries (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, previous_run_id TEXT NOT NULL,
   next_run_id TEXT NOT NULL, reason TEXT NOT NULL, created_at REAL NOT NULL,
@@ -252,7 +281,53 @@ CREATE INDEX IF NOT EXISTS idx_observer_created
   ON automation_observer_calls(created_at);
 CREATE INDEX IF NOT EXISTS idx_lineage_child
   ON session_lineage(child_run_id);
+-- Retention indexes. Every prune index in this store leads with the retention
+-- column; the scope-first indexes above cannot serve `WHERE created_at<?` at
+-- all, which is why the batched delete on a large table needed these.
+--
+-- Only four, and which four is measured rather than assumed (2026-08-24, live
+-- 2.8 GB mux.db after weeks of uptime): `automation_observer_calls` 19,309 rows
+-- (already covered by `idx_observer_created`), `automation_budget_ledger` 7,789,
+-- `automation_checkpoints` 2,966, `automation_annotations` 2,472,
+-- `scan_timeline_records` 2,400, and every remaining prune table at or below
+-- 1,100. Against a synthetic table the batched delete costs 263ms unindexed and
+-- 220ms indexed at 200,000 rows, and the "nothing aged out yet" probe - the
+-- common case, since retention runs hourly - costs 8.8ms unindexed against
+-- 0.024ms indexed. Neither figure is worth an extra B-tree per insert at a
+-- thousand rows; both are at a hundred thousand.
+--
+-- So the index goes on the four tables whose write rate and retention window can
+-- actually carry them there: the spend ledger and the checkpoint table (one row
+-- per agent run, kept until pruned), and the two on the 365-day durable window.
+CREATE INDEX IF NOT EXISTS idx_budget_created
+  ON automation_budget_ledger(created_at);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_updated
+  ON automation_checkpoints(updated_at);
+CREATE INDEX IF NOT EXISTS idx_annotations_created
+  ON automation_annotations(created_at);
+CREATE INDEX IF NOT EXISTS idx_scan_records_created
+  ON scan_timeline_records(created_at);
 """
+
+
+#: How many scan records one semantic search reads per scope. Search ranks in
+#: Python over the rows it is handed, so this is the real recall bound and the
+#: number a truncated answer has to be able to name.
+SCAN_SEARCH_SCAN_LIMIT = 2000
+
+
+@dataclass(frozen=True, slots=True)
+class ScanRecordPage:
+    """One bounded read of scan records, and whether it reached its bound.
+
+    The flag is the whole point. A search that silently answers from a page of a
+    larger history is indistinguishable, in its output, from one that read
+    everything — which is how the newest records past the cap went missing for as
+    long as they did without any surface reporting a gap.
+    """
+
+    records: list[dict[str, Any]]
+    truncated: bool
 
 
 def sorted_model_catalog(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1201,8 +1276,16 @@ class AutomationStore:
             # `target` is a JSON array, so the substring test runs against its
             # serialized form. A path fragment cannot collide with the array
             # punctuation, which is the only other thing in that text.
-            sql += " AND lower(COALESCE(json_extract(record_json,'$.target'),'')) LIKE ?"
-            args.append(f"%{str(target_fragment).casefold()}%")
+            #
+            # Escaped, because a fragment is a literal path and `_` is both an
+            # ordinary character in a filename and a LIKE wildcard: searching for
+            # `land_store` otherwise also matched `land-store` and `landAstore`,
+            # widening a caller's filter without telling it.
+            sql += (
+                " AND lower(COALESCE(json_extract(record_json,'$.target'),''))"
+                " LIKE ? ESCAPE '\\'"
+            )
+            args.append(f"%{escape_like(str(target_fragment).casefold())}%")
         order = "DESC" if newest_first else "ASC"
         sql += f" ORDER BY t0 {order},created_at {order} LIMIT ?"
         args.append(max(1, min(limit, 2000)))
@@ -1210,6 +1293,51 @@ class AutomationStore:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(sql, args).fetchall()
             return [{**dict(row), **json.loads(str(row["record_json"]))} for row in rows]
+
+        return await self._run(op)
+
+    async def scan_search_page(
+        self,
+        *,
+        project_id: str = "",
+        agent_run_id: str = "",
+        limit: int = SCAN_SEARCH_SCAN_LIMIT,
+    ) -> ScanRecordPage:
+        """The newest scan records in one scope, and whether older ones exist.
+
+        Its own read rather than a `scan_records` flag because search wants the
+        opposite of what the derivations want. `scan_consumers` walks a run
+        forwards and needs every record from the beginning; search ranks whatever
+        it is handed and then sorts newest-first, so a page taken from the
+        *oldest* end looks correct in its output and silently cannot contain the
+        newest work. That is exactly what happened: both search callers took
+        `scan_records`' oldest-first default, and with a 365-day durable window a
+        Project past 2,000 records could not find anything it had done recently.
+
+        Truncation is reported rather than inferred. The read asks for one row
+        more than the bound and reports the overflow instead of returning it, so
+        a caller can say "there is more history than this answer saw" rather than
+        leaving the reader to assume there is not (`no silent caps`).
+        """
+        bound = max(1, min(int(limit), SCAN_SEARCH_SCAN_LIMIT))
+        sql = "SELECT * FROM scan_timeline_records WHERE 1=1"
+        args: list[Any] = []
+        for column, value in (("project_id", project_id), ("agent_run_id", agent_run_id)):
+            if value:
+                sql += f" AND {column}=?"
+                args.append(value)
+        sql += " ORDER BY t0 DESC,created_at DESC LIMIT ?"
+        args.append(bound + 1)
+
+        def op() -> ScanRecordPage:
+            rows = self._db.execute(sql, args).fetchall()
+            truncated = len(rows) > bound
+            return ScanRecordPage(
+                records=[
+                    {**dict(row), **json.loads(str(row["record_json"]))} for row in rows[:bound]
+                ],
+                truncated=truncated,
+            )
 
         return await self._run(op)
 
@@ -2313,9 +2441,12 @@ class AutomationStore:
         else:
             sql = (
                 "SELECT * FROM experience_entries WHERE "
-                "(error_summary LIKE ? OR resolution_summary LIKE ?)"
+                "(error_summary LIKE ? ESCAPE '\\' OR resolution_summary LIKE ? ESCAPE '\\')"
             )
-            args = [f"%{query}%", f"%{query}%"]
+            # Literal, for the reason the fragment filter above is: an error
+            # summary is full of `_` and `%`, and an unescaped one turns a
+            # browse into a wildcard match nobody asked for.
+            args = [like_contains(query), like_contains(query)]
         if project_scope_id:
             sql += " AND project_scope_id=?"
             args.append(project_scope_id)
@@ -2389,10 +2520,82 @@ class AutomationStore:
 
         return await self._run(op)
 
+    async def _prune_table(self, table: str, column: str, cutoff: float) -> int:
+        """Delete one table's aged rows in committed batches. Returns the count.
+
+        Each batch is its own store operation, so the process-wide database lock
+        is taken and released once per batch rather than held across every table
+        (`sqlite.md`). That is the point of the batching: the history, telemetry,
+        voice, and PTY writers share that lock, and a retention pass that holds it
+        for the whole sweep makes an unrelated session write wait on housekeeping.
+
+        No `ORDER BY`, which is deliberate and measured. Ordering the batch by the
+        retention column forces a temp B-tree over every matching row on a table
+        with no index on it — 1563ms against 263ms for 100,000 rows, measured
+        2026-08-24 — while without it SQLite either walks the index range (when
+        the table has one) or scans and stops at the batch size (when it does
+        not), and both land at ~260ms. Rows still come off oldest-first in
+        practice, because both plans reach the old rows first; nothing depends on
+        that being guaranteed at a batch boundary.
+        """
+        statement = (
+            f"DELETE FROM {table} WHERE rowid IN "
+            f"(SELECT rowid FROM {table} WHERE {column}<? LIMIT ?)"
+        )
+
+        def batch() -> int:
+            cursor = self._db.execute(statement, (cutoff, _PRUNE_BATCH_ROWS))
+            self._db.commit()
+            return int(cursor.rowcount)
+
+        started = time.perf_counter()
+        removed = 0
+        batches = 0
+        while batches < _PRUNE_MAX_BATCHES:
+            deleted = await self._run(batch)
+            batches += 1
+            removed += deleted
+            if deleted < _PRUNE_BATCH_ROWS:
+                break
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if batches >= _PRUNE_MAX_BATCHES:
+            # A cap that stops early has to say so (`no silent caps`): the
+            # remainder ages out on the next pass rather than being kept.
+            log.warning(
+                "automation_retention_capped table=%s column=%s rows_removed=%d "
+                "batches=%d elapsed_ms=%.1f cutoff=%.0f",
+                table,
+                column,
+                removed,
+                batches,
+                elapsed_ms,
+                cutoff,
+            )
+        elif removed:
+            log.info(
+                "automation_retention_pruned table=%s column=%s rows_removed=%d "
+                "batches=%d elapsed_ms=%.1f cutoff=%.0f",
+                table,
+                column,
+                removed,
+                batches,
+                elapsed_ms,
+                cutoff,
+            )
+        else:
+            log.debug(
+                "automation_retention_clean table=%s column=%s elapsed_ms=%.1f cutoff=%.0f",
+                table,
+                column,
+                elapsed_ms,
+                cutoff,
+            )
+        return removed
+
     async def prune(
         self, retention_days: int, *, durable_retention_days: int | None = None
-    ) -> None:
-        """Age out automation rows.
+    ) -> dict[str, int]:
+        """Age out automation rows. Returns rows removed per table.
 
         Every table with unbounded growth is covered. Six of them previously had
         no DELETE anywhere in the codebase, so on a supervisor-preserved daemon
@@ -2404,6 +2607,13 @@ class AutomationStore:
         configured automation window, while derived knowledge a user reads long
         after the run — run-note annotations, learned resolutions, branch lineage
         — is kept for a deliberately longer one.
+
+        **One operation per batch, not one transaction for the sweep.** This used
+        to be a single `op()` deleting from thirteen tables and committing once,
+        which held the process-wide `mux.db` operation lock for the whole scan
+        while unrelated history, telemetry, and PTY writes queued behind it. The
+        work is the same; what changed is that it is now interruptible and the
+        lock is free between batches.
         """
         now = time.time()
         durable_days = (
@@ -2413,18 +2623,29 @@ class AutomationStore:
         )
         cutoff = now - max(1, retention_days) * 86400
         durable_cutoff = now - max(1, durable_days) * 86400
-
-        def op() -> None:
-            for table in _OPERATIONAL_PRUNE_TABLES:
-                self._db.execute(f"DELETE FROM {table} WHERE created_at<?", (cutoff,))
-            for table in _DURABLE_PRUNE_TABLES:
-                self._db.execute(f"DELETE FROM {table} WHERE created_at<?", (durable_cutoff,))
+        plan: list[tuple[str, str, float]] = [
+            *((table, "created_at", cutoff) for table in _OPERATIONAL_PRUNE_TABLES),
+            *((table, "created_at", durable_cutoff) for table in _DURABLE_PRUNE_TABLES),
             # Checkpoint keys embed the agent run id, so every run leaves rows
             # behind permanently; they stamp updated_at rather than created_at.
-            self._db.execute("DELETE FROM automation_checkpoints WHERE updated_at<?", (cutoff,))
-            self._db.commit()
-
-        await self._run(op)
+            ("automation_checkpoints", "updated_at", cutoff),
+        ]
+        started = time.perf_counter()
+        removed: dict[str, int] = {}
+        for table, column, table_cutoff in plan:
+            count = await self._prune_table(table, column, table_cutoff)
+            if count:
+                removed[table] = count
+        log.info(
+            "automation_retention_swept tables=%d rows_removed=%d elapsed_ms=%.1f "
+            "window_days=%d durable_window_days=%d",
+            len(plan),
+            sum(removed.values()),
+            (time.perf_counter() - started) * 1000,
+            max(1, retention_days),
+            max(1, durable_days),
+        )
+        return removed
 
     def close(self) -> None:
         if self._closed:

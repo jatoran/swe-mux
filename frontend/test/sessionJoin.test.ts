@@ -112,20 +112,20 @@ test('the refusal record forgets sessions that left the fleet', () => {
   assert.deepEqual(forgetJoinAttempts(attempts, new Set(['daemon-2'])), { 'daemon-2': 1 })
 })
 
-test('the refresh reconciler withholds the join from a Project whose own launch is still in flight', () => {
-  // The daemon creates and announces a session before the POST that asked for it returns, so a
-  // refresh landing in that window carries a session this client cannot yet recognise as its own.
-  // Joining it there would give it a second leaf beside the pending one `replaceTerminal` is
-  // about to swap the real id into.
+test('the refresh cycle reconciles layouts through the one planner that holds these rules', () => {
+  // The join rules themselves are tested against `planFleetLayouts` in fleetLayouts.test.ts,
+  // where they are behaviour rather than source text. This only holds the wiring: a second
+  // hand-rolled reconciliation inside the composition root is how they drifted apart before.
   const app = readFileSync(join(SRC, 'App.tsx'), 'utf8')
-  assert.match(app, /Object\.values\(pendingSpawns\.current\)\.filter\(pending => !pending\.resolvedId\)\.map\(pending => pending\.projectId\)/)
-  assert.match(app, /if\(isEndedSession\(session\)\|\|session\.pending\|\|spawningHere\.has\(session\.id\)\)continue/)
-  assert.match(app, /if\(launchingHere\.has\(session\.project_id\)\)continue/)
-  assert.match(app, /const candidates = joinableSessionIds\(joinCandidates\.get\(project\.id\)\|\|\[\], joinAttempts\.current\)/)
+  assert.match(app, /const plan = planFleetLayouts\(\{/)
+  assert.match(app, /joinAttempts\.current = plan\.joinAttempts/)
+  assert.ok(!/const joinCandidates = new Map/.test(app), 'App.tsx must not rebuild the join candidate grouping')
 })
 
 test('a join is persisted quietly, so a lost revision race reports nothing to the operator', () => {
+  // The quiet write's own behaviour - reload without a message - is tested against
+  // `createLayoutWriter` in layoutWriter.test.ts. This holds the caller: the refresh
+  // pass's automatic joins are the writes that must not report a conflict.
   const app = readFileSync(join(SRC, 'App.tsx'), 'utf8')
   assert.match(app, /updateLayout\(join\.projectId,join\.layout,\{quiet:true\}\)/)
-  assert.match(app, /if\(!options\?\.quiet\)setError\(/)
 })

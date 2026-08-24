@@ -12,7 +12,8 @@ import stat
 import time
 import tomllib
 import uuid
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Collection, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
 from .leaf_names import validate_leaf_name
+from .nested_worktrees import nested_worktree_paths
 
 PROJECT_CONFIG_VERSION = 1
 LEGACY_AUTOMATION_IDS = frozenset({"project_card"})
@@ -923,10 +925,47 @@ def effective_project_ignores(root: str | Path, global_patterns: list[str]) -> l
     return list(dict.fromkeys(pattern.strip() for pattern in patterns if pattern.strip()))
 
 
+def resolve_pruned_paths(
+    project_root: str | Path, pruned_paths: Collection[str] | None
+) -> frozenset[str]:
+    """Normalize an explicit prune set, or discover this Project's nested worktrees.
+
+    `None` means "ask Git", which is what every production caller wants and is why it is the
+    default: a route that has to remember to pass this is a route that will one day forget,
+    and the symptom of forgetting is a browser quietly listing a second copy of the whole
+    repository. An explicit collection - including an empty one - overrides, so a test can
+    pin the answer without a repository.
+    """
+    if pruned_paths is None:
+        return nested_worktree_paths(project_root)
+    return frozenset(
+        normalized
+        for path in pruned_paths
+        if (normalized := str(path).replace("\\", "/").strip("/"))
+    )
+
+
+def _within_pruned(relative_path: str, pruned: Collection[str]) -> bool:
+    """Whether a Project-relative path *is* a pruned root or lies beneath one."""
+    if not pruned:
+        return False
+    normalized = relative_path.replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    if normalized in pruned:
+        return True
+    return any(normalized.startswith(f"{root}/") for root in pruned)
+
+
 def list_project_directory(
-    root: str | Path, relative_path: str = "", *, ignore_patterns: list[str] | None = None
+    root: str | Path,
+    relative_path: str = "",
+    *,
+    ignore_patterns: list[str] | None = None,
+    pruned_paths: Collection[str] | None = None,
 ) -> dict[str, Any]:
     project_root = Path(root).resolve()
+    pruned = resolve_pruned_paths(project_root, pruned_paths)
     target = project_path(project_root, relative_path)
     if not target.is_dir():
         raise ValueError("project path is not a folder")
@@ -937,12 +976,14 @@ def list_project_directory(
         )
     except OSError as exc:
         raise ValueError(f"unable to browse project folder: {exc}") from exc
+    ignore = ignore_patterns or [".git"]
     visible_children = [
         child
         for child in children
         if not ignored_project_path(
-            child.relative_to(project_root).as_posix(), ignore_patterns or [".git"]
+            (relative := child.relative_to(project_root).as_posix()), ignore
         )
+        and not _within_pruned(relative, pruned)
     ]
     for child in visible_children[:2000]:
         relative = child.relative_to(project_root).as_posix()
@@ -973,6 +1014,7 @@ def list_project_directories(
     relative_paths: Sequence[str],
     *,
     ignore_patterns: list[str] | None = None,
+    pruned_paths: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """List several folders in one call so a restored tree loads in one round trip.
 
@@ -983,15 +1025,73 @@ def list_project_directories(
     """
 
     project_root = Path(root).resolve()
+    # Resolved once for the whole batch rather than per folder: this fans out to a
+    # thousand directories, and the nested-worktree lookup is a Git subprocess behind a
+    # short-lived cache. One call per batch is the difference between a cache that
+    # amortizes and a cache that is merely not wrong.
+    pruned = resolve_pruned_paths(project_root, pruned_paths)
     directories: dict[str, Any] = {}
     for relative in dict.fromkeys(relative_paths):
         try:
             directories[relative] = list_project_directory(
-                project_root, relative, ignore_patterns=ignore_patterns
+                project_root, relative, ignore_patterns=ignore_patterns, pruned_paths=pruned
             )
         except ValueError:
             continue
     return {"directories": directories}
+
+
+#: How many files one search may look at before it gives up. The bound exists so a huge
+#: tree cannot stall the daemon; which files it spends itself on is decided by the
+#: breadth-first order below, not by this number.
+SEARCH_MAX_FILES = 20000
+#: Total bytes one content search may read, and the largest single file it will open.
+SEARCH_MAX_BYTES = 64 * 1024 * 1024
+SEARCH_PER_FILE_BYTES = 1024 * 1024
+
+
+def _search_one_file(
+    project_root: Path,
+    relative: str,
+    name: str,
+    needle: str,
+    *,
+    want_names: bool,
+    want_contents: bool,
+) -> tuple[dict[str, Any] | None, int]:
+    """Test one file, returning its result row (or `None`) and the bytes it cost to read."""
+    if want_names and needle in name.casefold():
+        return {"name": name, "path": relative, "match": "name", "line": None, "snippet": None}, 0
+    if not want_contents:
+        return None, 0
+    target = project_root / relative
+    try:
+        if target.stat().st_size > SEARCH_PER_FILE_BYTES:
+            return None, 0
+        data = target.read_bytes()
+    except OSError:
+        return None, 0
+    if b"\x00" in data:
+        return None, len(data)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, len(data)
+    index = text.casefold().find(needle)
+    if index == -1:
+        return None, len(data)
+    start = text.rfind("\n", 0, index) + 1
+    end = text.find("\n", index)
+    return (
+        {
+            "name": name,
+            "path": relative,
+            "match": "content",
+            "line": text.count("\n", 0, index) + 1,
+            "snippet": text[start : end if end != -1 else len(text)].strip()[:200],
+        },
+        len(data),
+    )
 
 
 def search_project_files(
@@ -1000,86 +1100,101 @@ def search_project_files(
     *,
     mode: str = "names",
     ignore_patterns: list[str] | None = None,
+    pruned_paths: Collection[str] | None = None,
     limit: int = 300,
 ) -> dict[str, Any]:
     """Recursively find files by name and/or UTF-8 content beneath the project root.
 
-    The walk reuses the same ignore rules as the browser, prunes ignored directories, and is
-    bounded on every axis (files visited, bytes read, per-file size, and result count) so a
-    huge tree cannot stall the daemon. Content matching skips binary and oversized files and
-    reports the first matching line as a trimmed snippet. Name matches sort before content
-    matches; within each group results are path-ordered.
+    The walk reuses the same ignore rules as the browser, prunes ignored directories and
+    nested worktrees, and is bounded on every axis (files visited, bytes read, per-file size,
+    and result count) so a huge tree cannot stall the daemon. Content matching skips binary
+    and oversized files and reports the first matching line as a trimmed snippet. Name
+    matches sort before content matches; within each group results are path-ordered.
+
+    **The walk is breadth-first, and that is load-bearing rather than a style choice.**
+    `os.walk` is depth-first, so it spends the whole file budget on whichever subtree sorts
+    first - a dot-directory, always - and can exhaust it without ever reaching `src/`. That
+    is not a degraded search but a silent wrong answer: the results looked like a complete
+    list of matches and the real ones had never been visited. Breadth-first spends the budget
+    on the shallowest files first, which is both the order a person expects and the order in
+    which a Project's own code beats its vendored and generated trees.
+
+    A truncated result says *which* bound bit (`truncated_reason`) and, when it was the file
+    budget, where the walk stopped (`stopped_at`). "Refine your query" is useless advice
+    against a budget that a narrower query would exhaust in exactly the same place, and a
+    reader who is told that will retype the query instead of fixing the ignore list.
     """
     project_root = Path(root).resolve()
     needle = query.strip().casefold()
     if not needle:
-        return {"items": [], "truncated": False}
+        return {"items": [], "truncated": False, "truncated_reason": None, "stopped_at": None}
     ignore = ignore_patterns or [".git"]
+    pruned = resolve_pruned_paths(project_root, pruned_paths)
     want_names = mode in ("names", "both")
     want_contents = mode in ("contents", "both")
-    max_files = 20000
-    max_bytes = 64 * 1024 * 1024
-    per_file_bytes = 1024 * 1024
     items: list[dict[str, Any]] = []
-    truncated = False
+    truncated_reason: str | None = None
+    stopped_at: str | None = None
     scanned_files = 0
     scanned_bytes = 0
-    for dirpath, dirnames, filenames in os.walk(project_root):
-        base = Path(dirpath).relative_to(project_root)
-        prefix = "" if base == Path(".") else f"{base.as_posix()}/"
-        dirnames[:] = [
-            name
-            for name in sorted(dirnames, key=str.casefold)
-            if not ignored_project_path(f"{prefix}{name}", ignore)
-        ]
-        for name in sorted(filenames, key=str.casefold):
-            relative = f"{prefix}{name}"
-            if ignored_project_path(relative, ignore):
+    frontier: deque[str] = deque([""])
+    while frontier and truncated_reason is None:
+        prefix = frontier.popleft()
+        directory = project_root / prefix if prefix else project_root
+        subdirectories: list[str] = []
+        files: list[tuple[str, str]] = []
+        try:
+            with os.scandir(directory) as entries:
+                listing = sorted(entries, key=lambda entry: entry.name.casefold())
+        except OSError:
+            # A folder that vanished or refuses to be read is skipped, not fatal: a search
+            # over a live tree races every agent editing it.
+            continue
+        for entry in listing:
+            relative = f"{prefix}/{entry.name}" if prefix else entry.name
+            if ignored_project_path(relative, ignore) or _within_pruned(relative, pruned):
                 continue
+            try:
+                is_directory = entry.is_dir()
+                is_link = entry.is_symlink()
+            except OSError:
+                continue
+            if is_directory:
+                # A symlinked directory is listed but never descended into, matching
+                # `os.walk(followlinks=False)`: following one can loop forever, and a link
+                # out of the Project is a path this browser has no authority over.
+                if not is_link:
+                    subdirectories.append(relative)
+            else:
+                files.append((entry.name, relative))
+        for name, relative in files:
             scanned_files += 1
-            if scanned_files > max_files:
-                truncated = True
+            if scanned_files > SEARCH_MAX_FILES:
+                truncated_reason = "files"
+                stopped_at = prefix
                 break
-            match: str | None = None
-            line: int | None = None
-            snippet: str | None = None
-            if want_names and needle in name.casefold():
-                match = "name"
-            if match is None and want_contents and scanned_bytes < max_bytes:
-                target = project_root / relative
-                try:
-                    if target.stat().st_size <= per_file_bytes:
-                        data = target.read_bytes()
-                        scanned_bytes += len(data)
-                        if b"\x00" not in data:
-                            text = data.decode("utf-8")
-                            index = text.casefold().find(needle)
-                            if index != -1:
-                                match = "content"
-                                line = text.count("\n", 0, index) + 1
-                                start = text.rfind("\n", 0, index) + 1
-                                end = text.find("\n", index)
-                                stop = end if end != -1 else len(text)
-                                snippet = text[start:stop].strip()[:200]
-                except (OSError, UnicodeDecodeError):
-                    match = None
-            if match is not None:
-                items.append(
-                    {
-                        "name": name,
-                        "path": relative,
-                        "match": match,
-                        "line": line,
-                        "snippet": snippet,
-                    }
-                )
+            row, cost = _search_one_file(
+                project_root,
+                relative,
+                name,
+                needle,
+                want_names=want_names,
+                want_contents=want_contents and scanned_bytes < SEARCH_MAX_BYTES,
+            )
+            scanned_bytes += cost
+            if row is not None:
+                items.append(row)
                 if len(items) >= limit:
-                    truncated = True
+                    truncated_reason = "results"
                     break
-        if truncated:
-            break
+        frontier.extend(subdirectories)
     items.sort(key=lambda item: (item["match"] != "name", item["path"].casefold()))
-    return {"items": items, "truncated": truncated}
+    return {
+        "items": items,
+        "truncated": truncated_reason is not None,
+        "truncated_reason": truncated_reason,
+        "stopped_at": stopped_at,
+    }
 
 
 def read_project_file(root: str | Path, relative_path: str) -> dict[str, Any]:

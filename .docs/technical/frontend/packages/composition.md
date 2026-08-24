@@ -4,9 +4,10 @@ Index: `../packages.md`.
 
 ## Workspace composition
 
-`App.tsx`, `sessionSnapshots.ts`, `sessionKills.ts`, `sessionFocusHistory.ts`, `warmPanes.ts`, `uiBuild.ts`
+`App.tsx`, `fleetRefresh.ts`, `fleetLayouts.ts`, `fleetCommands.ts`, `layoutWriter.ts`, `sessionSnapshots.ts`, `sessionKills.ts`, `sessionFocusHistory.ts`, `warmPanes.ts`, `uiBuild.ts`
 
-- Fetches and coordinates Projects, sessions, layouts, menus, and overlays.
+- Coordinates Projects, sessions, layouts, menus, and overlays.
+  The controllers beside it own the parts with rules of their own: reading the fleet (`fleetRefresh.ts`), reconciling pane layouts against a snapshot (`fleetLayouts.ts`), writing a layout back (`layoutWriter.ts`), and the fleet-derived half of the command registry (`fleetCommands.ts`).
 - Event recovery is watermark-based, with bounded replay and one authoritative refresh for cold or wide gaps.
 - At reconnect it compares the production identity embedded in the loaded document against the served identity, reloading automatically only while hidden and raising a persistent manual banner while visible.
 - Hidden terminal warming is desktop-only; mobile opens no warm sockets.
@@ -16,6 +17,41 @@ Index: `../packages.md`.
 - `sessionKills.ts` owns optimistic removal: tombstones, TTL, and `nextActiveAfterKill`.
 - `sessionFocusHistory.ts` owns the bounded per-Project most-recently-focused stack that session choice consults.
   It is fed from the settled active session rather than from `setActiveId`'s many call sites, and is held in memory because it answers "where was I just now" (`../workspace-state.md`).
+
+## Fleet refresh
+
+`fleetRefresh.ts`, `fleetLayouts.ts`
+
+One cycle reads five independent daemon registries - sessions, Projects, previews, Groups, harnesses - and applies whatever arrived.
+
+- **Every read carries a deadline** (`FLEET_REFRESH_TIMEOUT_MS`), which is `api.ts`'s own rule for a request a view cannot render without.
+  These five had none, and the dedupe below then pinned every later refresh - interval, visibility, socket reconnect - behind the hung promise until the page was reloaded.
+- **Slices are applied one by one**, from `Promise.allSettled`.
+  A fail-fast `Promise.all` used to discard the whole snapshot for that cycle over a single transient 500.
+  The layout pass is the one step that needs three slices at once (sessions, Projects, previews) and is skipped when any of them is missing; the next full cycle reconciles.
+- **The in-flight cycle can be abandoned.** A cycle outrunning `FLEET_REFRESH_STALL_MS` is aborted and dropped, so a request that never settles costs one slow cycle rather than every refresh for the life of the page.
+  An abandoned cycle that finally returns is ignored by generation, so it cannot move the UI backwards.
+- **A caller arriving mid-cycle gets the follow-up, not the cycle in flight.**
+  `await refresh()` after a mutation used to be handed a promise whose GETs left before the mutation did, and so resolved with a fleet that had never seen the change.
+  Follow-ups coalesce: many callers during one cycle share one queued cycle.
+- `fleetLayouts.ts` is the pure half: given one snapshot it returns the layouts to store, the joins to persist quietly, and the pruned join-refusal record.
+  The join rules live there - a Project mid-launch is withheld, a session this device already has a pending leaf for is not joined twice, ended sessions keep a leaf but are never given one.
+
+## Command registry
+
+`commands.ts`, `fleetCommands.ts`, `App.tsx`
+
+Every keyboard chord, palette row, voice phrase and gesture runs through one list of `Command`s, built each render at the composition root.
+It is in two halves, split by what each depends on:
+
+- The **hand-written half** stays inline in `App.tsx`, because its `available` and `label` expressions read live UI state directly - the focused pane, the zoom, the drawer, the broadcast switch.
+- The **fleet half** (`fleetCommands.ts`) is one command per numbered Project slot, per Project, per live session, and per Project-and-harness launch pair, with the spoken phrases each of those carries.
+  That half scales with the fleet and does the string work, so it is memoized on what determines it: the Project and session records, the active Project, the sidebar order as a value (`displayOrderKey` - `displayProjects` is derived fresh every render and has no stable identity to key on), and the harness registry revision.
+  Its `run` handlers reach the current render through a ref-backed facade whose identity never changes, so a memoized command can never act on a snapshot the operator has already moved past.
+
+`paletteResults(open, commands, query)` is the gate on the search: while the palette is closed nothing is scored.
+`searchCommands` fuzzy-scores the whole registry - a string build and a sort over hundreds of entries - and its only consumer is the palette's result list, yet it used to run on every render of the shell.
+The gate lives in `commands.ts` rather than at the call site so the renderer harness exercises the same function the app does (`test/renderer/palette-gating.spec.ts` counts the label reads the scorer makes).
 
 ## Connection liveness
 
@@ -36,6 +72,11 @@ The offset between this device's clock and the daemon's, so a timestamp the daem
 It is sampled from the HTTP `Date` header inside the `api()` wrapper, the one choke point every request already passes through, so no endpoint opts in and error responses count - an outage cannot silently freeze the correction.
 Latency is halved out at the round-trip midpoint and the held value only moves outside a noise floor, because the offset feeds durations the user watches count up.
 `useRowClock` in `sessionRowPrefs.ts` consumes it; anything else ageing a daemon timestamp against `Date.now()` has the same bug and should read `serverNow()`.
+
+That hook is subscribed **below** the composition root, in `SessionRowLive.tsx`, and the root must not read it.
+A sidebar row is the only surface that has to re-read the wall clock on its own ("12m" is a fact about now, not about the session), and while the root derived it every five-second tick was a state change on the shell: every menu, drawer, tab strip and pane frame re-rendered to age a handful of rows, with terminal panes spared only by `TerminalPane`'s own memo comparator.
+The interval behind `useRowClock` is module-scoped and shared, so N subscribed rows still cost one timer - which is what makes "one timer for the whole sidebar" and "the tick does not re-render the shell" hold at the same time.
+`deriveRowFleetFacts` is the clock-free half of the row context the root does derive, once per fleet snapshot.
 
 ## Redeploy progress
 
@@ -66,7 +107,9 @@ Pure or narrowly stateful reusable behavior: modified-Tab classification, focuse
 ### Drag and drop
 
 `dragReorder.ts` owns movement-versus-hold activation decisions, reorder targets, and edge auto-scroll velocity.
-Mobile sidebar Projects use its 325 ms hold with 8 px slop; other pointer drags keep the 5 px movement threshold.
+Every touch hold-to-lift surface - sidebar Projects and sessions, the mobile tab bar, and the Configure Actions editor's chips and catalog - uses the single `MOBILE_HOLD_DRAG` constant (350 ms, 16 px slop); the drawer strip keeps `MOBILE_HOLD_MOVE_DRAG`, and other pointer drags keep the 5 px movement threshold.
+The hold slop is wide because a past-slop move is a *cancel* rather than a deferral, so a narrow one reads a resting finger's jitter as a scroll and the lift silently never happens.
+One constant rather than a per-surface value is the point: a surface that picks its own drifts from the hardening the shared one accumulates.
 `listDropTargetForPoint` is the sidebar-session variant, where a row is both a slot boundary and a target in its own right: the outer `insertionEdge` of each row (30% of its height, floored at 5 px and capped at 12 px, so a 44 px phone row and a dense desktop row both stay aimable) reads as insertion and the middle as grouping.
 A `groupable` predicate turns a row that cannot be grouped with into pure insertion over its whole height, rather than a middle band that quietly does nothing.
 `DROP_LIST_MARGIN` is how far outside a list the pointer may stray before the drop resolves to nothing, which keeps a session drag from committing to a Project the pointer has left.

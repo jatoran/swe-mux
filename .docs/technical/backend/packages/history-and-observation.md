@@ -63,6 +63,15 @@ On that sits the foreign-conversation filter and the turn-end gate that keeps a 
 
 It applies the approval policy on the hook path, returns the harness decision, and delivers an already-decided approval as a keystroke when the CLI ignores that decision - screen-gated, fingerprint-checked, with the ordinary stabilization timer armed underneath.
 
+`JsonlTailer` is how it reads the file, and two rules govern that.
+**Attach replay is windowed and off the loop**: the pre-existing content is read and decoded 512 KiB at a time in a worker thread, so peak memory is a window and its records rather than the file, and the loop is handed back at every window boundary.
+The whole-file read this replaced cost one uninterruptible span per attach and per rebind - measured on the primary host, 290 ms for a 24 MiB transcript and 691 ms for a 48 MiB one, with nothing else in the daemon running for the duration.
+Windowing may not move the replay boundary: a record's `(historical, live)` label is still its decoded byte position against the attach snapshot, and the `(None, False)` catch-up marker still follows the last historical record, whichever window it landed in.
+**The 250 ms poll trusts `stat()` only to say a file *changed*, never that it did not.**
+Size, file id and write time are read on every tick and a move in any of them triggers the 64-byte prefix read that proves whether the transcript was replaced; when all three hold still the read is skipped, and a 2 s backstop takes it anyway.
+The backstop is not belt-and-braces: on Windows a transcript held open by its writer reports its creation time as `st_mtime` for hours, so a same-length rewrite is entitled to leave every field this tailer may trust exactly as it found them.
+Before this the prefix read was unconditional - an open and a read per observed session per tick, forever, to catch that one case.
+
 **Not:** HTTP routing, title policy, transcript rendering, opening a `background_tasks` annotation from the PTY footer (that tier may only refresh), deciding *what* is approvable (`approvals.py`), any filesystem or database read on the decision path, or writing to a PTY directly.
 Delivery goes through `Session.approval_input_sink`, so the input accounting delivery readiness depends on cannot be skipped.
 

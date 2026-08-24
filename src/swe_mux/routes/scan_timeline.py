@@ -691,11 +691,12 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
     project_id = request.query.get("project_id", "").strip()
     store = request.app[keys.AUTOMATION_STORE]
     if run_id:
-        records = await store.scan_records(agent_run_id=run_id, limit=2000)
+        page = await store.scan_search_page(agent_run_id=run_id)
     elif project_id:
-        records = await store.scan_records(project_id=project_id, limit=2000)
+        page = await store.scan_search_page(project_id=project_id)
     else:
         raise ValueError("scan-timeline search requires a run_id or project_id scope")
+    records = page.records
     scope_project = project_id or (str(records[0].get("project_id") or "") if records else "")
     root = _project_root_for(request.app, scope_project, "") if scope_project else ""
     enabled = await request.app[keys.AUTOMATION_GATE](root) if root else frozenset()
@@ -705,7 +706,18 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
         return json_response({"enabled": True, "query": query, "results": []})
     limit = max(1, min(int(request.query.get("limit", 50) or 50), 200))
     results = search_scan_records(records, query, limit=limit)
-    return json_response({"enabled": True, "query": query, "results": results})
+    return json_response(
+        {
+            "enabled": True,
+            "query": query,
+            "results": results,
+            # The read is newest-first and bounded, so an empty result over a
+            # truncated scope means "not in the recent history" rather than
+            # "never happened". The surface has to be able to say which.
+            "truncated": page.truncated,
+            "scanned": len(records),
+        }
+    )
 
 
 async def session_transcript(request: web.Request) -> web.Response:

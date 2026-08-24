@@ -26,6 +26,7 @@ Writes, all thin callers into services that hold the authority: `notify`, `revok
 `request_land` and `request_verify` read their worktree from the caller's own live cwd rather than accepting it as an argument, through one shared enqueue helper so that scoping is written once.
 Two tools rather than one flagged tool, so the call that moves a trunk is never the default spelling of the call that moves nothing.
 `notify(dry_run=true)` is the one call on that list that writes nothing, and it is not counted as a write: checking before you send must not read as authority spent.
+A service refusal a caller can act on is translated where the tool calls the service - the enqueue helper turns `LandRefusal` into the same typed `QueueError` the tool's own refusals raise - because the generic handler above it can only answer `500 internal server error`, which is what the land tools did until the wire canary first ran.
 
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
 

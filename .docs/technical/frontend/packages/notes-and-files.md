@@ -8,7 +8,8 @@ Design: `../../../design/features/project-resources.md`.
 `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `DelimitedTextViewer.tsx`, `ImageViewer.tsx`,
 `delimitedText.ts`, `projectResourceCreate.ts`, `noteSaveQueue.ts`, `noteEditGuard.ts`,
 `noteEditorSettings.ts`, `noteFind.ts`,
-`noteOutline.ts`, `noteScroll.ts`, `layoutBox.ts`, `fileClipboard.ts`, `recentFiles.ts`
+`noteOutline.ts`, `noteScroll.ts`, `layoutBox.ts`, `fileClipboard.ts`, `recentFiles.ts`,
+`fileSearchLimit.ts`
 
 - Project notes plus the `global-note:scratchpad` editor, and canonical and exact-worktree file editors.
 - Right-click and guarded-long-press exclusive canonical creation, with pure destination selection.
@@ -25,6 +26,22 @@ Design: `../../../design/features/project-resources.md`.
 The two row kinds answer "when" in two different currencies, which is the whole reason the module exists rather than one format string: an uncommitted change has no timestamp Git records (and the file's mtime is exactly the filesystem reading the view exists to avoid), so it states *what* changed, while a committed path has a committer date and states how long ago.
 The age is coarse on purpose - it is a sort key made readable, and a precise one invites reading it as authoritative when it is the committer's clock rather than this machine's - and it clamps at zero, because a committer clock ahead of this browser's must not render as a future age.
 The list itself is read whole from `GET /api/projects/{id}/files/recent` (see `recent_files.py`); nothing is derived from the filesystem here.
+
+### A truncated search says which bound bit
+
+`fileSearchLimit.ts` is pure, and turns the search payload's `truncated_reason`/`stopped_at` into
+the one line under the result list.
+It exists because the two reasons deserve **opposite** advice and the surface shipped giving one
+of them the other's.
+Hitting the *result* limit means there is more of what you asked for, and refining finds it.
+Hitting the *file* limit means the walk gave up before visiting the tree, so the matches on screen
+are not the best matches but whatever was reached - and a narrower query re-runs the same walk and
+gives up in the same place, which sends a reader retyping while nothing changes.
+The file-limit notice therefore names the folder the walk stopped in and points at the ignore
+list, and never says "refine".
+A payload carrying `truncated` with no reason - an older daemon, which the redeploy rollback path
+makes real - falls back to the result-limit sentence rather than going silent, because a notice is
+all the reader gets there.
 
 ### What makes a commit a save
 

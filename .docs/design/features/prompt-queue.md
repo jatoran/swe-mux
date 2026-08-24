@@ -90,8 +90,11 @@ separately opt-in.
   content-free correlation and delivery-audit linkage. `queue_updated` / `queue_delivery`
   events carry ids and counts only.
 - **Provenance-rich sender model.** `sender_kind` (`user | remote_user | agent | rule |
-  queue_draft`), `sender_id`/`sender_label`, `origin_session_id`, `correlation_id` (unique
-  per sender: a retry returns the original message, never a duplicate), `thread_id` (the
+  queue_draft`), `sender_id`/`sender_label`, `origin_session_id`, `correlation_id` (per
+  sender: a retry returns the original message, never a duplicate - enforced by
+  `create_message`'s SELECT-before-INSERT, which compares `IFNULL(sender_id,'')`, and *not*
+  by the partial unique index, which NULL-sender rows escape because SQLite treats NULLs in a
+  UNIQUE index as distinct), `thread_id` (the
   relay exchange a message continues; daemon-assigned, and distinct from `correlation_id`
   for exactly the reason that key is per-sender), `chain_depth`,
   `origin_json` (relay path, originating rule/observer id, source Tier 0

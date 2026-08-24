@@ -13,18 +13,23 @@ import { RailDrawerIcon } from './railIcons'
 interface RailStripProps {
   /** The row's chips, in configured order. The popover receives a cloned complete list. */
   chips: VNode[]
-  /** The status readout, on whichever row carries it. Shrinks and ellipsises rather than
-   *  taking room from the chips, so its text changing never moves one. Empty is not the
-   *  same as absent to the caller — it marks the row that *would* carry a readout — but it
-   *  is the same to the row, so it renders nothing (see below). */
-  status?: string
   /** Opens the full Configure Actions modal. */
   onConfigure: () => void
   /** Accessible name for this row's overflow popover. */
   label: string
 }
 
-export function RailStrip({ chips, status, onConfigure, label }: RailStripProps) {
+/**
+ * A row carries no message of its own, deliberately.
+ *
+ * It used to take a `status` string and render it in the trailing cluster, which is where
+ * the selection readout lived. The cluster does not shrink, and the readout was capped in
+ * *viewport* units, so in a split pane narrower than 34vw it consumed the whole row and the
+ * chips were squeezed out of sight - the rail vanished behind a sentence about the
+ * selection. Every terminal message now goes to `.terminal-clip-toast`, over the terminal
+ * and flush on the rail's top edge, so no message can take a chip's place again.
+ */
+export function RailStrip({ chips, onConfigure, label }: RailStripProps) {
   const trailingRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
 
@@ -46,12 +51,6 @@ export function RailStrip({ chips, status, onConfigure, label }: RailStripProps)
       {chips}
     </OverflowRail>
     <div class="rail-row-trailing" ref={trailingRef}>
-      {/* Truthiness, not `!== undefined`. The caller marks the status row by passing a
-          string, and that string is empty most of the time — an empty readout still
-          carried its own `padding-right` plus the cluster's `gap`, taking ~23px of scroll
-          width from the row's chips for nothing. Unmounting it costs no announcement that
-          `display:none` would not have cost either: both leave the accessibility tree. */}
-      {status ? <span aria-live="polite">{status}</span> : null}
       <button
         type="button"
         class={`rail-more${open ? ' rail-more-open' : ''}`}

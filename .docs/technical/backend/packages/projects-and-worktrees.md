@@ -26,7 +26,10 @@ The shared Windows-safe filesystem-leaf validator - invalid characters, reserved
 - Safe Project config, and missing-root read safety.
 - Flat Project-note collection, legacy-note migration, and lazy global Scratchpad storage.
 - Recoverable note deletion into `notes/trash/`, plus the last-note `ProjectNoteProtected` refusal.
-- The tree, exclusive leaf-only file and folder creation, and bounded recursive name and content search.
+- The tree, exclusive leaf-only file and folder creation, and bounded **breadth-first** recursive name and content search.
+  The traversal order is load-bearing: `os.walk` is depth-first and spends the whole 20,000-file budget on whichever subtree sorts first, returning a truncated list of the wrong matches that renders exactly like a complete list of the right ones.
+  A truncated result carries `truncated_reason` (`results` or `files`) and, for the file budget, the `stopped_at` folder, because the advice the two deserve is opposite.
+- Pruning nested worktrees out of the tree and the search: `resolve_pruned_paths` defaults to asking `nested_worktrees`, so a route that forgets to pass a prune set gets the right answer rather than a browser quietly listing a second copy of the repository. An explicit collection, including an empty one, overrides it for tests.
 - Revision-checked text reads and writes.
 - The bounded validator behind `POST /notes/save-loop-diagnostic`, which logs one browser-reported
   note save loop at WARNING.
@@ -51,6 +54,19 @@ The reason it is Git-backed rather than an mtime walk: `node_modules` and `.venv
 The reason `-z` is not a tuning knob: it disables path quoting, so a path holding a quote, a backslash, or a newline arrives verbatim instead of as a C-escaped string this would have to decode.
 
 **Not:** running Git (`git_monitor.read_git`, which is what keeps `--no-optional-locks` on every read), the ignore rules themselves (`project_files.effective_project_ignores`), or any writing.
+
+### `nested_worktrees.py`
+
+Which directories inside a Project root are separate Git checkouts: one bounded, read-only `git worktree list --porcelain` per root behind a 30-second cache, parsed into Project-relative posix paths and filtered to those strictly inside the root.
+
+It exists for the half `config.WORKTREE_IGNORE_PATTERNS` cannot cover - `git worktree add ./scratch` is legal and no static pattern will ever name it - and the two are deliberately both kept: only the patterns still hide an *abandoned* checkout, after Git has stopped listing it.
+
+Three properties that are decisions rather than implementation.
+It **fails open** - not a repository, Git missing, Git slow, Git angry all answer "none" - because a file browser must not go offline over a Git that was never needed to browse files.
+It is **cached**, because the consumer is a walk behind a debounced search box and a subprocess per keystroke is not free; worktrees are created by hand, so the staleness costs at worst a new one staying visible for half a minute.
+It answers in **Project coordinates**, so a caller filtering relative paths does not have to re-derive the relationship this already knows.
+
+**Not:** the ignore patterns (`config.WORKTREE_IGNORE_PATTERNS`, applied by `project_files.ignored_project_path`), worktree creation or removal, or any judgement about whether a listed worktree is healthy (`git_review.listed_worktrees` is the richer async reader for that).
 
 ### `project_watcher.py`
 

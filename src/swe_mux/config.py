@@ -76,7 +76,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -185,9 +185,38 @@ MAX_PROJECT_INIT_SCRIPTS = 32
 INIT_SCRIPT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # HH:MM, 24-hour — the same shape the notification quiet window already uses.
 QUIET_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+#: How many ignore patterns one install may carry. Named because the schema-32 migration
+#: has to respect the same ceiling `_validate` enforces: appending past it would turn a
+#: silent upgrade into a daemon that refuses to start.
+PROJECT_IGNORE_PATTERN_LIMIT = 256
+
+#: Where the agent providers put worktrees they branch from this checkout, and the bare
+#: path Codex also registers. Carried as ignore patterns rather than left to the dynamic
+#: `nested_worktrees` lookup because a *pattern* keeps working after a checkout is abandoned
+#: and `git worktree list` stops naming it - which is exactly the state a directory nobody
+#: is using any more ends up in, and the one where hiding it matters most.
+#: These are path patterns rather than bare names on purpose: `.claude` also holds
+#: `settings.json`, `agents/`, and `skills/`, which are Project content a person browses.
+WORKTREE_IGNORE_PATTERNS = [
+    ".claude/worktrees",
+    ".codex/worktrees",
+    ".agents/worktrees",
+    ".worktrees",
+]
+
+#: Everything schema 32 added, and what an install written before it gets appended to its
+#: stored list. `.trash` joins the worktree roots because it is the same complaint arriving
+#: by a second route: the convention that moves a directory there instead of deleting it is
+#: what fills it with *abandoned checkouts*, so a browser that hides `.claude/worktrees` and
+#: lists `.trash/orphaned-worktrees` has hidden the tidy half of the problem. Deleted content
+#: is also the least defensible thing for a file browser to surface by default, and one line
+#: in Settings puts it back.
+SCHEMA_32_IGNORE_ADDITIONS = [*WORKTREE_IGNORE_PATTERNS, ".trash"]
+
 DEFAULT_PROJECT_IGNORE_PATTERNS = [
     ".git",
     ".swe-mux",
+    *SCHEMA_32_IGNORE_ADDITIONS,
     ".venv",
     "venv",
     "__pycache__",
@@ -1450,7 +1479,7 @@ def _validate(config: Config) -> None:
     ):
         errors["project_ignore_patterns"] = "must be an array of strings"
     if isinstance(config.project_ignore_patterns, list) and (
-        len(config.project_ignore_patterns) > 256
+        len(config.project_ignore_patterns) > PROJECT_IGNORE_PATTERN_LIMIT
         or any(
             not isinstance(pattern, str) or not pattern.strip() or len(pattern) > 200
             for pattern in config.project_ignore_patterns
@@ -2170,6 +2199,31 @@ def load_config(path: Path | None = None) -> Config:
             legacy_attention = raw.get("phase7_observers_enabled")
             if isinstance(legacy_attention, bool):
                 cfg.attention_observers_enabled = legacy_attention
+                migrated = True
+        if source_schema < 32:
+            # `project_ignore_patterns` is persisted in full, so an install written before
+            # this release keeps its stored list forever and never sees a new default. That
+            # is the whole reason this block exists: without it the worktree patterns ship
+            # and reach only brand-new installs, which is indistinguishable from not
+            # shipping them at all on every machine that has been running swe-mux.
+            #
+            # Only ever *adds*, and only patterns that did not exist before schema 32, so
+            # there is no "the user deliberately removed this" case to get wrong: a pattern
+            # absent from an older install is absent because it was never offered.
+            existing = {
+                pattern.strip().replace("\\", "/").strip("/")
+                for pattern in cfg.project_ignore_patterns
+                if isinstance(pattern, str)
+            }
+            missing = [
+                pattern for pattern in SCHEMA_32_IGNORE_ADDITIONS if pattern not in existing
+            ]
+            # Respect the ceiling `_validate` enforces rather than appending past it and
+            # failing startup on a config this migration itself made invalid.
+            room = PROJECT_IGNORE_PATTERN_LIMIT - len(cfg.project_ignore_patterns)
+            missing = missing[: max(0, room)]
+            if missing:
+                cfg.project_ignore_patterns = [*cfg.project_ignore_patterns, *missing]
                 migrated = True
         if source_schema < 22 and "harness_setup_complete" not in raw:
             # The first-run harness panel is new. An existing config is by definition

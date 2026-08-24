@@ -1538,6 +1538,51 @@ def test_versioned_phase2_provider_telemetry_fixtures(
     assert len(scan["compactions"]) == 1
 
 
+def test_codex_item_envelope_is_not_counted_as_parser_drift(tmp_path: Path) -> None:
+    """The unknown ratio must not fire on a record the observer already knows.
+
+    Codex 0.149 restates every completed item — reasoning, commands, subagent
+    starts — inside an `item_completed` envelope. It was in `observation.py`'s
+    vocabulary and not this one, which put real sessions at a 0.31-0.34 unknown
+    ratio: above the 0.25 threshold the live telemetry canary asserts, with nothing
+    actually drifted. Shapes captured from a real 0.149 rollout.
+    """
+    transcript = tmp_path / "rollout-codex.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "item_completed",
+                        "item": {"type": "Reasoning", "id": "item_0", "text": "thinking"},
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "item_completed",
+                        "item": {
+                            "type": "SubAgentActivity",
+                            "id": "call_1",
+                            "kind": "started",
+                            "agent_path": "/root/child_check",
+                        },
+                    },
+                },
+                {"type": "event_msg", "payload": {"type": "task_complete"}},
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    scan = scan_native_telemetry(transcript, "codex", "run-c", "project-a", None)
+    assert scan["unknown"] == 0
+    assert scan["recognized"] == 4
+
+
 def test_pid_reuse_marks_restored_fingerprint_stale(monkeypatch: pytest.MonkeyPatch) -> None:
     from swe_mux import processes
 

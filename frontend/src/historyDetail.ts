@@ -1,16 +1,16 @@
 // The single-session History view's section model: which sections start open, what each
 // one says while it is closed, and how the behavioural timeline is cut down to a preview.
 //
-// It is pure so the two rules that are easy to regress are pinned by a unit test rather
-// than only by a screenshot: a phone opens a conversation with the sections above the
-// transcript collapsed (the transcript is what the reader came for, and five expanded
-// sections leave it a strip at the bottom of a 390px viewport), and a closed section still
-// says the thing a reader would otherwise expand it to find.
+// It is pure so the rules that are easy to regress are pinned by a unit test rather than
+// only by a screenshot: a conversation opens on its transcript with every other band
+// collapsed (the transcript is what the reader came for, and expanded bands leave it a
+// strip at the bottom of the view), and a closed band still says the thing a reader would
+// otherwise expand it to find - except where that line is longer than the band it labels.
 
-/** A section of the detail view that collapses. The transcript itself never does. */
-export type HistorySectionKey = 'stats' | 'commits' | 'lineage' | 'notes' | 'timeline'
+/** A band of the detail view that collapses. The transcript is one of them. */
+export type HistorySectionKey = 'stats' | 'commits' | 'lineage' | 'notes' | 'timeline' | 'transcript'
 
-export const HISTORY_SECTION_KEYS: readonly HistorySectionKey[] = ['stats', 'commits', 'lineage', 'notes', 'timeline']
+export const HISTORY_SECTION_KEYS: readonly HistorySectionKey[] = ['stats', 'commits', 'lineage', 'notes', 'timeline', 'transcript']
 
 export type HistorySectionState = Record<HistorySectionKey, boolean>
 
@@ -18,22 +18,38 @@ export type HistorySectionState = Record<HistorySectionKey, boolean>
 export const HISTORY_TIMELINE_PREVIEW = 2
 
 /**
- * What a freshly opened conversation looks like.
+ * What a freshly opened conversation looks like: the transcript, and nothing else.
  *
- * Desktop keeps the two sections that are read at a glance open - the run's key figures and
- * its behavioural timeline - and keeps the three list-shaped ones closed, because their
- * summary line already carries the fact most readers want (how many commits, what the
- * newest one was) and expanding is cheap.
+ * Every band above the transcript is metadata about the run, and each one that opens by
+ * default is height subtracted from the only thing the reader came for. Their closed lines
+ * already carry the fact most readers want - how the run ended, how many commits, what the
+ * newest one was - and expanding is one click, so the cheaper default is closed.
  *
- * Mobile opens nothing. The transcript is the view on a phone; every open section above it
- * is subtracted from the only viewport there is.
+ * This is the same on a phone and on a desktop. It used to differ, which meant the view a
+ * reader learned on one device was not the view they got on the other.
  *
  * Defaults are applied when a conversation is opened rather than watched on a media query,
  * so a reader who expands a section keeps it expanded while they read, and a window dragged
  * across the breakpoint does not fold up what they were reading.
  */
-export function defaultHistorySections(mobile: boolean): HistorySectionState {
-  return { stats: !mobile, commits: false, lineage: false, notes: false, timeline: !mobile }
+export function defaultHistorySections(): HistorySectionState {
+  return { stats: false, commits: false, lineage: false, notes: false, timeline: false, transcript: true }
+}
+
+/**
+ * Bands whose closed line is suppressed, leaving the title alone.
+ *
+ * The general rule is that a closed band says what a reader would open it to find, and it
+ * holds while that line is a count. Commits is the exception: its line carries a whole
+ * commit subject, so on any realistic width the "collapsed" band is two wrapped lines of
+ * prose - taller than several of the bands it sits between, and the opposite of what
+ * collapsing it was for. Open, the rows say the same thing and say it per commit.
+ */
+export const HISTORY_QUIET_WHEN_CLOSED: readonly HistorySectionKey[] = ['commits']
+
+/** Whether a band's summary line is drawn, given whether the band is open. */
+export function sectionKeysVisible(key: HistorySectionKey, open: boolean): boolean {
+  return open || !HISTORY_QUIET_WHEN_CLOSED.includes(key)
 }
 
 /**
@@ -64,7 +80,9 @@ export function countLabel(count: number, noun: string, plural = `${noun}s`): st
 export type HistoryCommitLike = { commitOid: string; subject?: string; observedAt?: number }
 
 /**
- * What the Commits section says while it is closed: how many, and the newest one.
+ * What the Commits section says once it is open: how many, and the newest one.
+ *
+ * It is not drawn while the section is closed - see `HISTORY_QUIET_WHEN_CLOSED`.
  *
  * Newest by `observedAt` rather than by position, for the same reason the timeline sorts:
  * the caller's order is the provenance read's, which is not promised to be chronological.

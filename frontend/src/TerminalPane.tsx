@@ -45,6 +45,7 @@ import { activatePromptRailItem, railItemLabel } from './promptRail'
 import { usePromptTitles } from './promptTitles'
 import { railItemHasIcon, RailItemIcon, SendIcon } from './railIcons'
 import { RailStrip } from './RailStrip'
+import { registerRailClearance } from './railClearance'
 import { MOBILE_QUERY, currentProfile, loadRailConfig } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, inputResetsAppTail, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
@@ -383,7 +384,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [connectionState,setConnectionState]=useState<'connecting'|'connected'|'reconnecting'|'ended'>('connecting')
   const [preparedClipboard,setPreparedClipboard]=useState('')
   const [manualClipboard,setManualClipboard]=useState(false)
-  const [selectionText,setSelectionText]=useState('')
   const [lastReply,setLastReply]=useState('')
   const [clipboardStatus,setClipboardStatus]=useState('')
   const [manualPaste,setManualPaste]=useState(false)
@@ -512,7 +512,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setLastReply('')
     setPreparedClipboard('')
     setManualClipboard(false)
-    setSelectionText('')
+    // The toast carries the selection readout as well as the copy and paste confirmations,
+    // so its pending dismissal has to go with it: left running, the previous session's timer
+    // would blank a message the new one had just put up.
+    if(clipboardStatusTimerRef.current!==null){window.clearTimeout(clipboardStatusTimerRef.current);clipboardStatusTimerRef.current=null}
+    clipboardStatusKindRef.current='clipboard'
     setClipboardStatus('')
     setManualPaste(false)
     setFileDropActive(false)
@@ -691,6 +695,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const sendViewKeyRef=useRef<(sequence:string)=>void>(()=>{})
   const lastAutoCopiedSelectionRef=useRef('')
   const clipboardStatusTimerRef=useRef<number|null>(null)
+  // Which message is currently in the toast. A selection readout has to be withdrawn the
+  // moment the selection goes away, and a clipboard confirmation must not be: it is about
+  // something that already happened and runs out its own timer.
+  const clipboardStatusKindRef=useRef<'clipboard'|'selection'>('clipboard')
+  // The rail element, published to `railClearance` so app-level floating messages can sit
+  // above it instead of on it.
+  const railRef=useRef<HTMLDivElement>(null)
   const stateRef=useRef(session.state)
   stateRef.current=session.state
   const backendRef=useRef(session.backend)
@@ -722,10 +733,29 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setManualClipboard(mobileClipboardFallback())
     requestAnimationFrame(()=>{manualClipboardRef.current?.focus();manualClipboardRef.current?.select()})
   }
-  const showClipboardStatus = (message:string) => {
+  const showClipboardStatus = (message:string,kind:'clipboard'|'selection'='clipboard') => {
+    clipboardStatusKindRef.current=kind
     setClipboardStatus(message)
     if(clipboardStatusTimerRef.current!==null)window.clearTimeout(clipboardStatusTimerRef.current)
     clipboardStatusTimerRef.current=window.setTimeout(()=>setClipboardStatus(''),1800)
+  }
+  /** The selection readout, in the toast the copy and paste confirmations already use.
+   *
+   *  It used to ride the last rail row, where it did not fit: the trailing cluster does not
+   *  shrink and the readout was capped at 34vw, so in a pane narrower than that it pushed
+   *  the chips out of the row entirely. Here it is over the terminal, flush on the rail's
+   *  top edge, and it takes no pointer events - and it inherits the confirmations' dismissal
+   *  timer, so a readout is a glance rather than something parked on the last output line
+   *  for as long as the selection lives. A drag keeps refreshing it, so it stays up for the
+   *  whole gesture and fades from where the gesture ended. */
+  const showSelectionStatus = (text:string) => {
+    showClipboardStatus(`${text.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`,'selection')
+  }
+  /** Withdraw the readout when the selection clears, but never a clipboard confirmation. */
+  const clearSelectionStatus = () => {
+    if(clipboardStatusKindRef.current!=='selection')return
+    if(clipboardStatusTimerRef.current!==null){window.clearTimeout(clipboardStatusTimerRef.current);clipboardStatusTimerRef.current=null}
+    setClipboardStatus('')
   }
 
   attachFilesRef.current=async(files:Blob[])=>{
@@ -2626,9 +2656,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     mobileLiveInput?.addEventListener('paste',mobilePaste)
     const selectionChange = term.onSelectionChange(() => {
       const text=term.getSelection()
-      setSelectionText(text)
-      if(text)cancelCaretPlacement()
-      if(!text)lastAutoCopiedSelectionRef.current=''
+      if(text){cancelCaretPlacement();showSelectionStatus(text)}
+      else{lastAutoCopiedSelectionRef.current='';clearSelectionStatus()}
     })
     const autoCopySelection=()=>{
       if(!mobileInput.autoCopySelection)return
@@ -3101,6 +3130,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     connect(false)
     return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
+
+  // Publish this rail's box so the app's bottom-anchored messages clear it. Registration
+  // is unconditional and outlives every remount reason, because the rail is always in the
+  // pane - what changes is its height, and `railClearance` observes that itself.
+  useEffect(()=>{
+    const rail=railRef.current
+    if(!rail)return
+    return registerRailClearance(rail)
+  },[])
 
   // Every Action rail button, including the fixed mobile Send end-cap, preserves an
   // already-open keyboard through its press. RailScroller owns the same guard for its
@@ -3765,7 +3803,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}<div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} status={index===renderedRailRows.length-1?(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:''):undefined} onConfigure={()=>onConfigureRail?.()}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }

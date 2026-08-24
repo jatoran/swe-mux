@@ -348,6 +348,11 @@ uncommitted work together.
   While a worktree is pending its row offers neither Land nor Remove; the list already said what is happening to it.
 - Map has a **selection mode**, reached from one toolbar control, that draws a checkbox on every linked worktree row and a bulk bar at the head of the list.
   It is a mode rather than a permanent column because a checkbox under every branch name is weight on a surface people open to read a diff, and it exists at all because a repository accumulates worktrees faster than anyone removes them one at a time.
+- **Shift-click selects a range** (`worktreeSelection.ts`): from the last box pressed to this one, inclusive, every row takes the state the click produced.
+  Shift-clicking an unchecked box selects through; Shift-clicking a checked one un-selects back, which is how an overshoot is walked in, and the anchor follows every press so a run of Shift-clicks walks the list rather than re-ranging from a point the reader has to remember.
+  "All removable" is still there for the whole list; the range is for the run of six in the middle of forty, which is the case that was otherwise six presses.
+  Two bounds make it safe to point a range at a control whose next press removes things: it walks the **visible** rows, so a filtered-away checkout can never be swept up out of sight, and it steps over any row whose checkbox refuses, so the main tree, a locked checkout, and one with a live session in it are as unreachable by Shift as by hand.
+  A Shift-click with no anchor to extend from - none pressed yet, or the anchor filtered away since - is a plain click rather than a guessed range.
 - **Bulk land** is one land request per selected branch, in map order, and nothing more: the queue serializes them, which is the queue doing exactly its job (`land-queue.md`).
   The main tree and a detached HEAD are named as unable to land rather than being enqueued and refused.
 - **Bulk remove** rides the same pending-removals machinery as a single removal and applies the row's own refusals unchanged: the main tree is never a candidate, a checkout with a live session in it is not offered, and a locked one is Git's to refuse.

@@ -233,10 +233,13 @@ PaneLeaf = terminal | note | preview | history | queue
   and the swipe that toggles a panel are the same motion over the same pixels, so only the drag
   knows which one is happening. Claiming at the threshold rather than at pointer-down keeps a
   swipe that merely *starts* on a draggable tab working. See `ui.md` § touch gestures.
-- The standalone Configure Actions editor (`ui.md` § Action rail) reuses this contract with two deliberate departures, both forced by reparenting.
-  It captures the pointer on the **editor root** rather than on the dragged chip, because its live preview moves the chip between rows and a captured element removed from the document loses the pointer mid-drag.
+- The standalone Configure Actions editor (`ui.md` § Action rail) reuses this contract with one deliberate departure, forced by reparenting.
   It does drive Preact render state on every move, because the preview *is* the config a drop would commit; that is affordable only because the modal has a bounded number of chips, and it is not a licence to do the same on the workspace.
-  Everything else holds: 5px for pointers, the 325ms/8px hold for touch, one ghost, pointer-drag claim, and cancel on Escape/pointer-cancel/lost capture.
+  Everything else holds, and holds because it is the **same** contract rather than a second copy of it: 5px for pointers, the shared `MOBILE_HOLD_DRAG` hold-to-lift for touch (350ms, 16px slop), capture on `document.body`, the `touchmove` cancel, the native-`contextmenu` suppression, one ghost, pointer-drag claim, and cancel on Escape/pointer-cancel/blur.
+  It is a separate driver only because its preview and hit test are its own; every gesture-level rule is imported.
+  **A second driver that reimplements the gesture instead of importing it is the failure mode to watch for here.**
+  `beginRailDrag` was one, and it silently missed every hardening this contract accumulated — the touch-scroll cancel, the widened hold slop, the context-menu suppression, body capture — so the editor's mobile reorder worked about a third of the time long after the sidebar's was fixed.
+  Anything new that drags on touch takes `dragReorder.ts`'s activation constants and these defences verbatim.
 - Do not reintroduce `draggable`/native Chromium drag handlers for these surfaces. Responsive
   layout changes can strand that native loop with a permanent grabbing cursor and frozen UI.
 

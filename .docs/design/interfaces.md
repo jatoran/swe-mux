@@ -340,7 +340,7 @@ GET     /projects/{project_id}/files?path=RELATIVE
 GET     /projects/{project_id}/files/tree?path=RELATIVE&path=…   the root plus each expanded folder
 GET     /projects/{project_id}/files/recent   {items[{name,path,kind,origin,status,committed_at}], available, reason?}
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
-GET     /projects/{project_id}/search?q=&mode=names|contents|both
+GET     /projects/{project_id}/search?q=&mode=names|contents|both   {items[…], truncated, truncated_reason: results|files|null, stopped_at}
 GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]
 GET     /projects/{project_id}/file/content?path=RELATIVE&revision=REVISION[&worktree=ABSOLUTE]
 PUT     /projects/{project_id}/file   {path, text, revision, worktree?}
@@ -383,6 +383,8 @@ GET     /sessions/{session_id}/change-map?scope=<session|branch|project>&hops=<1
 pull consumers (`catch_me_up`, `live_blockers`, `semantic_history_search`). Each returns
 `enabled: false` rather than a fabricated empty when its Project opt-in is off, and every result
 names the `agent_run_id` it came from (`features/scan-timeline.md`).
+`history/scan-search` reads the newest records first and answers with `truncated` and `scanned`
+alongside `results`, so a caller can tell "not in the recent history" from "never happened".
 
 `change-map` is the Phase 7.9 per-session code change map: a bounded server-side subgraph of
 edited files, their blast radius, and one hop of forward context (`features/code-graph.md`).
@@ -2100,6 +2102,7 @@ Successful MCP calls record content-free per-tool call, serialized-response-byte
 The four cross-session memory reads are deterministic queries over Tier 0 facts, git-provenance edges, the experience corpus, and the scan timeline; each is per-Project opt-in through the enablement DAG and returns `unsupported` (503) when the substrate is absent or `disabled` (409) when no Project in scope opted its automation in, never a fake empty.
 The Phase 7.11 `scan_timeline` and `scan_search` reads expose the scan timeline to agents.
 `scan_timeline` is session-scoped and gates on the **target session's** Project opting into `scan_reads`; `scan_search` gates on `semantic_history_search`, the opt-in that already gates the identical query on the human surface.
+`scan_search` reads the newest records per Project and names what it did not cover: `projects` (with `projects_truncated` when the Project scope itself was cut) and `records_truncated` plus a note listing the Projects whose history is longer than one search reads.
 `detail:"digest"` is the bounded `catch_me_up` rollup, `detail:"records"` is the compact projection paged newest-first and cursored by an exclusive `since_t1`, and `detail:"full"` expands at most five explicitly named record ids.
 The projection omits `evidence_refs`, `tier0_fact_ids`, `prompt_hash`, `prompt_version` and `observer_model` and collapses `target` to a count plus a few paths, while keeping `repaired_fields`, `messages_seen` and `window_truncated`, which are what let a reader calibrate a label; a record that withheld `approach_status` omits the key rather than rendering `unknown`.
 Every result carries the enablement/liveness block (`scanning`, `last_scan_at`, `skip_reason`, `run_decided`), so a budget-stopped scanner is never readable as a quiet session, and an ended session is readable rather than refused.

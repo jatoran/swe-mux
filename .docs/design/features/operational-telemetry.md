@@ -145,6 +145,12 @@ translate transcript tokens into provider quota weighting.
   process evidence to the canonical root.
 - Claude, Codex, and OMP versioned fixtures cover explicit tools, failures, skills, compactions,
   and unknown records.
+- The per-harness known-record vocabulary is the drift signal, so a record type the observer
+  already knows must be known here too. Codex 0.149's `item_completed` envelope was missing
+  from this side only, and because it restates every item the CLI completes it put real
+  sessions at a 0.31-0.34 unknown ratio - above the 0.25 the live canary fires at - while
+  nothing had drifted. Two vocabularies for one dialect is how that happens; a payload type
+  added to `observation.py` belongs in `operational_telemetry.py` in the same change.
 
 Authenticated Phase 2 canaries are opt-in because they consume real provider quota and
 create ordinary provider transcript history. Each CLI reads one temporary sentinel through a

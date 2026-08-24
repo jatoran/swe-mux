@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from . import session_titles
+from .automation_store import SCAN_SEARCH_SCAN_LIMIT
 from .clipboard_store import looks_like_secret
 from .code_graph import (
     DEFAULT_BLAST_HOPS,
@@ -69,6 +70,7 @@ from .deterministic_consumers import (
 )
 from .git_projects import ProjectIdentity
 from .harness import agent_harnesses, is_agent_harness
+from .land_queue import LandRefusal
 from .mcp_contract import (
     CONFIGURATOR_READ_TOOL_NAMES,
     CONFIGURATOR_WRITE_TOOL_NAMES,
@@ -4212,7 +4214,7 @@ class McpService:
                 "does not run.",
                 status=503,
             )
-        scope, projects, disabled, _truncated = await self._memory_scope(
+        scope, projects, disabled, scope_truncated = await self._memory_scope(
             caller, args, "scan_search"
         )
         limit = max(
@@ -4222,13 +4224,18 @@ class McpService:
         run_filter = str(args.get("agent_run_id") or "").strip()
         current_run, owned = await self._caller_run_ids(caller)
         hits: list[dict[str, Any]] = []
+        #: Projects whose history is longer than one search reads. Named rather
+        #: than counted so the answer says *where* it stopped short.
+        truncated_projects: list[str] = []
         for project in projects:
-            rows = await self.automation_store.scan_records(
+            page = await self.automation_store.scan_search_page(
                 project_id=str(project.id),
-                agent_run_id=run_filter or None,
-                limit=SCAN_DIGEST_SCAN_LIMIT,
+                agent_run_id=run_filter,
+                limit=SCAN_SEARCH_SCAN_LIMIT,
             )
-            for match in search_scan_records(rows, query, limit=limit):
+            if page.truncated:
+                truncated_projects.append(str(project.name))
+            for match in search_scan_records(page.records, query, limit=limit):
                 match["snippet"] = _redact(str(match.get("snippet") or ""))
                 match["targets"] = [
                     _redact(str(item)) for item in match.get("targets") or []
@@ -4240,7 +4247,7 @@ class McpService:
         hits.sort(key=lambda item: float(item.get("t1") or 0.0), reverse=True)
         hits = hits[:limit]
         self._record_memory_outcome("scan_search", returned=len(hits), suppressed=0)
-        return {
+        result: dict[str, Any] = {
             "query": query,
             "results": hits,
             "note": (
@@ -4250,9 +4257,22 @@ class McpService:
                 "search_history(run_ids, message_after, message_before) to reach "
                 "the raw messages."
             ),
+            **self._covered_projects(projects, scope_truncated),
             **self._disabled_note(disabled, "semantic_history_search"),
             **self._scope_envelope(scope),
         }
+        if truncated_projects:
+            # The search read the newest `SCAN_SEARCH_SCAN_LIMIT` records and
+            # there are older ones. Said out loud, because an empty result over a
+            # truncated read means "not in the recent history", not "never
+            # happened", and an agent cannot tell those apart from hits alone.
+            result["records_truncated"] = True
+            result["records_truncated_note"] = (
+                f"Searched the newest {SCAN_SEARCH_SCAN_LIMIT} scan records per "
+                f"Project; {', '.join(sorted(truncated_projects))} has more "
+                "history than that. Narrow with agent_run_id to reach older work."
+            )
+        return result
 
     # ------------------------------------------------ code graph reads (7.9)
 
@@ -4736,16 +4756,25 @@ class McpService:
                 "this session is not owned by a registered Project.",
                 status=409,
             )
-        result = await self.land_queue.request(
-            project_id=str(project.id),
-            project_root=str(project.root),
-            worktree_root=worktree_root,
-            kind=kind,
-            origin="agent",
-            origin_session_id=str(record.id),
-            origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
-            reason=str(args.get("reason") or ""),
-        )
+        try:
+            result = await self.land_queue.request(
+                project_id=str(project.id),
+                project_root=str(project.root),
+                worktree_root=worktree_root,
+                kind=kind,
+                origin="agent",
+                origin_session_id=str(record.id),
+                origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
+                reason=str(args.get("reason") or ""),
+            )
+        except LandRefusal as refusal:
+            # The service's refusals are the ordinary answers here — the branch is
+            # already on the trunk, another request holds it, a precondition failed
+            # — and every one of them is something the agent can act on. Both HTTP
+            # routes already translate them to a typed 409; without this the same
+            # refusal reached the agent as `500 internal server error`, which says
+            # nothing and reads as a daemon bug rather than as an answer.
+            raise QueueError(refusal.code, refusal.message, status=409) from refusal
         return dict(result)
 
     async def watch_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:

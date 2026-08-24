@@ -6,9 +6,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from swe_mux.config import DEFAULT_PROJECT_IGNORE_PATTERNS, WORKTREE_IGNORE_PATTERNS
 from swe_mux.git_projects import ProjectIdentity, rebase_identity
 from swe_mux.project_files import (
     DEFAULT_NOTE_STORAGE_ID,
+    SEARCH_MAX_FILES,
     ObservationsUnreadableError,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
@@ -281,6 +283,124 @@ def test_project_search_matches_names_contents_and_respects_ignores(tmp_path: Pa
     paths = [item["path"] for item in both["items"]]
     assert paths == ["src/widget.ts", "src/helper.ts"]  # name match sorts before content match
     assert not search_project_files(tmp_path, "", mode="both", ignore_patterns=patterns)["items"]
+
+
+def test_conventional_worktree_roots_are_hidden_without_hiding_agent_config(
+    tmp_path: Path,
+) -> None:
+    """`.claude/worktrees` goes; `.claude/settings.json` stays.
+
+    The patterns are path-shaped rather than bare names precisely so this holds: a person
+    browses their agent config, and hiding the whole `.claude` folder to be rid of the
+    checkouts inside it would cost them that.
+    """
+    (tmp_path / ".claude" / "worktrees" / "feature" / "src").mkdir(parents=True)
+    (tmp_path / ".claude" / "worktrees" / "feature" / "src" / "app.py").write_text(
+        "widget", encoding="utf-8"
+    )
+    (tmp_path / ".claude" / "agents").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".worktrees" / "bare").mkdir(parents=True)
+    (tmp_path / ".worktrees" / "bare" / "widget.py").write_text("x", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "widget.py").write_text("x", encoding="utf-8")
+
+    patterns = list(DEFAULT_PROJECT_IGNORE_PATTERNS)
+    assert all(pattern in patterns for pattern in WORKTREE_IGNORE_PATTERNS)
+
+    claude = list_project_directory(tmp_path, ".claude", ignore_patterns=patterns, pruned_paths=())
+    assert [item["name"] for item in claude["items"]] == ["agents", "settings.json"]
+
+    found = search_project_files(
+        tmp_path, "widget", mode="both", ignore_patterns=patterns, pruned_paths=()
+    )
+    assert [item["path"] for item in found["items"]] == ["src/widget.py"]
+
+
+def test_a_worktree_git_names_is_pruned_even_where_no_pattern_covers_it(
+    tmp_path: Path,
+) -> None:
+    """`git worktree add ./scratch` is legal and no static pattern will ever name it."""
+    (tmp_path / "scratch" / "src").mkdir(parents=True)
+    (tmp_path / "scratch" / "src" / "widget.py").write_text("x", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "widget.py").write_text("x", encoding="utf-8")
+    patterns = list(DEFAULT_PROJECT_IGNORE_PATTERNS)
+
+    listing = list_project_directory(tmp_path, ignore_patterns=patterns, pruned_paths=["scratch"])
+    assert [item["name"] for item in listing["items"]] == ["src"]
+
+    found = search_project_files(
+        tmp_path, "widget", mode="names", ignore_patterns=patterns, pruned_paths=["scratch"]
+    )
+    assert [item["path"] for item in found["items"]] == ["src/widget.py"]
+
+    # The batch listing resolves the prune set once for the whole fan-out; every folder in
+    # it must still get the answer.
+    batch = list_project_directories(
+        tmp_path, ["", "scratch"], ignore_patterns=patterns, pruned_paths=["scratch"]
+    )
+    assert [item["name"] for item in batch["directories"][""]["items"]] == ["src"]
+
+
+def test_the_search_spends_its_file_budget_on_shallow_paths_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The defect a depth-first walk had: a full budget and none of the real answers.
+
+    `os.walk` descends the first-sorted subtree to the bottom, so a dot-directory holding a
+    vendored or duplicated tree consumes every file the search was allowed to look at and
+    the walk returns before reaching `src/`. What came back was not a short list of matches
+    but a *wrong* one, indistinguishable from a complete answer.
+    """
+    monkeypatch.setattr("swe_mux.project_files.SEARCH_MAX_FILES", 6)
+    deep = tmp_path / ".vendor" / "copy" / "src"
+    deep.mkdir(parents=True)
+    for index in range(20):
+        (deep / f"widget{index}.py").write_text("x", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "widget.py").write_text("x", encoding="utf-8")
+
+    found = search_project_files(
+        tmp_path, "widget", mode="names", ignore_patterns=[".git"], pruned_paths=()
+    )
+    assert "src/widget.py" in [item["path"] for item in found["items"]]
+
+
+def test_a_truncated_search_says_which_bound_bit_and_where_it_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Refine to narrow" is false advice against the file budget, so the two are distinct."""
+    monkeypatch.setattr("swe_mux.project_files.SEARCH_MAX_FILES", 3)
+    (tmp_path / "deep").mkdir()
+    for index in range(10):
+        (tmp_path / "deep" / f"widget{index}.py").write_text("x", encoding="utf-8")
+
+    exhausted = search_project_files(
+        tmp_path, "widget", mode="names", ignore_patterns=[".git"], pruned_paths=()
+    )
+    assert exhausted["truncated"] is True
+    assert exhausted["truncated_reason"] == "files"
+    assert exhausted["stopped_at"] == "deep"
+
+    monkeypatch.setattr("swe_mux.project_files.SEARCH_MAX_FILES", SEARCH_MAX_FILES)
+    capped = search_project_files(
+        tmp_path,
+        "widget",
+        mode="names",
+        ignore_patterns=[".git"],
+        pruned_paths=(),
+        limit=4,
+    )
+    assert capped["truncated"] is True
+    assert capped["truncated_reason"] == "results"
+    assert capped["stopped_at"] is None
+
+    complete = search_project_files(
+        tmp_path, "widget", mode="names", ignore_patterns=[".git"], pruned_paths=()
+    )
+    assert complete["truncated"] is False
+    assert complete["truncated_reason"] is None
 
 
 def test_project_file_inspection_classifies_delimited_text_and_bounds_reads(

@@ -3,7 +3,7 @@ import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
 import {
   allBackendNames, branchesFromMessage, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
-  isObservedHarness, setHarnessEnablement, type HarnessRegistryPayload,
+  isObservedHarness, setHarnessEnablement,
 } from './harnessRegistry'
 import {
   CONFIGURATOR_LAUNCH_PATH, fetchConfiguratorOptions, launchBody, launchState, opensChooser,
@@ -145,9 +145,14 @@ import {
   forgetFocusedSession, recentFocusedSessions, recordFocusedSession, type SessionFocusHistory,
 } from './sessionFocusHistory'
 import {
-  forgetJoinAttempts, joinSessions, joinableSessionIds, recordJoinFailure, unjoinedSessionIds,
+  recordJoinFailure,
   type JoinAttempts,
 } from './sessionJoin'
+import {
+  createFleetRefreshController, describeFleetFailures, fetchFleetSlices, type FleetRefreshController,
+} from './fleetRefresh.ts'
+import { planFleetLayouts, type PendingSpawn } from './fleetLayouts.ts'
+import { createLayoutWriter } from './layoutWriter.ts'
 import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
@@ -169,7 +174,8 @@ import {
 } from './uiScale'
 import { applyRailDensity, watchRailDensityProfile } from './railDensity'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
-import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
+import { bindingFor, displayChord, paletteResults, runCommand, type Command, type VoiceCommandResult } from './commands'
+import { buildFleetCommands, displayOrderKey, type FleetCommandActions } from './fleetCommands.ts'
 import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
 import { insertIntoTerminal, insertionRefusal, requestTerminalAction } from './terminalActions.ts'
@@ -180,7 +186,6 @@ import {
   voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
 } from './voiceQueries'
 import { adjacentVoiceSession, buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber } from './voiceNavigation'
-import { sessionLaunchVoicePhrases } from './voiceLaunch'
 import {
   clearSpokenListContext, loadSpokenListContext, saveSpokenListContext,
   SPOKEN_LIST_TTL_MS, type SpokenListContext,
@@ -230,19 +235,19 @@ import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
 import { activityBadges, sessionFaults, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
-import { SessionRowBody } from './SessionRowBody'
+import { SessionRowLive } from './SessionRowLive'
 import { isFieldPlaced, type DotShape, type StandingRender } from './sessionRowConfig'
 import {
-  applySessionDotSize, useRowBudget, useRowClock, useSessionRowConfig, watchSessionDotProfile,
+  applySessionDotSize, useRowBudget, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
 import { serverNow } from './serverClock.ts'
 import {
-  buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc,
+  deriveRowFleetFacts, sessionContextArc,
   sessionStandingMark,
 } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
-  reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
+  removeLeaf, replaceTerminal, setSplitRatio,
   activateContainingStack, activateStackChild, addLeafToStack, changeMapLeafId, changeMapLeafSessionId, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, moveTerminalBeside, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
@@ -389,7 +394,6 @@ type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, num
 type RunMenuState={project:Project;x:number;y:number}
 type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
 type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
-type PendingSpawn={projectId:string;placement:PendingSpawnPlacement|null;resolvedId?:string}
 
 function pendingTerminal(id:string,project:Project,backend:string='shell',options?:{cwd?:string;name?:string;label?:string;detail?:string}):Session {
   // Daemon clock: this placeholder is rendered by the same sidebar row that ages
@@ -414,7 +418,21 @@ function historyName(entry:HistoryEntry):string {
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [projects, setProjects] = useState<Project[]>([])
-  const [, setHarnessRegistryRevision] = useState(0)
+  // Bumped whenever a fleet refresh installs a harness registry: the accessors that
+  // read it (`allBackendNames`, `harnessDisplayName`) are module functions over a
+  // global, so this counter is what tells memoized work that their answers changed.
+  const [harnessRegistryRevision, setHarnessRegistryRevision] = useState(0)
+  // The current render's fleet-command handlers, and the never-changing facade the
+  // memoized registry holds instead of them.
+  const fleetCommandWork = useRef<FleetCommandActions>({
+    activateProject: () => {}, focusProject: () => {}, focusSession: () => {}, spawnSession: async () => false,
+  })
+  const fleetCommandActions = useMemo<FleetCommandActions>(() => ({
+    activateProject: projectId => fleetCommandWork.current.activateProject(projectId),
+    focusProject: projectId => fleetCommandWork.current.focusProject(projectId),
+    focusSession: session => fleetCommandWork.current.focusSession(session),
+    spawnSession: (projectId, backend, seedText) => fleetCommandWork.current.spawnSession(projectId, backend, seedText),
+  }), [])
   const [projectId, setProjectId] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
   const [focusedViewId,setFocusedViewId]=useState<string|null>(null)
@@ -521,12 +539,11 @@ export function App() {
   // Fleet-wide pending count: "is anything waiting anywhere", which is the question you
   // have while looking at some other session. It labels the way into the fleet queue.
   const queuePendingTotal=useMemo(()=>Object.values(queueSummary).reduce((total,target)=>total+target.pending,0),[queueSummary])
-  // Sidebar row appearance. The clock is shared and quantized, so ageing a
-  // working row costs one timer for the whole list rather than one per row; the
-  // derived context answers "differs from the project default" once per snapshot
-  // instead of once per row.
+  // Sidebar row appearance. The derived facts answer "differs from the project
+  // default" once per snapshot instead of once per row. The ageing clock is
+  // deliberately NOT read here: it lives in `SessionRowLive`, so a five-second tick
+  // re-renders the rows that age rather than the whole shell around them.
   const rowConfig=useSessionRowConfig()
-  const rowNow=useRowClock()
   const rowQueueDepth=useMemo(
     ()=>Object.fromEntries(Object.entries(queueSummary).map(([id,target])=>[id,target.pending])),
     [queueSummary],
@@ -556,9 +573,9 @@ export function App() {
     ()=>({enabled:!!voiceStatus?.enabled,default_mode:voiceStatus?.default_mode||'off'}),
     [voiceStatus?.enabled,voiceStatus?.default_mode],
   )
-  const rowContext=useMemo(
-    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowBudget,localDrafts,rowVoice),
-    [sessions,rowQueueDepth,rowNow,rowBudget,localDrafts,rowVoice],
+  const rowFacts=useMemo(
+    ()=>deriveRowFleetFacts(sessions,rowQueueDepth,rowBudget,localDrafts,rowVoice),
+    [sessions,rowQueueDepth,rowBudget,localDrafts,rowVoice],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -1446,13 +1463,36 @@ export function App() {
   const menuDismissedByPointer = useRef(false)
   const notificationIds = useRef<Set<string>>(new Set())
   const paletteInput = useRef<HTMLInputElement>(null)
-  const refreshInFlight = useRef<Promise<void> | null>(null)
-  const refreshQueued = useRef(false)
+  // The refresh cycle body, re-pointed every render so the controller - created
+  // once - always runs the current one. The controller owns the dedupe, the
+  // stall abort and the queued follow-up; see `fleetRefresh.ts`.
+  const runFleetRefreshRef = useRef<(signal: AbortSignal) => Promise<void>>(async () => {})
+  const refreshController = useMemo<FleetRefreshController>(() => createFleetRefreshController(
+    signal => runFleetRefreshRef.current(signal),
+    {
+      onStall: stallMs => {
+        if (!suppressErrorsRef.current) setError(`The fleet refresh did not finish within ${Math.round(stallMs/1000)}s; the next one starts fresh.`)
+      },
+    },
+  ), [])
+  useEffect(() => () => refreshController.reset(), [refreshController])
   const sessionsRef=useRef<Session[]>([])
   const projectsRef=useRef<Project[]>([])
-  const layoutRevisions = useRef<Record<string,number>>({})
-  const layoutWriteChains = useRef<Record<string,Promise<boolean>>>({})
-  const layoutWriteGeneration = useRef<Record<string,number>>({})
+  // Project layout is optimistic durable state; `layoutWriter.ts` owns the write chain,
+  // the generation guard and the server revisions. What stays here is the browser's view
+  // of a layout (`layoutValues` and `layoutMap`), which every surface reads.
+  const layoutWriter = useMemo(() => createLayoutWriter({
+    patch: (projectId, layout, revision) =>
+      api<Project>('PATCH', `/api/projects/${projectId}`, { layout, layout_revision: revision }),
+    showLayout: (projectId, layout) => {
+      layoutValues.current[projectId]=layout
+      setLayoutMap(current => ({ ...current, [projectId]: layout }))
+    },
+    adoptProject: project => setProjects(items => items.map(item => item.id === project.id ? project : item)),
+    serverRevision: projectId => projectsRef.current.find(project => project.id === projectId)?.layout_revision,
+    refresh: () => refreshController.refresh(),
+    onError: setError,
+  }), [refreshController])
   // Highest durable event sequence this tab has covered. Control frames can advance
   // it without transferring audit-only payloads that browser state does not consume.
   const lastEventSeq = useRef(0)
@@ -1566,144 +1606,87 @@ export function App() {
     setError('A session close never reported back; restoring whatever the daemon still has.')
   }
 
-  const refresh = (): Promise<void> => {
-    if (refreshInFlight.current) {
-      refreshQueued.current = true
-      return refreshInFlight.current
-    }
-    const operation = (async () => {
-      try {
-      const [nextSessions, nextProjects, nextPreviews, nextGroups, nextHarnesses] = await Promise.all([
-        api<Session[]>('GET', '/api/sessions'), api<Project[]>('GET', '/api/projects'),
-        api<{items:Preview[]}>('GET', '/api/previews'),
-        api<ProjectGroup[]>('GET','/api/project-groups'),
-        api<HarnessRegistryPayload>('GET','/api/harnesses'),
-      ])
+  // One refresh cycle: read the five fleet slices under their deadlines, then apply
+  // whichever of them arrived. Slice-by-slice rather than all-or-nothing, because the
+  // five are independent registries and a single transient 500 used to discard the
+  // other four for that cycle. `fleetRefresh.ts` owns the deadlines and the dedupe.
+  const runFleetRefresh = async (signal: AbortSignal): Promise<void> => {
+    const { slices, failures } = await fetchFleetSlices({ signal })
+    // The controller abandoned this cycle; applying a snapshot a newer cycle has
+    // already superseded would move the UI backwards.
+    if (signal.aborted) return
+    const { sessions: nextSessions, projects: nextProjects, previews: nextPreviews, groups: nextGroups, harnesses: nextHarnesses } = slices
+    if (nextHarnesses) {
       installHarnessRegistry(nextHarnesses)
       setHarnessRegistryRevision(current=>current+1)
-      // The daemon still reports a session being killed as live for the whole
-      // teardown window, so every consumer of this GET has to see the fleet the
-      // operator sees - the row, the layout leaf, and the live set they are reconciled against.
+    }
+    // The daemon still reports a session being killed as live for the whole
+    // teardown window, so every consumer of this GET has to see the fleet the
+    // operator sees - the row, the layout leaf, and the live set they are reconciled against.
+    let visibleSessions: Session[] | null = null
+    if (nextSessions) {
       expireStaleKills()
-      const visibleSessions=applyKillTombstones(nextSessions,pendingKills.current)
+      const visible = applyKillTombstones(nextSessions, pendingKills.current)
+      visibleSessions = visible
       setSessions(current => {
         const optimistic=current.filter(session=>session.pending&&pendingSpawns.current[session.id]&&!pendingSpawns.current[session.id].resolvedId)
-        return reconcileSessionSnapshots(current,visibleSessions,optimistic)
+        return reconcileSessionSnapshots(current,visible,optimistic)
       })
+    }
+    if (nextProjects) {
       setProjects(nextProjects)
-      // A project with a layout PATCH in flight is deliberately skipped below, so
-      // its server revision must not advance either: adopting it here is what let
-      // a second drag base itself on the clobbered layout and then win the write,
-      // silently reverting the first move for every client.
-      for(const project of nextProjects){
-        if(layoutWriteChains.current[project.id]!==undefined)continue
-        layoutRevisions.current[project.id]=project.layout_revision
-      }
-      setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
-      setProjectGroups(nextGroups)
-      setRegistryLoaded(true)
-      // Every session the daemon still holds keeps its leaf, ended ones
-      // included. A session that ends on its own used to keep its sidebar row
-      // and lose its tab in the same instant, so the pane showing what it
-      // printed was destroyed at exactly the moment somebody wanted to read
-      // it — and the pruned layout was written back, so it did not come back.
-      // A session leaves the layout when it leaves the fleet: killed, or
-      // dismissed. `sessionKills` already excludes in-flight kills from this
-      // set, which is what removes a closed tab immediately.
-      const live = new Set(visibleSessions.map(session => session.id))
-      const livePreviews = new Set(nextPreviews.items.map(item => item.id))
-      joinAttempts.current = forgetJoinAttempts(joinAttempts.current, live)
-      // A session this device is mid-spawn on already owns an optimistic leaf under its
-      // pending id; joining it here as well would leave the layout holding it twice once
-      // `replaceTerminal` swaps the real id in.
-      const spawningHere = new Set(
-        Object.values(pendingSpawns.current).map(pending => pending.resolvedId).filter(Boolean) as string[],
-      )
-      // A launch still waiting on its POST is worse than that: the daemon has created the
-      // session and announced it, so this GET can carry a session that is *ours* under an id
-      // this client does not know yet, and there is no way to tell it from a daemon-started
-      // one. The whole join pass is therefore withheld from that Project until the launch
-      // resolves; the refresh after it joins whatever is still floating.
-      const launchingHere = new Set(
-        Object.values(pendingSpawns.current).filter(pending => !pending.resolvedId).map(pending => pending.projectId),
-      )
-      // Grouped once rather than per Project: this runs on every refresh, and the fleet and the
-      // Project list both grow.
-      const joinCandidates = new Map<string,string[]>()
-      for (const session of visibleSessions) {
-        if(isEndedSession(session)||session.pending||spawningHere.has(session.id))continue
-        if(launchingHere.has(session.project_id))continue
-        const forProject=joinCandidates.get(session.project_id)
-        if(forProject)forProject.push(session.id)
-        else joinCandidates.set(session.project_id,[session.id])
-      }
-      const nextLayouts: Record<string,PaneLayout> = {}
-      const joins: {projectId:string;layout:PaneLayout;ids:string[]}[] = []
-      for (const project of nextProjects) {
-        // This GET may have been snapshotted before an in-flight layout PATCH
-        // committed. Overwriting optimistic state with it snaps a just-dropped
-        // tab back; the PATCH's own generation-guarded path reconciles instead.
-        if(layoutWriteChains.current[project.id]!==undefined)continue
-        // History graduated from a per-project pane tab to a global overlay;
-        // drop any persisted history leaf so old layouts don't dangle.
-        let base=parseLayout(project.layout)
-        for(const leaf of leaves(base,'history'))base=removeLeaf(base,'history',leaf.id)
-        let reconciled = reconcilePreviews(reconcileTerminals(base, live), livePreviews)
-        for(const [pendingId,pending] of Object.entries(pendingSpawns.current)){
-          if(pending.projectId!==project.id||!pending.placement)continue
-          reconciled=placePendingTerminal(reconciled,pending.resolvedId||pendingId,pending.placement,false)
-        }
-        // Sessions the daemon started on its own - an approved `request_spawn`, the
-        // assistant's daemon spawn path, a scheduled run - reach the fleet with no leaf,
-        // because only a device launch writes one. They used to float: a sidebar row
-        // attached to no pane group, joining the tabs only once the operator tapped it.
-        // They join here instead, off this same authoritative snapshot, so a client that
-        // was asleep while they spawned still finds them as tabs. Ended sessions are left
-        // alone: a pane is kept for a session that ended in one, never minted for one
-        // nobody ever opened, and adopting a long archive of them at boot would spend the
-        // layout's 64 leaves on sessions with nothing running. `sessionJoin.ts` owns the
-        // placement rule and the no-focus-stealing contract.
-        const candidates = joinableSessionIds(joinCandidates.get(project.id)||[], joinAttempts.current)
-        const joined = joinSessions(
-          reconciled,
-          candidates,
-          joinAnchor.current.projectId===project.id?joinAnchor.current.viewId:null,
-        )
-        if(joined!==reconciled)joins.push({projectId:project.id,layout:joined,ids:unjoinedSessionIds(reconciled,candidates)})
-        nextLayouts[project.id] = joined
-      }
+      layoutWriter.adoptRevisions(nextProjects)
+    }
+    if (nextPreviews) setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
+    // Gated on the Group read itself rather than on the whole cycle: the only thing
+    // this flag guards is pruning sidebar fold state against the Group registry, and
+    // that registry either loaded or it did not.
+    if (nextGroups) { setProjectGroups(nextGroups); setRegistryLoaded(true) }
+    // The layout pass reconciles panes against sessions, Projects and previews at
+    // once, so it runs only when all three arrived. A cycle that lost one of them
+    // leaves every layout untouched and the next full cycle reconciles.
+    if (visibleSessions && nextProjects && nextPreviews) {
+      const plan = planFleetLayouts({
+        sessions: visibleSessions,
+        projects: nextProjects,
+        previewIds: new Set(nextPreviews.items.map(item => item.id)),
+        pendingSpawns: pendingSpawns.current,
+        joinAttempts: joinAttempts.current,
+        joinAnchor: joinAnchor.current,
+        hasPendingLayoutWrite: layoutWriter.hasPendingWrite,
+        isEnded: isEndedSession,
+      })
+      joinAttempts.current = plan.joinAttempts
       setLayoutMap(current => {
-        const next = { ...current, ...nextLayouts }
+        const next = { ...current, ...plan.layouts }
         layoutValues.current=next
         return next
       })
-      setError('')
       // Persisted after the render that shows them, and quietly: a join nobody asked for must
       // not report a conflict the operator did not cause. A second device joining the same
       // session first simply wins - the loser's refresh finds the leaf already there and
       // proposes nothing, so the two converge instead of fighting.
-      for(const join of joins){
+      for(const join of plan.joins){
         void updateLayout(join.projectId,join.layout,{quiet:true}).then(persisted=>{
           if(!persisted)joinAttempts.current=recordJoinFailure(joinAttempts.current,join.ids)
         })
       }
-      } catch (cause) {
-        // While the daemon is deliberately away, every request failing is the
-        // expected state, not news. The reconnect that follows each dropped
-        // events socket schedules one of these, so without the gate the overlay
-        // explaining the outage sits under a stream of toasts reporting it.
-        if (!suppressErrorsRef.current) setError(cause instanceof Error ? cause.message : String(cause))
-      } finally {
-        refreshInFlight.current = null
-        if (refreshQueued.current) {
-          refreshQueued.current = false
-          void refresh()
-        }
-      }
-    })()
-    refreshInFlight.current = operation
-    return operation
+    }
+    // While the daemon is deliberately away, every request failing is the
+    // expected state, not news. The reconnect that follows each dropped
+    // events socket schedules one of these, so without the gate the overlay
+    // explaining the outage sits under a stream of toasts reporting it.
+    if (!failures.length) setError('')
+    else if (!suppressErrorsRef.current) setError(describeFleetFailures(failures))
   }
+  // An error escaping the application half is a defect rather than an outage, but it
+  // must still reach the operator: the controller only sees that the cycle concluded.
+  runFleetRefreshRef.current = async signal => {
+    try { await runFleetRefresh(signal) }
+    catch (cause) { if (!suppressErrorsRef.current) setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+
+  const refresh = refreshController.refresh
 
   type AppConfig = {
     theme:ThemeName
@@ -4145,36 +4128,7 @@ export function App() {
   // the operator did not make - the automatic join in `refresh` - where a lost revision race is
   // the mechanism working rather than news: the refresh that follows re-derives from whatever
   // the winner persisted.
-  const updateLayout = async (targetProject: string, layout: PaneLayout, options?: {quiet?: boolean}) => {
-    layoutValues.current[targetProject]=layout
-    setLayoutMap(current => ({ ...current, [targetProject]: layout }))
-    const generation=(layoutWriteGeneration.current[targetProject]||0)+1
-    layoutWriteGeneration.current[targetProject]=generation
-    const previous=layoutWriteChains.current[targetProject]||Promise.resolve(true)
-    const operation=previous.catch(()=>false).then(async()=>{
-      const revision=layoutRevisions.current[targetProject]??projects.find(project=>project.id===targetProject)?.layout_revision??0
-      try {
-        const updated = await api<Project>('PATCH', `/api/projects/${targetProject}`, { layout, layout_revision: revision })
-        layoutRevisions.current[targetProject]=updated.layout_revision
-        setProjects(items => items.map(item => item.id === updated.id ? updated : item))
-        if(layoutWriteGeneration.current[targetProject]===generation){
-          const persisted=parseLayout(updated.layout)
-          layoutValues.current[targetProject]=persisted
-          setLayoutMap(current => ({ ...current, [targetProject]: persisted }))
-        }
-        return true
-      } catch (cause) {
-        await refresh()
-        const message = cause instanceof Error ? cause.message : String(cause)
-        if(!options?.quiet)setError(message.includes('stale layout revision') ? 'Layout changed in another client; reloaded the current layout.' : message)
-        return false
-      }
-    })
-    layoutWriteChains.current[targetProject]=operation
-    const persisted=await operation
-    if(layoutWriteChains.current[targetProject]===operation)delete layoutWriteChains.current[targetProject]
-    return persisted
-  }
+  const updateLayout = layoutWriter.write
 
   const showResourceForTarget = async (target:NoteTarget,targetViewId?:string,preserveDrawerSelection=false) => {
     const resourceId=noteIdForTarget(target)
@@ -5196,16 +5150,35 @@ export function App() {
     }
     return{detail:'That voice query is not available.'}
   }
-  const sessionVoiceAliases=(session:Session):string[]=>{
-    if(session.awaiting_reason==='approval')return ['go to the one waiting for approval','show approvals','open approval']
-    if(session.awaiting_reason==='question'||session.awaiting_reason==='elicitation')return ['go to the one waiting for an answer','show questions']
-    if(session.awaiting_reason==='rate_limit')return ['go to the rate limited one']
-    if(session.delivery_readiness?.state==='unknown'||((session.state==='working'||session.state==='running')&&serverNow()-session.last_activity_ts>300))return ['go to the stuck one']
-    if(session.state==='working'||session.state==='running')return ['go to the working one']
-    if(session.state==='idle')return ['go to the idle one']
-    if(session.state==='crashed')return ['go to the crashed one']
-    return []
+  // Where a fleet command's work actually happens. Re-pointed every render and
+  // reached through the stable facade below, so the memoized registry never runs a
+  // handler built against a fleet snapshot the operator has already moved past.
+  fleetCommandWork.current = {
+    activateProject: projectId => {
+      const layout=layoutMap[projectId]||emptyLayout()
+      const first=leaves(layout)[0]||null
+      setProjectId(projectId);setFocusedViewId(first?.id||null);setActiveId(terminalIds(layout)[0]||null)
+    },
+    focusProject: projectId => selectProject(projectId),
+    focusSession: session => void selectSession(session),
+    spawnSession: (projectId,backend,seedText) =>
+      spawnTerminal(projectId,false,undefined,undefined,'after',backend,seedText===undefined?undefined:{seedText}),
   }
+  // The fleet half of the registry: one command per numbered Project slot, per
+  // Project, per live session, and per Project-and-harness launch pair, each with its
+  // spoken phrases. Rebuilt when the fleet changes rather than on every render.
+  // `displayProjects` and the harness registry are derived values with no stable
+  // identity, so the dependencies are what *determines* them: the Project and session
+  // records, the sidebar order as a value, and the registry revision counter.
+  const fleetCommands = useMemo(
+    () => buildFleetCommands({
+      displayProjects, projects, sessions, activeProjectId: projectId,
+      backends: allBackendNames(), harnessDisplayName, sessionName, isEnded: isEndedSession,
+      actions: fleetCommandActions,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the note above
+    [projects, sessions, projectId, displayOrderKey(displayProjects), harnessRegistryRevision, fleetCommandActions],
+  )
 
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
@@ -5691,41 +5664,11 @@ export function App() {
     { id: 'pane.next', label: 'Focus next pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(1) },
     { id: 'pane.previous', label: 'Focus previous pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(-1) },
     { id: 'broadcast.toggle', label: broadcast ? 'Stop broadcasting input' : 'Start broadcasting input', category: 'input', available: true, run: () => setBroadcast(value => !value) },
-    ...displayProjects.slice(0, 9).map((project, index): Command => ({
-      id: `project.activate(${index + 1})`, label: `Switch to project ${index + 1}: ${project.name}`,
-      category: 'project', available: project.id !== projectId, disabledReason: 'Project is already active',
-      run: () => { const layout=layoutMap[project.id]||emptyLayout();const first=leaves(layout)[0]||null;setProjectId(project.id);setFocusedViewId(first?.id||null);setActiveId(terminalIds(layout)[0]||null) },
-    })),
-    ...projects.map((project):Command=>({
-      id:`project.focus:${project.id}`,label:`Focus project: ${project.name}`,category:'project',available:true,
-      run:()=>selectProject(project.id),voice:{phrases:[`go to project ${project.name}`,`open project ${project.name}`,`switch to ${project.name}`]},
-    })),
-    ...sessions.filter(session=>!session.pending&&!isEndedSession(session)).map((session):Command=>({
-      id:`session.focus:${session.id}`,label:`Focus session: ${sessionName(session)}`,category:'session',available:true,
-      run:()=>void selectSession(session),voice:{phrases:[`go to session ${sessionName(session)}`,`open session ${sessionName(session)}`,`focus ${sessionName(session)}`,...sessionVoiceAliases(session)]},
-    })),
-    ...projects.flatMap(project=>allBackendNames().map((backend):Command=>({
-      id:`session.spawn:${project.id}:${backend}`,label:`New ${harnessDisplayName(backend)} in ${project.name}`,category:'session',available:true,
-      run:()=>void spawnTerminal(project.id,false,undefined,undefined,'after',backend),
-      voice:{
-        phrases:sessionLaunchVoicePhrases({
-          backend,
-          displayName:harnessDisplayName(backend),
-          projectName:project.name,
-          projectNumber:voiceProjectNumber(project),
-          currentProject:project.id===projectId,
-        }),
-        execute:async text=>{
-          const started=await spawnTerminal(project.id,false,undefined,undefined,'after',backend,{seedText:text||undefined})
-          return{detail:started
-            ?`Started ${harnessDisplayName(backend)} in ${project.name}${text?' with the spoken seed':''}. Still listening.`
-            :'The session could not be started. Still listening.'}
-        },
-      },
-    }))),
+    ...fleetCommands,
   ]
   commandRegistryRef.current=commands
-  const shownCommands = searchCommands(commands, paletteQuery)
+  // Nothing is scored while the palette is closed; `commands.ts` owns that gate.
+  const shownCommands = paletteResults(paletteOpen, commands, paletteQuery)
   useEffect(() => setPaletteIndex(0), [paletteQuery, paletteOpen])
   useEffect(()=>{if(!paletteOpen)return;const frame=requestAnimationFrame(()=>{paletteInput.current?.focus();paletteInput.current?.setSelectionRange(paletteInput.current.value.length,paletteInput.current.value.length)});return()=>cancelAnimationFrame(frame)},[paletteOpen])
 
@@ -6696,9 +6639,7 @@ export function App() {
     // its own title to make room for a branch name has traded down.
     // The flag strip survives the identity projection and is given the live row
     // context, so a phone still marks the session it is holding a draft for.
-    const rowTokens=(item:Session)=>mobileWorkspace&&!rowConfig.mobileFields
-      ? identityRowTokens(item,rowConfig,rowContext)
-      : buildSessionRowTokens(item,rowConfig,rowContext)
+    const identityOnly=mobileWorkspace&&!rowConfig.mobileFields
     // Sidebar attention tier for agent rows. The focused row keeps its own
     // `.active` treatment; a row visible in another split pane reads as
     // "viewing" (on screen, not focused); an off-screen row with unseen output
@@ -6709,7 +6650,7 @@ export function App() {
       :isUnread(session,ackedTurns)?'unread':'read'
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${isSearchCursorSession(session.id)?'search-cursor':''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${session.pending?'pending-terminal-row':''}`} title={isColdSession(session)?coldSessionSummary(session):undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
-      <SessionRowBody session={session} tokens={rowTokens(session)} config={rowConfig}/>
+      <SessionRowLive session={session} config={rowConfig} facts={rowFacts} identityOnly={identityOnly}/>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}</div>
   }

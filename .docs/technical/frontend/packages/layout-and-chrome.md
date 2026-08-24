@@ -23,7 +23,7 @@ Edge glows are `aria-hidden` spans with `pointer-events:none`; they indicate hid
 
 ## Pinned rail and overflow popover
 
-`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, plus `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
+`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, `railClearance.ts`, plus `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
 
 `RailStrip.tsx` is one Action rail row.
 Every configured chip remains in `OverflowRail`; no measurement twin or fit split exists.
@@ -32,8 +32,17 @@ The drawer's small count is `chips.length`, so it describes the complete row and
 Opening it clones the complete chip list into `RailOverflowPopover` as a wrapping grid.
 The same trailing cluster anchors the panel, giving all rows one trailing-edge placement.
 Command-rail glow wedges are positioned relative to each row's `OverflowRail` wrapper, which is the scroller's own box: `.terminal-action-rows>.rail-row>.overflow-rail` is `position:relative` with `overflow:visible`, so the wedge sits on the strip's edge while its glow still bleeds past it.
-Positioned from `.rail-row` instead, the right wedge had to name the trailing cluster's width in a `calc`, and that width is not one number - the readout row is wider - so on that row the wedge was drawn past its own strip, over furniture that answers to no tap.
-Rows whose trailing furniture matches still align, which is nearly always: `RailStrip` renders the status readout only when it has text, so the empty string the caller passes to mark the readout row costs the chips nothing.
+Positioned from `.rail-row` instead, the right wedge had to name the trailing cluster's width in a `calc`, and could only ever be right for one cluster width, so on any row whose cluster was wider the wedge was drawn past its own strip, over furniture that answers to no tap.
+`RailStrip` takes no message prop at all, which is why every row's cluster is now the same width and the wedges align: the trailing cluster is `flex:0 0 auto`, so anything living beside the drawer control takes its width straight out of the scrolling strip, and the selection readout that used to sit there was capped in `vw` - it swallowed a pane narrower than the cap whole.
+Terminal messages go to `.terminal-clip-toast` over the buffer instead, where the cap is a percentage of the pane.
+
+`railClearance.ts` keeps app-level floating messages off that rail.
+`.interaction-hud`, `.notification-toast`, and `.toast-stack` are pinned to the viewport's bottom-right corner, which on a maximised window is precisely where the rail is; the latter two take pointer events, so the overlap stole taps rather than only obscuring chips.
+Each `TerminalPane` registers its rail element, a single `ResizeObserver` (watching every registered rail plus `document.body`, since splitting a pane moves a sibling's rail without resizing it) recomputes on a coalesced frame, and `railClearancePx` publishes `--rail-clearance` on the root element for the stylesheet to add to each message's `bottom`.
+Only a rail whose bottom edge reaches the viewport's counts, within two pixels of subpixel slack: the upper pane of a top/bottom split has a rail nowhere near that corner, and lifting a toast by its height would strand the toast in mid-air.
+With several qualifying rails the tallest wins, which over-lifts a message sitting over a shorter one rather than leaving it covered.
+The number cannot be a constant - rail height is the configured row count times `--rail-row-h`, one of three density steps with a separate set of mobile values - which is the whole reason it is measured.
+`test/railClearance.test.ts` pins the arithmetic and holds the list of bottom-anchored selectors, so a new floating message that forgets the variable fails there rather than in someone's split pane.
 
 `railOverlayPlacement.ts` is the DOM half of placing **every** command-rail overlay - the popover and each drop-up - and exists for two soft-keyboard bugs that presented as one.
 `railOverlayView()` reads the *visual* viewport, because `interactive-widget=resizes-visual` keeps the layout viewport at full height and every bound drawn against `innerHeight` therefore describes a rectangle running behind the keyboard.
