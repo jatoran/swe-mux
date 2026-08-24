@@ -141,11 +141,14 @@ A held-conversation marker replaces Resume when a live CLI process still owns th
 "Schedule Resume" starts nothing and hands the conversation to the Schedule tab, so it stays offered even while the row is held - a schedule fires later, when it may not be.
 
 `historyDetail.ts` is the detail view's section model, and it is pure so the rules that are easy to regress are pinned by a unit test rather than only by a screenshot.
-- `defaultHistorySections` is what a freshly opened conversation looks like: a phone opens nothing, a desktop opens the run's figures and its behavioural timeline, and the three list-shaped bands stay closed on both because their closed line already carries the count and the newest entry.
+- `defaultHistorySections` is what a freshly opened conversation looks like: the transcript, and nothing else, on every device.
+  The transcript is one of the section keys, so "which bands are open" is one piece of state rather than a set plus a special case.
   It is read when a conversation is opened rather than watched on a media query, so an expansion survives the reading and a window dragged across the breakpoint does not fold up what is being read.
+- `sectionKeysVisible` decides whether a band draws its summary line, and `HISTORY_QUIET_WHEN_CLOSED` is the one-entry list of bands that do not draw it while closed.
+  The general rule holds while a summary is a count; Commits carries a whole commit subject and wrapped to a taller block than the band it labelled, so it is suppressed until the band is open and its rows say the same thing per commit.
 - `splitRecentScans` cuts the behavioural timeline to its two newest entries and sorts them itself, because the transcript route returns a run's records oldest-first and a mis-ordered preview reads as a run that did those things in that order.
   Ties keep the daemon's order, so equal timestamps stay stable across renders.
-- `commitsSummary` is what the Commits band says while closed, picking the newest by `observedAt` rather than by position for the same reason.
+- `commitsSummary` is what the Commits band says once it is open, picking the newest by `observedAt` rather than by position for the same reason.
 - `historyKeyStats` is the cut between what decides whether to open a conversation at all - what became of the run, what it ran on, when it last spoke, what it cost - and what is read once it is open.
   It hands the model on raw so `ModelName` keeps owning how a model is displayed.
 

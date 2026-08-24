@@ -17,9 +17,8 @@ import {
 import type { Project } from './types'
 import { runDisplayName } from './sessionNames'
 import { transcriptHarnesses } from './harnessRegistry'
-import { currentProfile } from './deviceSettings'
 import {
-  commitsSummary, countLabel, defaultHistorySections, historyKeyStats, speakerLabel, splitRecentScans,
+  commitsSummary, countLabel, defaultHistorySections, historyKeyStats, sectionKeysVisible, speakerLabel, splitRecentScans,
   type HistorySectionKey, type HistorySectionState,
 } from './historyDetail'
 import { ModelName } from './ModelName'
@@ -125,9 +124,9 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
   const [showToolCalls,setShowToolCalls]=useState(false)
   const [lineage,setLineage]=useState<LineageEdge[]>([])
   const [gitProvenance,setGitProvenance]=useState<GitProvenance[]>([])
-  // What is expanded above the transcript, re-defaulted every time a conversation is
-  // opened rather than watched on a media query - see `historyDetail.ts` for why.
-  const [sections,setSections]=useState<HistorySectionState>(()=>defaultHistorySections(currentProfile()==='mobile'))
+  // Which bands are expanded, re-defaulted every time a conversation is opened rather than
+  // watched on a media query - see `historyDetail.ts` for why.
+  const [sections,setSections]=useState<HistorySectionState>(()=>defaultHistorySections())
   const [timelineExpanded,setTimelineExpanded]=useState(false)
   const [job,setJob]=useState<BackfillJob|null>(null)
   const requestSequence=useRef(0)
@@ -209,7 +208,7 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
     return [...groups.entries()]
   },[items,historyProjects,projects])
 
-  const resetSections=()=>{setSections(defaultHistorySections(currentProfile()==='mobile'));setTimelineExpanded(false)}
+  const resetSections=()=>{setSections(defaultHistorySections());setTimelineExpanded(false)}
   const toggleSection=(key:HistorySectionKey,open:boolean)=>setSections(current=>current[key]===open?current:{...current,[key]:open})
 
   const view=async(entry:HistoryEntry)=>{
@@ -278,7 +277,14 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
   }
 
   const cancelBackfill=()=>job&&api<{job:BackfillJob}>('DELETE',`/api/history/backfills/${job.id}`).then(result=>setJob(result.job)).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
-  const moveMatch=(offset:number)=>{if(!transcript?.matches.length)return;setActiveMatch(current=>(current+offset+transcript.matches.length)%transcript.matches.length)}
+  /* Stepping through matches unfolds the transcript first. The band is collapsible now, and
+     a scroll into a closed `<details>` is a silent no-op - the counter would advance while
+     nothing moved. */
+  const moveMatch=(offset:number)=>{
+    if(!transcript?.matches.length)return
+    toggleSection('transcript',true)
+    setActiveMatch(current=>(current+offset+transcript.matches.length)%transcript.matches.length)
+  }
   const toggleMessage=(ordinal:number)=>setExpandedMessages(current=>{const next=new Set(current);if(next.has(ordinal))next.delete(ordinal);else next.add(ordinal);return next})
   const copyMessage=async(message:TranscriptMessage,ordinal:number)=>{
     const text=historyMessageText(message)
@@ -302,10 +308,14 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
   const historyHarnesses=transcriptHarnesses()
   const scanRecords=splitRecentScans(transcript?.scan_records||[])
   const keyStats=transcript?historyKeyStats(transcript.entry,{timestamp:timestampLabel,money:value=>money.format(value)}):[]
-  /** One collapsible band above the transcript: a title, what it says while closed, and its body. */
+  /** One collapsible band: a title, what it says while closed, and its body.
+   *
+   *  `sectionKeysVisible` is what keeps a closed band one line high. Most summary lines are
+   *  a count and stay; Commits carries a whole commit subject and is suppressed until the
+   *  band is open, where its rows say the same thing per commit. */
   const section=(key:HistorySectionKey,title:string,keys:ComponentChildren,body:ComponentChildren)=>
     <details class={`transcript-section transcript-section-${key}`} open={sections[key]} onToggle={event=>toggleSection(key,event.currentTarget.open)}>
-      <summary><span class="transcript-section-title">{title}</span><span class="transcript-section-keys">{keys}</span></summary>
+      <summary><span class="transcript-section-title">{title}</span>{sectionKeysVisible(key,sections[key])&&<span class="transcript-section-keys">{keys}</span>}</summary>
       <div class="transcript-section-body">{body}</div>
     </details>
   const scanRow=(item:ScanRecord)=><details class="transcript-row" key={item.id}>
@@ -393,7 +403,16 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
               {scanRecords.earlier.map(item=>scanRow(item))}
             </details>}
           </>)}
-        <div class="messages" ref={transcriptBody}>{visibleHistoryRows.length?visibleHistoryRows.map(({message,ordinal,text,toolCalls})=>{
+        {/* The transcript collapses like the bands above it, and is the only one open by
+            default. Its control is a *sibling* of the conversation rather than a `<details>`
+            wrapping it: a `<details>` puts a UA-owned content box between the element and
+            its children, and that box is the flex item, so the transcript cannot be made to
+            take the leftover height from inside one - it sizes to its text and the view ends
+            in dead space. `aria-controls` is what ties the two back together. */}
+        <button type="button" class="transcript-section-toggle" aria-expanded={sections.transcript} aria-controls="history-transcript-body" onClick={()=>toggleSection('transcript',!sections.transcript)}>
+          <span class="transcript-section-title">Transcript</span><span class="transcript-section-keys">{countLabel(visibleHistoryRows.length,'message')}</span>
+        </button>
+        {sections.transcript&&<div class="messages" id="history-transcript-body" ref={transcriptBody}>{visibleHistoryRows.length?visibleHistoryRows.map(({message,ordinal,text,toolCalls})=>{
           const matched=transcript.matches.some(match=>match.ordinal===ordinal)
           const foldable=transcriptClamped(text)
           const expanded=matched||expandedMessages.has(ordinal)
@@ -406,7 +425,8 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
             {foldable&&!matched&&<button class="transcript-expand" onClick={()=>toggleMessage(ordinal)}>{expanded?'Show less':'Show more'}</button>}
             {showToolCalls&&<TranscriptToolCalls calls={toolCalls}/>}
           </article>
-        }):<div class="no-transcript">No native transcript is available for this session.</div>}</div><textarea ref={manualCopyArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1}/></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
+        }):<div class="no-transcript">No native transcript is available for this session.</div>}</div>}
+        <textarea ref={manualCopyArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1}/></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
     </div>
     </section>
     </section>
