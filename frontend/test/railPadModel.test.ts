@@ -22,6 +22,7 @@ import {
   railConfigFromBlob,
   railPadSlotItemIds,
   railPadSlotLabel,
+  railPadBanded,
   railPadSlotMode,
   writeRailConfigBlob,
   type RailItem,
@@ -85,12 +86,34 @@ test('a slot mode defaults from the action, so a binding arrives already safe', 
   const arrow = BUILTIN_RAIL.find(item => item.id === 'up')
   const home = BUILTIN_RAIL.find(item => item.id === 'home')
   const kill = BUILTIN_RAIL.find(item => item.id === 'endSession')
-  assert.equal(defaultPadTriggerMode(arrow), 'enter-repeat')
+  // Repeat on *push-out* rather than on dwell: `enter-repeat` starts after 350ms anywhere in
+  // the wedge, so a thumb that hesitates begins spamming without being asked. Distance says
+  // it deliberately, which is the rule the rest of the gesture already runs on.
+  assert.equal(defaultPadTriggerMode(arrow), 'enter-repeat-far')
   assert.equal(defaultPadTriggerMode(home), 'enter')
   assert.equal(defaultPadTriggerMode(kill), 'release', 'anything destructive waits for the lift')
   assert.equal(defaultPadTriggerMode(undefined), 'enter')
   assert.equal(railPadSlotMode({ item: 'up', mode: 'release' }, arrow), 'release')
-  assert.equal(railPadSlotMode({ item: 'up', mode: 'nope' as never }, arrow), 'enter-repeat')
+  assert.equal(railPadSlotMode({ item: 'up', mode: 'nope' as never }, arrow), 'enter-repeat-far')
+  // Hold-anywhere is still there for anyone who prefers it.
+  assert.equal(railPadSlotMode({ item: 'up', mode: 'enter-repeat' }, arrow), 'enter-repeat')
+})
+
+test('repeat-on-push-out is refused where the band already means something else', () => {
+  // On a two-ring pad the outer band is a different slot, so there is no room for it to also
+  // mean "repeat this one". It resolves to a plain `enter` rather than silently repeating on
+  // a boundary that belongs to a neighbour.
+  const arrow = BUILTIN_RAIL.find(item => item.id === 'up')
+  assert.equal(railPadSlotMode({ item: 'up', mode: 'enter-repeat-far' }, arrow, 1), 'enter-repeat-far')
+  assert.equal(railPadSlotMode({ item: 'up', mode: 'enter-repeat-far' }, arrow, 2), 'enter')
+  assert.equal(defaultPadTriggerMode(arrow, 2), 'release')
+})
+
+test('a pad is banded when a ring needs it, or when a slot streams beyond it', () => {
+  assert.equal(railPadBanded(1, ['enter', 'release']), false)
+  assert.equal(railPadBanded(1, ['enter', 'enter-repeat-far']), true)
+  assert.equal(railPadBanded(2, ['release']), true)
+  assert.equal(railPadBanded(1, []), false)
 })
 
 test('a ringed pad commits on release, because its near ring is transit', () => {
@@ -102,7 +125,7 @@ test('a ringed pad commits on release, because its near ring is transit', () => 
   assert.equal(defaultPadTriggerMode(undefined, 2), 'release')
   // A one-ring pad has no transit and keeps entry-firing, which is what makes it fast - and
   // is why the shipped pads grew a fourth *wedge* rather than a second ring.
-  assert.equal(defaultPadTriggerMode(arrow, 1), 'enter-repeat')
+  assert.equal(defaultPadTriggerMode(arrow, 1), 'enter-repeat-far')
   assert.equal(railPadSlotMode({ item: 'up', mode: 'enter' }, arrow, 2), 'enter')
   assert.equal(railPadSlotMode({ item: 'up' }, arrow, 2), 'release')
 })
@@ -122,13 +145,14 @@ test('every shipped pad is one ring, so every shipped wedge fires as you cross i
 })
 
 test('the repeatable flag is one fact: the standalone chip and the pad slot read it together', () => {
+  const repeats = (mode: string) => mode === 'enter-repeat' || mode === 'enter-repeat-far'
   for (const id of ['up', 'down', 'left', 'right']) {
     assert.equal(isRepeatableRailKey(id), true)
-    assert.equal(defaultPadTriggerMode(BUILTIN_RAIL.find(item => item.id === id)), 'enter-repeat')
+    assert.ok(repeats(defaultPadTriggerMode(BUILTIN_RAIL.find(item => item.id === id))), id)
   }
   for (const id of ['enter', 'tab', 'ctrlC', 'home', 'padArrows']) {
     assert.equal(isRepeatableRailKey(id), false)
-    assert.notEqual(defaultPadTriggerMode(BUILTIN_RAIL.find(item => item.id === id)), 'enter-repeat')
+    assert.equal(repeats(defaultPadTriggerMode(BUILTIN_RAIL.find(item => item.id === id))), false, id)
   }
 })
 

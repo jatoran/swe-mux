@@ -30,6 +30,7 @@ test.use({ hasTouch: true })
 const PAD = '.rail-pad-w3'
 const FOUR = '[title="Jump"]'
 const RING = '.rail-pad-r2'
+const STREAM = '[title="Flow"]'
 const HOLD_MS = RAIL_KEY_REPEAT_DELAY_MS + RAIL_KEY_REPEAT_INTERVAL_MS * 6
 /** Comfortably inside the near ring, and comfortably past the dead radius. */
 const NEAR_PX = 60
@@ -57,7 +58,7 @@ async function flick(page: Page, selector: string, delta: { dx: number; dy: numb
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/command-rail-harness.html')
-  await expect(page.locator('.terminal-action-scroll > button')).toHaveCount(19)
+  await expect(page.locator('.terminal-action-scroll > button')).toHaveCount(20)
   const parked = await page.evaluate(() => {
     const strip = document.querySelector<HTMLElement>('.terminal-action-scroll')!
     const pad = strip.querySelector<HTMLElement>('.rail-pad-w3')!
@@ -132,6 +133,97 @@ test('holding a wedge repeats it, and only where the slot says so', async ({ pag
   await once.finger.up()
   await page.waitForTimeout(200)
   expect(await sends(page)).toEqual(['\x1b[C'])
+})
+
+// ---------------------------------------------------------------------------
+// Repeat on push-out
+// ---------------------------------------------------------------------------
+
+test('a repeat-far wedge sends one however long it is held inside', async ({ page }) => {
+  // The reason this mode exists: `enter-repeat` starts after 350ms anywhere in the wedge,
+  // so a thumb that merely hesitates begins spamming. Distance says it deliberately.
+  const { finger } = await flick(page, STREAM, intoWedge(NEAR_PX, 1, 2))
+  await expect.poll(() => sends(page)).toEqual(['\x1b[A'])
+  await page.waitForTimeout(HOLD_MS)
+  expect(await sends(page)).toEqual(['\x1b[A'])
+  await finger.up()
+  await page.waitForTimeout(200)
+  expect(await sends(page)).toEqual(['\x1b[A'])
+})
+
+test('pushing past the band starts the stream, and the crossing itself fires nothing', async ({ page }) => {
+  const finger = await touch(page)
+  const centre = await keyPoint(page, STREAM)
+  const near = intoWedge(NEAR_PX, 1, 2)
+  await finger.down(centre.x, centre.y)
+  await dragBy(finger, centre, near.dx, near.dy)
+  await expect.poll(() => sends(page)).toEqual(['\x1b[A'])
+
+  const far = intoWedge(FAR_PX, 1, 2)
+  await dragBy(finger, { x: centre.x + near.dx, y: centre.y + near.dy }, far.dx - near.dx, far.dy - near.dy)
+  // Crossing selects nothing - it only arms - so nothing extra lands before the delay.
+  expect(await sends(page)).toEqual(['\x1b[A'])
+  await page.waitForTimeout(HOLD_MS)
+  const streamed = await sends(page)
+  await finger.up()
+  expect(streamed.length).toBeGreaterThan(3)
+  expect(streamed.every(sequence => sequence === '\x1b[A')).toBe(true)
+})
+
+test('coming back inside stops the stream without re-firing', async ({ page }) => {
+  const finger = await touch(page)
+  const centre = await keyPoint(page, STREAM)
+  const far = intoWedge(FAR_PX, 1, 2)
+  const near = intoWedge(NEAR_PX, 1, 2)
+  await finger.down(centre.x, centre.y)
+  await dragBy(finger, centre, far.dx, far.dy)
+  await page.waitForTimeout(HOLD_MS)
+  const streamed = (await sends(page)).length
+  expect(streamed).toBeGreaterThan(3)
+
+  await dragBy(finger, { x: centre.x + far.dx, y: centre.y + far.dy }, near.dx - far.dx, near.dy - far.dy)
+  const settled = (await sends(page)).length
+  await page.waitForTimeout(HOLD_MS)
+  await finger.up()
+  expect(await sends(page)).toHaveLength(settled)
+})
+
+test('the dial marks the push-out band, and lights it while the stream runs', async ({ page }) => {
+  const finger = await touch(page)
+  const centre = await keyPoint(page, STREAM)
+  const near = intoWedge(NEAR_PX, 1, 2)
+  await finger.down(centre.x, centre.y)
+  await dragBy(finger, centre, near.dx, near.dy)
+  await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
+  // Both wedges of this pad stream, so both draw a band; neither is live yet.
+  await expect(page.locator('.rail-pad-band')).toHaveCount(2)
+  expect(await page.locator('.rail-pad-band-live').count()).toBe(0)
+  // A one-ring pad that streams still gets the *banded* geometry, because there has to be a
+  // boundary to push past. Asserted on the drawn size, since that is what the finger meets.
+  const width = await page.evaluate(() =>
+    document.querySelector<SVGSVGElement>('.rail-pad-dial-svg')!.getBoundingClientRect().width)
+  expect(width).toBeCloseTo(RAIL_PAD_OUTER_PX * 2, 0)
+
+  const far = intoWedge(FAR_PX, 1, 2)
+  await dragBy(finger, { x: centre.x + near.dx, y: centre.y + near.dy }, far.dx - near.dx, far.dy - near.dy)
+  await expect(page.locator('.rail-pad-band-live')).toHaveCount(1)
+  // Painted, not merely classed. The band is a `path` child of the wedge group, so the
+  // wedge's own active fill out-ranks a single-class band rule and the band silently does
+  // not paint - which is exactly what happened, and a class-presence check cannot see it.
+  const painted = await page.evaluate(() => {
+    const live = document.querySelector<SVGPathElement>('.rail-pad-band-live')!
+    const wedge = live.closest('.rail-pad-wedge')!.querySelector<SVGPathElement>('path:not(.rail-pad-band)')!
+    return { band: getComputedStyle(live).fill, near: getComputedStyle(wedge).fill }
+  })
+  await finger.up()
+  expect(painted.band).not.toBe(painted.near)
+})
+
+test('a wedge that does not stream draws no band', async ({ page }) => {
+  const { finger } = await flick(page, PAD, intoWedge(NEAR_PX, 1, 3))
+  await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
+  await expect(page.locator('.rail-pad-band')).toHaveCount(0)
+  await finger.up()
 })
 
 test('a release slot waits for the lift', async ({ page }) => {
@@ -428,7 +520,7 @@ test('a squeezed pad shrinks its dial and its ring together', async ({ page }) =
     document.querySelector<SVGSVGElement>('.rail-pad-dial-svg')!.getBoundingClientRect().width)
   await finger.up()
   expect(width).toBeLessThan(RAIL_PAD_OUTER_PX * 2)
-  expect(width).toBeGreaterThan(railPadBands(2, 0.45).outer)
+  expect(width).toBeGreaterThan(railPadBands(true, 0.45).outer)
 })
 
 test('a pad marks its populated wedges without costing a pixel of width', async ({ page }) => {
