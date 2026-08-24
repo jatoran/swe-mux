@@ -5,8 +5,8 @@ Design: `../../../design/features/git.md`, `../../../design/features/land-queue.
 
 ## Git tab
 
-`GitTab.tsx`, `gitWorktrees.ts`, `worktreeRemoval.ts`, `gitReview.ts`, `GitFileRow.tsx`,
-`GitReviewModal.tsx`, `GitSessionLinks.tsx`, `LazyGitDiff.tsx`, `GitDiffView.tsx`
+`GitTab.tsx`, `gitWorktrees.ts`, `worktreeRemoval.ts`, `worktreeSelection.ts`, `gitReview.ts`,
+`GitFileRow.tsx`, `GitReviewModal.tsx`, `GitSessionLinks.tsx`, `LazyGitDiff.tsx`, `GitDiffView.tsx`
 
 Map, Log, and durable session-provenance orchestration.
 Mutations are limited to API-wrapped worktree add and remove, land *requests*, the one-key `[worktree] verify_command` write, and the gate approval.
@@ -62,6 +62,17 @@ The pending set belongs to the **list**, not to a row.
 
 `planBulkRemoval` separates what will run, what is refused and why, and what carries uncommitted or unlanded work; `planBulkLand` takes every named branch in map order and names the main tree and a detached HEAD as unable to land.
 Neither invents a permission the row does not have, and an unmeasured checkout takes the side of needing force rather than being called clean.
+
+`worktreeSelection.ts` is which boxes one press moves.
+`applySelectionClick` resolves a click into the next selection and the next anchor: without Shift it toggles one row and becomes the anchor; with Shift it sets every row from the anchor to the click, inclusive, to the state the click produced, and the anchor still follows the click.
+That last part is load-bearing rather than incidental - pinning the anchor to the last *plain* click reads fine until the reader overshoots and Shift-clicks back, where the box they land on is already checked and the press un-selects the near half of the range instead of shortening it.
+The walk is over the **visible** rows in draw order, so Map's filter bounds it and a range can never sweep a checkout the reader filtered away and cannot see to un-select - the worst outcome available on a surface whose next press removes things.
+Rows whose checkbox is disabled are stepped over, so the main tree, a locked checkout, and one with a live session in it are as unreachable by Shift as by hand; the clicked row itself is always moved, because a press the browser has already applied to a box that leaves this state alone renders as checked and unselected.
+A Shift-click whose anchor is gone - never set, or filtered away since - degrades to a plain click rather than guessing an origin, and `clearSelection` and "All removable" both leave no anchor.
+
+`GitTab.tsx` reads the modifier from the checkbox's **`click`**, not its `change`: a `change` event is not a mouse event and carries no `shiftKey` at all, so the obvious wiring reads every range press as an ordinary one.
+Click is also what a press on the surrounding 26px label forwards (with the modifier intact) and what Space on a focused box fires, so nothing is lost by reading it there.
+`git-map-range.spec.ts` drives the label rather than the input for exactly that reason.
 
 Explicit unavailable and prunable presentation never converts null measurements to clean.
 Also: read-specific timeout guidance, failed-removal refresh with the mutation error retained, review locators, ephemeral annotation anchors, stale-session reduction, bounded review-packet generation, shared file rows, neutral comparison labels, and the adaptive review modal.
