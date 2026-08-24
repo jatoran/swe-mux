@@ -1714,12 +1714,18 @@ Its rules, and what each one is defending:
   After the pads, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout rides the **last** rail row; it takes whatever width is left and ellipsises, so a chip never shifts because it appeared beside them.
-  With nothing to say it renders nothing at all, rather than an empty element holding its own padding: that width belongs to the chips, and the row carrying the readout is the busiest one.
-  It carries the selection readout alone, which is a state and belongs beside the keys that act on it, so most of the time it has nothing to say and the row is all chips.
-  A momentary copy/paste confirmation is not a state and is drawn over the terminal instead (`.terminal-clip-toast`): flush on the rail's top edge, right-aligned with the jump-to-latest cluster, in the terminal's own grid cell so it stacks rather than displaces.
+  **No message of any kind is drawn inside a rail row.**
+  A rail row is chips plus its drawer control, and nothing else competes with them for width.
+  The rule was learned the hard way: the selection readout used to ride the last row, in trailing furniture that does not shrink and under a `34vw` cap - viewport units inside a pane that is usually a fraction of the viewport.
+  At full width it looked like the readout taking "whatever width is left"; in a split pane narrower than that cap it took the entire row and the chips went out of sight behind a sentence about the selection.
+  Every terminal message is drawn over the terminal instead (`.terminal-clip-toast`): flush on the rail's top edge, right-aligned with the jump-to-latest cluster, in the terminal's own grid cell so it stacks rather than displaces, and capped against the *pane* rather than the window.
   It draws *over* the jump-to-latest and peek chips rather than dodging them, because a message that moves depending on which chips happen to be up is harder to read than one that is always in the same place, and it takes no pointer events, so their taps stay theirs.
-  It is mounted only while it has something to say, for the same reason the readout is.
+  It is mounted only while it has something to say.
+  The selection readout shares that surface and its dismissal timer, so it reads as a glance rather than something parked on the terminal's last output line for as long as the selection lives; a drag keeps refreshing it, so it stays up for the whole gesture and fades from where the gesture ended.
+- **A message pinned to the viewport's bottom edge clears the command rail rather than landing on it.**
+  The rail is the bottom-most thing in a terminal pane, so on a maximised window it ends exactly where the interaction HUD, the notification toast, and the error stack are anchored - and two of those three take pointer events, so the overlap was taking taps meant for chips, not merely hiding them.
+  Each of them adds `--rail-clearance` to its own offset.
+  That value is measured (`railClearance.ts`) rather than written down, because rail height is the configured row count times a density variable that has three steps and a separate set of mobile values, and only a rail that actually reaches the bottom of the viewport counts toward it.
   The strip itself carries no customize gear.
   Every row instead keeps one fixed drawer control outside its scroller, including empty rows and rows whose buttons all fit.
 - **Every row answers overflow twice: it scrolls end to end, and its permanent drawer opens the complete row.**
@@ -1727,7 +1733,7 @@ Its rules, and what each one is defending:
   Passive left and right glow wedges appear only while content exists in that direction.
   The wedges consume no layout space, accept no input, and sit on the edges of **their own strip**.
   A wedge is a claim about where this row's content is cut, so it is positioned from the strip rather than from the row: a row's trailing furniture is not one width, and one aligned across rows from the row's edge stood off the end of the strip on any row whose furniture was wider, drawing its glow over the flat panel and marking a spot no tap could reach.
-  Rows whose furniture does match still line up, which is nearly always, since an empty status readout now takes no width.
+  Every row's furniture is now the drawer control alone, so rows do line up - but by construction rather than by arithmetic, which is the point of positioning from the strip.
   The drawer control uses the rail's ordinary neutral button treatment with a slightly heavier outline and drawer mark.
   Its small bottom-right count is the row's total action count, not an overflow calculation, so it remains stable across resizing.
   The fixed trailing cluster gives the drawer one position on every row and anchors the panel to the rail's trailing edge.

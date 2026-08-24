@@ -13,9 +13,10 @@
 // real buffer sits between. Driving those directly is the honest worst case; screenshotting
 // an xterm would measure whatever grey its theme happened to average to.
 import { render } from 'preact'
-import { useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { RailDropup } from '../../src/RailDropup'
 import { RailStrip } from '../../src/RailStrip'
+import { registerRailClearance } from '../../src/railClearance'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon } from '../../src/railIcons'
 import '../../src/style.css'
 
@@ -54,10 +55,20 @@ function Harness() {
   const clip = useRef<HTMLButtonElement>(null)
   const query = new URLSearchParams(location.search)
   const multipleRows = query.has('rows')
-  // The second row's readout, so a spec can drive the two cases that decide where the right
-  // wedge lands: real text (a trailing cluster wider than the row above it) and the empty
-  // string production passes most of the time (a cluster that must match it exactly).
-  const secondStatus = query.get('status') ?? 'Copied'
+  // The terminal message, in the one place a terminal message is allowed to go: over the
+  // buffer, flush on the rail's top edge. `?toast=` drives its text so a spec can measure a
+  // long one, which is the case that used to overrun a narrow pane.
+  const toast = query.get('toast') ?? ''
+  // A pane narrower than the viewport, which is the whole point of the width assertion: a
+  // cap written in `vw` looks fine at full width and swallows a split pane.
+  const paneWidth = query.get('pane')
+  // The app-level HUD, which is pinned to the viewport rather than to the pane and so used
+  // to land on the rail. `?hud=` renders the real element with the real class.
+  const hud = query.get('hud') ?? ''
+  const rail = useRef<HTMLDivElement>(null)
+  // The production registration, so the spec measures the whole chain - observe the rail,
+  // publish `--rail-clearance`, and let the stylesheet lift the HUD - rather than a number.
+  useEffect(() => (rail.current ? registerRailClearance(rail.current) : undefined), [])
   window.setBuffer = setBufferColour
   window.fireCommand = command => window.dispatchEvent(new CustomEvent('mux:command', { detail: command }))
   window.openKeyboard = inset => {
@@ -106,24 +117,27 @@ function Harness() {
     onClick={() => fire(`second-${label}`)}
   >{label}</button>)
 
-  return <div class="terminal-surface" style="position:fixed;inset:0;display:grid;grid-template-rows:minmax(0,1fr) auto">
+  // Only the placement is overridden; the grid itself comes from the real stylesheet, since
+  // the toast's cell (`grid-row:1;grid-column:1`) is what puts it over the buffer.
+  const surface = `position:fixed;top:0;bottom:0;left:0;${paneWidth ? `width:${paneWidth}px` : 'right:0'}`
+  return <div class="terminal-surface" style={surface}>
     <div class="terminal-host" id="buffer" style={`background:${buffer}`} />
-    <div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions">
+    <div ref={rail} class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions">
       <div class="terminal-action-rows">
         <RailStrip
           chips={chips}
           label="Actions"
-          status={multipleRows ? undefined : ''}
           onConfigure={() => { window.railOverflowFires.push('configure') }}
         />
         {multipleRows && <RailStrip
           chips={secondRow}
           label="Actions, row 2"
-          status={secondStatus}
           onConfigure={() => { window.railOverflowFires.push('configure') }}
         />}
       </div>
     </div>
+    {toast && <div class="terminal-clip-toast" role="status">{toast}</div>}
+    {hud && <div class="interaction-hud" role="status" aria-live="polite" aria-atomic="true">{hud}</div>}
     {dropup && <RailDropup
       label="Recent clipboard"
       anchor={dropup}

@@ -182,9 +182,10 @@ Filtering is substring, not the palette's subsequence matcher, which would match
 
 ## Clipboard capture
 
-`clipboardHistory.ts`, `InteractionHud.tsx`, `insertTarget.ts`
+`clipboardHistory.ts`, `InteractionHud.tsx`, `insertTarget.ts`, `railClearance.ts`
 
 Boot-installed copy capture (a `writeText` wrapper plus capture-phase copy/cut) with client-side dedupe, payload-free successful-copy feedback owned by an isolated HUD below `App.tsx` so clipboard gestures cannot re-render active editors or terminals, and pure last-focused-surface insert routing shared by every injecting surface.
+The HUD is pinned to the viewport's bottom-right corner, which on a maximised window is where the terminal's command rail is, so it reads `--rail-clearance` from `railClearance.ts` to sit above the rail rather than on it (`layout-and-chrome.md`).
 
 ## Clipboard history section
 
