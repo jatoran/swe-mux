@@ -433,7 +433,8 @@ Its rules, and what each one is defending:
   The click synthesized after a sidebar long-press is consumed; normal click/tap remains the activation gesture.
   Menu actions operate on the captured target without selecting it unless the action explicitly opens or focuses that target.
 - Mobile Project long-press is not a context-menu gesture.
-  A 325 ms hold with no movement beyond 8 px picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
+  A 350 ms hold with no movement beyond 16 px picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
+  The slop is wide because past it the gesture is *cancelled* rather than deferred, so a narrow one turns a resting finger's jitter into a pickup that silently never happens.
   Pickup closes open menus, claims the pointer, gives short haptic feedback, lifts the row, and enables insertion preview plus edge auto-scroll inside its current section.
   Once picked up it also **cancels `touchmove` for the rest of the drag**, without which the sidebar scrolled under the finger and the scroll cancelled the pointer — the row lifted and then nothing happened, which is what "mobile reordering does not work" looked like (`workspace-layout.md` § pointer drag contract).
   `⋮` opens the Project context menu on tap, while desktop right-click retains the same menu.
@@ -2010,9 +2011,17 @@ Its rules, and what each one is defending:
   "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
   Dragging a catalog row into a layout places it exactly.
 - Chips drag within and between rows, on mouse and on touch, through the shared controller (`railDrag.ts`) mounted by the modal editor.
-  Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the modal instead of dragging.
+  Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and the shared `MOBILE_HOLD_DRAG` hold-to-lift for touch (350 ms, 16px slop), so a finger that moves first scrolls the modal instead of dragging.
+  The lift is announced with the same short haptic the sidebar gives, because until the finger moves nothing on screen says the chip became draggable.
   The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.
-  Pointer capture is taken on the editor root, not on the chip: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
+  Pointer capture is taken on `document.body`, not on the chip and not on the editor root: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
+- **The editor's touch drag carries the same two defences as the sidebar's, for the same reasons** (`workspace-layout.md` § pointer drag contract).
+  Its drag sources sit inside the modal's own vertical scroller and keep `touch-action:pan-y`, because a catalog row is most of what a finger can land on and `touch-action:none` would cost the editor its scrolling; so the controller cancels `touchmove` itself — within the hold's slop while the hold is pending, and unconditionally once the drag is real — and suppresses the native `contextmenu` Android fires about 500 ms into a stationary touch.
+  Without the first, a held finger's ordinary jitter latched a pan that then ignored every `preventDefault` and cancelled the pointer; without the second, a hold that lingered before moving died a moment after it lifted.
+  Both failures read to the operator as a reorder that works about a third of the time, which is exactly what was reported.
+- **A drop resolves to the nearest row within a margin, not to the row under the exact pixel.**
+  Rows are separated by a gap and by the next row's header, and a fingertip covers the strip it is aiming at, so an exact hit test turns a drop that visibly landed on a row into "off every row" — which commits nothing and reads as the drag having silently failed.
+  A lift with no travel is likewise not a drop: releasing a chip where it sat leaves the layout alone rather than writing an identical one back.
 - The drop index is measured against the row **without** the dragged chip.
   That exclusion is what makes it a fixed point: re-measuring after the preview moves the chip gives the same answer, so a chip hovering over its own new home does not oscillate.
   The hit test is two-dimensional because the editor wraps a row's chips over several visual lines; a horizontal-only comparison would put every drop on the second line into the middle of the first.

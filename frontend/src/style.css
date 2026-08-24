@@ -2567,6 +2567,9 @@ body {
   .commandrail-settings .rail-id{grid-area:1/1}
   .commandrail-settings .rail-expand{grid-area:1/2}
   .commandrail-settings .rail-placement-summary{grid-area:2/1/2/3;text-align:left;white-space:normal}
+  /* An empty row is the target for the very first button placed on it, and a drop needs
+     somewhere a fingertip can actually be aimed. */
+  .commandrail-settings .rail-chips{min-height:calc(44px*var(--ui-scale));gap:5px;padding:5px}
   .commandrail-settings .rail-chip{line-height:calc(32px*var(--ui-scale))}
   .commandrail-settings .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
   .commandrail-settings .rail-chip-hide{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
