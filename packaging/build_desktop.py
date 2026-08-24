@@ -137,8 +137,85 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         cwd=ROOT,
         check=True,
     )
-    verify_no_gpl_av(output_root / "swe-mux")
+    verify_bundle_licenses(output_root / "swe-mux")
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
+
+
+# LGPL packages that must ship as replaceable source rather than frozen into the
+# executable archive, so a recipient can substitute their own build. Kept in
+# sync with `license_audit.ALLOWLIST` by `tests/test_license_audit.py`.
+RELINKABLE_LGPL = ("pystray", "num2words")
+
+# Payloads the audit found hiding inside wheels that declare a permissive
+# license. Each is checked by artifact name because the declaration lies: PyAV
+# declares BSD-3-Clause and links GPL x264/x265, and the espeak-ng family enters
+# through packages that declare Apache-2.0 or MIT.
+# PyAV itself is covered by the dedicated `verify_no_gpl_av` below.
+FORBIDDEN_ARTIFACTS = (
+    ("espeakng_loader", "the espeak-ng loader (GPL data payload)"),
+    ("phonemizer", "phonemizer/phonemizer-fork (drags in espeak-ng)"),
+    ("espeak-ng-data", "espeak-ng voice data"),
+)
+# Deliberately matched as shared libraries only. `misaki/espeak.py` is misaki's
+# own optional wrapper and ships harmlessly - the G2P is constructed with
+# `fallback=None` and the loader it would need is forbidden above, so it can
+# never acquire a backend. A bare `*espeak*` glob would fail every build over a
+# file that is inert by construction.
+FORBIDDEN_BINARY_GLOBS = (
+    ("**/*x264*", "GPL x264"),
+    ("**/*x265*", "GPL x265"),
+    ("**/avcodec*", "FFmpeg avcodec"),
+    ("**/*espeak*.dll", "an espeak-ng shared library"),
+    ("**/*espeak*.so*", "an espeak-ng shared library"),
+    ("**/*espeak*.dylib", "an espeak-ng shared library"),
+)
+
+
+def verify_bundle_licenses(bundle_root: Path) -> None:
+    """Prove the bundle's license posture rather than asserting it in a doc.
+
+    Phase 10.5. Three properties, each of which has silently regressed or could:
+
+    1. No GPL payload by artifact name (`verify_no_gpl_av` plus the espeak
+       family). Declared metadata does not describe shipped binaries, which is
+       the audit's central lesson, so this reads the built tree.
+    2. Every allowlisted LGPL package ships as readable source under
+       `_internal/<pkg>/`. That is the LGPL relink condition, and it holds only
+       because those packages are in the spec's `collect_all` loop; removing one
+       would leave the notices file promising something untrue.
+    3. `misaki`'s espeak module never acquires a working backend, checked by the
+       absence of the loader above rather than by importing anything.
+    """
+    verify_no_gpl_av(bundle_root)
+    internal = bundle_root / "_internal"
+
+    offenders = [
+        f"{internal / name} ({why})"
+        for name, why in FORBIDDEN_ARTIFACTS
+        if (internal / name).exists()
+    ]
+    for pattern, why in FORBIDDEN_BINARY_GLOBS:
+        offenders += [f"{path} ({why})" for path in sorted(internal.glob(pattern))[:3]]
+    if offenders:
+        raise SystemExit(
+            "Copyleft regression: a forbidden payload entered the bundle:\n  "
+            + "\n  ".join(offenders)
+            + "\nSee packaging/license_audit.py for why each of these may never ship."
+        )
+
+    missing = [
+        name
+        for name in RELINKABLE_LGPL
+        if not sorted((internal / name).glob("*.py"))
+    ]
+    if missing:
+        raise SystemExit(
+            "LGPL relink regression: "
+            + ", ".join(missing)
+            + f" must ship as readable source under {internal} so a recipient can "
+            "replace it, which is what THIRD-PARTY-NOTICES.md promises. Add the "
+            "name back to the collect_all loop in packaging/swe_mux.spec."
+        )
 
 
 def verify_no_gpl_av(bundle_root: Path) -> None:

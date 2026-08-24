@@ -78,8 +78,8 @@ const PlainKey = ({ id, label, bytes }: { id: string; label: string; bytes: stri
 //
 // The three-wedge one deliberately mixes every trigger mode: `up` repeats while held, `right`
 // fires on entry, and `left` waits for the lift so the escape hatch has something real to
-// escape from. Its centre is bound too, so a tap has an answer - and that is the shape the
-// shipped arrows pad has, where Down is the tap.
+// escape from. Every slot is a wedge - there is no centre - so a tap on it opens the dial
+// rather than running anything, which is what the standing-dial specs drive.
 const WEDGE_PAD: RailItem = {
   id: 'padWedges',
   type: 'pad',
@@ -93,7 +93,6 @@ const WEDGE_PAD: RailItem = {
       '0:0': { item: 'right', mode: 'enter' },
       '0:1': { item: 'up', mode: 'enter-repeat' },
       '0:2': { item: 'kill', mode: 'release' },
-      center: { item: 'centre', mode: 'enter' },
       // Deliberately not `enter-repeat-far`: this pad covers hold-anywhere, and `STREAM_PAD`
       // covers push-out, so one spec never has to reason about both at once.
     },
@@ -157,7 +156,7 @@ const STREAM_PAD: RailItem = {
 const PAD_BYTES: Record<string, string> = {
   up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
   home: '\x1b[H', end: '\x1b[F', ctrlHome: '\x1b[1;5H', ctrlEnd: '\x1b[1;5F',
-  kill: 'KILL', centre: 'CENTRE', dead: 'DEAD',
+  kill: 'KILL', dead: 'DEAD',
   nearLeft: 'NEAR-L', nearRight: 'NEAR-R', farLeft: 'FAR-L', farRight: 'FAR-R',
 }
 

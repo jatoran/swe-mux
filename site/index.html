@@ -780,8 +780,13 @@ footer .todo { color: var(--orange); }
       </div>
       <div>
         <h4>source</h4>
-        <div class="todo">[ repository URL goes here ]</div>
+        <div><a href="https://github.com/jatoran/swe-mux">github.com/jatoran/swe-mux</a></div>
         <div><code>.docs/design/00_OVERVIEW.md</code></div>
+      </div>
+      <div>
+        <h4>license</h4>
+        <div><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
       </div>
       <div>
         <h4>cited</h4>
@@ -791,6 +796,10 @@ footer .todo { color: var(--orange); }
     </div>
     <p class="colophon"><span class="h">#</span> A multiplexer. For software engineers.
     The name is not doing anything clever.</p>
+    <p class="colophon"><span class="h">#</span> swe-mux is not affiliated with, endorsed
+    by, or sponsored by Anthropic, OpenAI, or any other vendor whose CLI it launches.
+    Product names and trademarks belong to their respective owners. You run those tools
+    under your own account and your own agreement with each vendor.</p>
   </div>
 </footer>
 
@@ -828,7 +837,7 @@ footer .todo { color: var(--orange); }
       note: 'If you already run <a href="https://docs.astral.sh/uv/">uv</a>. Add <code>--extra desktop</code> on Windows for the tray app.'
     },
     source: {
-      cmd: 'git clone https://github.com/REPLACE/swe-mux',
+      cmd: 'git clone https://github.com/jatoran/swe-mux',
       os: ['windows', 'linux'],
       note: 'Then <code>uv sync --extra desktop</code> and <code>npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build</code>. Full steps below.'
     }

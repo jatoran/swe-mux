@@ -29,6 +29,16 @@ hiddenimports = []
 # three surfaces only in the frozen app ("Can't find model 'en_core_web_sm'"),
 # never in a source run.
 #
+# `pystray` and `num2words` are the two LGPL packages in the shipped closure
+# (`packaging/license_audit.py` allowlists both). `collect_all` defaults to
+# `include_py_files=True`, so each lands as readable source under
+# `_internal/<pkg>/` instead of being frozen into the executable's archive -
+# which is precisely what satisfies the LGPL condition that the recipient be
+# able to substitute their own build of the library. `verify_bundle_licenses`
+# asserts that property on the built bundle, so dropping either name here is a
+# build failure rather than a silent compliance regression. num2words is not
+# optional: `misaki.en` imports it at module scope for the Kokoro G2P.
+#
 # `mcp` is the official MCP client used by the Agent Environment tool-catalog
 # fetch to dial a Claude-configured server (`mcp_tools.claude_probe`). It is
 # imported lazily, inside the probe, so the daemon never pays for it at startup
@@ -48,6 +58,7 @@ for package in (
     "spacy",
     "en_core_web_sm",
     "misaki",
+    "num2words",
     "mcp",
 ):
     package_datas, package_binaries, package_hidden = collect_all(package)

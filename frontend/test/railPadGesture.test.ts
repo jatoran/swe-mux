@@ -8,6 +8,7 @@ import {
   RAIL_PAD_EXIT_RATIO,
   RAIL_PAD_FAN_SPAN_DEG,
   RAIL_PAD_FAN_START_DEG,
+  RAIL_PAD_LIFT_PX,
   RAIL_PAD_MIN_SCALE,
   RAIL_PAD_OUTER_PX,
   RAIL_PAD_REPEAT_DELAY_MS,
@@ -16,6 +17,7 @@ import {
   RAIL_PAD_SINGLE_OUTER_PX,
   RAIL_PAD_SKIRT_DEG,
   RAIL_PAD_SWITCH_MARGIN_PX,
+  RAIL_PAD_TAP_SLOP_PX,
   railPadAngle,
   railPadAxes,
   railPadBands,
@@ -27,7 +29,7 @@ import {
   type RailPadPressOptions,
   type RailPadShape,
 } from '../src/railPadGesture.ts'
-import { PAD_CENTER, RAIL_PAD_MAX_WEDGES, padSlotKey } from '../src/commandRail.ts'
+import { RAIL_PAD_MAX_WEDGES, padSlotKey } from '../src/commandRail.ts'
 import { markPointerDragClaims, pointerDragOwnsPointer } from '../src/pointerDragClaim.ts'
 import { RAIL_PAN_SLOP_PX } from '../src/railOverflow.ts'
 
@@ -47,7 +49,7 @@ const THREE: RailPadPressOptions['slots'] = {
 function harness(options?: Partial<RailPadPressOptions>) {
   const fired: string[] = []
   const latches: { slot: string | null; armed: boolean }[] = []
-  const ends: number[] = []
+  const ends: string[] = []
   const bands: boolean[] = []
   let now = 0
   const timers: { at: number; run: () => void; id: number }[] = []
@@ -57,7 +59,7 @@ function harness(options?: Partial<RailPadPressOptions>) {
       fire: slot => fired.push(slot),
       latch: (slot, detail) => latches.push({ slot, armed: detail.armed }),
       band: beyond => { bands.push(beyond) },
-      end: () => { ends.push(1) },
+      end: detail => { ends.push(detail.standing ? 'standing' : 'closed') },
     },
     (callback, delayMs) => {
       const id = nextId++
@@ -80,13 +82,37 @@ function harness(options?: Partial<RailPadPressOptions>) {
     }
     now = until
   }
-  const press = (x = 0, y = 0) => gesture.press(1, x, y, {
-    wedges: 3,
-    rings: 1,
-    slots: THREE,
-    ...options,
-  })
-  return { gesture, fired, latches, ends, bands, advance, press }
+  let pressX = 0
+  let pressY = 0
+  const press = (x = 0, y = 0) => {
+    pressX = x
+    pressY = y
+    return gesture.press(1, x, y, {
+      wedges: 3,
+      rings: 1,
+      slots: THREE,
+      ...options,
+    })
+  }
+  /**
+   * Absolute pointer coordinates for a point *on the dial*: `radius` from the fan's origin,
+   * at `degrees`.
+   *
+   * Every geometric move goes through this rather than naming a raw pointer offset, because
+   * the origin is not the press: it sits `RAIL_PAD_LIFT_PX` above it, so "60px up from the
+   * finger" and "60px up the dial" are different points and only the second one is what any
+   * of these tests mean.
+   */
+  const point = (radius: number, degrees: number) => {
+    const polar = at(radius, degrees)
+    return { x: pressX + polar.dx, y: pressY - RAIL_PAD_LIFT_PX + polar.dy }
+  }
+  /** Put the finger on that dial point. */
+  const aim = (radius: number, degrees: number) => {
+    const target = point(radius, degrees)
+    return gesture.move(1, target.x, target.y)
+  }
+  return { gesture, fired, latches, ends, bands, advance, press, point, aim }
 }
 
 /** A point at a distance and an angle, in the gesture's own screen-axis convention. */
@@ -102,6 +128,9 @@ const resolveAt = (shape: RailPadShape, radius: number, degrees: number, current
   const point = at(radius, degrees)
   return railPadResolve(point.dx, point.dy, shape, current)
 }
+
+/** Comfortably outside the hub at full size, and inside every band boundary. */
+const NEAR = RAIL_PAD_DEAD_RADIUS_PX + 20
 
 // ---------------------------------------------------------------------------
 // The fan
@@ -154,22 +183,46 @@ test('wedges stay thumb-sized at every count the model allows', () => {
   }
 })
 
+test('the hub is what separates two neighbouring actions, so it is sized for that', () => {
+  // The base of a wedge is the hub's arc across the wedge's own angle, and it is the *only*
+  // thing between one action and the one beside it at the moment a drag commits. At the
+  // widest count the model allows it still has to be a target rather than a line.
+  const bands = railPadBands(false)
+  for (let wedges = 1; wedges <= RAIL_PAD_MAX_WEDGES; wedges += 1) {
+    const base = bands.dead * (RAIL_PAD_FAN_SPAN_DEG / wedges) * Math.PI / 180
+    assert.ok(base >= 30, `${wedges} wedges gives a ${Math.round(base)}px base`)
+  }
+})
+
+test('the press always lands inside the hub, at every squeeze', () => {
+  // The invariant the whole lift rests on: "nothing is selected" and "you are in the neutral
+  // middle" have to be the same state. A lift that reached past the hub would open every
+  // dial already describing the abort zone, which reads as a pad that starts broken.
+  for (const scale of [1, 0.9, 0.75, RAIL_PAD_MIN_SCALE, 0.1]) {
+    for (const banded of [false, true]) {
+      const bands = railPadBands(banded, scale)
+      assert.ok(bands.lift < bands.dead, `scale ${scale}, banded ${banded}`)
+      assert.ok(bands.dead < bands.outer, `scale ${scale}: the wedges keep an annulus`)
+    }
+  }
+})
+
 test('a three-wedge pad reads left, up and right, and never a fourth', () => {
   const shape = shapeOf(3, 1)
-  assert.equal(resolveAt(shape, 60, 0), RIGHT)
-  assert.equal(resolveAt(shape, 60, 90), UP)
-  assert.equal(resolveAt(shape, 60, 180), LEFT)
+  assert.equal(resolveAt(shape, NEAR, 0), RIGHT)
+  assert.equal(resolveAt(shape, NEAR, 90), UP)
+  assert.equal(resolveAt(shape, NEAR, 180), LEFT)
   // Everything downward is the centre, which is what makes "pull down" a cancel that always
   // has room - the one gesture a rail on the screen's bottom edge can always complete.
-  assert.equal(resolveAt(shape, 60, -90), null)
+  assert.equal(resolveAt(shape, NEAR, -90), null)
   assert.equal(resolveAt(shape, 200, -90), null)
 })
 
 test('a four-wedge pad splits the same fan four ways, all of them upward', () => {
   const shape = shapeOf(4, 1)
-  const seen = [10, 60, 120, 170].map(degrees => resolveAt(shape, 60, degrees))
+  const seen = [10, 60, 120, 170].map(degrees => resolveAt(shape, NEAR, degrees))
   assert.deepEqual(seen, [W(0), W(1), W(2), W(3)])
-  assert.equal(resolveAt(shape, 60, -90), null)
+  assert.equal(resolveAt(shape, NEAR, -90), null)
 })
 
 test('a one-ring pad has no ring boundary, however far the drag goes', () => {
@@ -190,27 +243,42 @@ test('a two-ring pad reads near and far in the same wedge', () => {
 })
 
 test('a short pane squeezes the dial, and the gesture squeezes with it', () => {
+  // The lift is inside the reach being fitted, so it is part of what a full-size dial needs
+  // above the press - a lift kept at full size while the bands shrank would spend the scarce
+  // pixels pushing the origin off the top of the window.
+  const bandedReach = RAIL_PAD_LIFT_PX + RAIL_PAD_OUTER_PX
+  const singleReach = RAIL_PAD_LIFT_PX + RAIL_PAD_SINGLE_OUTER_PX
   assert.equal(railPadScaleFor(true, Infinity), 1)
-  assert.equal(railPadScaleFor(true, RAIL_PAD_OUTER_PX * 2), 1)
-  assert.equal(railPadScaleFor(true, RAIL_PAD_OUTER_PX / 2), 0.5)
+  assert.equal(railPadScaleFor(true, bandedReach * 2), 1)
+  assert.equal(railPadScaleFor(true, bandedReach / 2), 0.5)
   assert.equal(railPadScaleFor(true, 0), RAIL_PAD_MIN_SCALE)
-  assert.equal(railPadScaleFor(false, RAIL_PAD_SINGLE_OUTER_PX / 2), 0.5)
+  assert.equal(railPadScaleFor(false, singleReach / 2), 0.5)
   const squeezed = railPadBands(true, 0.5)
   assert.equal(squeezed.ring, RAIL_PAD_RING_PX / 2)
   assert.equal(squeezed.outer, RAIL_PAD_OUTER_PX / 2)
-  // The dead radius is not scaled: it is already small, and shrinking it would make the pad
-  // fire on a press that never really moved.
-  assert.equal(squeezed.dead, RAIL_PAD_DEAD_RADIUS_PX)
+  assert.equal(squeezed.lift, RAIL_PAD_LIFT_PX / 2)
+  assert.equal(squeezed.dead, RAIL_PAD_DEAD_RADIUS_PX / 2)
+})
+
+test('the smallest hub a squeeze can produce is still bigger than the old full-size one', () => {
+  // What `RAIL_PAD_MIN_SCALE` buys once the hub scales, and the reason the hub needs no floor
+  // of its own: the worst case is not merely survivable, it is roomier than what every pad
+  // used to have at full size. Anchored on the number rather than on the old constant,
+  // because the old constant is gone and this is the fact worth keeping.
+  const tiny = railPadBands(false, 0.01)
+  assert.equal(tiny.dead, RAIL_PAD_DEAD_RADIUS_PX * RAIL_PAD_MIN_SCALE)
+  assert.ok(tiny.dead > 14, `a maximally squeezed hub is ${tiny.dead}px`)
+  assert.ok(tiny.lift < tiny.dead)
 })
 
 test('a latched wedge costs the switch margin to leave, at every count', () => {
   for (const wedges of [3, 4, 5]) {
     const shape = shapeOf(wedges, 1)
     const boundary = railPadWedgeBounds(0, wedges).to
-    assert.equal(resolveAt(shape, 60, boundary + 1, W(0)), W(0), `${wedges} wedges: held`)
-    assert.equal(resolveAt(shape, 60, boundary + 25, W(0)), W(1), `${wedges} wedges: switched`)
+    assert.equal(resolveAt(shape, NEAR, boundary + 1, W(0)), W(0), `${wedges} wedges: held`)
+    assert.equal(resolveAt(shape, NEAR, boundary + 25, W(0)), W(1), `${wedges} wedges: switched`)
     // With nothing latched the same point reads as its raw wedge.
-    assert.equal(resolveAt(shape, 60, boundary + 1, null), W(1))
+    assert.equal(resolveAt(shape, NEAR, boundary + 1, null), W(1))
   }
 })
 
@@ -230,8 +298,59 @@ test('railPadAxes reports only the axes the bound wedges span', () => {
   assert.deepEqual(railPadAxes([UP], 3), { horizontal: false, vertical: true })
   assert.deepEqual(railPadAxes([LEFT, RIGHT], 3), { horizontal: true, vertical: true })
   assert.deepEqual(railPadAxes([W(0, 1)], 2), { horizontal: true, vertical: true })
-  assert.deepEqual(railPadAxes([PAD_CENTER], 3), { horizontal: false, vertical: false })
+  assert.deepEqual(railPadAxes(['center'], 3), { horizontal: false, vertical: false },
+    'a key that names no position spans nothing')
   assert.deepEqual(railPadAxes([], 3), { horizontal: false, vertical: false })
+})
+
+// ---------------------------------------------------------------------------
+// The lift
+// ---------------------------------------------------------------------------
+
+test('a press that has not moved selects nothing, however long it is held', () => {
+  const { gesture, fired, latches, advance, press } = harness()
+  press(100, 100)
+  // The same coordinates the press arrived at. Under a fan centred on the finger this was
+  // the vertex of every wedge; under a lifted one it is inside the hub.
+  gesture.move(1, 100, 100)
+  assert.deepEqual(latches, [])
+  advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 10)
+  assert.deepEqual(fired, [])
+  gesture.cancel()
+})
+
+test('sideways drift has to clear the skirt before it reaches any wedge', () => {
+  // The drift the lift exists to refuse. With the origin on the finger, this much sideways
+  // travel was several times the dead radius and committed the outermost wedge; with it
+  // above, the same travel is still below the fan because the angle back to the origin has
+  // not cleared the skirt.
+  const { gesture, fired, latches, press } = harness()
+  press(0, 0)
+  const safe = RAIL_PAD_LIFT_PX / Math.tan(RAIL_PAD_SKIRT_DEG * Math.PI / 180)
+  assert.ok(safe > 90, `the skirt is only cleared past ${Math.round(safe)}px of drift`)
+  for (const drift of [20, 40, 60, 80]) {
+    gesture.move(1, drift, 0)
+    gesture.move(1, -drift, 0)
+  }
+  assert.deepEqual(fired, [])
+  assert.deepEqual(latches, [])
+  // Deliberately going that far does still work, because the wedge is angular and the skirt
+  // is a real part of it.
+  gesture.move(1, safe + 30, 0)
+  assert.deepEqual(fired, [RIGHT])
+  gesture.cancel()
+})
+
+test('committing straight up costs the lift as well as the hub', () => {
+  // The one direction the lift works against, asserted so it stays a decision: the finger has
+  // to travel through the origin and out the far side of the hub.
+  const { gesture, fired, press } = harness()
+  press(0, 0)
+  gesture.move(1, 0, -(RAIL_PAD_LIFT_PX + RAIL_PAD_DEAD_RADIUS_PX - 1))
+  assert.deepEqual(fired, [])
+  gesture.move(1, 0, -(RAIL_PAD_LIFT_PX + RAIL_PAD_DEAD_RADIUS_PX))
+  assert.deepEqual(fired, [UP])
+  gesture.cancel()
 })
 
 // ---------------------------------------------------------------------------
@@ -239,14 +358,14 @@ test('railPadAxes reports only the axes the bound wedges span', () => {
 // ---------------------------------------------------------------------------
 
 test('a press fires nothing, and crossing the dead radius fires once immediately', () => {
-  const { gesture, fired, advance, press } = harness()
+  const { gesture, fired, advance, press, aim } = harness()
   assert.equal(press(100, 100), true)
   assert.deepEqual(fired, [])
-  gesture.move(1, 100, 100 - (RAIL_PAD_DEAD_RADIUS_PX - 1))
+  aim(RAIL_PAD_DEAD_RADIUS_PX - 1, 90)
   assert.deepEqual(fired, [])
   // Crossing it fires on entry, with no clock involved at all - the wedges are thumb-sized
   // but the *commitment* is still this close in, which is what keeps the pad fast.
-  gesture.move(1, 100, 100 - RAIL_PAD_DEAD_RADIUS_PX)
+  aim(RAIL_PAD_DEAD_RADIUS_PX, 90)
   assert.deepEqual(fired, [UP])
   advance(0)
   assert.deepEqual(fired, [UP])
@@ -255,17 +374,17 @@ test('a press fires nothing, and crossing the dead radius fires once immediately
 
 test('the dial delay is not a gesture delay', () => {
   assert.ok(RAIL_PAD_DIAL_DELAY_MS > 0)
-  const { gesture, fired, press } = harness()
+  const { gesture, fired, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   assert.deepEqual(fired, [UP])
   gesture.cancel()
 })
 
 test('a hold repeats at the shared cadence, and only an enter-repeat slot does', () => {
-  const { gesture, fired, advance, press } = harness()
+  const { gesture, fired, advance, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   assert.deepEqual(fired, [UP])
   advance(RAIL_PAD_REPEAT_DELAY_MS - 1)
   assert.deepEqual(fired, [UP])
@@ -274,7 +393,7 @@ test('a hold repeats at the shared cadence, and only an enter-repeat slot does',
   advance(RAIL_PAD_REPEAT_INTERVAL_MS * 3)
   assert.equal(fired.length, 5)
   // Switching to a plain `enter` slot fires once and stops repeating.
-  gesture.move(1, 60, 0)
+  aim(NEAR, 0)
   const afterSwitch = fired.length
   assert.equal(fired[afterSwitch - 1], RIGHT)
   advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 5)
@@ -294,9 +413,9 @@ const OUTSIDE = RAIL_PAD_RING_PX + 40
 test('a repeat-far slot sends exactly one however long it is held inside', () => {
   // The whole point of the mode: dwell is a poor statement of "I meant lots of these", and
   // `enter-repeat` starts spamming after 350ms from a thumb that merely hesitated.
-  const { gesture, fired, advance, press } = harness({ slots: FAR_SLOTS })
+  const { gesture, fired, advance, press, aim } = harness({ slots: FAR_SLOTS })
   press(0, 0)
-  gesture.move(1, 0, -INSIDE)
+  aim(INSIDE, 90)
   assert.deepEqual(fired, [UP])
   advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 20)
   assert.deepEqual(fired, [UP], 'still one, twenty intervals later')
@@ -305,11 +424,11 @@ test('a repeat-far slot sends exactly one however long it is held inside', () =>
 })
 
 test('pushing past the band starts the stream, and fires nothing on the crossing itself', () => {
-  const { gesture, fired, advance, press, bands } = harness({ slots: FAR_SLOTS })
+  const { gesture, fired, advance, press, bands, aim } = harness({ slots: FAR_SLOTS })
   press(0, 0)
-  gesture.move(1, 0, -INSIDE)
+  aim(INSIDE, 90)
   assert.deepEqual(fired, [UP])
-  gesture.move(1, 0, -OUTSIDE)
+  aim(OUTSIDE, 90)
   // Crossing selects nothing - it only arms - so the count is unchanged until the delay.
   assert.deepEqual(fired, [UP])
   assert.deepEqual(bands, [true])
@@ -321,21 +440,21 @@ test('pushing past the band starts the stream, and fires nothing on the crossing
 })
 
 test('coming back inside stops the stream without re-firing, and going out restarts the delay', () => {
-  const { gesture, fired, advance, press, bands } = harness({ slots: FAR_SLOTS })
+  const { gesture, fired, advance, press, bands, aim } = harness({ slots: FAR_SLOTS })
   press(0, 0)
-  gesture.move(1, 0, -OUTSIDE)
+  aim(OUTSIDE, 90)
   advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS)
   const streamed = fired.length
   assert.ok(streamed >= 3)
 
-  gesture.move(1, 0, -INSIDE)
+  aim(INSIDE, 90)
   assert.equal(fired.length, streamed, 'coming back in fires nothing')
   advance(RAIL_PAD_REPEAT_INTERVAL_MS * 10)
   assert.equal(fired.length, streamed, 'and stops the stream')
 
   // Out again restarts the *delay* rather than resuming mid-stream, so a wiggle across the
   // boundary cannot machine-gun.
-  gesture.move(1, 0, -OUTSIDE)
+  aim(OUTSIDE, 90)
   assert.equal(fired.length, streamed)
   advance(RAIL_PAD_REPEAT_DELAY_MS - 1)
   assert.equal(fired.length, streamed)
@@ -348,24 +467,24 @@ test('coming back inside stops the stream without re-firing, and going out resta
 test('the band boundary costs the switch margin in both directions', () => {
   // Same hysteresis the ring slots use, and for the same reason: a finger resting on the
   // boundary must not flip a stream on and off.
-  const { gesture, press, bands } = harness({ slots: FAR_SLOTS })
+  const { gesture, press, bands, aim } = harness({ slots: FAR_SLOTS })
   press(0, 0)
-  gesture.move(1, 0, -(RAIL_PAD_RING_PX + 2))
+  aim(RAIL_PAD_RING_PX + 2, 90)
   assert.deepEqual(bands, [], 'just past is not past enough')
-  gesture.move(1, 0, -(RAIL_PAD_RING_PX + RAIL_PAD_SWITCH_MARGIN_PX + 2))
+  aim(RAIL_PAD_RING_PX + RAIL_PAD_SWITCH_MARGIN_PX + 2, 90)
   assert.deepEqual(bands, [true])
-  gesture.move(1, 0, -(RAIL_PAD_RING_PX - 2))
+  aim(RAIL_PAD_RING_PX - 2, 90)
   assert.deepEqual(bands, [true], 'and neither is just inside')
-  gesture.move(1, 0, -(RAIL_PAD_RING_PX - RAIL_PAD_SWITCH_MARGIN_PX - 2))
+  aim(RAIL_PAD_RING_PX - RAIL_PAD_SWITCH_MARGIN_PX - 2, 90)
   assert.deepEqual(bands, [true, false])
   gesture.cancel()
 })
 
 test('a flick that lands straight in the band still arms the stream', () => {
   // A fast operator never pauses inside; the stream has to be where the finger is.
-  const { gesture, fired, advance, press } = harness({ slots: FAR_SLOTS })
+  const { gesture, fired, advance, press, aim } = harness({ slots: FAR_SLOTS })
   press(0, 0)
-  gesture.move(1, 0, -OUTSIDE)
+  aim(OUTSIDE, 90)
   assert.deepEqual(fired, [UP], 'one on entry, as always')
   advance(RAIL_PAD_REPEAT_DELAY_MS)
   assert.deepEqual(fired, [UP, UP])
@@ -387,16 +506,15 @@ test('a repeat-far pad is banded, so the geometry has a boundary to cross', () =
 })
 
 test('switching wedges mid-stream stops it, and the band does not restart it for another mode', () => {
-  const { gesture, fired, advance, press } = harness({
+  const { gesture, fired, advance, press, aim } = harness({
     slots: { [UP]: { mode: 'enter-repeat-far' }, [RIGHT]: { mode: 'enter' } },
   })
   press(0, 0)
-  gesture.move(1, 0, -OUTSIDE)
+  aim(OUTSIDE, 90)
   advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 2)
   const streamed = fired.length
   // Sideways to the plain `enter` wedge, still out past the band.
-  const sideways = at(OUTSIDE, 0)
-  gesture.move(1, sideways.dx, sideways.dy)
+  aim(OUTSIDE, 0)
   assert.equal(fired[fired.length - 1], RIGHT)
   advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 10)
   assert.equal(fired.length, streamed + 1, 'an enter slot does not stream just because it is far out')
@@ -404,35 +522,35 @@ test('switching wedges mid-stream stops it, and the band does not restart it for
 })
 
 test('leaving and re-entering a wedge fires it again', () => {
-  const { gesture, fired, press } = harness()
+  const { gesture, fired, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, 0, -60)
-  gesture.move(1, 0, -(RAIL_PAD_DEAD_RADIUS_PX * RAIL_PAD_EXIT_RATIO) + 0.5)
-  gesture.move(1, 0, -60)
-  gesture.move(1, 0, 0)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
+  aim(RAIL_PAD_DEAD_RADIUS_PX * RAIL_PAD_EXIT_RATIO - 0.5, 90)
+  aim(NEAR, 90)
+  aim(0, 90)
+  aim(NEAR, 90)
   assert.deepEqual(fired, [UP, UP, UP])
   gesture.cancel()
 })
 
 test('pulling down into the abort zone releases the latch and fires nothing', () => {
-  const { gesture, fired, latches, press } = harness()
+  const { gesture, fired, latches, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   assert.deepEqual(fired, [UP])
-  gesture.move(1, 0, 120)
+  aim(120, -90)
   assert.equal(latches.at(-1)?.slot, null)
   gesture.release(1)
   assert.deepEqual(fired, [UP], 'and the centre does not sneak in on the way out')
 })
 
 test('hysteresis is asymmetric: leaving costs less travel than entering', () => {
-  const { gesture, fired, press } = harness()
+  const { gesture, fired, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, 0, -RAIL_PAD_DEAD_RADIUS_PX)
+  aim(RAIL_PAD_DEAD_RADIUS_PX, 90)
   assert.deepEqual(fired, [UP])
-  gesture.move(1, 0, -(RAIL_PAD_DEAD_RADIUS_PX - 1))
-  gesture.move(1, 0, -RAIL_PAD_DEAD_RADIUS_PX)
+  aim(RAIL_PAD_DEAD_RADIUS_PX - 1, 90)
+  aim(RAIL_PAD_DEAD_RADIUS_PX, 90)
   assert.deepEqual(fired, [UP])
   gesture.cancel()
 })
@@ -440,7 +558,7 @@ test('hysteresis is asymmetric: leaving costs less travel than entering', () => 
 test('a release slot waits for the lift, and dragging back out cancels it', () => {
   const held = harness()
   held.press(0, 0)
-  held.gesture.move(1, -60, 0)
+  held.aim(NEAR, 180)
   assert.deepEqual(held.fired, [], 'a release slot fires nothing on the way in')
   assert.equal(held.latches.at(-1)?.armed, true)
   held.gesture.release(1)
@@ -448,15 +566,15 @@ test('a release slot waits for the lift, and dragging back out cancels it', () =
 
   const escaped = harness()
   escaped.press(0, 0)
-  escaped.gesture.move(1, -60, 0)
-  escaped.gesture.move(1, 0, 0)
+  escaped.aim(NEAR, 180)
+  escaped.aim(0, 90)
   escaped.gesture.release(1)
   assert.deepEqual(escaped.fired, [])
 
   const swapped = harness()
   swapped.press(0, 0)
-  swapped.gesture.move(1, -60, 0)
-  swapped.gesture.move(1, 60, 0)
+  swapped.aim(NEAR, 180)
+  swapped.aim(NEAR, 0)
   swapped.gesture.release(1)
   assert.deepEqual(swapped.fired, [RIGHT])
 })
@@ -464,73 +582,81 @@ test('a release slot waits for the lift, and dragging back out cancels it', () =
 test('the press announces its end however it finished, so the dial can be torn down', () => {
   const lifted = harness()
   lifted.press(0, 0)
-  lifted.gesture.move(1, 0, -60)
+  lifted.aim(NEAR, 90)
   assert.deepEqual(lifted.ends, [])
   lifted.gesture.release(1)
-  assert.equal(lifted.ends.length, 1)
+  assert.deepEqual(lifted.ends, ['closed'])
 
   const cancelled = harness()
   cancelled.press(0, 0)
-  cancelled.gesture.move(1, 0, -60)
+  cancelled.aim(NEAR, 90)
   cancelled.gesture.cancel()
-  assert.equal(cancelled.ends.length, 1)
+  assert.deepEqual(cancelled.ends, ['closed'])
   cancelled.gesture.cancel()
-  assert.equal(cancelled.ends.length, 1)
+  assert.deepEqual(cancelled.ends, ['closed'])
 })
 
-test('returning to the centre to abort runs nothing, even with a centre bound', () => {
-  const { gesture, fired, press } = harness({ slots: { ...THREE, [PAD_CENTER]: { mode: 'enter' } } })
+test('returning to the hub to abort runs nothing at all', () => {
+  const { gesture, fired, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, -60, 0)
-  gesture.move(1, 0, 0)
+  aim(NEAR, 180)
+  aim(0, 90)
   gesture.release(1)
   assert.deepEqual(fired, [])
 })
 
-test('a press that never travels fires the centre, and one that did does not', () => {
-  const tapped = harness({ slots: { ...THREE, [PAD_CENTER]: { mode: 'enter' } } })
-  tapped.press(0, 0)
-  tapped.gesture.move(1, 2, 2)
-  tapped.gesture.release(1)
-  assert.deepEqual(tapped.fired, [PAD_CENTER])
-  assert.equal(tapped.gesture.consumeHandledClick(), true, 'the centre it fired is the tap, so the click is spent')
-
-  const dragged = harness({ slots: { ...THREE, [PAD_CENTER]: { mode: 'enter' } } })
+test('a neutral release fires nothing, whatever the press did on the way there', () => {
+  // There is no centre for one to resolve to, and that is the point: a press that reached no
+  // wedge has stated no direction, so anything the pad ran would answer a gesture nobody
+  // made. The drag *did* reach a wedge, and that one still fires.
+  const dragged = harness()
   dragged.press(0, 0)
-  dragged.gesture.move(1, 60, 0)
+  dragged.aim(NEAR, 0)
   dragged.gesture.release(1)
-  assert.deepEqual(dragged.fired, [RIGHT], 'a wedge was chosen, so the centre is not also run')
+  assert.deepEqual(dragged.fired, [RIGHT])
+
+  const aborted = harness()
+  aborted.press(0, 0)
+  aborted.aim(NEAR, -90)
+  aborted.gesture.release(1)
+  assert.deepEqual(aborted.fired, [])
+
+  const drifted = harness()
+  drifted.press(0, 0)
+  drifted.gesture.move(1, 0, RAIL_PAD_TAP_SLOP_PX)
+  drifted.gesture.release(1)
+  assert.deepEqual(drifted.fired, [])
 })
 
-test('an unbound wedge latches, fires nothing, and blocks the centre', () => {
-  const { gesture, fired, press, latches } = harness({
-    slots: { [UP]: { mode: 'enter' }, [LEFT]: { mode: 'enter' }, [PAD_CENTER]: { mode: 'enter' } },
+test('an unbound wedge latches and fires nothing', () => {
+  const { gesture, fired, press, latches, aim } = harness({
+    slots: { [UP]: { mode: 'enter' }, [LEFT]: { mode: 'enter' } },
   })
   press(0, 0)
-  gesture.move(1, 60, 0)
+  aim(NEAR, 0)
   assert.deepEqual(fired, [])
   assert.equal(latches.at(-1)?.slot, RIGHT)
   gesture.release(1)
-  assert.deepEqual(fired, [], 'releasing into a dead wedge is a deliberate abort, not a centre tap')
+  assert.deepEqual(fired, [], 'releasing into a dead wedge is a deliberate abort')
 })
 
 test('a disabled slot is a dead wedge, not a hidden one', () => {
-  const { gesture, fired, press, latches } = harness({
+  const { gesture, fired, press, latches, aim } = harness({
     slots: { [UP]: { mode: 'enter', disabled: true }, [RIGHT]: { mode: 'enter' } },
   })
   press(0, 0)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   assert.equal(latches.at(-1)?.slot, UP, 'the wedge is still where it was')
   assert.deepEqual(fired, [])
-  gesture.move(1, 60, 0)
+  aim(NEAR, 0)
   assert.deepEqual(fired, [RIGHT])
   gesture.cancel()
 })
 
 test('a cancel fires nothing, including from an armed release slot', () => {
-  const { gesture, fired, press } = harness()
+  const { gesture, fired, press, aim } = harness()
   press(0, 0)
-  gesture.move(1, -60, 0)
+  aim(NEAR, 180)
   gesture.cancel()
   assert.deepEqual(fired, [])
   assert.equal(pointerDragOwnsPointer(), false)
@@ -549,22 +675,23 @@ test('a two-axis pad claims the pointer at press, so the pan and the menu swipe 
 })
 
 test('a vertical-only pad yields the horizontal axis to the rail pan', () => {
-  const { gesture, fired, press } = harness({ slots: { [UP]: { mode: 'enter' } } })
+  const { gesture, fired, press, aim } = harness({ slots: { [UP]: { mode: 'enter' } } })
   press(0, 0)
   assert.equal(pointerDragOwnsPointer(), false, 'nothing claimed yet: this pad has an axis to give away')
+  // Raw travel: the arbitration is about which way the *finger* went, at the pan's own slop.
   gesture.move(1, RAIL_PAN_SLOP_PX, 0)
   assert.equal(pointerDragOwnsPointer(), false)
   // The press is over for the pad: coming back vertically must not steal a pan already begun.
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   assert.deepEqual(fired, [])
 })
 
 test('a vertical-only pad still claims once the drag goes its way', () => {
-  const { gesture, fired, press } = harness({ slots: { [UP]: { mode: 'enter' } } })
+  const { gesture, fired, press, aim } = harness({ slots: { [UP]: { mode: 'enter' } } })
   press(0, 0)
   gesture.move(1, 0, -RAIL_PAN_SLOP_PX)
   assert.equal(pointerDragOwnsPointer(), true)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   assert.deepEqual(fired, [UP])
   gesture.release(1)
   assert.equal(pointerDragOwnsPointer(), false)
@@ -581,18 +708,18 @@ test('only the pointer that opened a press may move or end it', () => {
 })
 
 test('a drag marks the click as spent, and a fresh press hands it back', () => {
-  const { gesture, press } = harness()
+  const { gesture, press, aim } = harness()
   press(0, 0)
   // Claiming the pointer is not by itself an answer to the click. A chip that taps *and*
   // pads has already claimed at this point and must still be tappable.
   assert.equal(gesture.consumeHandledClick(), false)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   gesture.release(1)
   assert.equal(gesture.consumeHandledClick(), true)
   assert.equal(gesture.consumeHandledClick(), false, 'one-shot')
 
   press(0, 0)
-  gesture.move(1, 0, -60)
+  aim(NEAR, 90)
   gesture.release(1)
   press(0, 0)
   assert.equal(gesture.consumeHandledClick(), false)
@@ -604,11 +731,181 @@ test('peek reports the bands the press is actually using', () => {
     wedges: 2,
     rings: 2,
     slots: { [W(1, 0)]: { mode: 'release' }, [W(1, 1)]: { mode: 'release' } },
-    roomAbovePx: RAIL_PAD_OUTER_PX / 2,
+    roomAbovePx: (RAIL_PAD_LIFT_PX + RAIL_PAD_OUTER_PX) / 2,
   })
   press(0, 0)
   const { bands } = gesture.peek()
   assert.equal(bands.ring, RAIL_PAD_RING_PX / 2)
   assert.equal(bands.outer, RAIL_PAD_OUTER_PX / 2)
+  assert.equal(bands.lift, RAIL_PAD_LIFT_PX / 2)
+  gesture.cancel()
+})
+
+test('a squeezed press still opens inside its own smaller hub', () => {
+  // The lift and the hub shrink together, so the invariant that a press starts neutral is not
+  // something a short pane can take away.
+  const { gesture, fired, latches, press } = harness({ roomAbovePx: 0 })
+  press(0, 0)
+  gesture.move(1, 0, 0)
+  assert.deepEqual(latches, [])
+  assert.deepEqual(fired, [])
+  const { bands } = gesture.peek()
+  assert.equal(bands.outer, RAIL_PAD_SINGLE_OUTER_PX * RAIL_PAD_MIN_SCALE)
+  // And a drag scaled to that dial still reaches its wedge.
+  gesture.move(1, 0, -(bands.lift + bands.dead + 4))
+  assert.deepEqual(fired, [UP])
+  gesture.cancel()
+})
+
+// ---------------------------------------------------------------------------
+// The standing dial
+// ---------------------------------------------------------------------------
+
+test('a tap leaves the dial standing, and a drag does not', () => {
+  // What a pad's four slots are is the one thing a finger cannot discover - the chip shows
+  // marks, not labels - so a tap asks, and asking is all it does.
+  const tapped = harness()
+  tapped.press(0, 0)
+  tapped.gesture.move(1, 2, 2)
+  tapped.gesture.release(1)
+  assert.deepEqual(tapped.fired, [])
+  assert.equal(tapped.gesture.peek().standing, true)
+  assert.deepEqual(tapped.ends, ['standing'])
+  assert.equal(tapped.gesture.consumeHandledClick(), true, 'opening answers the tap, so the click is spent')
+
+  // A drag has already said what it wanted. Re-opening after one would leave a surface over
+  // the workspace every time the pad was used properly.
+  const dragged = harness()
+  dragged.press(0, 0)
+  dragged.aim(NEAR, 90)
+  dragged.gesture.release(1)
+  assert.equal(dragged.gesture.peek().standing, false)
+  assert.deepEqual(dragged.ends, ['closed'])
+
+  // And so has an abort. Pulling down is an escape, not a request for the map.
+  const aborted = harness()
+  aborted.press(0, 0)
+  aborted.aim(120, -90)
+  aborted.gesture.release(1)
+  assert.equal(aborted.gesture.peek().standing, false)
+})
+
+test('a press on the standing dial adopts its origin rather than opening a second fan', () => {
+  // The whole design: the wedge under the finger is the wedge that runs, because the geometry
+  // is the standing dial's and not this press's. A fan re-centred on the new touch would put
+  // the hub where the operator was aiming.
+  const { gesture, fired, press, point } = harness()
+  press(0, 0)
+  gesture.release(1)
+  assert.equal(gesture.peek().standing, true)
+
+  const target = point(NEAR, 90)
+  assert.equal(gesture.press(2, target.x, target.y, { wedges: 3, rings: 1, slots: THREE, adoptStanding: true }), true)
+  gesture.move(2, target.x, target.y)
+  assert.deepEqual(fired, [UP], 'an enter slot runs on the touch itself, exactly as it does on a drag')
+  gesture.release(2)
+  assert.equal(gesture.peek().standing, false, 'one activation, one outcome')
+})
+
+test('every trigger mode keeps one meaning on the standing dial', () => {
+  // The reason the second press adopts rather than re-implementing: a tapped wedge is an
+  // ordinary press from that point, so `release` still waits for the lift and `enter-repeat`
+  // still repeats. Neither grew a second tap-shaped behaviour beside its drag-shaped one.
+  const held = harness()
+  held.press(0, 0)
+  held.gesture.release(1)
+  const left = held.point(NEAR, 180)
+  held.gesture.press(2, left.x, left.y, { wedges: 3, rings: 1, slots: THREE, adoptStanding: true })
+  held.gesture.move(2, left.x, left.y)
+  assert.deepEqual(held.fired, [], 'a release slot fires nothing on the way in, tapped or dragged')
+  assert.equal(held.latches.at(-1)?.armed, true)
+  held.gesture.release(2)
+  assert.deepEqual(held.fired, [LEFT])
+
+  const repeated = harness()
+  repeated.press(0, 0)
+  repeated.gesture.release(1)
+  const up = repeated.point(NEAR, 90)
+  repeated.gesture.press(2, up.x, up.y, { wedges: 3, rings: 1, slots: THREE, adoptStanding: true })
+  repeated.gesture.move(2, up.x, up.y)
+  assert.deepEqual(repeated.fired, [UP])
+  repeated.advance(RAIL_PAD_REPEAT_DELAY_MS + RAIL_PAD_REPEAT_INTERVAL_MS * 2)
+  assert.ok(repeated.fired.length >= 3, 'held on the wedge, it still streams')
+  repeated.gesture.cancel()
+})
+
+test('a press outside the drawn dial dismisses it and stays inert', () => {
+  // A one-ring pad resolves a wedge at *any* radius on purpose - a long drag is not an abort -
+  // so without this rule a tap in an empty corner would run whatever wedge it happened to line
+  // up with rather than closing the menu the way every other overlay does.
+  const { gesture, fired, press, point } = harness()
+  press(0, 0)
+  gesture.release(1)
+
+  const far = point(RAIL_PAD_SINGLE_OUTER_PX + 60, 90)
+  gesture.press(2, far.x, far.y, { wedges: 3, rings: 1, slots: THREE, adoptStanding: true })
+  gesture.move(2, far.x, far.y)
+  assert.deepEqual(fired, [])
+  // Sliding back onto the dial mid-press must not turn a dismissal into a selection: what the
+  // finger touched down on is the statement.
+  const inside = point(NEAR, 90)
+  gesture.move(2, inside.x, inside.y)
+  assert.deepEqual(fired, [])
+  gesture.release(2)
+  assert.equal(gesture.peek().standing, false)
+})
+
+test('a press that does not adopt takes the screen from the standing dial, and says so', () => {
+  // Whatever the operator just touched is what they meant, and leaving a full-viewport surface
+  // behind it is how a dial ends up eating clicks nobody can trace. The announcement is the
+  // load-bearing half: the caller binds fresh handlers off the back of `press`, so a silent
+  // clear would swap the owning pad's handlers out without ever telling it to take the dial
+  // down - which strands exactly the surface this is closing.
+  const { gesture, press, ends } = harness()
+  press(0, 0)
+  gesture.release(1)
+  assert.equal(gesture.peek().standing, true)
+  press(400, 400)
+  assert.equal(gesture.peek().standing, false)
+  assert.deepEqual(ends, ['standing', 'closed'], 'the owner was told before the new press bound')
+  gesture.cancel()
+  // And a press with nothing standing says nothing extra.
+  const quiet = harness()
+  quiet.press(0, 0)
+  assert.deepEqual(quiet.ends, [])
+  quiet.gesture.cancel()
+})
+
+test('a standing dial can be closed with no press at all, and only once', () => {
+  const { gesture, press, ends } = harness()
+  press(0, 0)
+  gesture.release(1)
+  assert.equal(gesture.dismiss(), true)
+  assert.deepEqual(ends, ['standing', 'closed'])
+  assert.equal(gesture.dismiss(), false, 'nothing standing, nothing to say')
+  assert.deepEqual(ends, ['standing', 'closed'])
+})
+
+test('whatever takes the window away takes the standing dial with it', () => {
+  // The failure this prevents is the worst one the feature has: a full-viewport surface that
+  // outlives the thing owning it swallows every click in the app.
+  const { gesture, press, ends } = harness()
+  press(0, 0)
+  gesture.release(1)
+  gesture.cancel()
+  assert.equal(gesture.peek().standing, false)
+  assert.deepEqual(ends, ['standing', 'closed'])
+})
+
+test('the keyboard route stands a dial up with no pointer, and loses to a live press', () => {
+  const { gesture, press } = harness()
+  assert.equal(gesture.open(100, 100, { wedges: 3, rings: 1, slots: THREE }), true)
+  assert.equal(gesture.peek().standing, true)
+  const bands = gesture.peek().bands
+  assert.equal(bands.outer, RAIL_PAD_SINGLE_OUTER_PX)
+
+  // A live press is about to decide what happens to the dial, so it wins.
+  press(0, 0)
+  assert.equal(gesture.open(200, 200, { wedges: 3, rings: 1, slots: THREE }), false)
   gesture.cancel()
 })

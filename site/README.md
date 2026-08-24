@@ -381,6 +381,8 @@ Each of these was wrong on this page at some point.
 # 10. Open before launch
 
 - **Fill the `data-todo` placeholders.** The docs, blog, and repository URLs are all `href="#"`. Grep `data-todo`.
-- **Replace the install commands.** `get.swe-mux.dev` does not exist and the clone URL says `REPLACE`. The `source` flow is the only real one today, and its full version is section 11.
+- **Replace the install commands.** `get.swe-mux.dev` does not exist. The `source` flow is the only real one today, and its full version is section 11.
+  The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
+  If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
 - **Re-shoot and scrub the screenshots.** See section 8.
 - **Draw the two diagrams.** See section 8.

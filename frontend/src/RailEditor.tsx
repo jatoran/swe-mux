@@ -4,7 +4,7 @@ import { api } from './api'
 import { Dropdown } from './Dropdown'
 import {
   allRailBackends, defaultPadTriggerMode, defaultRailConfig, isBuiltinRailId,
-  PAD_CENTER, padRingCount, padSlotKey, padWedgeCount, padWedgeName, parsePadSlotKey,
+  padRingCount, padSlotKey, padWedgeCount, padWedgeName, parsePadSlotKey,
   railItemDisplayLabel, railItemDisplayMode,
   railItemVisible, railPadSlotMode, railPayload,
   railProjectScopeKind, railRowKey,
@@ -695,7 +695,7 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
     const at = parsePadSlotKey(key)
     return <div class="rail-pad-cell" key={key}>
       <span class="rail-pad-cell-name">
-        {at ? padWedgeName(at.wedge, wedges, at.ring) : 'Centre (tap)'}
+        {at ? padWedgeName(at.wedge, wedges, at.ring) : key}
       </span>
       <Dropdown
         value={binding?.item || ''}
@@ -753,13 +753,12 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
     {rows.map((row, index) => <div class="rail-pad-grid" key={index} style={{ gridTemplateColumns: `repeat(${wedges}, minmax(0, 1fr))` }}>
       {row.map(slotCell)}
     </div>)}
-    <div class="rail-pad-grid rail-pad-grid-centre">{slotCell(PAD_CENTER)}</div>
     <p class="rail-add-note">
-      Press the chip and drag a wedge; pull straight down to cancel. The centre is what a tap
-      does, and it is where an action with no direction of its own belongs — Down, on the
-      arrows pad. An empty wedge is inert, which also makes it a safe place to abort into, and
-      a wedge whose action this session does not offer goes dim where it is rather than
-      letting the others move.
+      Press the chip and drag a wedge; pull straight down to cancel. Tap it instead and the
+      dial stays up, so you can read the wedges and tap one — every slot is a wedge, and a tap
+      opens rather than running anything. An empty wedge is inert, which also makes it a safe
+      place to abort into, and a wedge whose action this session does not offer goes dim where
+      it is rather than letting the others move.
       {rings > 1 && ' Reaching the far ring crosses the near one, which is why a ringed pad waits for the lift rather than firing on the way past.'}
       {wedges >= 5 && ' Five wedges is ±22° each: easy enough to hit while looking at the dial, harder without.'}
     </p>
