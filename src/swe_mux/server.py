@@ -169,7 +169,7 @@ from .sqlite_store import prepare_database
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
-from .supervisor_client import SupervisorClient
+from .supervisor_client import SupervisorClient, SupervisorUnavailable
 from .tailscale import (
     is_tailscale_ip,
 )
@@ -267,6 +267,31 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         )
     except (ValueError, TypeError, ProviderAccountError) as exc:
         return json_response({"error": str(exc)}, 400)
+    except SupervisorUnavailable as exc:
+        # A refusal with a reason, not a bug. The one that matters is the spawn
+        # the daemon deliberately fails rather than falling back in-process when
+        # the socket died mid-spawn and the supervisor is still alive: a fallback
+        # there is a coin flip on two agents in one workspace. Reaching the
+        # generic clause below turned that into `500 internal server error`, so
+        # the reason the daemon had just logged never got to the operator - who
+        # is the only one who can act on it, by restarting the daemon.
+        log.warning(
+            "supervisor unavailable method=%s path=%s reason=%s",
+            request.method,
+            request.path,
+            exc,
+        )
+        return json_response({"error": str(exc), "code": "supervisor_unreachable"}, 503)
+    except TimeoutError as exc:
+        # `TimeoutError` subclasses `OSError`, so it matched nothing above and
+        # became a 500 whose body said nothing. A deadline that expired is an
+        # upstream condition the caller can retry, and it has a message.
+        log.warning(
+            "request timed out method=%s path=%s reason=%s", request.method, request.path, exc
+        )
+        return json_response(
+            {"error": str(exc) or "the operation timed out", "code": "timeout"}, 504
+        )
     except Exception:
         log.exception("unhandled request error")
         return json_response({"error": "internal server error"}, 500)

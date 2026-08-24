@@ -20,10 +20,13 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import supervisor_client
 from swe_mux.adapters import ShellAdapter
 from swe_mux.models import SessionRecord
+from swe_mux.server import error_middleware
 from swe_mux.session import Session, SessionManager
 from swe_mux.supervisor import discovery_path
 from swe_mux.supervisor_client import (
@@ -379,3 +382,72 @@ async def test_hook_cwd_telemetry_tasks_do_not_accumulate(tmp_path: Path) -> Non
 
     assert session.tasks, "the fixture must actually have scheduled work"
     await drain(session)
+
+
+async def test_the_refusal_reaches_the_operator_with_a_status_and_a_reason(
+    tmp_path: Path,
+) -> None:
+    """The refusal above is only useful if the person who can act on it sees it.
+
+    Found in the D1 soak: `SupervisorUnavailable` subclasses `RuntimeError` and
+    matched no clause in `error_middleware`, so the refused spawn came back as
+    `500 {"error": "internal server error"}`. The daemon had just written the
+    whole reason to its log, and the operator - who is the only one who can act
+    on it, by restarting the daemon - was told nothing.
+
+    The exception is raised by the real refusal path rather than constructed, so
+    this cannot pass against a message the code no longer produces.
+    """
+    supervisor = FakeSupervisor(tmp_path, responder=status_responder("live"))
+    await supervisor.start()
+    client = await SupervisorClient.connect(tmp_path)
+    try:
+        host = RemotePtyHost(client, "s1", appname="cmd.exe", cwd=".")
+        host.prepare()
+        await supervisor.drop_connection()
+        await until(lambda: not client.connected, what="the client noticed the drop")
+        manager = cast(Any, SimpleNamespace(supervisor=client))
+        with pytest.raises(SupervisorUnavailable) as raised:
+            await SessionManager._resolve_failed_supervisor_spawn(manager, host, SPAWN_FAILURE)
+        refusal = raised.value
+    finally:
+        await client.close()
+        await supervisor.stop()
+
+    async def spawn(_request: web.Request) -> web.Response:
+        raise refusal
+
+    app = web.Application(middlewares=[error_middleware])
+    app.router.add_post("/api/sessions", spawn)
+    async with TestClient(TestServer(app)) as http:
+        response = await http.post("/api/sessions", json={})
+        payload = await response.json()
+
+    # 503, not 500: nothing was created, the daemon is refusing on purpose, and
+    # the condition clears when the daemon is restarted.
+    assert response.status == 503
+    assert payload["code"] == "supervisor_unreachable"
+    assert "refusing an in-process fallback" in payload["error"]
+    assert str(client.supervisor_pid) in payload["error"]
+
+
+async def test_a_timeout_is_a_deadline_not_an_internal_error() -> None:
+    """`TimeoutError` subclasses `OSError`, so it used to fall through to 500.
+
+    The same trip the refusal took: nothing above the generic clause matched it,
+    and a body reading "internal server error" told the caller neither that a
+    deadline had expired nor that retrying was reasonable.
+    """
+
+    async def slow(_request: web.Request) -> web.Response:
+        raise TimeoutError("no reply within 5s")
+
+    app = web.Application(middlewares=[error_middleware])
+    app.router.add_get("/slow", slow)
+    async with TestClient(TestServer(app)) as http:
+        response = await http.get("/slow")
+        payload = await response.json()
+
+    assert response.status == 504
+    assert payload == {"error": "no reply within 5s", "code": "timeout"}
+

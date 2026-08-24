@@ -3,6 +3,30 @@
 All JSON APIs are rooted at `/api`. PTY and event streams use `/pty/{session_id}` and
 `/events` WebSockets.
 
+## Error shapes every route shares
+
+`error_middleware` translates the typed failures below before any handler-specific
+code runs, so these statuses hold for every route unless a section says otherwise.
+
+| Raised | Status | Body |
+|---|---|---|
+| `KeyError` | 404 | `{error: "not found: <key>"}` |
+| `ValueError` / `TypeError` | 400 | `{error}` |
+| `SupervisorUnavailable` | 503 | `{error, code: "supervisor_unreachable"}` |
+| `TimeoutError` | 504 | `{error, code: "timeout"}` |
+| anything else | 500 | `{error: "internal server error"}` |
+
+The last two rows are recent.
+`SupervisorUnavailable` subclasses `RuntimeError` and `TimeoutError` subclasses
+`OSError`, so both used to reach the generic clause and answer `500 internal
+server error` with the reason left in `daemon.log`.
+The case that made it matter is `POST /api/sessions`: when the supervisor socket
+dies mid-spawn and the supervisor process is still alive, the daemon deliberately
+fails the spawn rather than falling back in-process (a fallback there is a coin
+flip on two agents in one workspace), and the operator - the only person who can
+act on it, by restarting the daemon - was told nothing.
+Nothing is created on either path, and both are retryable.
+
 ## Desktop lifecycle control
 
 ```text
