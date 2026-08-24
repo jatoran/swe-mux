@@ -18,15 +18,15 @@ from swe_mux.config import (
     load_config,
 )
 from swe_mux.keybindings import COMMAND_IDS, normalize_binding
-from swe_mux.server import (
+from swe_mux.routes.clipboard import (
     capture_clipboard_entry,
     clear_clipboard_entries,
     delete_clipboard_entry,
-    error_middleware,
     get_clipboard_entry,
     list_clipboard_entries,
     patch_clipboard_entry,
 )
+from swe_mux.server import error_middleware
 
 
 def _rows(path: Path) -> list[sqlite3.Row]:

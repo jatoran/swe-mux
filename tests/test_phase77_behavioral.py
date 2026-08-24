@@ -19,6 +19,7 @@ from swe_mux.behavioral_consumers import (
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.openrouter import OpenRouterError
+from swe_mux.routes import scan_timeline as scan_timeline_routes
 from swe_mux.scan_consumers import (
     catch_me_up,
     handoff_progress,
@@ -522,7 +523,6 @@ def _seed_record(store: AutomationStore, **kwargs: Any) -> Any:
 def _app(store: AutomationStore, sessions: Any, enabled: set[str]) -> Any:
     from aiohttp import web
 
-    from swe_mux import server
 
     async def gate(_root: str) -> frozenset[str]:
         return frozenset(enabled)
@@ -532,9 +532,9 @@ def _app(store: AutomationStore, sessions: Any, enabled: set[str]) -> Any:
     app[keys.SESSIONS] = sessions
     app[keys.AUTOMATION_GATE] = gate
     app[keys.PROJECTS] = SimpleNamespace(projects={"proj": SimpleNamespace(root="/root")})
-    app.router.add_get("/catch/{sid}", server.session_catch_me_up)
-    app.router.add_get("/blockers", server.fleet_live_blockers)
-    app.router.add_get("/search", server.scan_timeline_search)
+    app.router.add_get("/catch/{sid}", scan_timeline_routes.session_catch_me_up)
+    app.router.add_get("/blockers", scan_timeline_routes.fleet_live_blockers)
+    app.router.add_get("/search", scan_timeline_routes.scan_timeline_search)
     return app
 
 

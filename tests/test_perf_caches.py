@@ -8,11 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 import swe_mux.reconcile as reconcile
-import swe_mux.server as server
 import swe_mux.tailscale as tailscale
 import swe_mux.transcript_view as tv
 from swe_mux.history import HistoryIndex
 from swe_mux.reconcile import reconcile_external_history
+from swe_mux.routes import automation as automation_routes
+from swe_mux.routes import projects as projects_routes
 
 RULES_TOML = 'version=1\n[[rule]]\nid="diag"\non="turn_ended"\ndo=[{kind="notify",message="hi"}]\n'
 
@@ -154,42 +155,42 @@ def test_transcript_cache_propagates_missing_file(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# server._load_repo_rule_entry (repository rules mtime cache)
+# automation_routes._load_repo_rule_entry (repository rules mtime cache)
 # --------------------------------------------------------------------------- #
 def test_repo_rule_entry_caches_by_mtime(tmp_path: Path, monkeypatch) -> None:
-    server._repo_rules_cache.clear()
+    automation_routes._repo_rules_cache.clear()
     root = tmp_path / "proj"
     (root / ".swe-mux").mkdir(parents=True)
     rules_path = root / ".swe-mux" / "rules.toml"
     rules_path.write_text(RULES_TOML, encoding="utf-8")
     calls = {"n": 0}
-    real = server.parse_rules
+    real = automation_routes.parse_rules
 
     def counting(text, *, source):
         calls["n"] += 1
         return real(text, source=source)
 
-    monkeypatch.setattr(server, "parse_rules", counting)
+    monkeypatch.setattr(automation_routes, "parse_rules", counting)
 
-    e1 = server._load_repo_rule_entry("scope-1", str(root))
-    e2 = server._load_repo_rule_entry("scope-1", str(root))
+    e1 = automation_routes._load_repo_rule_entry("scope-1", str(root))
+    e2 = automation_routes._load_repo_rule_entry("scope-1", str(root))
     assert calls["n"] == 1  # parsed once
     assert e1["valid"] is True and e1["execution"] == "inert"
     assert e1["rules"][0]["source"] == "repository-inert"
     assert e2["project_scope_id"] == "scope-1"
 
     # A cache hit still reflects the caller's fresh project id.
-    e3 = server._load_repo_rule_entry("scope-2", str(root))
+    e3 = automation_routes._load_repo_rule_entry("scope-2", str(root))
     assert calls["n"] == 1
     assert e3["project_scope_id"] == "scope-2"
 
     rules_path.write_text(RULES_TOML, encoding="utf-8")
     _bump_mtime(rules_path)
-    server._load_repo_rule_entry("scope-1", str(root))
+    automation_routes._load_repo_rule_entry("scope-1", str(root))
     assert calls["n"] == 2  # re-parsed after change
 
     # No rules.toml -> skipped (None), matching the original not-is_file() behaviour.
-    assert server._load_repo_rule_entry("scope-x", str(tmp_path / "empty")) is None
+    assert automation_routes._load_repo_rule_entry("scope-x", str(tmp_path / "empty")) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -334,22 +335,22 @@ async def test_tailscale_status_ttl_cache(monkeypatch) -> None:
 
 
 async def test_fs_roots_probe_is_cached(monkeypatch) -> None:
-    server._fs_roots_cache = None
+    projects_routes._fs_roots_cache = None
     probes = {"n": 0}
 
     def fake_probe():
         probes["n"] += 1
         return ["C:\\"]
 
-    monkeypatch.setattr(server, "_probe_drive_roots", fake_probe)
+    monkeypatch.setattr(projects_routes, "_probe_drive_roots", fake_probe)
     request = SimpleNamespace(remote="127.0.0.1")
 
-    await server.filesystem_roots(request)  # type: ignore[arg-type]
-    await server.filesystem_roots(request)  # type: ignore[arg-type]
+    await projects_routes.filesystem_roots(request)  # type: ignore[arg-type]
+    await projects_routes.filesystem_roots(request)  # type: ignore[arg-type]
     assert probes["n"] == 1  # cached within TTL
 
-    assert server._fs_roots_cache is not None
-    server._fs_roots_cache = (0.0, server._fs_roots_cache[1])
-    await server.filesystem_roots(request)  # type: ignore[arg-type]
+    assert projects_routes._fs_roots_cache is not None
+    projects_routes._fs_roots_cache = (0.0, projects_routes._fs_roots_cache[1])
+    await projects_routes.filesystem_roots(request)  # type: ignore[arg-type]
     assert probes["n"] == 2  # re-probed after expiry
-    server._fs_roots_cache = None
+    projects_routes._fs_roots_cache = None

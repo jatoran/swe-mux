@@ -9,7 +9,7 @@ import pytest
 from multidict import MultiDict
 
 from swe_mux import app_keys as keys
-from swe_mux import git_provenance, server
+from swe_mux import git_provenance
 from swe_mux.event_bus import EventBus
 from swe_mux.git_monitor import GitCommitChange, GitCommitMetadata, GitPosition
 from swe_mux.git_provenance import (
@@ -23,6 +23,7 @@ from swe_mux.git_provenance import (
 )
 from swe_mux.history import HistoryIndex
 from swe_mux.models import GitState, MuxEvent
+from swe_mux.routes import git as git_routes
 
 from .host_paths import ABS_ROOT, OTHER_ABS_ROOT, abs_path
 
@@ -1477,7 +1478,7 @@ async def test_provenance_api_validates_and_filters() -> None:
 
     request = _provenance_request(MultiDict({"project_id": "p", "session_id": "s"}), [])
     request.app[keys.HISTORY].git_provenance = rows
-    response = await server.git_provenance(request)
+    response = await git_routes.git_provenance(request)
     payload = json.loads(response.body)
 
     assert response.status == 200
@@ -1525,7 +1526,7 @@ async def test_provenance_rows_carry_the_current_name_beside_the_recorded_one() 
             {"agent_run_id": "run-ended", "content": "Land the migration"},
         ],
     )
-    payload = json.loads((await server.git_provenance(request)).body)
+    payload = json.loads((await git_routes.git_provenance(request)).body)
     by_commit = {item["commit_oid"]: item for item in payload["items"]}
 
     assert by_commit[NEW]["display_name"] == "Fix the parser"
@@ -1570,6 +1571,6 @@ async def test_a_renamed_session_keeps_its_name_over_a_later_generated_title() -
             {"agent_run_id": "run-ended", "content": "Land the migration"},
         ],
     )
-    payload = json.loads((await server.git_provenance(request)).body)
+    payload = json.loads((await git_routes.git_provenance(request)).body)
 
     assert [item["display_name"] for item in payload["items"]] == ["release prep", "hand-named"]

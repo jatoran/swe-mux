@@ -17,7 +17,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.project_files import note_save_loop_sample
-from swe_mux.server import error_middleware, note_save_loop_diagnostic
+from swe_mux.routes.notes import note_save_loop_diagnostic
+from swe_mux.server import error_middleware
 
 
 def _app() -> web.Application:

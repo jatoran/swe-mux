@@ -11,7 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 import swe_mux.session_attachments as attachment_store
 from swe_mux import app_keys as keys
 from swe_mux.models import SessionRecord
-from swe_mux.server import upload_session_attachment
+from swe_mux.routes.sessions import upload_session_attachment
 from swe_mux.session_attachments import (
     attachment_workspace_root,
     sanitize_attachment_name,

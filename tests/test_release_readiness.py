@@ -30,13 +30,10 @@ from swe_mux.harness import (
     version_is_untested,
 )
 from swe_mux.prerequisites import detect_prerequisites
-from swe_mux.server import (
-    diagnostics_export,
-    error_middleware,
-    firewall_repair,
-    firewall_status,
-    get_doctor_report,
-)
+from swe_mux.routes import system as system_routes
+from swe_mux.routes.diagnostics import diagnostics_export, get_doctor_report
+from swe_mux.routes.system import firewall_repair, firewall_status
+from swe_mux.server import error_middleware
 
 # --------------------------------------------------------------------------- #
 # Tailscale connection-state classifier
@@ -314,7 +311,7 @@ def _diagnostics_app(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> web.Appl
     async def fake_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
         return {"available": True, "connection_state": "connected", "port": port}
 
-    monkeypatch.setattr(server, "tailscale_status", fake_status)
+    monkeypatch.setattr(system_routes, "tailscale_status", fake_status)
     app = web.Application(middlewares=[error_middleware])
     app[keys.CONFIG] = Config(data_dir=tmp_path, port=8765)
     app[keys.SESSIONS] = SimpleNamespace(sessions={})
@@ -385,10 +382,10 @@ async def test_doctor_endpoint_assembles_a_report(
             "serve_configured": False,
         }
 
-    monkeypatch.setattr(server, "tailscale_status", fake_status)
+    monkeypatch.setattr(system_routes, "tailscale_status", fake_status)
     # Keep the wiring test hermetic: no real PATH detection or background singleton.
-    monkeypatch.setattr(server, "detect_prerequisites", lambda: [])
-    monkeypatch.setattr(server, "detect_installations_with_versions", lambda exe: {})
+    monkeypatch.setattr(system_routes, "detect_prerequisites", lambda: [])
+    monkeypatch.setattr(system_routes, "detect_installations_with_versions", lambda exe: {})
     monkeypatch.setattr(
         server, "background", SimpleNamespace(health=lambda: {"degraded": [], "total_faults": 0})
     )

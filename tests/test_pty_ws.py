@@ -11,11 +11,12 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.device_presence import DevicePresenceStore, DeviceReport
 from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
-from swe_mux.server import PtyOutputFlow, deliver_broadcast, pty_ws
+from swe_mux.routes import pty as pty_routes
+from swe_mux.routes.pty import PtyOutputFlow, pty_ws
+from swe_mux.routes.terminal import deliver_broadcast
 from swe_mux.session import Session
 from tests.support.settle import until
 
@@ -53,7 +54,7 @@ async def test_pty_sender_batches_output_already_waiting_in_the_queue() -> None:
         sent.append(payload)
 
     task = asyncio.create_task(
-        server._pty_sender(
+        pty_routes._pty_sender(
             cast(Any, SimpleNamespace(send_bytes_classified=send_bytes_classified)),
             cast(Any, SimpleNamespace()),
             SimpleNamespace(queue=queue),
@@ -536,7 +537,7 @@ async def test_a_settled_drag_pulses_an_alternate_screen_child_exactly_once(
     nothing arrives to overwrite them (`needs_resize_repaint`). One pulse after the
     gesture settles is what the user was otherwise doing by hand.
     """
-    monkeypatch.setattr(server, "RESIZE_REPAINT_SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(pty_routes, "RESIZE_REPAINT_SETTLE_SECONDS", 0.05)
     resizes: list[tuple[int, int]] = []
     session = _repaint_test_session("claude", resizes)
     app = _repaint_test_app(session)
@@ -584,7 +585,7 @@ async def test_a_settled_drag_never_pulses_a_normal_screen_harness(
     Pulsing them anyway would spend a full transcript re-render on every drag, which is
     the cost `repaints_scrollback` deliberately rations behind a client request.
     """
-    monkeypatch.setattr(server, "RESIZE_REPAINT_SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(pty_routes, "RESIZE_REPAINT_SETTLE_SECONDS", 0.05)
     resizes: list[tuple[int, int]] = []
     session = _repaint_test_session("codex", resizes)
     app = _repaint_test_app(session)
@@ -678,7 +679,7 @@ async def test_paste_trace_persists_as_its_own_event_type_with_its_own_clamp() -
             "before": {"cursorCol": 10, "rows": ["r" * 120 for _ in range(6)]},
             "after": {"cursorCol": 58, "rows": ["r" * 120 for _ in range(6)]},
         }
-        assert len(json.dumps(detail)) > server.CLIENT_DIAGNOSTIC_DETAIL_LIMIT
+        assert len(json.dumps(detail)) > pty_routes.CLIENT_DIAGNOSTIC_DETAIL_LIMIT
         await ws.send_json(
             {"type": "client_diagnostic", "phase": "terminal_paste_trace", "detail": detail}
         )
@@ -869,7 +870,7 @@ async def test_pty_replay_does_not_wait_for_event_persistence() -> None:
 async def test_pty_replay_has_a_bounded_fallback_for_clients_without_readiness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("swe_mux.server.PTY_ATTACH_READY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("swe_mux.routes.pty.PTY_ATTACH_READY_TIMEOUT_SECONDS", 0.01)
     record = SessionRecord(
         "mux-id", "shell", "default", "shell", "mux-id", ".", "pwsh.exe", [], state="running"
     )
@@ -973,7 +974,7 @@ async def test_broadcast_targets_carry_operator_input_evidence() -> None:
 
 async def test_http_session_input_guards_ended_sessions_and_carries_evidence() -> None:
     """`POST /api/sessions/{sid}/input` mirrors the WS/voice evidence contract."""
-    from swe_mux.server import session_input
+    from swe_mux.routes.terminal import session_input
 
     writes: dict[str, list[str]] = {"live": [], "ended": []}
     live = _broadcast_session(writes, "live", included=False)
@@ -1410,7 +1411,7 @@ async def test_mouse_reports_are_not_counted_as_typed_input() -> None:
 
 
 def test_pointer_report_classification() -> None:
-    from swe_mux.server import pointer_report_kind
+    from swe_mux.routes.pty import pointer_report_kind
 
     assert pointer_report_kind("\x1b[<35;10;20M") == "motion"      # SGR motion
     assert pointer_report_kind("\x1b[<32;10;20M") == "motion"      # SGR drag

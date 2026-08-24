@@ -406,7 +406,7 @@ def _request(app: dict[str, Any], sid: str, query: dict[str, str] | None = None)
 
 
 async def test_state_log_range_query_serves_the_durable_timeline(tmp_path: Path) -> None:
-    from swe_mux.server import get_session_state_log
+    from swe_mux.routes.diagnostics import get_session_state_log
 
     store = StatusTimelineStore(tmp_path / "mux.db")
     session = ringed_session(sid="live-1", run_id="live-1")
@@ -465,7 +465,7 @@ async def _none_entry(_identity: str) -> dict[str, Any] | None:
 
 
 async def test_ended_session_state_log_is_served_post_mortem(tmp_path: Path) -> None:
-    from swe_mux.server import get_session_state_log
+    from swe_mux.routes.diagnostics import get_session_state_log
 
     store = StatusTimelineStore(tmp_path / "mux.db")
     session = ringed_session(sid="gone-1", run_id="gone-run")
@@ -505,7 +505,7 @@ async def test_ended_session_state_log_is_served_post_mortem(tmp_path: Path) -> 
 async def test_diagnostic_bundle_packages_timeline_health_and_transcript(
     tmp_path: Path,
 ) -> None:
-    from swe_mux.server import get_session_diagnostic_bundle
+    from swe_mux.routes.diagnostics import get_session_diagnostic_bundle
 
     store = StatusTimelineStore(tmp_path / "mux.db")
     session = ringed_session(sid="gone-2", run_id="gone-2-run")

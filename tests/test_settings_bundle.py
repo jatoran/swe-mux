@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from swe_mux import app_keys as keys
 from swe_mux.config import Config
-from swe_mux.server import settings_bundle
+from swe_mux.routes.settings import settings_bundle
 
 
 class AutomationStub:

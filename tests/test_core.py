@@ -18,14 +18,14 @@ from swe_mux.launchers import create_agent_shims, resolve_codex_pty_command, res
 from swe_mux.models import ProjectRecord, SessionRecord
 from swe_mux.pty_host import PtyHost, merge_environment
 from swe_mux.reconcile import reconcile_external_history
-from swe_mux.server import (
+from swe_mux.routes.agent_ingress import hook_event_payload
+from swe_mux.session import terminal_exit_outcome
+from swe_mux.session_media import (
     SESSION_MEDIA_TTL_SECONDS,
     cleanup_expired_session_media,
-    hook_event_payload,
     session_media_directory,
     validate_session_media,
 )
-from swe_mux.session import terminal_exit_outcome
 from swe_mux.shim_paths import SHIM_SUFFIX, is_mux_shim, path_without_shim_dirs
 from swe_mux.transcript_view import parse_transcript
 

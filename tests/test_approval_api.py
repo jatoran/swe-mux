@@ -20,12 +20,12 @@ from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import ApprovalPolicy, SessionRecord
-from swe_mux.server import (
+from swe_mux.routes.sessions import (
     approve_pending_request,
-    error_middleware,
     get_session_approvals,
     put_session_approvals,
 )
+from swe_mux.server import error_middleware
 
 pytestmark = pytest.mark.anyio
 

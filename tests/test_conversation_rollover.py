@@ -32,7 +32,8 @@ from swe_mux.observation import (
     conversation_rollover_decision,
     foreign_conversation_hook_id,
 )
-from swe_mux.server import _branch_source_id, hook_event_payload
+from swe_mux.routes.agent_ingress import hook_event_payload
+from swe_mux.routes.branch import _branch_source_id
 from swe_mux.session import Session, SessionManager
 from tests.support.detection_replay import ReplaySession, VirtualClock
 
@@ -668,7 +669,7 @@ async def test_an_idle_prompt_notification_never_marks_a_session_stale(
 
 
 def test_only_transcript_backed_hooks_date_the_staleness_evidence() -> None:
-    from swe_mux.server import _TRANSCRIPT_BACKED_HOOK_EVENTS
+    from swe_mux.routes.agent_ingress import _TRANSCRIPT_BACKED_HOOK_EVENTS
 
     for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
         assert event in _TRANSCRIPT_BACKED_HOOK_EVENTS

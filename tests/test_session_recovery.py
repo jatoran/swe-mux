@@ -761,7 +761,7 @@ def test_input_is_refused_for_a_session_with_no_process() -> None:
     into and type at. Neither has a PTY, and `PtyHost.write` raises for a released
     or never-spawned pseudoterminal - a 500 on the HTTP paths and a dropped socket
     on the WebSocket one. Refusing here makes it explainable instead."""
-    from swe_mux.server import session_accepts_input
+    from swe_mux.routes.terminal import session_accepts_input
 
     assert session_accepts_input(FakeSession("live", state="running")) is True
     assert session_accepts_input(FakeSession("live", state="awaiting")) is True

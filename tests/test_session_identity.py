@@ -238,7 +238,7 @@ def test_codex_turn_notify_dates_the_staleness_evidence() -> None:
     it. Verified live: the rolled pane reported the abandoned conversation as live,
     with its retired token counts, for 200s.
     """
-    from swe_mux.server import _HOOK_EVENT_TYPES, _TRANSCRIPT_BACKED_HOOK_EVENTS
+    from swe_mux.routes.agent_ingress import _HOOK_EVENT_TYPES, _TRANSCRIPT_BACKED_HOOK_EVENTS
 
     assert "agent-turn-complete" in _HOOK_EVENT_TYPES
     assert "agent-turn-complete" in _TRANSCRIPT_BACKED_HOOK_EVENTS
@@ -282,7 +282,8 @@ async def test_subagent_hooks_never_date_transcript_staleness_evidence(
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from swe_mux.server import error_middleware, hook_ingress, security_middleware
+    from swe_mux.routes.agent_ingress import hook_ingress
+    from swe_mux.server import error_middleware, security_middleware
 
     record = agent_record(OWN, cwd=str(tmp_path))
     record.state = "idle"

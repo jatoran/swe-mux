@@ -34,7 +34,7 @@ from pathlib import Path
 
 from swe_mux.assistant import ASSISTANT_RULE_ID
 from swe_mux.config import Config
-from swe_mux.server import FEATURE_SPENDERS, _label_spend_rows
+from swe_mux.routes.automation import FEATURE_SPENDERS, _label_spend_rows
 
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "swe_mux"
 RULE_ID_ASSIGNMENT = re.compile(r"^([A-Z][A-Z0-9_]*_RULE_ID)\s*=\s*[\"']([^\"']+)[\"']", re.M)

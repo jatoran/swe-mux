@@ -22,13 +22,13 @@ from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.openrouter import OpenRouterError, OpenRouterVerification
 from swe_mux.project_files import read_project_config, write_project_config
-from swe_mux.server import (
+from swe_mux.routes.automation import (
     automation_provider_key,
     automation_provider_status,
-    error_middleware,
     get_project_automations,
     verify_automation_provider,
 )
+from swe_mux.server import error_middleware
 
 pytestmark = pytest.mark.anyio
 

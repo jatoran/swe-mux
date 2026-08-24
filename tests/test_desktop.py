@@ -31,7 +31,8 @@ from swe_mux.desktop_window_state import (
     load_window_state,
     save_window_state,
 )
-from swe_mux.server import desktop_shutdown, is_loopback_peer
+from swe_mux.http_support import is_loopback_peer
+from swe_mux.routes.system import desktop_shutdown
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore:It is recommended to use web.AppKey instances for keys"

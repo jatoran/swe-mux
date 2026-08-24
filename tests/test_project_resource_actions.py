@@ -11,14 +11,14 @@ from swe_mux import app_keys as keys
 from swe_mux.config import load_config
 from swe_mux.event_bus import EventBus
 from swe_mux.project_files import read_project_config
-from swe_mux.server import (
-    error_middleware,
+from swe_mux.routes.project_files import (
     get_project_file,
     get_project_file_content,
     ignore_project_resource,
     post_project_resource,
     reveal_project_resource,
 )
+from swe_mux.server import error_middleware
 
 
 async def test_project_resource_context_actions_are_scoped_and_persisted(
@@ -32,7 +32,7 @@ async def test_project_resource_context_actions_are_scoped_and_persisted(
     target_file.write_bytes(b"cache")
     revealed: list[str] = []
     monkeypatch.setattr(
-        "swe_mux.server.open_in_file_manager", lambda path: revealed.append(str(path))
+        "swe_mux.routes.project_files.open_in_file_manager", lambda path: revealed.append(str(path))
     )
 
     config = load_config(tmp_path / "config.toml")

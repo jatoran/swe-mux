@@ -27,7 +27,8 @@ from swe_mux.operational_telemetry import (
 )
 from swe_mux.processes import OwnedProcess, ProcessInspector
 from swe_mux.provider_accounts import ProviderAccountManager
-from swe_mux.server import create_app, get_notification_diagnostics
+from swe_mux.routes.diagnostics import get_notification_diagnostics
+from swe_mux.server import create_app
 from swe_mux.sqlite_store import read_schema_version
 from swe_mux.tier0_store import TIER0_SCHEMA_VERSION, Tier0Store
 

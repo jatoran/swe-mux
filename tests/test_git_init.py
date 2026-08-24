@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import git_init, git_review, server
+from swe_mux import git_init, git_review
 from swe_mux.models import ProjectRecord
+from swe_mux.routes import git as git_routes
 
 
 def git(repo: Path, *args: str) -> str:
@@ -135,7 +136,7 @@ async def test_init_endpoint_creates_the_repository_and_announces_the_change(
 ) -> None:
     project = ProjectRecord("project", "Project", str(tmp_path), 0)
     request = Request(project, {"project_id": project.id})
-    body = payload(await server.init_repository(request))  # type: ignore[arg-type]
+    body = payload(await git_routes.init_repository(request))  # type: ignore[arg-type]
 
     assert body["ok"] is True
     assert body["gitignore"] == "created"
@@ -148,7 +149,7 @@ async def test_init_endpoint_refuses_a_folder_git_already_tracks(tmp_path: Path)
     git(tmp_path, "init")
     project = ProjectRecord("project", "Project", str(tmp_path), 0)
     with pytest.raises(git_review.GitReviewError) as caught:
-        await server.init_repository(Request(project, {"project_id": project.id}))  # type: ignore[arg-type]
+        await git_routes.init_repository(Request(project, {"project_id": project.id}))  # type: ignore[arg-type]
     # Re-checked in the handler rather than trusted from the client, because `git init`
     # on a tracked folder reinitializes a repository the user still has.
     assert caught.value.code == "already_initialized"
@@ -159,5 +160,5 @@ async def test_init_endpoint_refuses_a_folder_git_already_tracks(tmp_path: Path)
 async def test_init_endpoint_refuses_a_folder_that_is_gone(tmp_path: Path) -> None:
     project = ProjectRecord("project", "Project", str(tmp_path / "missing"), 0)
     with pytest.raises(git_review.GitReviewError) as caught:
-        await server.init_repository(Request(project, {"project_id": project.id}))  # type: ignore[arg-type]
+        await git_routes.init_repository(Request(project, {"project_id": project.id}))  # type: ignore[arg-type]
     assert caught.value.code == "root_unavailable"

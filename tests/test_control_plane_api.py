@@ -13,20 +13,17 @@ from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.models import SessionRecord
-from swe_mux.server import (
+from swe_mux.routes.attention import list_lineage
+from swe_mux.routes.automation import (
     automation_notifications,
-    create_observer_batch,
-    delete_session,
-    error_middleware,
-    export_handoff,
     get_automation_status,
     list_annotations,
-    list_lineage,
     patch_automation_notification,
     patch_automation_notifications,
-    relaunch_session,
-    second_opinion,
 )
+from swe_mux.routes.insights import create_observer_batch, export_handoff, second_opinion
+from swe_mux.routes.sessions import delete_session, relaunch_session
+from swe_mux.server import error_middleware
 
 
 class EventsStub:
@@ -210,7 +207,7 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
         manager.sessions[new_record.id] = new
         return new
 
-    monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
+    monkeypatch.setattr("swe_mux.routes.sessions._spawn_from_body", fake_spawn)
     request = SimpleNamespace(
         app={keys.SESSIONS: manager, keys.CONFIG: SimpleNamespace(data_dir=tmp_path)},
         match_info={"sid": old_record.id},
@@ -304,7 +301,7 @@ async def test_a_recovered_shell_relaunches_without_becoming_a_task_terminal(
         manager.sessions[new_record.id] = new
         return new
 
-    monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
+    monkeypatch.setattr("swe_mux.routes.sessions._spawn_from_body", fake_spawn)
     request = SimpleNamespace(
         app={keys.SESSIONS: manager, keys.CONFIG: SimpleNamespace(data_dir=tmp_path)},
         match_info={"sid": old_record.id},
@@ -385,8 +382,8 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
             return 0, "## main\n M src/parser.py"
         return 0, "src/parser.py | 4 +++-"
 
-    monkeypatch.setattr("swe_mux.server._spawn_from_body", spawn_stub)
-    monkeypatch.setattr("swe_mux.server._git", git_stub)
+    monkeypatch.setattr("swe_mux.routes.sessions._spawn_from_body", spawn_stub)
+    monkeypatch.setattr("swe_mux.routes.insights._git", git_stub)
     app = web.Application(middlewares=[error_middleware])
     app[keys.HISTORY] = HistoryStub(source)
     app[keys.AUTOMATION_STORE] = store

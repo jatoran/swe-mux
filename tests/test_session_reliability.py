@@ -13,9 +13,9 @@ from swe_mux import app_keys as keys
 from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
+from swe_mux.routes.terminal import session_startup_metrics
 from swe_mux.runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser
 from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser, StickyModeParser
-from swe_mux.server import session_startup_metrics
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
 

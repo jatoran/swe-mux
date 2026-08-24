@@ -36,7 +36,7 @@ from swe_mux.adapters import ClaudeAdapter, CodexAdapter
 from swe_mux.cli_state import ConversationHolder
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
-from swe_mux.server import resume_history
+from swe_mux.routes.history import resume_history
 from swe_mux.session import Session, SessionManager
 
 CONVERSATION = "aaaaaaaa-1111-4a7b-8c9d-0e1f2a3b4c5d"

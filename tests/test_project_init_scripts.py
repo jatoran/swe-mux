@@ -14,7 +14,8 @@ from swe_mux.history import HistoryIndex
 from swe_mux.project_actions import action_spawn_body
 from swe_mux.project_init import init_script_step, select_init_scripts
 from swe_mux.projects import ProjectManager, canonical_project_root
-from swe_mux.server import error_middleware, run_project_init_scripts
+from swe_mux.routes.project_actions import run_project_init_scripts
+from swe_mux.server import error_middleware
 
 SCRIPTS = [
     {"id": "git", "label": "Initialize git", "command": "git init", "default_enabled": True},
@@ -159,7 +160,7 @@ async def test_init_script_endpoint_starts_selected_scripts_in_order(
         async def emit(self, name: str, **_: Any) -> None:
             events.append(name)
 
-    monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
+    monkeypatch.setattr("swe_mux.routes.sessions._spawn_from_body", fake_spawn)
     app = web.Application(middlewares=[error_middleware])
     app[keys.CONFIG] = _config(tmp_path, SCRIPTS)
     app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})

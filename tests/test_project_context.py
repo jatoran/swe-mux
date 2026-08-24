@@ -13,7 +13,7 @@ from swe_mux.project_context import (
     ProjectContext,
     ProjectContextService,
 )
-from swe_mux.server import get_project_context, put_project_context
+from swe_mux.routes.projects import get_project_context, put_project_context
 
 
 def context(root: Path) -> ProjectContext:

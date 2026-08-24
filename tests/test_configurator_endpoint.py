@@ -17,9 +17,11 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.config import Config
-from swe_mux.server import (
+from swe_mux.routes import configurator as configurator_routes
+from swe_mux.routes import diagnostics as diagnostics_routes
+from swe_mux.routes import sessions as sessions_routes
+from swe_mux.routes.configurator import (
     _configurator_apply_settings,
     _configurator_harness,
     _configurator_health_line,
@@ -109,7 +111,7 @@ def test_a_source_checkout_project_is_preferred_over_merely_the_first(
     """
     checkout = tmp_path / "swe-mux"
     checkout.mkdir()
-    monkeypatch.setattr(server, "source_checkout", lambda: checkout)
+    monkeypatch.setattr(configurator_routes, "source_checkout", lambda: checkout)
     app = _app(config, _project("p1", tmp_path / "other"), _project("p2", checkout))
     assert _configurator_project(app, "").id == "p2"
 
@@ -125,7 +127,9 @@ def test_no_project_at_all_is_none_rather_than_an_invented_one(config: Config) -
 async def test_options_report_what_the_button_needs_before_it_is_pressed(
     tmp_path: Path, config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(server, "_configurator_candidates", lambda _config: ("claude",))
+    monkeypatch.setattr(
+        configurator_routes,
+        "_configurator_candidates", lambda _config: ("claude",))
     body = await _body(
         await configurator_options(_request(_app(config, _project("p1", tmp_path))))
     )
@@ -151,11 +155,14 @@ async def test_a_launch_seeds_a_prompt_and_marks_the_session(
         spawned.append(body)
         return session
 
-    monkeypatch.setattr(server, "_configurator_candidates", lambda _config: ("claude",))
-    monkeypatch.setattr(server, "_spawn_from_body", spawn)
-    monkeypatch.setattr(server, "_doctor_report", lambda _app: _ok_report())
     monkeypatch.setattr(
-        server, "detect_installations_with_versions", lambda _overrides: {}
+        configurator_routes,
+        "_configurator_candidates", lambda _config: ("claude",))
+    monkeypatch.setattr(sessions_routes, "_spawn_from_body", spawn)
+    monkeypatch.setattr(diagnostics_routes, "_doctor_report", lambda _app: _ok_report())
+    monkeypatch.setattr(
+        configurator_routes,
+        "detect_installations_with_versions", lambda _overrides: {}
     )
 
     app = _app(config, _project("p1", tmp_path))
@@ -198,10 +205,12 @@ async def test_the_launch_body_is_a_valid_spawn_request(
             publish_update=lambda: None,
         )
 
-    monkeypatch.setattr(server, "_configurator_candidates", lambda _config: ("claude",))
-    monkeypatch.setattr(server, "_spawn_from_body", spawn)
-    monkeypatch.setattr(server, "_doctor_report", lambda _app: _ok_report())
-    monkeypatch.setattr(server, "detect_installations_with_versions", lambda _o: {})
+    monkeypatch.setattr(
+        configurator_routes,
+        "_configurator_candidates", lambda _config: ("claude",))
+    monkeypatch.setattr(sessions_routes, "_spawn_from_body", spawn)
+    monkeypatch.setattr(diagnostics_routes, "_doctor_report", lambda _app: _ok_report())
+    monkeypatch.setattr(configurator_routes, "detect_installations_with_versions", lambda _o: {})
 
     await launch_configurator(_request(_app(config, _project("p1", tmp_path)), {}))
     assert "configurator" not in captured[0]
@@ -211,12 +220,14 @@ async def test_the_launch_body_is_a_valid_spawn_request(
 async def test_no_harness_and_no_project_refuse_with_different_codes(
     tmp_path: Path, config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(server, "_configurator_candidates", lambda _config: ())
+    monkeypatch.setattr(configurator_routes, "_configurator_candidates", lambda _config: ())
     no_harness = await launch_configurator(_request(_app(config, _project("p1", tmp_path)), {}))
     assert no_harness.status == 409
     assert (await _body(no_harness))["code"] == "no_harness"
 
-    monkeypatch.setattr(server, "_configurator_candidates", lambda _config: ("claude",))
+    monkeypatch.setattr(
+        configurator_routes,
+        "_configurator_candidates", lambda _config: ("claude",))
     no_project = await launch_configurator(_request(_app(config), {}))
     assert no_project.status == 409
     assert (await _body(no_project))["code"] == "no_project"
@@ -226,7 +237,9 @@ async def test_no_harness_and_no_project_refuse_with_different_codes(
 async def test_an_unavailable_named_harness_names_the_ones_that_are(
     tmp_path: Path, config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(server, "_configurator_candidates", lambda _config: ("claude",))
+    monkeypatch.setattr(
+        configurator_routes,
+        "_configurator_candidates", lambda _config: ("claude",))
     response = await launch_configurator(
         _request(_app(config, _project("p1", tmp_path)), {"harness": "codex"})
     )
@@ -298,7 +311,7 @@ async def test_a_device_settings_edit_repaints_every_attached_browser(
         {"id": "row-2", "items": ["up", "down", "padArrows"]}
     ]}}}})
     app = {**_app(config), keys.SETTINGS_STORE: store}
-    result = await server._configurator_edit_device_settings(
+    result = await configurator_routes._configurator_edit_device_settings(
         app,
         profile="",
         domain="commandRail",
@@ -324,11 +337,11 @@ async def test_a_project_is_resolvable_by_name_as_well_as_id(
     # An agent reading a Project *name* out of a rail projection should be able
     # to act on it without translating back to a UUID first.
     app = _app(config, _project("p1", tmp_path / "a"))
-    assert server._configurator_resolve_project(app, "p1").id == "p1"
+    assert configurator_routes._configurator_resolve_project(app, "p1").id == "p1"
     with pytest.raises(ValueError, match="registered Projects"):
-        server._configurator_resolve_project(app, "nope")
+        configurator_routes._configurator_resolve_project(app, "nope")
     with pytest.raises(ValueError, match="not owned by one"):
-        server._configurator_resolve_project(app, "")
+        configurator_routes._configurator_resolve_project(app, "")
 
 
 @pytest.mark.asyncio
@@ -350,7 +363,7 @@ async def test_a_project_settings_write_merges_rather_than_replaces(
         **_app(config, _project("p1", root)),
         keys.HISTORY: SimpleNamespace(register_project_scope=_noop),
     }
-    result = await server._configurator_apply_project_settings(
+    result = await configurator_routes._configurator_apply_project_settings(
         app, project="p1", changes={"automations": {"tier0": True, "raw_store": True}}
     )
     assert result["applied"] is True
@@ -375,7 +388,7 @@ async def test_a_forbidden_project_field_is_refused_as_a_result(
         **_app(config, _project("p1", root)),
         keys.HISTORY: SimpleNamespace(register_project_scope=_noop),
     }
-    result = await server._configurator_apply_project_settings(
+    result = await configurator_routes._configurator_apply_project_settings(
         app, project="p1", changes={"token": "secret", "port": 9999}
     )
     assert result["applied"] is False
@@ -442,9 +455,9 @@ async def test_a_slow_health_report_does_not_hold_up_the_launch(
         await asyncio.sleep(30)
         return {}
 
-    monkeypatch.setattr(server, "CONFIGURATOR_HEALTH_BUDGET_SECONDS", 0.05)
-    monkeypatch.setattr(server, "_doctor_report", lambda _app: never())
-    assert await server._configurator_health_preview({}) == ""
+    monkeypatch.setattr(configurator_routes, "CONFIGURATOR_HEALTH_BUDGET_SECONDS", 0.05)
+    monkeypatch.setattr(diagnostics_routes, "_doctor_report", lambda _app: never())
+    assert await configurator_routes._configurator_health_preview({}) == ""
 
 
 @pytest.mark.asyncio
@@ -454,5 +467,5 @@ async def test_a_failing_health_report_does_not_fail_the_launch(
     async def broken() -> dict[str, Any]:
         raise RuntimeError("firewall probe exploded")
 
-    monkeypatch.setattr(server, "_doctor_report", lambda _app: broken())
-    assert await server._configurator_health_preview({}) == ""
+    monkeypatch.setattr(diagnostics_routes, "_doctor_report", lambda _app: broken())
+    assert await configurator_routes._configurator_health_preview({}) == ""

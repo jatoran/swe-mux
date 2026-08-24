@@ -9,12 +9,11 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
-from swe_mux import server as server_module
 from swe_mux.agent_context import AgentContextConflict, AgentContextService
 from swe_mux.event_bus import EventBus
 from swe_mux.harness import HARNESSES, descriptor, instruction_harnesses
-from swe_mux.server import (
-    error_middleware,
+from swe_mux.routes import agent_context as agent_context_routes
+from swe_mux.routes.agent_context import (
     get_agent_context,
     get_agent_context_source,
     preview_agent_context_sync,
@@ -22,6 +21,7 @@ from swe_mux.server import (
     reveal_agent_context_source,
     sync_agent_context,
 )
+from swe_mux.server import error_middleware
 
 
 def revision(data: bytes) -> str:
@@ -309,7 +309,8 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
     service = AgentContextService(tmp_path / "backups", home=home)
     revealed: list[Path] = []
     monkeypatch.setattr(
-        server_module, "open_in_file_manager", lambda path: revealed.append(Path(path))
+        agent_context_routes,
+        "open_in_file_manager", lambda path: revealed.append(Path(path))
     )
     app = web.Application(middlewares=[error_middleware])
     app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})

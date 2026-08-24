@@ -284,7 +284,7 @@ def _read_request(session: Any, body: Any, events: Any) -> Any:
 
 
 async def test_the_read_endpoint_acknowledges_publishes_and_stays_idempotent() -> None:
-    from swe_mux.server import mark_session_read
+    from swe_mux.routes.sessions import mark_session_read
 
     emitted: list[tuple[str, dict[str, Any]]] = []
     published: list[int] = []
@@ -316,7 +316,7 @@ async def test_the_read_endpoint_acknowledges_publishes_and_stays_idempotent() -
 
 
 async def test_the_read_endpoint_rejects_a_nonsense_cursor() -> None:
-    from swe_mux.server import mark_session_read
+    from swe_mux.routes.sessions import mark_session_read
 
     class EventsStub:
         async def emit(self, event_type: str, **payload: Any) -> None:
@@ -351,7 +351,7 @@ async def test_the_read_endpoint_separates_the_dwell_timer_from_the_user() -> No
     `{"read": false}` and `{"read": true}` are the menu item. Only the latter may
     move the mark backwards, and only the latter may clear a mark it set.
     """
-    from swe_mux.server import mark_session_read
+    from swe_mux.routes.sessions import mark_session_read
 
     emitted: list[tuple[str, dict[str, Any]]] = []
 

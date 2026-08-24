@@ -25,7 +25,7 @@ from swe_mux.event_bus import EventBus
 from swe_mux.harness import reserved_launch_arg_conflict
 from swe_mux.models import ProjectRecord
 from swe_mux.profiles import resolve_agent_profile, resolve_profile
-from swe_mux.server import spawn_session
+from swe_mux.routes.sessions import spawn_session
 
 
 def agent_profile(

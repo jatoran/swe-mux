@@ -11,19 +11,20 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
-from swe_mux.processes import PreviewRegistration
-from swe_mux.server import (
-    HOOK_RATE_LIMIT,
+from swe_mux.preview_transport import (
     PREVIEW_HTTP_CONCURRENCY,
     PREVIEW_WS_CONCURRENCY,
-    allowed_browser_host,
-    browser_origin_matches_request,
-    error_middleware,
-    hook_ingress,
     preview_proxy,
     preview_target,
     rewrite_preview_html,
     rewrite_preview_javascript,
+)
+from swe_mux.processes import PreviewRegistration
+from swe_mux.routes.agent_ingress import HOOK_RATE_LIMIT, hook_ingress
+from swe_mux.server import (
+    allowed_browser_host,
+    browser_origin_matches_request,
+    error_middleware,
     security_middleware,
 )
 from swe_mux.tailscale import (
@@ -510,9 +511,9 @@ async def test_hook_ingress_requires_and_deduplicates_ordered_omp_sequences(
     async def heal(_session: object, _payload: object) -> None:
         return None
 
-    monkeypatch.setattr("swe_mux.server.apply_hook_observation", apply)
+    monkeypatch.setattr("swe_mux.routes.agent_ingress.apply_hook_observation", apply)
     monkeypatch.setattr(
-        "swe_mux.server.foreign_conversation_hook_id", lambda _session, _payload: None
+        "swe_mux.routes.agent_ingress.foreign_conversation_hook_id", lambda _session, _payload: None
     )
     record = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000001",

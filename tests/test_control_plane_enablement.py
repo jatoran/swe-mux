@@ -739,7 +739,7 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
     # be enough — a consumer whose substrate is off must show *what it needs*.
     from types import SimpleNamespace
 
-    from swe_mux.server import get_project_automations, put_project_automations
+    from swe_mux.routes.automation import get_project_automations, put_project_automations
 
     project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
     emitted: list[str] = []
@@ -799,7 +799,7 @@ async def test_the_project_matrix_reports_every_project_including_the_opted_out(
     # silently vanished from the list would read as covered.
     from types import SimpleNamespace
 
-    from swe_mux.server import automation_project_matrix, put_project_automations
+    from swe_mux.routes.automation import automation_project_matrix, put_project_automations
 
     root_a = tmp_path / "a"
     root_b = tmp_path / "b"
@@ -848,7 +848,7 @@ async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path)
     # absent toggle: it makes the user believe a project is covered.
     from types import SimpleNamespace
 
-    from swe_mux.server import put_project_automations
+    from swe_mux.routes.automation import put_project_automations
 
     project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
 

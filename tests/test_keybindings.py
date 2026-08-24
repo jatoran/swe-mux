@@ -12,7 +12,7 @@ from swe_mux.keybindings import (
     keybinding_policy,
     normalize_binding,
 )
-from swe_mux.server import _keybindings_payload
+from swe_mux.routes.settings import _keybindings_payload
 
 
 def test_default_bindings_reference_valid_commands() -> None:

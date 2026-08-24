@@ -12,7 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
 from swe_mux.config import Config
-from swe_mux.server import daemon_restart
+from swe_mux.routes.system import daemon_restart
 from swe_mux.supervisor_client import (
     SUPERVISOR_EXE_ENV,
     dedicated_supervisor_exe,
@@ -111,7 +111,7 @@ async def test_restart_refuses_to_kill_sessions_without_the_supervisor(
 ) -> None:
     app, stop_event, spawned = restart_app(tmp_path)
     monkeypatch.setattr(
-        "swe_mux.server._spawn_daemon_successor",
+        "swe_mux.routes.system._spawn_daemon_successor",
         lambda command, log_path: spawned.append(list(command)),
     )
     client = TestClient(TestServer(app))
@@ -139,7 +139,7 @@ async def test_restart_detaches_and_spawns_a_successor_with_supervisor(
 ) -> None:
     app, stop_event, spawned = restart_app(tmp_path, supervisor_connected=True)
     monkeypatch.setattr(
-        "swe_mux.server._spawn_daemon_successor",
+        "swe_mux.routes.system._spawn_daemon_successor",
         lambda command, log_path: spawned.append(list(command)),
     )
     client = TestClient(TestServer(app))

@@ -14,6 +14,7 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux import server
+from swe_mux.routes import system as system_routes
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +25,7 @@ def no_real_bundle_scan(monkeypatch: Any) -> None:
     dev machine actually running the frozen app — environment-dependent. Tests
     that exercise the gate override this stub with their own holders.
     """
-    monkeypatch.setattr(server, "bundle_lock_holders", lambda _bundle: [])
+    monkeypatch.setattr(system_routes, "bundle_lock_holders", lambda _bundle: [])
 
 
 class FakeRequest:
@@ -68,7 +69,7 @@ def _app(tmp_path: Path, *, supervisor_connected: bool = True) -> dict[str, Any]
 
 
 def test_redeploy_source_root_finds_this_checkout() -> None:
-    root = server.redeploy_source_root()
+    root = system_routes.redeploy_source_root()
     assert root is not None
     assert (root / "packaging" / "redeploy_desktop.py").is_file()
     assert (root / "pyproject.toml").is_file()
@@ -77,15 +78,15 @@ def test_redeploy_source_root_finds_this_checkout() -> None:
 async def test_redeploy_refused_without_source_checkout(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    monkeypatch.setattr(server, "redeploy_source_root", lambda: None)
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    monkeypatch.setattr(system_routes, "redeploy_source_root", lambda: None)
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 409
     assert _payload(response)["error"] == "no_source_checkout"
 
 
 async def test_redeploy_refused_without_uv(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.setattr(server.shutil, "which", lambda _name: None)
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    monkeypatch.setattr(system_routes.shutil, "which", lambda _name: None)
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 409
     assert _payload(response)["error"] == "uv_not_found"
 
@@ -94,7 +95,7 @@ async def test_redeploy_refused_without_supervisor_unless_forced(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     app = _app(tmp_path, supervisor_connected=False)
-    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 409
     assert _payload(response)["error"] == "supervisor_not_attached"
     # force=true carries the same authority as killing sessions.
@@ -104,8 +105,8 @@ async def test_redeploy_refused_without_supervisor_unless_forced(
         spawned.append((args, kwargs))
         return SimpleNamespace(pid=4242)
 
-    monkeypatch.setattr(server.subprocess, "Popen", fake_popen)
-    response = await server.daemon_redeploy(  # type: ignore[arg-type]
+    monkeypatch.setattr(system_routes.subprocess, "Popen", fake_popen)
+    response = await system_routes.daemon_redeploy(  # type: ignore[arg-type]
         FakeRequest(app, body={"force": True})
     )
     assert response.status == 202
@@ -130,8 +131,8 @@ async def test_redeploy_refused_while_the_bundle_is_held(
             "path": r"D:\PROJECTS\swe-mux\dist\swe-mux\_internal",
         }
     ]
-    monkeypatch.setattr(server, "bundle_lock_holders", lambda _bundle: holders)
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    monkeypatch.setattr(system_routes, "bundle_lock_holders", lambda _bundle: holders)
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 409
     body = _payload(response)
     assert body["error"] == "bundle_in_use"
@@ -142,11 +143,11 @@ async def test_redeploy_refused_while_the_bundle_is_held(
     # force=true attempts anyway (the holder may exit during the build).
     spawned: list[Any] = []
     monkeypatch.setattr(
-        server.subprocess,
+        system_routes.subprocess,
         "Popen",
         lambda *args, **kwargs: spawned.append(args) or SimpleNamespace(pid=7),
     )
-    response = await server.daemon_redeploy(  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(  # type: ignore[arg-type]
         FakeRequest(_app(tmp_path), body={"force": True})
     )
     assert response.status == 202
@@ -156,7 +157,7 @@ async def test_redeploy_refused_while_the_bundle_is_held(
 async def test_redeploy_single_flight_lock(tmp_path: Path) -> None:
     # A lock naming a live pid (ours) refuses a second redeploy.
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 409
     assert _payload(response)["error"] == "redeploy_in_progress"
 
@@ -169,10 +170,10 @@ async def test_redeploy_spawn_contract(tmp_path: Path, monkeypatch: Any) -> None
         captured["kwargs"] = kwargs
         return SimpleNamespace(pid=31337)
 
-    monkeypatch.setattr(server.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(system_routes.subprocess, "Popen", fake_popen)
     # A stale lock (dead pid) must not block.
     (tmp_path / "redeploy.lock").write_text("999999999", encoding="ascii")
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 202
     body = _payload(response)
     assert body["status"] == "redeploying"
@@ -196,14 +197,14 @@ async def test_redeploy_status_reports_lock_and_log(tmp_path: Path) -> None:
     (tmp_path / "redeploy.log").write_text(
         "[redeploy] rebuilding\n[redeploy] ABORT: build failed\n", encoding="utf-8"
     )
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     body = _payload(response)
     assert body["running"] is False
     assert body["log_tail"][-1] == "[redeploy] ABORT: build failed"
     assert body["available"] is True
 
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert _payload(response)["running"] is True
 
 
@@ -211,7 +212,7 @@ def _redeploy_module() -> Any:
     import importlib.util
     import sys
 
-    root = Path(server.__file__).resolve().parents[2]
+    root = system_routes.PACKAGE_DIR.parents[1]
     sys.path.insert(0, str(root / "packaging"))
     try:
         spec = importlib.util.spec_from_file_location(
@@ -411,12 +412,12 @@ async def test_redeploy_env_scrub_covers_session_markers(
 ) -> None:
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
-        server.subprocess,
+        system_routes.subprocess,
         "Popen",
         lambda command, **kwargs: captured.update(kwargs) or SimpleNamespace(pid=1),
     )
     monkeypatch.setenv(marker, "leaked-parent-session")
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 202
     assert marker not in captured["env"]
 
@@ -431,10 +432,10 @@ async def test_accepting_a_redeploy_broadcasts_the_build_stage(
     later as a wall of failed requests.
     """
     monkeypatch.setattr(
-        server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=4242)
+        system_routes.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=4242)
     )
     app = _app(tmp_path)
-    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
     events: FakeEvents = app[keys.EVENTS]
     assert events.types() == ["daemon_redeploy_started"]
@@ -443,9 +444,9 @@ async def test_accepting_a_redeploy_broadcasts_the_build_stage(
 
 
 async def test_a_refused_redeploy_broadcasts_nothing(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.setattr(server, "redeploy_source_root", lambda: None)
+    monkeypatch.setattr(system_routes, "redeploy_source_root", lambda: None)
     app = _app(tmp_path)
-    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 409
     assert app[keys.EVENTS].types() == []
 
@@ -456,11 +457,11 @@ async def test_the_daemon_spawns_the_script_with_the_lock_already_claimed(
     """Without --lock-held the script would find the daemon's lock and refuse itself."""
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
-        server.subprocess,
+        system_routes.subprocess,
         "Popen",
         lambda command, **kwargs: captured.update(command=command) or SimpleNamespace(pid=7),
     )
-    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 202
     assert "--lock-held" in captured["command"]
 
@@ -469,7 +470,7 @@ async def test_announce_broadcasts_a_cli_started_redeploy(tmp_path: Path) -> Non
     """A redeploy run straight from a terminal reaches the UI the same way."""
     app = _app(tmp_path)
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
-    response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
     assert app[keys.EVENTS].types() == ["daemon_redeploy_started"]
 
@@ -477,13 +478,13 @@ async def test_announce_broadcasts_a_cli_started_redeploy(tmp_path: Path) -> Non
 async def test_announce_refuses_when_no_redeploy_is_running(tmp_path: Path) -> None:
     """It describes a real redeploy; it is not a way to fake a maintenance mode."""
     app = _app(tmp_path)
-    response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 409
     assert _payload(response)["error"] == "no_redeploy_in_flight"
     assert app[keys.EVENTS].types() == []
     # A lock naming a dead process is not a redeploy either.
     (tmp_path / "redeploy.lock").write_text("999999999", encoding="ascii")
-    response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 409
 
 
@@ -491,7 +492,7 @@ async def test_announce_is_loopback_only(tmp_path: Path) -> None:
     app = _app(tmp_path)
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
     with pytest.raises(server.web.HTTPForbidden):
-        await server.daemon_redeploy_announce(  # type: ignore[arg-type]
+        await system_routes.daemon_redeploy_announce(  # type: ignore[arg-type]
             FakeRequest(app, remote="10.0.0.4")
         )
     assert app[keys.EVENTS].types() == []
@@ -511,7 +512,7 @@ async def test_stopping_for_a_redeploy_is_broadcast_before_the_daemon_goes(
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(system_routes.asyncio, "sleep", fake_sleep)
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
     shutdown = asyncio.Event()
     app = _app(tmp_path)
@@ -524,12 +525,12 @@ async def test_stopping_for_a_redeploy_is_broadcast_before_the_daemon_goes(
     )
     request = FakeRequest(app, {"mode": "restart"})
     request.headers["Authorization"] = "Bearer secret"
-    response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
+    response = await system_routes.desktop_shutdown(request)  # type: ignore[arg-type]
     assert response.status == 202
     assert app[keys.EVENTS].types() == ["daemon_redeploy_stopping"]
     # The frame the client most needs is the one the shutdown would otherwise
     # close the socket before writing.
-    assert slept == [server.REDEPLOY_STOPPING_DRAIN_SECONDS]
+    assert slept == [system_routes.REDEPLOY_STOPPING_DRAIN_SECONDS]
     assert shutdown.is_set()
 
 
@@ -546,7 +547,7 @@ async def test_an_ordinary_desktop_quit_broadcasts_no_redeploy(tmp_path: Path) -
     )
     request = FakeRequest(app, {"mode": "quit"})
     request.headers["Authorization"] = "Bearer secret"
-    response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
+    response = await system_routes.desktop_shutdown(request)  # type: ignore[arg-type]
     assert response.status == 202
     assert app[keys.EVENTS].types() == []
 
@@ -566,7 +567,7 @@ async def test_a_shutdown_app_without_config_or_events_still_shuts_down() -> Non
         }
     )
     request.headers["Authorization"] = "Bearer secret"
-    response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
+    response = await system_routes.desktop_shutdown(request)  # type: ignore[arg-type]
     assert response.status == 202
     assert shutdown.is_set()
 
@@ -577,20 +578,20 @@ async def test_status_reports_the_phase_and_the_last_outcome(tmp_path: Path) -> 
         json.dumps({"outcome": "rolled_back", "detail": "Your change did NOT ship."}),
         encoding="utf-8",
     )
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     body = _payload(response)
     assert body["phase"] == "idle"
     assert body["last_result"]["outcome"] == "rolled_back"
 
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     # Answering at all means the daemon is up, so a live lock is always the build.
     assert _payload(response)["phase"] == "building"
 
 
 async def test_status_survives_an_unreadable_outcome_file(tmp_path: Path) -> None:
     (tmp_path / "redeploy-result.json").write_text("{not json", encoding="utf-8")
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert _payload(response)["last_result"] is None
 
 
@@ -805,14 +806,14 @@ async def test_a_stale_log_is_not_served_as_the_running_redeploys_progress(
     os.utime(log, (1_000_000, 1_000_000))
     os.utime(lock, (2_000_000, 2_000_000))
 
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     body = _payload(response)
     assert body["running"] is True
     assert body["log_tail"] == []
 
     # A log written during this run is served normally.
     os.utime(log, (3_000_000, 3_000_000))
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert _payload(response)["log_tail"] == ["[redeploy] daemon healthy: live_sessions=2"]
 
 
@@ -821,7 +822,7 @@ async def test_the_last_runs_log_is_still_readable_when_nothing_is_running(
 ) -> None:
     """With no redeploy in flight the file is the last run's, which is what to show."""
     (tmp_path / "redeploy.log").write_text("[redeploy] ABORT: build failed\n", encoding="utf-8")
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     body = _payload(response)
     assert body["running"] is False
     assert body["log_tail"] == ["[redeploy] ABORT: build failed"]
@@ -882,11 +883,11 @@ async def test_accepting_a_redeploy_reports_what_goes_dark(
     "the redeploy broke my server" when the server never stopped.
     """
     monkeypatch.setattr(
-        server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
+        system_routes.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
     )
     app = _app(tmp_path)
     app[keys.PREVIEWS] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080))
-    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
     interrupted = _payload(response)["interrupted"]
     assert [entry["port"] for entry in interrupted["previews"]] == [5173, 8080]
@@ -906,11 +907,11 @@ async def test_an_open_port_never_refuses_a_redeploy(tmp_path: Path, monkeypatch
     a fix for a gate that refuses wrongly.
     """
     monkeypatch.setattr(
-        server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
+        system_routes.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
     )
     app = _app(tmp_path)
     app[keys.PREVIEWS] = FakePreviews(*(_preview(f"p{index}", 3000 + index) for index in range(12)))
-    response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
 
 
@@ -918,7 +919,7 @@ async def test_unlisted_previews_are_not_reported(tmp_path: Path) -> None:
     """`listed` is what belongs in navigation; the rest is routing plumbing."""
     app = _app(tmp_path)
     app[keys.PREVIEWS] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080, listed=False))
-    response = await server.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
     ports = [entry["port"] for entry in _payload(response)["interrupted"]["previews"]]
     assert ports == [5173]
 
@@ -929,14 +930,14 @@ async def test_the_status_reports_interruptions_before_any_redeploy_starts(
     """The confirm dialog reads this, which is the only moment it can change a decision."""
     app = _app(tmp_path)
     app[keys.PREVIEWS] = FakePreviews(_preview("aaa", 5173))
-    response = await server.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
     body = _payload(response)
     assert body["running"] is False
     assert len(body["interrupted"]["previews"]) == 1
 
 
 async def test_a_daemon_with_no_preview_registry_still_answers(tmp_path: Path) -> None:
-    response = await server.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    response = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     interrupted = _payload(response)["interrupted"]
     assert interrupted["previews"] == []
     assert interrupted["kills_processes"] is False

@@ -15,8 +15,9 @@ from typing import Any
 
 import pytest
 
-from swe_mux import server
 from swe_mux.config import Config
+from swe_mux.routes import git as git_routes
+from swe_mux.routes import sessions as sessions_routes
 from swe_mux.worktree_setup import WorktreeSetupResult
 
 # The helper never touches the app on any path under test; typed Any so mypy accepts it.
@@ -32,13 +33,13 @@ def worktree(tmp_path: Path) -> str:
 
 @pytest.mark.asyncio
 async def test_spawn_is_skipped_when_the_body_is_not_an_object(worktree: str) -> None:
-    result = await server._spawn_into_worktree(APP, "claude", worktree)
+    result = await git_routes._spawn_into_worktree(APP, "claude", worktree)
     assert result["status"] == "error"
 
 
 @pytest.mark.asyncio
 async def test_spawn_requires_a_project_id(worktree: str) -> None:
-    result = await server._spawn_into_worktree(APP, {"backend": "claude"}, worktree)
+    result = await git_routes._spawn_into_worktree(APP, {"backend": "claude"}, worktree)
     assert result["status"] == "error"
     assert "project_id" in result["error"]
 
@@ -55,9 +56,9 @@ async def test_cwd_is_forced_to_the_new_worktree(
             record=SimpleNamespace(id="sess-1", snapshot=lambda: {"id": "sess-1", "cwd": worktree})
         )
 
-    monkeypatch.setattr(server, "_spawn_from_body", fake_spawn)
+    monkeypatch.setattr(sessions_routes, "_spawn_from_body", fake_spawn)
     # A caller trying to redirect the session elsewhere must not be able to.
-    result = await server._spawn_into_worktree(
+    result = await git_routes._spawn_into_worktree(
         APP, {"project_id": "p1", "cwd": "C:/somewhere/else"}, worktree
     )
     assert result == {
@@ -77,8 +78,8 @@ async def test_a_rejected_spawn_is_reported_not_raised(
     async def refuse(app: Any, body: dict[str, Any]) -> Any:
         raise ValueError("unknown project: p1")
 
-    monkeypatch.setattr(server, "_spawn_from_body", refuse)
-    result = await server._spawn_into_worktree(APP, {"project_id": "p1"}, worktree)
+    monkeypatch.setattr(sessions_routes, "_spawn_from_body", refuse)
+    result = await git_routes._spawn_into_worktree(APP, {"project_id": "p1"}, worktree)
     assert result["status"] == "error"
     assert "unknown project" in result["error"]
     assert Path(worktree).is_dir(), "the worktree must survive a rejected spawn"
@@ -99,12 +100,12 @@ async def test_setup_output_is_seeded_before_spawn_and_failure_does_not_block_se
             record=SimpleNamespace(id="sess-1", snapshot=lambda: {"id": "sess-1"})
         )
 
-    monkeypatch.setattr(server, "_spawn_from_body", fake_spawn)
+    monkeypatch.setattr(sessions_routes, "_spawn_from_body", fake_spawn)
     setup = WorktreeSetupResult(
         "failed", "convention", ".worktree-setup", 7, 50, b"dependency error\n"
     )
 
-    result = await server._spawn_into_worktree(
+    result = await git_routes._spawn_into_worktree(
         APP, {"project_id": "p1", "backend": "claude"}, worktree, setup
     )
 
@@ -121,8 +122,8 @@ async def test_an_unexpected_failure_still_leaves_the_worktree(
     async def explode(app: Any, body: dict[str, Any]) -> Any:
         raise RuntimeError("pty supervisor unreachable")
 
-    monkeypatch.setattr(server, "_spawn_from_body", explode)
-    result = await server._spawn_into_worktree(APP, {"project_id": "p1"}, worktree)
+    monkeypatch.setattr(sessions_routes, "_spawn_from_body", explode)
+    result = await git_routes._spawn_into_worktree(APP, {"project_id": "p1"}, worktree)
     assert result["status"] == "error"
     assert "RuntimeError" in result["error"]
     assert Path(worktree).is_dir(), "the worktree must survive an unexpected spawn failure"
@@ -132,7 +133,7 @@ def test_missing_parents_are_created_below_the_configured_worktree_root(tmp_path
     config = Config(data_dir=tmp_path / "data")
     target = config.resolved_worktree_root / "project-12345678" / "feature"
 
-    server._ensure_worktree_parent(config, target)
+    git_routes._ensure_worktree_parent(config, target)
 
     assert target.parent.is_dir()
 
@@ -144,7 +145,7 @@ def test_missing_parents_outside_the_configured_worktree_root_are_refused(
     target = tmp_path / "other" / "project" / "feature"
 
     with pytest.raises(ValueError, match="parent directory does not exist"):
-        server._ensure_worktree_parent(config, target)
+        git_routes._ensure_worktree_parent(config, target)
     assert not target.parent.exists()
 
 
@@ -179,10 +180,10 @@ async def test_existing_worktree_session_endpoint_runs_setup_before_spawn(
                 "spawn": {"project_id": "p1", "backend": "claude"},
             }
 
-    monkeypatch.setattr(server, "_prepare_worktree_setup", prepare)
-    monkeypatch.setattr(server, "_spawn_into_worktree", spawn)
+    monkeypatch.setattr(git_routes, "_prepare_worktree_setup", prepare)
+    monkeypatch.setattr(git_routes, "_spawn_into_worktree", spawn)
 
-    response = await server.spawn_worktree_session(Request())  # type: ignore[arg-type]
+    response = await git_routes.spawn_worktree_session(Request())  # type: ignore[arg-type]
 
     assert calls == ["setup", "spawn"]
     assert json.loads(response.text)["session_id"] == "sess-1"

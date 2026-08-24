@@ -17,8 +17,8 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.config import load_config
+from swe_mux.routes import git as git_routes
 
 
 def git(repo: Path, *args: str) -> str:
@@ -59,7 +59,7 @@ async def test_worktree_create_names_the_missing_first_commit(tmp_path: Path) ->
     target.parent.mkdir()
 
     request = Request(tmp_path, {"cwd": str(repo), "path": str(target)})
-    response = await server.create_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.create_worktree(request)  # type: ignore[arg-type]
     assert response.status == 400
     payload = json.loads(response.text)
     assert payload["code"] == "repository_has_no_commits"
@@ -69,7 +69,7 @@ async def test_worktree_create_names_the_missing_first_commit(tmp_path: Path) ->
     # With a commit the same request goes through: the guard names the unborn
     # state and nothing else.
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init")
-    response = await server.create_worktree(
+    response = await git_routes.create_worktree(
         Request(tmp_path, {"cwd": str(repo), "path": str(target), "branch": "wt-a"})
     )  # type: ignore[arg-type]
     assert response.status == 201

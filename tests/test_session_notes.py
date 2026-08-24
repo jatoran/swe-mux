@@ -19,15 +19,15 @@ from swe_mux.project_files import (
     read_note,
     write_note,
 )
-from swe_mux.server import (
+from swe_mux.routes.notes import (
     create_project_note,
     delete_project_note,
-    error_middleware,
     get_note,
     list_notes,
     patch_note,
     put_note,
 )
+from swe_mux.server import error_middleware
 
 
 def _identity(root: Path) -> ProjectIdentity:

@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import git_operations, server
+from swe_mux import git_operations, worktree_mutation
 from swe_mux.git_operations import GitMutationResult
+from swe_mux.routes import git as git_routes
 
 
 @pytest.mark.asyncio
@@ -142,11 +143,11 @@ async def test_prunable_remove_repairs_exact_path_then_forces_removal(
         assert path == expected == str(worktree)
         return True
 
-    monkeypatch.setattr(server, "_listed_worktree_entries", listed)
-    monkeypatch.setattr(server, "run_git_mutation", mutate)
-    monkeypatch.setattr(server, "_worktree_root_matches", root_matches)
+    monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
+    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "worktree_root_matches", root_matches)
     events = FakeEvents()
-    response = await server.remove_worktree(
+    response = await git_routes.remove_worktree(
         request(
             {"cwd": str(tmp_path), "path": str(worktree), "force": True},
             events,
@@ -196,10 +197,10 @@ async def test_repaired_dirty_worktree_requires_explicit_force(
         assert path == expected == str(worktree)
         return True
 
-    monkeypatch.setattr(server, "_listed_worktree_entries", listed)
-    monkeypatch.setattr(server, "run_git_mutation", mutate)
-    monkeypatch.setattr(server, "_worktree_root_matches", root_matches)
-    response = await server.remove_worktree(
+    monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
+    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "worktree_root_matches", root_matches)
+    response = await git_routes.remove_worktree(
         request({"cwd": str(tmp_path), "path": str(worktree)}, FakeEvents())
     )
     payload = json.loads(response.text)
@@ -241,10 +242,10 @@ async def test_nonzero_repair_continues_when_post_state_is_exact_and_usable(
         assert path == expected == str(worktree)
         return True
 
-    monkeypatch.setattr(server, "_listed_worktree_entries", listed)
-    monkeypatch.setattr(server, "run_git_mutation", mutate)
-    monkeypatch.setattr(server, "_worktree_root_matches", root_matches)
-    response = await server.remove_worktree(
+    monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
+    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "worktree_root_matches", root_matches)
+    response = await git_routes.remove_worktree(
         request(
             {"cwd": str(tmp_path), "path": str(worktree), "force": True},
             FakeEvents(),
@@ -286,10 +287,10 @@ async def test_remove_quarantines_orphan_after_git_drops_registration(
             f"error: failed to delete '{worktree}': Function not implemented",
         )
 
-    monkeypatch.setattr(server, "_listed_worktree_entries", listed)
-    monkeypatch.setattr(server, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
+    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
     events = FakeEvents()
-    response = await server.remove_worktree(
+    response = await git_routes.remove_worktree(
         request({"cwd": str(tmp_path), "path": str(worktree)}, events)
     )
     payload = json.loads(response.text)

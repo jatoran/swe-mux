@@ -9,6 +9,7 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux import git_review, server
+from swe_mux.routes import git as git_routes
 
 
 @pytest.mark.asyncio
@@ -33,7 +34,7 @@ async def test_empty_repository_has_an_empty_graph_not_an_error(
         return {"lines": [], "limit": limit, "has_more": False, "filtered": False}
 
     monkeypatch.setattr(server.git_review, "git_graph", fake_graph)
-    response = await server.git_graph(
+    response = await git_routes.git_graph(
         SimpleNamespace(
             query={"project_id": "p", "limit": "80"},
             app={
@@ -61,7 +62,7 @@ async def test_graph_limit_is_bounded_before_git_runs(
         raise AssertionError("Git must not run for an invalid limit")
 
     monkeypatch.setattr(server.git_review, "git_graph", unexpected)
-    response = await server.git_graph(
+    response = await git_routes.git_graph(
         SimpleNamespace(
             query={"project_id": "p", "limit": "201"},
             app={
@@ -103,21 +104,21 @@ async def test_the_overview_is_conditional_and_answers_304_to_its_own_etag(
         return {"worktrees": [], "detail": "full"}
 
     monkeypatch.setattr(server.git_review, "shared_worktree_overview", overview)
-    first = await server.list_worktrees(_overview_request({"project_id": "p"}))
+    first = await git_routes.list_worktrees(_overview_request({"project_id": "p"}))
     assert first.status == 200
     etag = first.headers["ETag"]
     # `no-cache` is "revalidate before every use", not "do not store": without it a
     # browser never sends `If-None-Match` at all and the conditional never happens.
     assert first.headers["Cache-Control"] == "no-cache"
 
-    again = await server.list_worktrees(
+    again = await git_routes.list_worktrees(
         _overview_request({"project_id": "p"}, {"If-None-Match": etag})
     )
     assert again.status == 304
     assert again.headers["ETag"] == etag
     # Weak comparison, because the tag is weak: a client library that strips `W/` names
     # the same reading and must not silently stop matching.
-    stripped = await server.list_worktrees(
+    stripped = await git_routes.list_worktrees(
         _overview_request({"project_id": "p"}, {"If-None-Match": etag.removeprefix("W/")})
     )
     assert stripped.status == 304
@@ -147,8 +148,8 @@ async def test_the_two_readings_do_not_share_an_etag(monkeypatch: pytest.MonkeyP
         }
 
     monkeypatch.setattr(server.git_review, "shared_worktree_overview", overview)
-    full = await server.list_worktrees(_overview_request({"project_id": "p"}))
-    summary = await server.list_worktrees(
+    full = await git_routes.list_worktrees(_overview_request({"project_id": "p"}))
+    summary = await git_routes.list_worktrees(
         _overview_request({"project_id": "p", "detail": "summary"})
     )
     assert full.headers["ETag"] != summary.headers["ETag"]
@@ -157,7 +158,7 @@ async def test_the_two_readings_do_not_share_an_etag(monkeypatch: pytest.MonkeyP
     assert body["worktrees"][0]["unstaged"]["files"] == []
     assert body["worktrees"][0]["unstaged"]["files_omitted"] is True
     # A client holding the summary must not be told the full reading is unchanged.
-    crossed = await server.list_worktrees(
+    crossed = await git_routes.list_worktrees(
         _overview_request({"project_id": "p"}, {"If-None-Match": summary.headers["ETag"]})
     )
     assert crossed.status == 200
@@ -173,7 +174,7 @@ async def test_an_unknown_detail_is_refused_before_git_runs(
 
     monkeypatch.setattr(server.git_review, "shared_worktree_overview", unexpected)
     with pytest.raises(git_review.GitReviewError) as error:
-        await server.list_worktrees(_overview_request({"project_id": "p", "detail": "brief"}))
+        await git_routes.list_worktrees(_overview_request({"project_id": "p", "detail": "brief"}))
     assert error.value.code == "invalid_parameters"
 
 
@@ -200,7 +201,7 @@ async def test_overview_rejects_browser_supplied_git_parameters(
         },
     )
     with pytest.raises(git_review.GitReviewError) as error:
-        await server.list_worktrees(request)
+        await git_routes.list_worktrees(request)
     assert error.value.code == "invalid_parameters"
 
 
@@ -232,5 +233,5 @@ async def test_diff_rejects_extraneous_parameters_before_delegating(
         },
     )
     with pytest.raises(git_review.GitReviewError) as error:
-        await server.git_diff(request)
+        await git_routes.git_diff(request)
     assert error.value.code == "invalid_parameters"

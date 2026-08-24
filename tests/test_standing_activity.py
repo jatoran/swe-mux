@@ -1005,7 +1005,7 @@ async def test_a_manual_clear_retracts_annotations_and_nothing_else() -> None:
     # false. Without this the only exit is a 30-minute TTL.
     import json as _json
 
-    from swe_mux.server import clear_session_standing_activity
+    from swe_mux.routes.sessions import clear_session_standing_activity
 
     session = ReplaySession("claude")
     session.record.state = "idle"
@@ -1059,7 +1059,7 @@ def test_the_manual_clear_is_reachable_from_the_ui() -> None:
 async def test_a_manual_clear_rejects_an_unknown_kind() -> None:
     import pytest
 
-    from swe_mux.server import clear_session_standing_activity
+    from swe_mux.routes.sessions import clear_session_standing_activity
 
     session = ReplaySession("claude")
     with pytest.raises(ValueError, match="unknown standing-activity kind"):

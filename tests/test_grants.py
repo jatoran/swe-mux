@@ -32,12 +32,9 @@ from swe_mux.grants import (
     project_values_after,
 )
 from swe_mux.project_files import read_project_config, write_project_config
-from swe_mux.server import (
-    apply_grants,
-    describe_grants,
-    error_middleware,
-    get_project_automations,
-)
+from swe_mux.routes.automation import get_project_automations
+from swe_mux.routes.grants import apply_grants, describe_grants
+from swe_mux.server import error_middleware
 
 pytestmark = pytest.mark.anyio
 

@@ -19,8 +19,9 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server, worktree_graveyard
+from swe_mux import worktree_graveyard, worktree_mutation
 from swe_mux.git_operations import GitMutationResult
+from swe_mux.routes import git as git_routes
 
 
 def git(repo: Path, *args: str) -> str:
@@ -90,7 +91,7 @@ async def test_a_clean_removal_renames_the_tree_away_and_purges_it(repo: Path) -
     git(worktree, "commit", "-m", "bulk")
 
     request = Request({"cwd": str(repo), "path": str(worktree)})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
     payload = json.loads(response.text)
 
     assert response.status == 200
@@ -122,7 +123,7 @@ async def test_removing_one_worktree_leaves_a_broken_sibling_registered(repo: Pa
     stale.rmdir()
 
     request = Request({"cwd": str(repo), "path": str(healthy)})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
     assert response.status == 200
     await _settle(request)
 
@@ -137,7 +138,7 @@ async def test_a_dirty_worktree_is_refused_without_force_and_is_left_alone(repo:
     (worktree / "untracked.txt").write_text("mine\n", encoding="utf-8")
 
     request = Request({"cwd": str(repo), "path": str(worktree)})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
     payload = json.loads(response.text)
 
     assert response.status == 400
@@ -155,7 +156,7 @@ async def test_force_buries_a_dirty_worktree(repo: Path) -> None:
     (worktree / "untracked.txt").write_text("mine\n", encoding="utf-8")
 
     request = Request({"cwd": str(repo), "path": str(worktree), "force": True})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
     payload = json.loads(response.text)
 
     assert response.status == 200
@@ -172,7 +173,7 @@ async def test_a_locked_worktree_is_never_renamed_away(repo: Path) -> None:
     git(repo, "worktree", "lock", str(worktree))
 
     request = Request({"cwd": str(repo), "path": str(worktree)})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
 
     assert response.status == 400
     assert worktree.is_dir()
@@ -187,7 +188,7 @@ async def test_the_main_tree_is_never_renamed_away(repo: Path) -> None:
     add_worktree(repo, "sibling")
 
     request = Request({"cwd": str(repo), "path": str(repo), "force": True})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
 
     assert response.status == 400
     assert (repo / "tracked.txt").read_text(encoding="utf-8") == "first\n"
@@ -208,7 +209,7 @@ async def test_a_defeated_rename_falls_back_to_the_in_place_delete(
 
     monkeypatch.setattr(worktree_graveyard, "bury", refuse)
     request = Request({"cwd": str(repo), "path": str(worktree)})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
     payload = json.loads(response.text)
 
     assert response.status == 200
@@ -230,9 +231,9 @@ async def test_git_refusing_after_the_rename_puts_the_tree_back(
         del cwd, args, kwargs
         return GitMutationResult(1, "git refused for reasons of its own")
 
-    monkeypatch.setattr(server, "run_git_mutation", refuse)
+    monkeypatch.setattr(git_routes, "run_git_mutation", refuse)
     request = Request({"cwd": str(repo), "path": str(worktree)})
-    response = await server.remove_worktree(request)  # type: ignore[arg-type]
+    response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
 
     assert response.status == 400
     # Exactly where it was, with its contents, and still registered.
@@ -271,6 +272,6 @@ def test_the_startup_sweep_clears_what_a_killed_purge_left(repo: Path, tmp_path:
     linked.mkdir()
     (linked / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
 
-    server._sweep_graveyards([str(repo), str(linked), str(tmp_path / "gone")])
+    worktree_mutation.sweep_graveyards([str(repo), str(linked), str(tmp_path / "gone")])
 
     assert not (graveyard / "leftover-abc").exists()

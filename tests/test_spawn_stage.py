@@ -17,9 +17,10 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.composer_input import BRACKETED_PASTE_END, composer_insertion
 from swe_mux.harness import composer_insertion_rules
+from swe_mux.routes import sessions as sessions_routes
+from swe_mux.routes import terminal as terminal_routes
 
 
 class _Record:
@@ -55,8 +56,8 @@ def _capture_writes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     ) -> None:
         writes.append((data, source))
 
-    monkeypatch.setattr(server, "_record_operator_input", record)
-    monkeypatch.setattr(server, "STAGE_READY_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(terminal_routes, "_record_operator_input", record)
+    monkeypatch.setattr(sessions_routes, "STAGE_READY_POLL_SECONDS", 0.001)
     return writes
 
 
@@ -72,7 +73,7 @@ async def test_stage_waits_for_readiness_then_pastes_without_enter(
         session.record.state = "idle"
 
     settle = asyncio.create_task(become_ready())
-    await server._stage_spawn_text({keys.EVENTS: events}, session, "line one\nline two")
+    await sessions_routes._stage_spawn_text({keys.EVENTS: events}, session, "line one\nline two")
     await settle
     assert writes == [(_staged("line one\nline two"), "spawn_stage")]
     # The whole point: the write ends on the paste terminator, never on Enter.
@@ -98,8 +99,8 @@ async def test_stage_timeout_still_pastes_and_says_so(monkeypatch: pytest.Monkey
     session = _Session()
     events = _Events()
     writes = _capture_writes(monkeypatch)
-    monkeypatch.setattr(server, "STAGE_READY_TIMEOUT_SECONDS", 0.02)
-    await server._stage_spawn_text({keys.EVENTS: events}, session, "parked prompt")
+    monkeypatch.setattr(sessions_routes, "STAGE_READY_TIMEOUT_SECONDS", 0.02)
+    await sessions_routes._stage_spawn_text({keys.EVENTS: events}, session, "parked prompt")
     assert writes == [(_staged("parked prompt"), "spawn_stage")]
     assert events.emitted[0][1]["ready"] is False
 
@@ -110,6 +111,6 @@ async def test_stage_refuses_a_session_that_died_first(monkeypatch: pytest.Monke
     events = _Events()
     writes = _capture_writes(monkeypatch)
     with pytest.raises(ValueError, match="stage_text"):
-        await server._stage_spawn_text({keys.EVENTS: events}, session, "too late")
+        await sessions_routes._stage_spawn_text({keys.EVENTS: events}, session, "too late")
     assert writes == []
     assert events.emitted == []

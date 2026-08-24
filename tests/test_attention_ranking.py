@@ -467,7 +467,11 @@ async def test_the_digest_renders_a_rollover_as_a_boundary(tmp_path: Path) -> No
 async def test_the_routes_expose_ranking_feedback_and_rule_decisions(tmp_path: Path) -> None:
     import json as json_module
 
-    from swe_mux.server import attention_feedback, attention_inbox, attention_rule_decision
+    from swe_mux.routes.attention import (
+        attention_feedback,
+        attention_inbox,
+        attention_rule_decision,
+    )
 
     store = AutomationStore(tmp_path / "mux.db")
     try:

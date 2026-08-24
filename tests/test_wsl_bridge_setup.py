@@ -19,12 +19,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.doctor import _wsl_bridge_checks
-from swe_mux.server import (
-    error_middleware,
-    wsl_bridge_firewall_repair,
-    wsl_bridge_install,
-    wsl_bridge_status,
-)
+from swe_mux.routes import system as system_routes
+from swe_mux.routes.system import wsl_bridge_firewall_repair, wsl_bridge_install, wsl_bridge_status
+from swe_mux.server import error_middleware
 
 WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="WSL is a Windows host feature")
 
@@ -110,9 +107,8 @@ async def test_firewall_repair_reports_a_missing_adapter_rather_than_guessing(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Scoping the rule needs the WSL subnet. Inventing one would silently widen it."""
-    import swe_mux.server as server
 
-    monkeypatch.setattr(server, "wsl_adapter_subnet", lambda: None)
+    monkeypatch.setattr(system_routes, "wsl_adapter_subnet", lambda: None)
     async with TestClient(TestServer(_app(tmp_path))) as client:
         response = await client.post(
             "/api/wsl/bridge/firewall/repair",

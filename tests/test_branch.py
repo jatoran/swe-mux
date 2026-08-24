@@ -8,9 +8,9 @@ from typing import Any, cast
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.adapters import ClaudeAdapter
-from swe_mux.server import _branch_source_id, branch_session, session_branch_points
+from swe_mux.routes import branch as branch_routes
+from swe_mux.routes.branch import _branch_source_id, branch_session, session_branch_points
 
 from .support.claude_transcript import SIDECAR_NAME, read_records, write_source
 
@@ -23,8 +23,8 @@ def _fast_branch_timings(monkeypatch: pytest.MonkeyPatch) -> None:
     in the incident these guards exist for); the behaviour under test is the
     sequencing, which is identical at any scale.
     """
-    monkeypatch.setattr(server, "BRANCH_SIBLING_SETTLE_SECONDS", 0.05)
-    monkeypatch.setattr(server, "BRANCH_SIBLING_RETRY_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(branch_routes, "BRANCH_SIBLING_SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(branch_routes, "BRANCH_SIBLING_RETRY_BACKOFF_SECONDS", 0.0)
 
 
 class FakeBus:

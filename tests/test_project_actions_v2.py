@@ -35,12 +35,12 @@ from swe_mux.project_actions import (
     substituted_action,
     write_actions_source,
 )
-from swe_mux.server import (
+from swe_mux.routes.project_actions import (
     _arm_action_timeout,
     diff_project_actions,
-    error_middleware,
     trust_project_actions,
 )
+from swe_mux.server import error_middleware
 
 
 def write(root: Path, relative: str, text: str) -> Path:

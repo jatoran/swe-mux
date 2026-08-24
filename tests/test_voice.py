@@ -19,13 +19,8 @@ from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterResult
-from swe_mux.server import (
-    session_last_reply,
-    voice_approval,
-    voice_generate,
-    voice_prepare_submit,
-    voice_submit,
-)
+from swe_mux.routes.scan_timeline import session_last_reply
+from swe_mux.routes.voice import voice_approval, voice_generate, voice_prepare_submit, voice_submit
 from swe_mux.transcript_view import conversation_view, message_exchange
 from swe_mux.voice import (
     SUPERSEDED_CLIP_TTL_SECONDS,

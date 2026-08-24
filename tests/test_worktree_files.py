@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import git_review, server
+from swe_mux import git_review
 from swe_mux.models import ProjectRecord
+from swe_mux.routes import project_files as project_files_routes
 
 
 def git(repo: Path, *args: str) -> str:
@@ -54,7 +55,7 @@ async def test_worktree_file_reads_and_writes_use_the_exact_checkout(
     worktrees: tuple[ProjectRecord, Path, Path],
 ) -> None:
     project, root, sibling = worktrees
-    response = await server.get_project_file(
+    response = await project_files_routes.get_project_file(
         Request(project, query={"path": "same.txt", "worktree": str(sibling)})  # type: ignore[arg-type]
     )
     payload = json.loads(response.body)
@@ -62,7 +63,7 @@ async def test_worktree_file_reads_and_writes_use_the_exact_checkout(
     assert Path(payload["worktree"]).resolve() == sibling.resolve()
     assert (root / "same.txt").read_text(encoding="utf-8").splitlines() == ["main"]
 
-    written = await server.put_project_file(
+    written = await project_files_routes.put_project_file(
         Request(
             project,
             query={},
@@ -85,7 +86,7 @@ async def test_removed_or_nested_worktree_roots_are_recoverable_errors(
 ) -> None:
     project, root, sibling = worktrees
     with pytest.raises(git_review.GitReviewError) as nested:
-        await server.get_project_file(
+        await project_files_routes.get_project_file(
             Request(
                 project,
                 query={"path": "same.txt", "worktree": str(sibling / "nested")},
@@ -95,7 +96,7 @@ async def test_removed_or_nested_worktree_roots_are_recoverable_errors(
 
     git(root, "worktree", "remove", "--force", str(sibling))
     with pytest.raises(git_review.GitReviewError) as removed:
-        await server.get_project_file(
+        await project_files_routes.get_project_file(
             Request(project, query={"path": "same.txt", "worktree": str(sibling)})  # type: ignore[arg-type]
         )
     assert removed.value.status == 404

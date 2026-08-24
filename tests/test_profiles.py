@@ -19,7 +19,8 @@ from swe_mux.profiles import (
     profile_payload,
     resolve_profile,
 )
-from swe_mux.server import resume_history, spawn_session
+from swe_mux.routes.history import resume_history
+from swe_mux.routes.sessions import spawn_session
 
 
 def profile(profile_id: str = "pwsh") -> LaunchProfile:

@@ -13,13 +13,10 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
 from swe_mux.config import Config
-from swe_mux.schedule_store import ScheduleStore
-from swe_mux.scheduler import ScheduleService
-from swe_mux.server import (
+from swe_mux.routes.branch import history_branch_points
+from swe_mux.routes.schedules import (
     create_project_schedule,
     delete_schedule,
-    error_middleware,
-    history_branch_points,
     list_project_schedules,
     list_schedule_runs,
     list_schedules,
@@ -27,6 +24,9 @@ from swe_mux.server import (
     preview_schedule,
     run_schedule_now,
 )
+from swe_mux.schedule_store import ScheduleStore
+from swe_mux.scheduler import ScheduleService
+from swe_mux.server import error_middleware
 
 from .support.claude_transcript import SOURCE_ID, write_source
 

@@ -19,7 +19,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
-from swe_mux.server import error_middleware, regenerate_session_title, session_transcript
+from swe_mux.routes.scan_timeline import session_transcript
+from swe_mux.routes.sessions import regenerate_session_title
+from swe_mux.server import error_middleware
 
 
 class SessionStub:

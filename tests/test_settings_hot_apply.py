@@ -24,7 +24,7 @@ from aiohttp import web
 
 from swe_mux import app_keys as keys
 from swe_mux.config import RESTART_FIELDS, Config, update_config
-from swe_mux.server import _apply_runtime_config
+from swe_mux.runtime_config import apply_runtime_config
 from swe_mux.session import Session, SessionManager
 from swe_mux.session_recovery import SessionRecoveryStore
 from swe_mux.status_timeline import StatusTimelineStore
@@ -36,7 +36,7 @@ class _FakeSession:
 
 
 class _FakeSessionManager:
-    """Only the surface `_apply_runtime_config` touches for these fields.
+    """Only the surface `apply_runtime_config` touches for these fields.
 
     A stand-in rather than a real manager because building one needs adapters, a
     reaper, a history store, and an event bus - none of which this behaviour reads.
@@ -61,7 +61,7 @@ def _apply(
     for name, handle in handles.items():
         app[getattr(keys, name.upper())] = handle
     hot, restart = update_config(config, changes)
-    _apply_runtime_config(app, hot)
+    apply_runtime_config(app, hot)
     assert not restart, f"unexpected restart-required fields: {sorted(restart)}"
     return hot
 

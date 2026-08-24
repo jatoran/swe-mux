@@ -16,7 +16,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import lifecycle
 from swe_mux.config import load_config
 from swe_mux.logsetup import current_log_level, normalize_level, set_log_level
-from swe_mux.server import get_log_level, put_log_level
+from swe_mux.routes.system import get_log_level, put_log_level
 from swe_mux.subprocess_flags import popen_outside_job
 
 

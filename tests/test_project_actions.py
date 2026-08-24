@@ -19,7 +19,8 @@ from swe_mux.project_actions import (
     loads_jsonc,
     process_invocation,
 )
-from swe_mux.server import error_middleware, list_project_actions, run_project_action
+from swe_mux.routes.project_actions import list_project_actions, run_project_action
+from swe_mux.server import error_middleware
 
 
 def test_jsonc_parser_preserves_comment_text_inside_strings() -> None:

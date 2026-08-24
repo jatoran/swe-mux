@@ -11,7 +11,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.models import SessionRecord
-from swe_mux.server import BRANCH_CUT_EXCERPT_CHARS, _branch_cut_excerpt, list_lineage
+from swe_mux.routes.attention import list_lineage
+from swe_mux.routes.branch import BRANCH_CUT_EXCERPT_CHARS, _branch_cut_excerpt
 
 
 class HistoryNamingStub:

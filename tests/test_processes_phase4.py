@@ -24,6 +24,7 @@ from swe_mux.processes import (
     listener_record,
     preview_id,
 )
+from swe_mux.routes import processes as processes_routes
 
 
 class FakeInspector:
@@ -1564,9 +1565,8 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
     # testable without Chromium.
     from types import SimpleNamespace
 
-    from swe_mux import server
     from swe_mux.config import Config
-    from swe_mux.server import capture_preview
+    from swe_mux.routes.processes import capture_preview
 
     project_root = tmp_path / "repo"
     project_root.mkdir()
@@ -1588,7 +1588,7 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
     )
 
     # Backend missing: a typed unavailable state with an install hint, never a 500.
-    monkeypatch.setattr(server, "capture_available", lambda: False)
+    monkeypatch.setattr(processes_routes, "capture_available", lambda: False)
     payload = json.loads((await capture_preview(request)).body)  # type: ignore[arg-type]
     assert payload["available"] is False
     assert payload["install"]
@@ -1601,8 +1601,8 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"png")
 
-    monkeypatch.setattr(server, "capture_available", lambda: True)
-    monkeypatch.setattr(server, "capture_loopback", fake_capture)
+    monkeypatch.setattr(processes_routes, "capture_available", lambda: True)
+    monkeypatch.setattr(processes_routes, "capture_loopback", fake_capture)
     payload = json.loads((await capture_preview(request)).body)  # type: ignore[arg-type]
     assert payload["available"] is True
     assert captured["path"].parent == project_root / ".swe-mux" / "preview-shots"
@@ -1613,7 +1613,7 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
 async def test_preview_shots_expire_but_recent_ones_survive(tmp_path: Path) -> None:
     # They live inside the user's repository and a UI-iteration session takes
     # dozens a day, so "no sweep" meant unbounded growth in the checkout.
-    from swe_mux.server import PREVIEW_SHOT_TTL_SECONDS, cleanup_expired_preview_shots
+    from swe_mux.session_media import PREVIEW_SHOT_TTL_SECONDS, cleanup_expired_preview_shots
 
     shots = tmp_path / ".swe-mux" / "preview-shots"
     shots.mkdir(parents=True)

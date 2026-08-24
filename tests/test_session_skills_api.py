@@ -17,13 +17,13 @@ from swe_mux.agent_environment import capture_config_baseline
 from swe_mux.agent_environment import clear_cache as clear_environment_cache
 from swe_mux.agent_skills import clear_cache
 from swe_mux.models import SessionRecord
-from swe_mux.server import (
-    error_middleware,
+from swe_mux.routes.scan_timeline import (
     runtime_inventory_ingress,
     session_agent_environment,
     session_mcp_tools,
     session_skills,
 )
+from swe_mux.server import error_middleware
 
 
 @pytest.fixture(autouse=True)

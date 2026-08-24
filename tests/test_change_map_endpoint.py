@@ -22,9 +22,9 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.code_graph import CodeGraphStore, index_project, parsing_available
-from swe_mux.server import session_change_map
+from swe_mux.routes import scan_timeline as scan_timeline_routes
+from swe_mux.routes.scan_timeline import session_change_map
 from swe_mux.tier0_store import Tier0Store
 
 pytestmark = pytest.mark.skipif(
@@ -40,9 +40,9 @@ def _fresh_worktree_membership() -> Any:
     process-global and a test that asserts on a *miss* would otherwise depend on
     ordering.
     """
-    server._worktree_membership.clear()
+    scan_timeline_routes._worktree_membership.clear()
     yield
-    server._worktree_membership.clear()
+    scan_timeline_routes._worktree_membership.clear()
 
 
 def _project(tmp_path: Path) -> None:

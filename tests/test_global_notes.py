@@ -9,7 +9,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.project_files import GLOBAL_SCRATCHPAD_ID, global_note_path, read_global_note
-from swe_mux.server import error_middleware, get_global_note, put_global_note
+from swe_mux.routes.notes import get_global_note, put_global_note
+from swe_mux.server import error_middleware
 
 
 def _app(data_dir: Path) -> web.Application:

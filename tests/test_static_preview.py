@@ -21,16 +21,16 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
 from swe_mux.preview_store import PreviewStore
-from swe_mux.processes import PreviewRegistry, static_preview_id
-from swe_mux.project_files import is_static_preview_entry, read_static_preview_file
-from swe_mux.server import (
+from swe_mux.preview_transport import (
     PREVIEW_HTTP_CONCURRENCY,
     PREVIEW_WS_CONCURRENCY,
-    _register_static_preview,
     preview_proxy,
-    security_middleware,
     static_preview_content_type,
 )
+from swe_mux.processes import PreviewRegistry, static_preview_id
+from swe_mux.project_files import is_static_preview_entry, read_static_preview_file
+from swe_mux.routes.processes import _register_static_preview
+from swe_mux.server import security_middleware
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore:It is recommended to use web.AppKey instances for keys"

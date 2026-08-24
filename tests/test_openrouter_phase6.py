@@ -29,8 +29,8 @@ from swe_mux.openrouter import (
     cached_prompt_tokens,
     marks_cache_breakpoints,
 )
+from swe_mux.routes.automation import automation_provider_key
 from swe_mux.secret_store import PlatformSecretStore
-from swe_mux.server import automation_provider_key
 
 
 class MemorySecrets:

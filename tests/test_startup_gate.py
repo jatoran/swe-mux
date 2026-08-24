@@ -30,13 +30,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
 from swe_mux.config import Config
-from swe_mux.server import (
-    STARTUP_OPEN_PATHS,
-    create_app,
-    publish,
-    startup_open,
-    wait_runtime_ready,
-)
+from swe_mux.server import STARTUP_OPEN_PATHS, create_app, publish, startup_open, wait_runtime_ready
 from swe_mux.sqlite_store import (
     connect_or_quarantine,
     prepare_database,

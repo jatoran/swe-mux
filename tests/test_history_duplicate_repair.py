@@ -22,7 +22,7 @@ from typing import Any, cast
 from swe_mux import app_keys as keys
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
-from swe_mux.server import repair_history_duplicates
+from swe_mux.routes.history import repair_history_duplicates
 
 CONVERSATION = "019fd562-bd56-7d70-aade-00891aee99ed"
 BASE = 1_785_000_000.0

@@ -10,11 +10,11 @@ from aiohttp import ClientWebSocketResponse, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
-from swe_mux import server
 from swe_mux.device_presence import DevicePresenceStore
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
-from swe_mux.server import events_ws
+from swe_mux.routes import pty as pty_routes
+from swe_mux.routes.pty import events_ws
 
 
 def _app(
@@ -96,7 +96,7 @@ async def test_reconnect_with_a_cursor_delivers_exactly_the_gap(tmp_path: Path) 
 async def test_large_reconnect_gap_skips_replay_and_advances_to_watermark(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(server, "EVENTS_CATCHUP_LIMIT", 5)
+    monkeypatch.setattr(pty_routes, "EVENTS_CATCHUP_LIMIT", 5)
     history = HistoryIndex(tmp_path / "mux.db")
     try:
         await _seed(history, 30)

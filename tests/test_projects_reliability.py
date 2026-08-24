@@ -15,7 +15,8 @@ from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_la
 from swe_mux.models import SessionRecord
 from swe_mux.project_files import read_note
 from swe_mux.projects import ProjectManager
-from swe_mux.server import delete_project, error_middleware, record_project_use
+from swe_mux.routes.projects import delete_project, record_project_use
+from swe_mux.server import error_middleware
 
 
 async def test_project_creation_initializes_resources_and_persists_layout(

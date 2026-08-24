@@ -446,7 +446,7 @@ class DetectionReplay:
             payload = dict(step.get("payload") or {})
             if foreign_conversation_hook_id(self.session, payload) is None:  # type: ignore[arg-type]
                 self.session.last_hook_ts = self.clock.wall()
-                from swe_mux.server import _TRANSCRIPT_BACKED_HOOK_EVENTS
+                from swe_mux.routes.agent_ingress import _TRANSCRIPT_BACKED_HOOK_EVENTS
 
                 if (
                     str(step["event"]) in _TRANSCRIPT_BACKED_HOOK_EVENTS
