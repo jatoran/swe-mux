@@ -87,9 +87,24 @@ Phase 7.5 and are covered in "Cross-session memory reads" below.
   `projects_truncated` when it stopped.
 - **Return nothing over a weak match (CP §7).** Empty results are fine;
   plausible-but-wrong teaches an agent to stop calling.
+- **Only a typed miss answers "not found".** `tools/call` translates `ScopeMiss`
+  (a `KeyError` subclass raised deliberately by resolution) into the soft
+  not-found result, `AmbiguousIdentity`/`ValueError`/`TypeError` into `-32602`,
+  and a refused write's `QueueError` into its typed code. Anything else is a
+  defect in the handler: it is logged with its traceback and answered `-32603`,
+  because a `KeyError` from a mistyped dict key used to be indistinguishable
+  from "that session does not exist", and an agent acts on the latter as fact.
+- **One transcript parse per transcript at a time.** A parse runs as a single
+  flight keyed by transcript path, and the `PARSE_TIMEOUT_SECONDS` deadline
+  belongs to the flight rather than to whoever is waiting: a caller told
+  `transient: retry` joins the parse already running instead of starting a
+  second, and a request for a *different* page of a transcript that is mid-parse
+  is refused rather than stacked. The worker thread cannot be cancelled, so the
+  flight is retired when the thread finishes, not when a caller gives up.
 - **Bounded and redacted.** Transcript, Project-note, and Agent Context source reads are capped at 512 KiB.
   Ordinary transcript reads default to 12 messages and 32 KiB of message text, remain explicitly expandable to 200 messages and 512 KiB, and are pageable in either direction through run-bound opaque cursors.
   `list_sessions` returns at most 25 compact entries and 32 KiB across live and ended rows combined, with query filtering and an opaque continuation cursor.
+  The byte cap is fitted by per-item accounting: each entry is serialized once, and only the small envelope is re-measured as the tail is trimmed, so the largest page is not also the one that pays to re-encode itself per item dropped.
   History search defaults to eight compact hits and a 16 KiB hit-payload budget, with explicit bounds for larger calls.
   Detailed session records go out only when `detail=full` and still use the `session_summary` allowlist, never `record.snapshot()`, which carries `spawn_env`.
   Any message or excerpt that trips the clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
@@ -161,7 +176,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `doc_debt` | which docs owe an update for the Project's recently changed source files, as `{doc, changed_files}` pairs re-derived from each doc's "Key files" section (`build_doc_debt_map` over `build_doc_ownership`, inverted to `doc -> changed files` over a 24h Project fact window, a doc edited in that window excluded). Not scraped from the doc-debt annotation, whose content is a human sentence. Blind spot named in the description: a source file no doc lists produces no debt, so empty is not proof the docs are current (Phase 7.10) |
 | `scan_timeline` | one session's distilled behavioral spine instead of its raw conversation. `detail:"digest"` (the default) is the bounded `catch_me_up` rollup - phases, claims, current blocker; `detail:"records"` is the compact per-window projection, newest first, cursored by `since_t1`; `detail:"full"` expands at most five explicitly named `record_ids`. Filters: time window, `blocked_only`, `work_phase`, `approach_status`, a `target` path fragment, `exclude_heartbeat`. Every result carries the enablement/liveness block. Reads an ended session too. Gated on `scan_reads` (Phase 7.11) |
 | `scan_search` | runs found by what they were *doing*: a query resolved against distilled scan `summary`/`intent`/`target` records rather than raw transcript text, all terms required. Each hit names its `agent_run_id` and its `t0`/`t1` window. Reads the newest records per Project and reports `records_truncated` when a Project's history is longer than one search covers, so an empty result over a truncated read is not readable as "never happened". The agent-facing exposure of the shipped `GET /api/history/scan-search`. Gated on `semantic_history_search` (Phase 7.11) |
-| `blast_radius` | everything a change to one file can reach: reverse callers (hop-ordered), the git co-change net, covering tests among the reachable set, and owning docs, from the Phase 7.9 code-structure graph. The static reverse set is a lower bound and says so; named blind spots are `getattr`, dict dispatch, decorators, DI, dynamic imports. Gated on `code_graph` |
+| `blast_radius` | everything a change to one file can reach: reverse callers (hop-ordered), the git co-change net, covering tests among the reachable set, and owning docs, from the Phase 7.9 code-structure graph. The static reverse set is a lower bound and says so; named blind spots are `getattr`, dict dispatch, decorators, DI, dynamic imports. Every entry also carries `co_change_available`; when it is false the entry names a `co_change_unavailable_reason` (`provenance_reader_unavailable`, `provenance_read_failed`) and the empty `co_changed_files` beside it means *unknown*, not *none* - an entry with nothing else to report is still returned in that case rather than skipped. Gated on `code_graph` |
 | `find_definition` | where a symbol is defined, by leaf name or qualname, from the code graph. Gated on `code_graph` |
 | `find_callers` | the (file, symbol) pairs that call into a file or symbol, resolved import-aware so a same-named symbol in an unrelated module is not a false caller; unresolved same-name callers are reported separately. A lower bound. Gated on `code_graph` |
 | `find_references` | every call or reference to a symbol in a file — the precise structural neighborhood, not a grep. Gated on `code_graph` |
@@ -476,7 +491,7 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - Loopback-only, like hook ingress; the Host allowlist of `security_middleware` applies.
 - Per-session sliding-window rate limit (120 calls/min) with the same sweep pattern as
   `hook_ingress_windows`; 256 KiB request-body cap.
-- `calls`/`denied`/`writes` counters and per-tool call/response-byte/truncation totals appear under `mcp` in `GET /api/diagnostics/background`.
+- `calls`/`denied`/`writes` counters and per-tool call/response-byte/truncation totals appear under `mcp` in `GET /api/diagnostics/background`, alongside `transcript_parses` (`in_flight`, `timeouts`, `refusals`) - a non-zero `in_flight` at rest names the pathological transcript that used to present only as agents being told to retry.
 - Read-tool logs contain tool, caller, and Project metadata only.
   Source contents, prompt text, and SSH credential text are never logged.
 - JSON-RPC methods: `initialize` (protocol 2025-06-18, older versions negotiated),

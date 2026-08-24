@@ -1119,6 +1119,7 @@ class ScanTimelineService:
                                 event.type,
                                 delay=0,
                                 disable_run=ended_run,
+                                ends_session=True,
                             )
                         else:
                             self._schedule(event.session_id, event.type)
@@ -1162,6 +1163,7 @@ class ScanTimelineService:
         delay: float = DEBOUNCE_SECONDS,
         disable_run: tuple[str, str] | None = None,
         catchup_depth: int = 0,
+        ends_session: bool = False,
     ) -> None:
         prior = self._debounce.get(session_id)
         if prior and not prior.done() and prior is not asyncio.current_task():
@@ -1189,6 +1191,11 @@ class ScanTimelineService:
             finally:
                 if self._debounce.get(session_id) is asyncio.current_task():
                     self._debounce.pop(session_id, None)
+                if ends_session:
+                    # After the final scan, not when the exit event arrived: the
+                    # scan this schedules is the last user of the session's lock.
+                    self._forget_session(session_id)
+                    self._evict_dead_sessions()
 
         self._catchup_depth[session_id] = catchup_depth
         self._debounce[session_id] = asyncio.create_task(
@@ -1220,6 +1227,44 @@ class ScanTimelineService:
     def _clear_skip(self, session_id: str) -> None:
         self._skip_reasons.pop(session_id, None)
         self._skip_terminal.pop(session_id, None)
+
+    def _forget_session(self, session_id: str) -> None:
+        """Drop the per-session state of a session that has ended (F24).
+
+        One `asyncio.Lock` per session ever scanned is unbounded on a daemon
+        built to run for weeks, and the catch-up depth beside it is the same
+        shape. Follows `voice.py`'s eviction rule: a held lock is left alone,
+        because dropping it would let the next caller build a second lock and
+        defeat the mutual exclusion the first one is still providing. Nothing is
+        lost by skipping - the entry is simply retired on a later pass, or on
+        `stop()`.
+
+        The skip reasons are deliberately *not* dropped: the drawer reads them
+        to explain why a session's timeline stops, and an ended session is
+        exactly when someone asks.
+        """
+        lock = self._locks.get(session_id)
+        if lock is not None and lock.locked():
+            return
+        pending = self._debounce.get(session_id)
+        if pending is not None and not pending.done():
+            # A catch-up chained itself behind the scan that is retiring; it
+            # will take this lock. The sweep below picks the entry up later.
+            return
+        self._locks.pop(session_id, None)
+        self._catchup_depth.pop(session_id, None)
+
+    def _evict_dead_sessions(self) -> None:
+        """Retire the lock of every session the manager no longer holds.
+
+        Called when a session ends, so each exit also clears whatever the
+        previous ones left behind - a session is often still registered at the
+        moment its own exit event is handled, and a chained catch-up can outlive
+        the scan that scheduled it.
+        """
+        live = self.sessions.sessions
+        for session_id in [sid for sid in self._locks if sid not in live]:
+            self._forget_session(session_id)
 
     async def _scan(
         self,

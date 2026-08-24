@@ -439,6 +439,26 @@ class ProjectCardService:
             "last_error": self.last_error,
         }
 
+    def forget_project(self, project_id: str) -> None:
+        """Drop every per-project entry for a Project that no longer exists (F24).
+
+        The lock map is keyed by Project id and nothing removed an entry, so a
+        daemon that runs for weeks kept one `asyncio.Lock` per Project ever
+        carded - including ones the operator deleted. Call this when a Project
+        registration is removed.
+
+        A held lock is left in place, following `voice.py`: dropping it would let
+        the next caller build a second lock while a build is still running under
+        the first, which is exactly the concurrent double-build the lock exists
+        to prevent. The entry is retired on the next call instead.
+        """
+        lock = self._locks.get(project_id)
+        if lock is not None and lock.locked():
+            return
+        self._locks.pop(project_id, None)
+        self._memo.pop(project_id, None)
+        self._failures.pop(project_id, None)
+
     # -- internals ----------------------------------------------------------
 
     def _model(self) -> str:

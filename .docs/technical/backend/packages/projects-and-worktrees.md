@@ -90,16 +90,22 @@ Project-config and convention setup resolution, supervised pre-spawn subprocess 
 
 ### `worktree_exec.py`
 
-The shared seam under both repository-declared worktree commands: `[worktree]`-override-or-executable-script resolution, shebang resolution on Windows, head-and-tail bounded output capture with an optional `on_chunk` observer whose exceptions are contained, and one timeout and tree-reap subprocess runner that returns the exit status exactly as given.
+The shared seam under both repository-declared worktree commands: `[worktree]`-override-or-executable-script resolution, shebang resolution on Windows, the merged-stream session environment a repository-declared command runs under, and a failure reported *as an outcome* rather than raised, because "the gate did not run" is a thing the land queue has to be able to say.
+
+The execution mechanics - the head-and-tail cap, the optional `on_chunk` observer whose exceptions are contained, the timeout, the tree reap on timeout and cancellation - are `bounded_subprocess.py`, which was extracted from this module and now serves `usage.py`, `provider_accounts.py`, and `git_monitor.py` too.
 A throw in the observer would abandon a half-read pipe and block the process it is draining.
 
-**Not:** authority of any kind - bootstrap has none to check and verification's lives in `worktree_verify.py` - or interpreting what the observed bytes mean (`verify_progress.py`).
+**Not:** authority of any kind - bootstrap has none to check and verification's lives in `worktree_verify.py` - the execution mechanics themselves (`bounded_subprocess.py`), or interpreting what the observed bytes mean (`verify_progress.py`).
 
 ### `worktree_graveyard.py`
 
 Where a removed checkout goes so the deletion does not have to happen in front of anyone: the graveyard's location under the repository's common Git directory, the single atomic rename that buries a tree, the restore that undoes it, and the idempotent purge.
 
 The purge clears the read-only bit before retrying a file (Git writes loose objects read-only, and Windows cannot unlink one at all), counts what it could not delete rather than raising, and never removes the graveyard root - a purge racing a burial must not delete the directory another removal is renaming into.
+
+Two rules bound its patience, and both come from a purge loop that had neither (D2 soak, 2026-08-24, 1,165 warnings over three days for a handful of paths, up to 24 repeats of one).
+**An absent path is a purged path**: a directory Windows has marked delete-pending stays in the listing while every operation on it reports it missing, so a `FileNotFoundError` there is the deletion working, not failing.
+And a path that genuinely will not go is retried `PURGE_ATTEMPT_LIMIT` times and then abandoned with one terminal `worktree_graveyard_purge_abandoned` line; the bytes stay on disk and the next daemon tries again, which is the intended bound - a lock held by a process that has since exited gets a fresh budget, while a live one stops writing the same warning forever.
 
 **Not:** deciding *whether* a worktree may be buried, which is Git's set of refusals and lives in `worktree_mutation.py`; running Git; or scheduling the purge.
 
