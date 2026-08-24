@@ -3,16 +3,22 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
+from swe_mux import observation
 from swe_mux.event_bus import EventBus
 from swe_mux.meta_hooks import HookRule, MetaHookEngine
 from swe_mux.models import SessionRecord
 from swe_mux.observation import (
+    _TAIL_CHUNK_BYTES,
+    _TAIL_IDENTITY_PROBE_SECONDS,
     JsonlTailer,
     _claude,
     _codex,
@@ -2364,6 +2370,271 @@ async def test_a_rewritten_transcript_counts_as_growth(tmp_path: Path) -> None:
     await drain_tailer(path, growth, then=rewrite)
 
     assert growth != []
+
+
+def synthetic_transcript(path: Path, target_bytes: int) -> int:
+    """Write a transcript of roughly `target_bytes`, returning its record count.
+
+    Shaped like a real Claude assistant record rather than `{"n":1}`, because the
+    cost this exercises is the per-line `json.loads` of a nested object, not the
+    read.
+    """
+    line = (
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-07-19T01:00:00Z",
+                "message": {
+                    "content": [{"type": "text", "text": "x" * 400}],
+                    "stop_reason": "end_turn",
+                    "model": "claude-opus-4-8",
+                    "usage": {"input_tokens": 1_000, "output_tokens": 50},
+                },
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
+    count = max(1, target_bytes // len(line))
+    with path.open("wb") as handle:
+        for _ in range(count):
+            handle.write(line)
+    return count
+
+
+async def collect_tail(
+    path: Path, seen: list[tuple[dict[str, Any] | None, bool]], stop: asyncio.Event
+) -> None:
+    """Record everything a tailer yields, boundary markers included."""
+    async for item in JsonlTailer(path).events(stop):
+        seen.append(item)
+
+
+def window_spy(monkeypatch: pytest.MonkeyPatch, lengths: list[int]) -> None:
+    """Record the length of every window the tailer asks the filesystem for."""
+    real = observation._read_transcript_window
+
+    def spy(path: Path, offset: int, length: int, prefix_len: int) -> tuple[bytes, bytes]:
+        lengths.append(length)
+        return real(path, offset, length, prefix_len)
+
+    monkeypatch.setattr(observation, "_read_transcript_window", spy)
+
+
+async def test_a_large_attach_replay_keeps_the_event_loop_serviced(tmp_path: Path) -> None:
+    """Replay must not be one uninterruptible span, however big the transcript is.
+
+    A resumed Claude conversation's transcript is routinely tens of MB, and the
+    daemon re-reads all of it on every attach and every rebind. Measured on the
+    primary host while this read the whole file and decoded it in one go: a 24 MiB
+    transcript held the loop for 290ms and a 48 MiB one for 691ms, and a heartbeat
+    task got exactly *zero* turns in between - nothing else in the daemon ran, for
+    any session, for the duration.
+
+    The assertion is a count rather than a duration on purpose: the gate runs
+    across every core, so a wall-clock bound would be a bet on scheduling, while
+    "the loop was serviced at least once per window" is true no matter how loaded
+    the machine is - each window crosses a thread boundary, and crossing one hands
+    the loop back.
+    """
+    path = tmp_path / "big.jsonl"
+    written = synthetic_transcript(path, 16 * 1024 * 1024)
+    windows = -(-path.stat().st_size // _TAIL_CHUNK_BYTES)
+    assert windows > 8, "the file must be large enough for windowing to be the claim"
+
+    ticks = 0
+    replayed = 0
+    caught_up = False
+    stop = asyncio.Event()
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while not stop.is_set():
+            await asyncio.sleep(0)
+            ticks += 1
+
+    async def collect() -> None:
+        nonlocal replayed, caught_up
+        async for item, historical in JsonlTailer(path).events(stop):
+            if item is None:
+                caught_up = not historical
+                return
+            assert historical, "the attach snapshot is history, not live behavior"
+            replayed += 1
+
+    beat = asyncio.create_task(heartbeat())
+    task = asyncio.create_task(collect())
+    try:
+        await until(lambda: caught_up, seconds=60, what="the attach replay finished")
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=10)
+        await asyncio.wait_for(beat, timeout=10)
+
+    assert replayed == written
+    assert ticks >= windows
+
+
+async def test_attach_replay_reads_one_bounded_window_at_a_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Peak memory is a window and its records, not the whole file.
+
+    The bound is what makes the cost of attaching to a 100 MB transcript the same
+    as attaching to a 1 MB one; asserting on the requested lengths states it
+    directly instead of inferring it from an RSS reading.
+    """
+    path = tmp_path / "big.jsonl"
+    synthetic_transcript(path, 4 * 1024 * 1024)
+    size = path.stat().st_size
+    lengths: list[int] = []
+    window_spy(monkeypatch, lengths)
+
+    stop = asyncio.Event()
+    seen: list[tuple[dict[str, Any] | None, bool]] = []
+    task = asyncio.create_task(collect_tail(path, seen, stop))
+    try:
+        await until(
+            lambda: (None, False) in seen, seconds=60, what="the attach snapshot was replayed"
+        )
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=10)
+
+    assert lengths, "the replay read nothing"
+    assert max(lengths) <= _TAIL_CHUNK_BYTES
+    assert sum(lengths) >= size
+
+
+async def test_a_record_split_across_windows_keeps_the_replay_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windowing may not move the historical/live line, not even mid-record.
+
+    A window boundary lands wherever the byte count says, so it routinely falls
+    inside a JSON line. Five-byte windows put one inside every record here; the
+    sequence must still be the one an unwindowed read produced, byte position for
+    byte position.
+    """
+    monkeypatch.setattr(observation, "_TAIL_CHUNK_BYTES", 5)
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n{"n":2}\n')
+    stop = asyncio.Event()
+    seen: list[tuple[dict[str, Any] | None, bool]] = []
+    task = asyncio.create_task(collect_tail(path, seen, stop))
+    try:
+        await until(lambda: (None, False) in seen, what="the attach snapshot was replayed")
+        with path.open("ab") as handle:
+            handle.write(b'{"n":3}\n')
+        await until(lambda: ({"n": 3}, False) in seen, what="the live record arrived")
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert seen == [({"n": 1}, True), ({"n": 2}, True), (None, False), ({"n": 3}, False)]
+
+
+async def test_a_same_length_rewrite_is_read_as_a_replacement(tmp_path: Path) -> None:
+    """Claude's cancel/revert can land on the length it replaced.
+
+    `size < offset` catches the common case where the rewrite is shorter, and
+    nothing else about the file's *size* can betray a rewrite that is not. The
+    leading bytes are the identity that does.
+    """
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n{"n":2}\n')
+    stop = asyncio.Event()
+    seen: list[tuple[dict[str, Any] | None, bool]] = []
+    task = asyncio.create_task(collect_tail(path, seen, stop))
+    try:
+        await until(lambda: (None, False) in seen, what="the attach snapshot was replayed")
+        replacement = b'{"n":9}\n{"n":8}\n'
+        assert len(replacement) == path.stat().st_size
+        path.write_bytes(replacement)
+        await until(lambda: ({"n": 8}, True) in seen, what="the replacement snapshot was replayed")
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert seen.index((None, True)) < seen.index(({"n": 9}, True))
+
+
+async def _poll_once(tailer: JsonlTailer, stop: asyncio.Event) -> list[Any]:
+    return [item async for item in tailer._poll(stop)]
+
+
+async def test_a_rewrite_stat_cannot_see_is_still_caught_by_the_prefix_backstop(
+    tmp_path: Path,
+) -> None:
+    """The Windows trap the identity check is built around.
+
+    A transcript held open by its writer reports its *creation* time as
+    `st_mtime` for as long as the handle lives - measured 2026-08-06 across five
+    Codex rollouts, with every Win32 timestamp API agreeing - so a rewrite is
+    allowed to leave every `stat()` field this tailer may trust exactly as it
+    found them. `os.utime` reproduces that here. The identity check therefore
+    only ever *skips* work, never concludes from it that the file is unchanged:
+    the prefix backstop is what closes the case, and this drives the poll
+    directly so the interval is a decision rather than a wall-clock wait.
+    """
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n{"n":2}\n')
+    stop = asyncio.Event()
+    tailer = JsonlTailer(path)
+    assert await _poll_once(tailer, stop) == [
+        ({"n": 1}, True),
+        ({"n": 2}, True),
+        (None, False),
+    ]
+    identity = tailer._identity
+    assert identity is not None
+
+    path.write_bytes(b'{"n":9}\n{"n":8}\n')
+    os.utime(path, ns=(identity[3], identity[3]))
+    after = path.stat()
+    assert (after.st_size, after.st_mtime_ns) == (identity[0], identity[3])
+
+    # Inside the interval the tailer takes stat() at its word and touches nothing.
+    assert await _poll_once(tailer, stop) == []
+    tailer._prefix_checked_at -= _TAIL_IDENTITY_PROBE_SECONDS
+    assert await _poll_once(tailer, stop) == [
+        (None, True),
+        ({"n": 9}, True),
+        ({"n": 8}, True),
+        (None, False),
+    ]
+
+
+async def test_an_idle_transcript_is_not_reopened_on_every_poll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The poll used to cost an open and a 64-byte read per session per 250ms.
+
+    It bought exactly one thing: catching a rewrite that `stat()` reports
+    identically. That is now the backstop's job, on a much longer clock, so a
+    quiet transcript costs one `stat()` a tick and no opens at all.
+
+    The quiet window *is* the claim here, so the fixed sleep is the point rather
+    than the hazard the settle helpers exist for (see `tests/support/settle.py`) -
+    a loaded machine polls fewer times, never more.
+    """
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n')
+    lengths: list[int] = []
+    window_spy(monkeypatch, lengths)
+
+    stop = asyncio.Event()
+    seen: list[tuple[dict[str, Any] | None, bool]] = []
+    task = asyncio.create_task(collect_tail(path, seen, stop))
+    try:
+        await until(lambda: (None, False) in seen, what="the attach snapshot was replayed")
+        lengths.clear()
+        await asyncio.sleep(1.0)
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)
+
+    # Four polls a second for a second: four opens before, at most one backstop now.
+    assert len(lengths) <= 1
 
 
 async def test_the_observer_stamps_growth_onto_the_session(tmp_path: Path) -> None:
