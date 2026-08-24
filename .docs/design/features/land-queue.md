@@ -438,6 +438,19 @@ A handback additionally records whether its message was **armed**, and when it w
 A verify-only request's result additionally records a `verify`/`reported` row carrying whether its answer reached its author armed, for the same reason a handback does.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
 
+**A state change and its trail entry are one commit.** `LandStore.transition` and `LandStore.enqueue`
+take the audit row as an argument (`LandEvent`) and write both inside a single store operation.
+They were two commits, in whichever order each call site picked, and the skip paths - documentation-only,
+reused verdict, standing verdict - all wrote the event *first*, so a conditional `UPDATE` that then lost
+its race left a `verify`/`skipped` entry standing over a request that never moved.
+The event carries no Project of its own; the writer reads it off the row it just updated, so an entry
+cannot name a different Project from the request it describes.
+Restart recovery works the same way: the `orphaned` entries are written in the same commit that returns
+the steps to `queued`.
+Nothing here is a correctness fix - the state machine never reads `land_events` to decide anything and
+`restore()` re-derives from the repository - it is the audit trail being able to say what happened,
+which is the only job it has.
+
 **A gate that ran is recorded as a `test_result` fact**, not only as a land event.
 The gate is the only test run most branches ever get and it runs out-of-band - the daemon executes it, so no tool call and no transcript records it - which left the substrate holding one `test_result` fact against 4,485 `command_result` facts in a measured 24-hour window and made declared-vs-verified a statement about capture rather than about an agent (`tier0-facts.md`, `deterministic-consumers.md`).
 Only `passed` and `failed` become facts: `not_configured`, `unapproved` and `timed_out` are statements about the setup or about a run that never finished, and recording them as a failed test run would put a verdict on the branch that nothing ever tested.

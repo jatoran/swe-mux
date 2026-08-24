@@ -120,13 +120,48 @@ Pure moves plus the AppKey migration; no behavior changes, so review is structur
 
 ### S5 - store layer (automation_store, prompt_queue, voice, land_store; no S3/S4 overlap)
 
-- [ ] S5.1 Scan search (F6): pass `newest_first=True` in both search callers, add a truncation flag to the response, add an index for the unindexed `ORDER BY t0`, and propagate the discarded `_memory_scope` truncation flag.
-- [ ] S5.2 Retention batching (F12): per-table operations deleting bounded rowid batches with commits between batches, plus measured `created_at` indexes on the tables that need them; log rows-removed and elapsed per table.
-- [ ] S5.3 Voice eviction (F19): replace the unindexed `COALESCE` group scans with `WHERE stream_id=? OR id=?`, batch victim deletion.
-- [ ] S5.4 Prompt queue append (F18): skip renumbering on ordinary tail appends; renumber only on anchor inserts. Correct the schema comment that claims the partial unique index enforces NULL-sender dedup.
-- [ ] S5.5 LIKE escaping (F23): route `target_fragment` and the history metadata fallback through the existing `_escape_like`/`ESCAPE` pattern.
-- [ ] S5.6 Land audit atomicity (F/codex, downgraded): add `transition_with_event` / `enqueue_with_event` so a state transition and its audit row commit in one operation; fix the two write-event-first call sites.
-- [ ] S5.T Tests: >2000-record scan-search regression (newest record found, truncation reported); retention batching test proving intermediate commits; LIKE metacharacter test; tail-append write-count test; crash-between-transition-and-event test made impossible by construction.
+- [x] S5.1 Scan search (F6): pass `newest_first=True` in both search callers, add a truncation flag to the response, add an index for the unindexed `ORDER BY t0`, and propagate the discarded `_memory_scope` truncation flag.
+- [x] S5.2 Retention batching (F12): per-table operations deleting bounded rowid batches with commits between batches, plus measured `created_at` indexes on the tables that need them; log rows-removed and elapsed per table.
+- [x] S5.3 Voice eviction (F19): replace the unindexed `COALESCE` group scans with `WHERE stream_id=? OR id=?`, batch victim deletion.
+- [x] S5.4 Prompt queue append (F18): skip renumbering on ordinary tail appends; renumber only on anchor inserts. Correct the schema comment that claims the partial unique index enforces NULL-sender dedup.
+- [x] S5.5 LIKE escaping (F23): route `target_fragment` and the history metadata fallback through the existing `_escape_like`/`ESCAPE` pattern.
+- [x] S5.6 Land audit atomicity (F/codex, downgraded): add `transition_with_event` / `enqueue_with_event` so a state transition and its audit row commit in one operation; fix the two write-event-first call sites.
+- [x] S5.T Tests: >2000-record scan-search regression (newest record found, truncation reported); retention batching test proving intermediate commits; LIKE metacharacter test; tail-append write-count test; crash-between-transition-and-event test made impossible by construction.
+
+Delivered in `tests/test_store_hardening.py` (21 tests), plus doc updates in
+`technical/backend/sqlite.md`, `design/features/{scan-timeline,land-queue,voice,prompt-queue}.md`,
+`design/{interfaces,data-model}.md`, and `design/features/mux-mcp.md`.
+Four decisions worth knowing before the next package touches these stores:
+
+- **S5.1 is its own read, not a flag on `scan_records`.** Search wants the opposite of what the
+  derivations want: `scan_consumers` walks a run forwards and needs every record from the
+  beginning, while search ranks whatever it is handed and re-sorts newest-first. So
+  `AutomationStore.scan_search_page` is a separate newest-first, truncation-reporting read and
+  `scan_records` keeps its oldest-first contract unchanged. The truncation flag reaches both
+  surfaces (`records_truncated` on the tool, `truncated`/`scanned` on the endpoint), and the tool
+  also stopped discarding `_memory_scope`'s scope-truncation flag by adopting the existing
+  `_covered_projects` envelope.
+- **S5.2's index list is measured and short.** Live 2.8 GB `mux.db`: the largest prune table is
+  19,309 rows (already indexed) and everything except four is at or below 1,100. At those sizes an
+  extra B-tree per insert loses to what it saves, so only `automation_budget_ledger`,
+  `automation_annotations`, `scan_timeline_records`, and `automation_checkpoints(updated_at)`
+  gained one. The batch statement carries **no `ORDER BY`**: ordering by the retention column
+  forces a temp B-tree per batch on an unindexed table (1563ms against 263ms per 100,000 rows),
+  while omitting it is within 20% of the best indexed plan and has no bad case. `prune` now
+  returns rows-removed per table and logs per-table and per-sweep lines.
+- **S5.6 is an optional `event: LandEvent` argument on `transition`/`enqueue`, not two new
+  methods.** `transition` takes nineteen keyword arguments; a `transition_with_event` wrapper is
+  either a twenty-line forwarder that silently drifts or an `Any`-typed `**kwargs` that type-checks
+  nothing. The argument delivers the same guarantee with no duplication, and the event's
+  `project_id` comes off the updated row so it cannot name a different Project. Three call sites
+  wrote the event first, not two (`_skip_verification`, `_reuse_verification`, `_standing_verdict`);
+  all three now pass through `_clear_gate`, and `LandStore.restore` writes its `orphaned` entries
+  in the same commit as the requeue.
+- **The LIKE helpers moved to `sqlite_store`** (`escape_like`, `like_contains`) rather than being
+  copied a third time; `history`'s `_escape_like`/`_like_pattern` are aliases. Four call sites were
+  unescaped, not two: the scan `target_fragment`, the experience browse, and both history metadata
+  filters. `code_graph.definitions`' `name LIKE ?` (`f"%.{name}"`) has the same defect and was left
+  alone as out of scope for S5.
 
 ### S6 - session.py and observation follow-ups (after wave 1 lands; conflicts with S2 otherwise)
 

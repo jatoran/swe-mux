@@ -38,6 +38,30 @@ _SCHEMA_VERSIONS = (
 )
 
 
+def escape_like(value: str) -> str:
+    """Make a user's text literal inside a SQL ``LIKE`` pattern.
+
+    ``%`` and ``_`` are wildcards there, so a search for ``100%`` would otherwise
+    match everything after ``100`` and one for ``land_store`` would also match
+    ``land-store``. Both directions are wrong and neither is visible in the
+    result: the caller is silently handed a different query from the one it
+    asked for.
+
+    Lives here rather than in one store because every store searching text has
+    the same problem, and three private copies is how two of them ended up
+    without one. **Paired with** ``ESCAPE '\\'`` at the call site - the escape
+    character is not SQLite's default, so a pattern built by this function and
+    used without that clause is escaped into literal backslashes and matches
+    nothing.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def like_contains(value: str) -> str:
+    """A literal substring ``LIKE`` pattern. Pair with ``ESCAPE '\\'``."""
+    return f"%{escape_like(value)}%"
+
+
 def read_schema_version(db: sqlite3.Connection, store: str) -> int:
     """Read one store's schema version from the shared per-store table.
 

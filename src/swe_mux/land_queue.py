@@ -50,7 +50,7 @@ from .land_preconditions import (
     evaluate_preconditions,
     read_repository_facts,
 )
-from .land_store import LandConflict, LandStore
+from .land_store import LandConflict, LandEvent, LandStore
 from .verify_progress import VerifyProgress, sanitize_plan
 from .worktree_verify import (
     MAX_HANDBACK_OUTPUT_BYTES,
@@ -215,21 +215,18 @@ class LandQueueService:
         await background.stop(LAND_LOOP)
 
     async def restore(self) -> None:
-        """Return steps orphaned by a daemon restart to the queue."""
-        recovered = await self._store.restore(now=self._clock())
-        for row in recovered:
+        """Return steps orphaned by a daemon restart to the queue.
+
+        The `orphaned` audit rows are written by the store, in the same commit as
+        the requeue - a second crash between the requeue and its record is exactly
+        the hole this path must not have.
+        """
+        for row in await self._store.restore(now=self._clock()):
             log.warning(
                 "land_step_orphaned request_id=%s branch=%s state=%s",
                 row["id"],
                 row["branch"],
                 row["state"],
-            )
-            await self._store.record_event(
-                request_id=row["id"],
-                project_id=row["project_id"],
-                step=row["state"],
-                outcome="orphaned",
-                reason="daemon restarted mid-step",
             )
 
     async def _run(self) -> None:
@@ -401,23 +398,23 @@ class LandQueueService:
                 origin_session_id=origin_session_id,
                 origin_run_id=origin_run_id,
                 correlation_id=f"land:{uuid.uuid4().hex[:12]}",
+                # The claim and the trail's opening entry in one commit; the row
+                # carries the branch and OID it claimed, so an event written
+                # afterwards could have described a claim that never happened.
+                event=LandEvent(
+                    step="request",
+                    outcome="queued",
+                    detail={
+                        "origin": origin,
+                        "kind": kind,
+                        "branch": facts.worktree_branch,
+                        "oid": facts.worktree_head,
+                    },
+                ),
                 now=self._clock(),
             )
         except LandConflict as exc:
             raise LandRefusal("already_queued", str(exc)) from exc
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=project_id,
-            step="request",
-            outcome="queued",
-            detail={
-                "origin": origin,
-                "kind": kind,
-                "branch": row["branch"],
-                "oid": row["requested_oid"],
-            },
-            now=self._clock(),
-        )
         await self._emit("land_changed", row)
         return row
 
@@ -470,13 +467,7 @@ class LandQueueService:
             state="cancelled",
             reason="cancelled by the operator",
             clear_waiting=True,
-            now=self._clock(),
-        )
-        await self._store.record_event(
-            request_id=request_id,
-            project_id=row["project_id"],
-            step="request",
-            outcome="cancelled",
+            event=LandEvent(step="request", outcome="cancelled"),
             now=self._clock(),
         )
         await self._emit("land_changed", row)
@@ -706,6 +697,7 @@ class LandQueueService:
         digest: str = "",
         duration_ms: float = 0.0,
         bump_attempts: bool = False,
+        event: LandEvent | None = None,
     ) -> dict[str, Any] | None:
         """Move a request past the gate - to the fast-forward, or to its own terminal green.
 
@@ -716,6 +708,13 @@ class LandQueueService:
         `verified_oid` is set on every path and still means what it always meant - the
         OID this request cleared its gate at - so the branch-moved-after-clearing check
         in `_land` keeps working unchanged.
+
+        `event` is the "why this gate was cleared without running" record, and it
+        travels with the transition rather than ahead of it. All three skip paths used
+        to write it first, which meant a `verify/skipped` or `verify/reused` entry could
+        outlive a transition that then lost its race and never happened - a trail
+        asserting a gate was skipped for a request still sitting in `reconciling`. A
+        `LandConflict` now discards both together.
         """
         lands = self._lands(row)
         try:
@@ -729,6 +728,7 @@ class LandQueueService:
                 verify_digest=digest,
                 verify_gate=gate,
                 bump_verify_attempts=bump_attempts,
+                event=event,
                 now=self._clock(),
             )
         except LandConflict:
@@ -747,21 +747,18 @@ class LandQueueService:
         otherwise for a second and a half is a small lie in the one place the queue is
         read for what actually happened.
         """
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=row["project_id"],
-            step="verify",
-            outcome="skipped",
-            reason=choice.reason,
-            detail={"gate": "docs_only", "paths": list(choice.paths), "oid": head},
-            now=self._clock(),
-        )
         return await self._clear_gate(
             row,
             head,
             expect=("reconciling",),
             gate="docs_only",
             summary=choice.reason,
+            event=LandEvent(
+                step="verify",
+                outcome="skipped",
+                reason=choice.reason,
+                detail={"gate": "docs_only", "paths": list(choice.paths), "oid": head},
+            ),
         )
 
     async def _reuse_verification(
@@ -774,18 +771,14 @@ class LandQueueService:
         under the same approved command and does not spend the minutes again.
 
         **A skipped gate is never silent** (`no silent caps`), so the reuse is written to
-        the trail *with its key* before the row moves. The key is what makes the record
-        auditable rather than a claim: a reader can ask which run produced the verdict
-        and check that the tree it names is the tree that landed.
+        the trail *with its key*, in the same commit that moves the row. The key is what
+        makes the record auditable rather than a claim: a reader can ask which run
+        produced the verdict and check that the tree it names is the tree that landed.
         """
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=row["project_id"],
+        reuse = LandEvent(
             step="verify",
             outcome="reused",
-            reason=(
-                "these exact bytes already passed on this exact tree in this queue"
-            ),
+            reason="these exact bytes already passed on this exact tree in this queue",
             detail={
                 "gate": "reused",
                 "tree": tree,
@@ -797,7 +790,6 @@ class LandQueueService:
                 "duration_ms": memo["duration_ms"],
                 "oid": head,
             },
-            now=self._clock(),
         )
         log.info(
             "land_gate_reused request_id=%s branch=%s tree=%s source=%s",
@@ -814,6 +806,7 @@ class LandQueueService:
             digest=str(memo["digest"]),
             duration_ms=float(memo["duration_ms"]),
             summary="verification was already passed on these exact bytes and this exact tree",
+            event=reuse,
         )
 
     async def _standing_verdict(self, row: dict[str, Any], head: str) -> dict[str, Any] | None:
@@ -826,15 +819,6 @@ class LandQueueService:
         a request that reached here after a restart used to fall through in `reconciling`
         and be refused by its own next transition.
         """
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=row["project_id"],
-            step="verify",
-            outcome="standing",
-            reason="the branch already contained the trunk; its recorded verdict still stands",
-            detail={"oid": head, "gate": row.get("verify_gate") or ""},
-            now=self._clock(),
-        )
         return await self._clear_gate(
             row,
             head,
@@ -844,6 +828,14 @@ class LandQueueService:
             gate=None,
             digest=str(row.get("verify_digest") or ""),
             summary="the branch already contained the trunk and its verdict still stands",
+            event=LandEvent(
+                step="verify",
+                outcome="standing",
+                reason=(
+                    "the branch already contained the trunk; its recorded verdict still stands"
+                ),
+                detail={"oid": head, "gate": row.get("verify_gate") or ""},
+            ),
         )
 
     async def _verify(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -1064,14 +1056,11 @@ class LandQueueService:
             reason="",
             trunk_before=trunk_before,
             landed_oid=trunk_after,
-            now=self._clock(),
-        )
-        await self._store.record_event(
-            request_id=request_id,
-            project_id=row["project_id"],
-            step="land",
-            outcome="landed",
-            detail={"trunk_before": trunk_before, "trunk_after": trunk_after},
+            event=LandEvent(
+                step="land",
+                outcome="landed",
+                detail={"trunk_before": trunk_before, "trunk_after": trunk_after},
+            ),
             now=self._clock(),
         )
         await self._fact(landed, "land_landed", {"trunk_after": trunk_after})
@@ -1108,15 +1097,12 @@ class LandQueueService:
             reason=reason,
             detail=dict(detail or {}),
             clear_waiting=True,
-            now=self._clock(),
-        )
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=row["project_id"],
-            step="request",
-            outcome="already_landed",
-            reason=reason,
-            detail=dict(detail or {}),
+            event=LandEvent(
+                step="request",
+                outcome="already_landed",
+                reason=reason,
+                detail=dict(detail or {}),
+            ),
             now=self._clock(),
         )
         await self._emit("land_changed", updated)
@@ -1151,16 +1137,17 @@ class LandQueueService:
             detail=payload,
             clear_waiting=True,
             handback_message_id=message_id,
-            now=self._clock(),
-        )
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=row["project_id"],
-            step="request",
-            outcome="refused",
-            reason=reason,
-            detail={**payload, "message_id": message_id, "armed": armed,
-                    "arming_reason": arming_reason},
+            event=LandEvent(
+                step="request",
+                outcome="refused",
+                reason=reason,
+                detail={
+                    **payload,
+                    "message_id": message_id,
+                    "armed": armed,
+                    "arming_reason": arming_reason,
+                },
+            ),
             now=self._clock(),
         )
         await self._fact(updated, "land_refused", {"reason": reason})
@@ -1194,24 +1181,21 @@ class LandQueueService:
             detail={"step": step, "paths": list(paths)},
             clear_waiting=True,
             handback_message_id=message_id,
-            now=self._clock(),
-        )
-        await self._store.record_event(
-            request_id=row["id"],
-            project_id=row["project_id"],
-            step=step,
-            outcome="handed_back",
-            reason=summary,
-            detail={
-                "message_id": message_id,
-                "paths": list(paths),
-                # Whether the answer will reach its author without a human press, and
-                # why not when it will not. A handback that sat as a draft nobody
-                # delivered is the failure this records: from the row alone it read
-                # exactly like one that arrived (`land-queue.md`).
-                "armed": armed,
-                "arming_reason": arming_reason,
-            },
+            event=LandEvent(
+                step=step,
+                outcome="handed_back",
+                reason=summary,
+                detail={
+                    "message_id": message_id,
+                    "paths": list(paths),
+                    # Whether the answer will reach its author without a human press,
+                    # and why not when it will not. A handback that sat as a draft
+                    # nobody delivered is the failure this records: from the row alone
+                    # it read exactly like one that arrived (`land-queue.md`).
+                    "armed": armed,
+                    "arming_reason": arming_reason,
+                },
+            ),
             now=self._clock(),
         )
         await self._fact(updated, "land_handed_back", {"step": step, "reason": summary})
