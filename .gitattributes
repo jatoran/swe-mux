@@ -1,3 +1,33 @@
+# ---------------------------------------------------------------------------
+# Line endings
+# ---------------------------------------------------------------------------
+# This checkout is developed on Windows, where the system gitconfig sets
+# `core.autocrlf=true`, so Git writes CRLF into the working tree. Every tool in
+# this toolchain writes LF instead: npm (`frontend/package-lock.json`), uv
+# (`uv.lock`), vite, node, and whatever regenerates the pytest fixtures.
+#
+# That combination produces a file Git calls modified but can neither diff nor
+# commit. Git checks the file out as CRLF and caches that CRLF byte count in the
+# index; the tool then rewrites the file as LF, so the on-disk size drops by one
+# byte per line. `git status` sees the size disagree, reports ` M`, and never
+# reaches the CRLF filter that would prove the content byte-identical. The entry
+# is then stuck forever: `git diff` prints nothing, `git commit` has nothing to
+# record, and no amount of re-running clears it. `package-lock.json` sat that way
+# at 3073 bytes below its cached size, which is exactly its line count.
+#
+# Checking every text file out as LF removes the mismatch at its source: what Git
+# writes is now what the tools write, so the round trip is stable. The index is
+# already LF throughout, so this changes only the working tree and never a blob.
+#
+# `text=auto` keeps Git's own binary detection in charge, so the .png/.mp3/.webp/
+# .tgz assets and the .bin PTY fixtures are left alone, as are the four frontend
+# sources that embed a literal NUL as a composite-key separator.
+* text=auto eol=lf
+
+# The rules below are implied by the line above. They are kept because they
+# record *why* these particular files must never be CRLF, which is a stronger
+# claim than the general one and would otherwise be lost.
+
 # Note files carry an identity header that the daemon matches byte-exactly, and
 # `read_note` decodes raw bytes so it gets no universal-newline translation. A
 # checkout under `core.autocrlf=true` would otherwise rewrite a committed note
