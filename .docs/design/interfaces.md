@@ -306,7 +306,7 @@ GET     /projects/{project_id}/files?path=RELATIVE
 GET     /projects/{project_id}/files/tree?path=RELATIVE&path=…   the root plus each expanded folder
 GET     /projects/{project_id}/files/recent   {items[{name,path,kind,origin,status,committed_at}], available, reason?}
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
-GET     /projects/{project_id}/search?q=&mode=names|contents|both
+GET     /projects/{project_id}/search?q=&mode=names|contents|both   {items[…], truncated, truncated_reason: results|files|null, stopped_at}
 GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]
 GET     /projects/{project_id}/file/content?path=RELATIVE&revision=REVISION[&worktree=ABSOLUTE]
 PUT     /projects/{project_id}/file   {path, text, revision, worktree?}

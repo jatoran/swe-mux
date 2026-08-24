@@ -10,7 +10,10 @@ from swe_mux.budget import Budget
 from swe_mux.config import (
     BUILTIN_THEME_PAIRS,
     DEFAULT_PROJECT_IGNORE_PATTERNS,
+    PROJECT_IGNORE_PATTERN_LIMIT,
+    SCHEMA_32_IGNORE_ADDITIONS,
     SCHEMA_VERSION,
+    WORKTREE_IGNORE_PATTERNS,
     contrast_ratio,
     default_ccusage_command,
     load_config,
@@ -381,6 +384,67 @@ def test_legacy_harness_executable_and_argument_keys_migrate_to_registry_maps(
     assert persisted["harness_args"] == config.harness_args
     assert "claude_exe" not in persisted
     assert "codex_args" not in persisted
+
+
+def test_worktree_ignore_patterns_reach_an_install_that_already_persisted_the_old_list(
+    tmp_path: Path,
+) -> None:
+    # The trap this exists to close: `project_ignore_patterns` is written out in full, so a
+    # new entry in the *defaults* reaches brand-new installs only. Ship it without this and
+    # every machine that has ever run swe-mux keeps browsing its own worktrees, which is
+    # indistinguishable from never having shipped the fix.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'schema_version = 31\nproject_ignore_patterns = [".git", "node_modules", "mine"]\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert all(
+        pattern in config.project_ignore_patterns for pattern in SCHEMA_32_IGNORE_ADDITIONS
+    )
+    assert all(pattern in SCHEMA_32_IGNORE_ADDITIONS for pattern in WORKTREE_IGNORE_PATTERNS)
+    # An operator's own entries and their order survive; the migration only appends.
+    assert config.project_ignore_patterns[:3] == [".git", "node_modules", "mine"]
+    persisted = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert ".claude/worktrees" in persisted["project_ignore_patterns"]
+    assert ".trash" in persisted["project_ignore_patterns"]
+
+
+def test_the_worktree_pattern_migration_does_not_duplicate_what_is_already_there(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'schema_version = 31\nproject_ignore_patterns = [".git", ".claude/worktrees/"]\n',
+        encoding="utf-8",
+    )
+
+    patterns = load_config(path).project_ignore_patterns
+
+    # Compared after the same normalization the matcher applies, so a trailing slash is
+    # recognized as the pattern it already is rather than added beside it.
+    assert patterns.count(".claude/worktrees/") == 1
+    assert ".claude/worktrees" not in patterns
+
+
+def test_the_worktree_pattern_migration_respects_the_ceiling_validation_enforces(
+    tmp_path: Path,
+) -> None:
+    # Appending past the limit would turn a silent upgrade into a daemon that refuses to
+    # start, on a config the migration itself made invalid.
+    existing = [f"pattern{index}" for index in range(PROJECT_IGNORE_PATTERN_LIMIT - 1)]
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"schema_version = 31\nproject_ignore_patterns = {existing!r}\n".replace("'", '"'),
+        encoding="utf-8",
+    )
+
+    patterns = load_config(path).project_ignore_patterns
+
+    assert len(patterns) == PROJECT_IGNORE_PATTERN_LIMIT
+    assert patterns[-1] == SCHEMA_32_IGNORE_ADDITIONS[0]
 
 
 def test_enabled_legacy_attention_observer_switch_survives_its_rename(tmp_path: Path) -> None:

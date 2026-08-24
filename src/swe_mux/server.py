@@ -11228,17 +11228,26 @@ async def restore_agent_context(request: web.Request) -> web.Response:
 
 
 async def list_project_files(request: web.Request) -> web.Response:
+    """List one Project folder.
+
+    Off the loop, unlike the version that shipped before: the listing was always a blocking
+    filesystem walk, and it now also asks Git which of this Project's subdirectories are
+    separate worktrees (`nested_worktrees`). Its batch sibling below has run in an executor
+    for exactly this reason; a subprocess on the event loop stalls every session's WebSocket.
+    """
     project = _request_project(request)
-    patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
+    patterns = await asyncio.to_thread(
+        effective_project_ignores,
+        project.root,
+        request.app["config"].project_ignore_patterns,
     )
-    return json_response(
-        list_project_directory(
-            project.root,
-            request.query.get("path", ""),
-            ignore_patterns=patterns,
-        )
+    result = await asyncio.to_thread(
+        list_project_directory,
+        project.root,
+        request.query.get("path", ""),
+        ignore_patterns=patterns,
     )
+    return json_response(result)
 
 
 async def post_project_resource(request: web.Request) -> web.Response:
@@ -11281,16 +11290,18 @@ async def list_project_files_tree(request: web.Request) -> web.Response:
     """
 
     project = _request_project(request)
-    patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
-    )
+    configured = request.app["config"].project_ignore_patterns
     paths = request.query.getall("path", [])
     # Always include the root, dedupe, and bound the fan-out so a hostile or
     # runaway query cannot ask us to stat thousands of directories.
     wanted = list(dict.fromkeys(["", *paths]))[:1000]
     result = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: list_project_directories(project.root, wanted, ignore_patterns=patterns),
+        lambda: list_project_directories(
+            project.root,
+            wanted,
+            ignore_patterns=effective_project_ignores(project.root, configured),
+        ),
     )
     return json_response(result)
 
@@ -11317,13 +11328,18 @@ async def search_project_files_route(request: web.Request) -> web.Response:
     if mode not in ("names", "contents", "both"):
         mode = "names"
     query = request.query.get("q", "")
-    patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
-    )
+    configured = request.app["config"].project_ignore_patterns
     # The recursive walk (and any content reads) is blocking, so keep it off the event loop.
+    # So are the Project config parse and the nested-worktree Git call it now makes, which is
+    # why the whole thing is one executor hop rather than a walk with two reads in front of it.
     result = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: search_project_files(project.root, query, mode=mode, ignore_patterns=patterns),
+        lambda: search_project_files(
+            project.root,
+            query,
+            mode=mode,
+            ignore_patterns=effective_project_ignores(project.root, configured),
+        ),
     )
     return json_response(result)
 
