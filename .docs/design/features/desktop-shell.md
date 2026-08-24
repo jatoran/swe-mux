@@ -122,6 +122,24 @@ continues to own every terminal.
   complete `onedir` folder is the distributable unit; the executable is not standalone. It is
   deliberately the *only* executable here: a second one (`swe-mux-action.exe`) used to root
   task terminals, and a live task then locked this directory against the redeploy swap.
+- **The bundle's license posture is proven at build time, not asserted in prose.**
+  `build_app_bundle` calls `verify_bundle_licenses`, which fails the build on three
+  things: a forbidden GPL payload present by artifact name (PyAV's `av.libs`, the
+  espeak-ng loader, `phonemizer`, an x264/x265/avcodec/espeak shared library); an
+  allowlisted LGPL package that is *not* shipped as readable source under
+  `_internal/<pkg>/`; and, through `verify_no_gpl_av`, PyAV re-entering at all. The
+  check reads the built tree rather than package metadata because declared metadata is
+  exactly what hid the original defect - PyAV declares BSD-3-Clause and links GPL
+  x264/x265, sherpa-onnx declares Apache-2.0 and statically links espeak-ng.
+- **`pystray` and `num2words` are in the spec's `collect_all` loop for a licensing
+  reason, not a packaging one.** Both are LGPL. `collect_all` defaults to
+  `include_py_files=True`, so each lands as plain source under `_internal/<pkg>/`
+  instead of being frozen into the executable's archive, which is what lets a recipient
+  substitute their own build and satisfies the LGPL relink condition that
+  `THIRD-PARTY-NOTICES.md` promises. Removing either name is a build failure rather than
+  a silent compliance regression. `num2words` is not optional: `misaki.en` imports it at
+  module scope for the Kokoro G2P. The metadata half of the same gate lives in
+  `packaging/license_audit.py` and runs in the verification gate.
 - `packaging/swe_mux_supervisor.spec` emits the dedicated PTY supervisor bundle
   `dist/swe-mux-supervisor/` — a separate artifact precisely so rebuilding `dist/swe-mux`
   never collides with a running supervisor's file image (Windows locks running
@@ -225,7 +243,10 @@ continues to own every terminal.
 - Package metadata: `pyproject.toml`, `uv.lock`
 - Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/swe_mux.spec`
 - Reproducible build: `packaging/build_desktop.py`
+- Closure license gate and notice generation: `packaging/license_audit.py`,
+  `packaging/third_party_licenses.json`, `THIRD-PARTY-NOTICES.md`
 - Lifecycle tests: `tests/test_desktop.py`
+- License-gate tests: `tests/test_license_audit.py`
 
 ## Relates to
 

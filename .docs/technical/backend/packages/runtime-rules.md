@@ -167,9 +167,17 @@ Because those per-session Jobs live supervisor-side, anything the daemon needs t
 **A new supervisor message must not bump `PROTOCOL_VERSION` unless the wire format genuinely changed.**
 A mismatch stops a new daemon from driving the already-running supervisor, and the only way to update the supervisor is to kill every live session.
 Add the message, let an older supervisor answer "unknown message type", and degrade on the daemon side.
+`spawn_status` is the current example: it exists so a daemon whose spawn reply was lost can learn the true outcome instead of guessing, and against a supervisor that predates it the daemon keeps its previous behaviour and logs the ambiguity.
+
+`spawn` is idempotent on the session id, and the reservation - created the moment the request is accepted - is the deduplication key.
+That matters on the daemon side too: only a `spawn_status` of `unknown` proves nothing was reserved, so it is the one state under which an in-process fallback cannot leave two agents mutating one workspace.
+
+Supervisor teardown quiesces before it reaps: the closing flag goes up, the listener closes, new spawns are refused, in-flight ones are drained and any child born during shutdown is stopped, and only then do the Jobs close.
+Closing the reaper Job first orphans anything created a moment later, which is the one failure a reap cannot report.
 
 The frozen supervisor ships as its own bundle (`dist/swe-mux-supervisor`), never inside `dist/swe-mux`, so app rebuilds cannot collide with a running supervisor's image.
 Keep the supervisor's import closure inside the hash-gated source list in `packaging/build_desktop.py`; adding an import to `supervisor.py` or `pty_host.py` without updating that list ships a stale bundle.
+A module the daemon *also* wants (`nested_job.py` is the one) may be shared only while its own imports are already in the closure - otherwise the daemon's need drags volatile code into the near-frozen half, and every future change to it costs a session reap.
 
 Daemon self-restart (`/api/daemon/restart`) must spawn the successor with `--relaunch-wait` and detach intent.
 It is refused without an attached supervisor unless forced, because an unpreserved restart is a session-killing action.

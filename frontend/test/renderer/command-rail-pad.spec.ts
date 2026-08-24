@@ -1,7 +1,9 @@
 import { expect, test, type Page } from 'playwright/test'
 import { RAIL_KEY_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS } from '../../src/railKeyRepeat.ts'
 import {
+  RAIL_PAD_DEAD_RADIUS_PX,
   RAIL_PAD_DIAL_DELAY_MS,
+  RAIL_PAD_LIFT_PX,
   RAIL_PAD_OUTER_PX,
   RAIL_PAD_RING_PX,
   railPadBands,
@@ -33,15 +35,21 @@ const RING = '.rail-pad-r2'
 const STREAM = '[title="Flow"]'
 const HOLD_MS = RAIL_KEY_REPEAT_DELAY_MS + RAIL_KEY_REPEAT_INTERVAL_MS * 6
 /** Comfortably inside the near ring, and comfortably past the dead radius. */
-const NEAR_PX = 60
+const NEAR_PX = RAIL_PAD_DEAD_RADIUS_PX + 20
 /** Comfortably past the ring boundary. */
 const FAR_PX = RAIL_PAD_RING_PX + 46
 
-/** A displacement at a distance and an angle, in the dial's own convention: degrees
- *  counter-clockwise from due east, with up positive. */
+/**
+ * The finger displacement that lands on a point of the dial: `radius` from the fan's origin,
+ * at `degrees` counter-clockwise from due east with up positive.
+ *
+ * The lift is in here because the fan is centred `RAIL_PAD_LIFT_PX` *above* the press rather
+ * than on it, so a plain polar offset from the chip names a different point on the dial than
+ * the one a test means - and at these radii the difference is the whole gesture.
+ */
 const at = (radius: number, degrees: number) => ({
   dx: radius * Math.cos(degrees * Math.PI / 180),
-  dy: -radius * Math.sin(degrees * Math.PI / 180),
+  dy: -radius * Math.sin(degrees * Math.PI / 180) - RAIL_PAD_LIFT_PX,
 })
 
 /** Straight down the middle of one wedge, so a test never depends on where a boundary is. */
@@ -101,14 +109,18 @@ test('a sideways flick that dips below the horizontal still lands in its wedge',
 
 test('pulling down is the abort, and it always has room', async ({ page }) => {
   // The reason the fan gave up its lower half: a rail on the bottom edge of the screen can
-  // always complete a downward drag, and nothing down there is a target.
+  // always complete a downward drag, and nothing down there is a target. The lift makes it
+  // cheaper still - the press already sits at the bottom of the hub, so a short physical drag
+  // is deep in the abort zone - while staying well past the tap slop, which is what keeps it
+  // an abort rather than a tap.
   const { finger } = await flick(page, PAD, at(NEAR_PX, -90))
   expect(await sends(page)).toEqual([])
   await finger.up()
   await page.waitForTimeout(200)
-  // Not even the centre, which is bound: an escape that ran a different action would be a
-  // redirect rather than an escape.
   expect(await sends(page)).toEqual([])
+  // And it is an escape rather than a request for the map: a pull-down does not leave the
+  // dial standing the way a tap does.
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
 })
 
 test('the pad claims the pointer while dragging, so the pan and the menu swipe stand down', async ({ page }) => {
@@ -245,16 +257,20 @@ test('dragging back out of a release slot cancels it', async ({ page }) => {
   expect(await sends(page)).toEqual([])
 })
 
-test('a tap with no travel runs the centre exactly once', async ({ page }) => {
-  // The shipped arrows pad puts Down here, because an upward fan has no south wedge to hold
-  // it and "the one with no direction is the one you tap" keeps the arrow pair on one chip.
+test('a tap with no travel opens the dial and runs nothing', async ({ page }) => {
+  // What a pad holds is the one thing a finger cannot discover - the chip shows marks, not
+  // labels - so a tap asks, and asking is all it does.
   const finger = await touch(page)
   const centre = await keyPoint(page, PAD)
   await finger.down(centre.x, centre.y)
   await finger.up()
-  await expect.poll(() => sends(page)).toEqual(['CENTRE'])
+  await expect(page.locator('.rail-pad-dial-standing')).toHaveCount(1)
   await page.waitForTimeout(200)
-  expect(await sends(page)).toEqual(['CENTRE'])
+  expect(await sends(page)).toEqual([])
+  // Announced as the menu the chip's `aria-haspopup` promised, rather than hidden the way a
+  // dial drawn mid-drag is.
+  await expect(page.locator('.rail-pad-dial')).toHaveAttribute('role', 'menu')
+  await expect(page.locator(PAD)).toHaveAttribute('aria-expanded', 'true')
 })
 
 test('a drag does not also run the centre on the way out', async ({ page }) => {
@@ -388,7 +404,7 @@ test('a pad tap keeps the keyboard too', async ({ page }) => {
   const centre = await keyPoint(page, PAD)
   await finger.down(centre.x, centre.y)
   await finger.up()
-  await expect.poll(() => sends(page)).toEqual(['CENTRE'])
+  await expect(page.locator('.rail-pad-dial-standing')).toHaveCount(1)
   expect(await page.evaluate(() => document.activeElement?.id)).toBe('keeper')
 })
 
@@ -465,6 +481,47 @@ test('the dial is thumb-sized, and its wedges reach the radii the gesture uses',
   expect(measured.far).toBeGreaterThan(RAIL_PAD_RING_PX)
 })
 
+test('the dial opens above the finger, with the press inside its hub', async ({ page }) => {
+  // The lift, measured where it actually matters: against the drawing, not the constant. A
+  // dial centred on a different point than the one the gesture resolves against would be
+  // lying at exactly the moment the operator is reading it, so this checks the hub the
+  // *renderer* drew actually contains the press the *gesture* opened from.
+  const finger = await touch(page)
+  const centre = await keyPoint(page, PAD)
+  await finger.down(centre.x, centre.y)
+  await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
+  const drawn = await page.evaluate(() => {
+    const svg = document.querySelector<SVGSVGElement>('.rail-pad-dial-svg')!
+    const hub = svg.querySelector<SVGCircleElement>('.rail-pad-dial-hub')!.getBoundingClientRect()
+    return { originY: hub.top + hub.height / 2, radius: hub.height / 2 }
+  })
+  await finger.up()
+  // Within a pixel rather than exactly: the dial's position is rounded to whole pixels for
+  // the stylesheet, and the touch point is the chip's own half-pixel centre.
+  const lifted = centre.y - drawn.originY
+  expect(Math.abs(lifted - RAIL_PAD_LIFT_PX)).toBeLessThanOrEqual(1)
+  expect(Math.abs(drawn.radius - RAIL_PAD_DEAD_RADIUS_PX)).toBeLessThanOrEqual(1)
+  // And it is a lift *into* the hub rather than past it: "nothing is selected" and "you are
+  // in the neutral middle" have to be the same state.
+  expect(lifted).toBeLessThan(drawn.radius)
+})
+
+test('drift around the press selects nothing, in any direction', async ({ page }) => {
+  // The complaint the lift answers. Every one of these was several times the old dead radius
+  // and would have committed a wedge; from below the fan they are all still the abort zone,
+  // and a release out of one runs nothing at all - not even the centre, which is bound.
+  const finger = await touch(page)
+  const centre = await keyPoint(page, PAD)
+  await finger.down(centre.x, centre.y)
+  for (const [dx, dy] of [[26, 0], [-26, 0], [40, 6], [-40, 6], [0, 20], [18, -14]]) {
+    await finger.move(centre.x + dx, centre.y + dy)
+  }
+  expect(await sends(page)).toEqual([])
+  await finger.up()
+  await page.waitForTimeout(200)
+  expect(await sends(page)).toEqual([])
+})
+
 test('the dial escapes the strip that clips everything else', async ({ page }) => {
   const { finger } = await flick(page, PAD, intoWedge(NEAR_PX, 2, 3))
   await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
@@ -514,7 +571,13 @@ test('a squeezed pad shrinks its dial and its ring together', async ({ page }) =
     rail.style.left = '0px'
     rail.style.right = '0px'
   })
-  const { finger } = await flick(page, RING, at(30, 145))
+  // A bare press rather than a drag. What is being measured is the *squeeze*, which is
+  // decided at pointer-down from the room above the press; with the rail at the top of the
+  // window there is no room left to travel into, so a drag aimed at a wedge would be aimed
+  // off the top of the glass and CDP has nowhere to put the finger.
+  const finger = await touch(page)
+  const centre = await keyPoint(page, RING)
+  await finger.down(centre.x, centre.y)
   await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
   const width = await page.evaluate(() =>
     document.querySelector<SVGSVGElement>('.rail-pad-dial-svg')!.getBoundingClientRect().width)
@@ -577,8 +640,112 @@ test('the number keys continue into a second ring', async ({ page }) => {
   expect(await sends(page)).toHaveLength(4)
 })
 
-test('Enter on a focused pad runs its centre', async ({ page }) => {
+test('Enter on a focused pad opens the dial, and Escape closes it', async ({ page }) => {
+  // The one route with no pointer behind it. It does what a tap does, so the keyboard and the
+  // finger agree about what a plain activation of this chip means - and the chip keeps focus,
+  // which is what keeps Escape and the number keys reaching it.
   await page.locator(PAD).focus()
   await page.keyboard.press('Enter')
-  await expect.poll(() => sends(page)).toEqual(['CENTRE'])
+  await expect(page.locator('.rail-pad-dial-standing')).toHaveCount(1)
+  expect(await sends(page)).toEqual([])
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
+  expect(await sends(page)).toEqual([])
+})
+
+test('a number key on a standing dial runs its wedge and closes it', async ({ page }) => {
+  // One activation, one outcome, whichever route reached the slot.
+  await page.locator(PAD).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.rail-pad-dial-standing')).toHaveCount(1)
+  await page.keyboard.press('2')
+  await expect.poll(() => sends(page)).toEqual(['\x1b[A'])
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// The standing dial
+// ---------------------------------------------------------------------------
+
+/** Tap the chip and wait for the dial it leaves behind. */
+async function openStanding(page: Page, selector = PAD) {
+  const finger = await touch(page)
+  const centre = await keyPoint(page, selector)
+  await finger.down(centre.x, centre.y)
+  await finger.up()
+  await expect(page.locator('.rail-pad-dial-standing')).toHaveCount(1)
+  return centre
+}
+
+test('tapping a wedge of a standing dial runs it and closes the dial', async ({ page }) => {
+  const centre = await openStanding(page)
+  const up = intoWedge(NEAR_PX, 1, 3)
+  const finger = await touch(page)
+  await finger.down(centre.x + up.dx, centre.y + up.dy)
+  // On the touch itself: the finger has landed on the wedge it wants, so an `enter` slot runs
+  // exactly as it does when a drag crosses into it.
+  await expect.poll(() => sends(page)).toEqual(['\x1b[A'])
+  await finger.up()
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
+})
+
+test('a standing dial resolves against its own origin, not the new touch', async ({ page }) => {
+  // The whole reason the second press adopts: a fan re-centred on wherever the finger landed
+  // would put the hub over the wedge the operator was aiming at.
+  const centre = await openStanding(page)
+  const right = intoWedge(NEAR_PX, 0, 3)
+  const finger = await touch(page)
+  await finger.down(centre.x + right.dx, centre.y + right.dy)
+  await expect.poll(() => sends(page)).toEqual(['\x1b[C'])
+  await finger.up()
+})
+
+test('a release wedge tapped on a standing dial still waits for the lift', async ({ page }) => {
+  // Every trigger mode keeps one meaning, which is what adopting the origin buys instead of a
+  // second tap-shaped behaviour per mode.
+  const centre = await openStanding(page)
+  const kill = intoWedge(NEAR_PX, 2, 3)
+  const finger = await touch(page)
+  await finger.down(centre.x + kill.dx, centre.y + kill.dy)
+  await page.waitForTimeout(120)
+  expect(await sends(page)).toEqual([])
+  await finger.up()
+  await expect.poll(() => sends(page)).toEqual(['KILL'])
+})
+
+test('tapping outside a standing dial closes it and runs nothing', async ({ page }) => {
+  // A one-ring pad resolves a wedge at any radius on purpose, so without the drawn edge as a
+  // hitbox a tap in an empty corner would run whatever wedge it lined up with.
+  const centre = await openStanding(page)
+  const finger = await touch(page)
+  await finger.down(Math.max(4, centre.x - 320), Math.max(4, centre.y - 300))
+  await finger.up()
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
+  await page.waitForTimeout(200)
+  expect(await sends(page)).toEqual([])
+})
+
+test('the standing dial takes pointer events, unlike the one drawn mid-drag', async ({ page }) => {
+  // Only the root does: every press on it is routed to the gesture as coordinates, which
+  // keeps `railPadResolve` the one place the geometry lives.
+  await openStanding(page)
+  const live = await page.evaluate(() =>
+    getComputedStyle(document.querySelector<HTMLElement>('.rail-pad-dial')!).pointerEvents)
+  expect(live).toBe('auto')
+})
+
+test('a standing dial does not survive the session it belongs to', async ({ page }) => {
+  // The worst failure this feature has: a full-viewport surface outliving its owner swallows
+  // every click in the app. Reproduced through the same signal a tab switch sends.
+  await openStanding(page)
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')))
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
+})
+
+test('a drag on a padded chip leaves nothing standing', async ({ page }) => {
+  const { finger } = await flick(page, PAD, intoWedge(NEAR_PX, 1, 3))
+  await finger.up()
+  await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
+  await expect(page.locator('.rail-pad-dial')).toHaveCount(0)
+  expect(await sends(page)).toEqual(['\x1b[A'])
 })

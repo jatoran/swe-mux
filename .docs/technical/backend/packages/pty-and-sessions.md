@@ -11,9 +11,36 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 The standalone PTY supervisor process: ConPTY plus read loop plus authoritative scrollback ownership, spawn-time initial scrollback seeding, the reaper Job, the loopback IPC server, the discovery file, the single-instance mutex, and reap-all teardown.
 
 It must stay small and near-frozen, because it cannot be hot-updated without killing every live session, so volatile code belongs in the daemon.
-It imports only `pty_host.py`, `scrollback.py`, and the platform seams those two stand on (`host_platform.py`, `pty_backend.py`, `pty_backend_windows.py`, `process_reaper.py`, `win_jobobj.py`).
+It imports only `pty_host.py`, `scrollback.py`, `nested_job.py`, and the platform seams those stand on (`host_platform.py`, `pty_backend.py`, `pty_backend_windows.py`, `process_reaper.py`, `win_jobobj.py`).
+
+Three rules the spawn path turns on.
+
+**A session id is the deduplication key, and a reservation exists from the instant a `spawn` is accepted.** A duplicate `spawn` for a reserved or live id returns the first attempt's outcome (marked `deduped`) instead of erroring or starting a second process, and `spawn_status` answers `unknown` / `reserved` / `live` / `exited` for any id.
+That query is what a daemon whose spawn reply was lost asks before falling back, and only `unknown` makes falling back safe - the id was never reserved, so nothing can be duplicated.
+A *failed* spawn releases the reservation, so a retry really retries rather than being deduplicated against a session that never existed.
+Neither addition is gated on `PROTOCOL_VERSION`, for the same reason `job_pids` is not: an older supervisor answers "unknown message type" and the daemon degrades, where a version bump would stop a new daemon driving a running older supervisor and orphan every live session.
+A deduplicated spawn deliberately does **not** subscribe the asking connection - registration and the scrollback snapshot are one indivisible step in `subscribe`, and splitting them drops or duplicates the boundary chunk.
+
+**Teardown order is the reap.** A closing flag goes up before the listener closes, new spawns are refused, `_background_tasks` are drained, a spawn that completed anyway during shutdown is stopped explicitly, and only then do the per-session and global Jobs close.
+Closing the Job first is what let a child created moments later be assigned to nothing and killed by nothing: a reap that reported success while an agent kept running.
+The drain is bounded and overrunning it is logged, because what escapes past the bound is exactly that orphan.
+
+**The two wire directions are bounded differently.** Daemon-inbound frames carry header and payload caps; an unauthenticated connection gets a small header cap, a payload allowance of zero (so `hello` is payload-free by enforcement rather than convention), and a deadline.
+The reverse direction is left unbounded on purpose - a legitimate `subscribe` reply carries a whole scrollback buffer, sized by the daemon's `scrollback_bytes`.
+A refused or malformed frame closes the connection: the stream is desynced at an unknown offset, so there is nothing to resynchronise to.
 
 **Not:** HTTP composition, SQLite, orchestration, or observation - anything volatile.
+
+## `nested_job.py`
+
+The nested per-session process owner: create a child reaper beneath the daemon-wide one, take ownership of the root pid, and report the outcome as the assignment-string suffix that process forensics read back (`;nested_session_job_assigned`, `;nested_session_job_failed:<error>`).
+
+It never raises - a session whose cleanup is weaker than intended still beats no session - and it never reports ownership it does not have, so a job created but not assigned is closed rather than kept.
+
+It is inside the hash-gated supervisor source closure and imports nothing but `process_reaper`, which was already in that closure, so sharing it did not widen what a supervisor rebuild covers.
+That is the property that made the extraction safe: the same six lines had been duplicated near-verbatim in `supervisor.py` and `session.py`, including the strings.
+
+**Not:** deciding *whether* a session should be owned, the daemon-wide reaper's lifetime, or any platform detail (`process_reaper` and the backends own those).
 
 ## `supervisor_client.py`
 
@@ -38,7 +65,16 @@ Three rules this module exists to keep:
 
 The platform-neutral half of one pseudoterminal session: the reader thread and its graduated poll ladder, output coalescing, the backpressure handoff onto the event loop, `merge_environment`, and the resize, exit-status, and release contracts.
 
-**Not:** how a pseudoterminal is allocated or a child started on it (`pty_backend*`), lifetime ownership (`process_reaper`), HTTP, SQLite, or layout.
+Two rules the reader turns on.
+
+**The end-of-output sentinel waits like a data chunk does.** It is the only signal that a session's output ended, so losing it under a momentarily full queue leaves a phantom-alive session that never emits `pty_exit`, a supervisor that lingers because it still counts a live session, and a pane that never resolves.
+It used to give up after two seconds and swallow the exception.
+The single bounded case is a deliberate teardown - `stop()`/`release()` set `_stop`, and removing a supervised session cancels its fanout, the only consumer - where waiting would park the reader thread for the life of the process; that drop is logged.
+
+**A swallowed read failure is counted and logged.** `read_errors`, `last_read_error`, and `last_read_error_at` ride the supervisor's session inventory, because the daemon cannot see this reader thread and an alive-but-permanently-silent session is otherwise indistinguishable from an agent that is merely thinking.
+The reader still continues past a read error on purpose - a transient failure on a live pseudoterminal is not a reason to end a session - and the log is rate-limited (first occurrence, then one line per interval carrying the counts) so a storm is diagnosable without becoming the storm.
+
+**Not:** how a pseudoterminal is allocated or a child started on it (`pty_backend*`), lifetime ownership (`process_reaper`, `nested_job`), HTTP, SQLite, or layout.
 
 ## `scrollback.py`
 

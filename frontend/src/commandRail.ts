@@ -106,19 +106,30 @@ export function migratedRailItemId(id: string): string {
 }
 
 /**
- * A slot's address on the fan: `ring:wedge`, or the centre.
+ * A slot's address on the fan: `ring:wedge`, and nothing else.
  *
  * Positional rather than named ("up", "upLeft") because the wedge count is the operator's
  * choice: a name that means up-left on a four-wedge pad means something else on a three-
  * wedge one, and a table of names could not cover five. The human-readable name is derived
  * from the geometry instead (`padWedgeName`), so it is always true of the pad it is on.
+ *
+ * **Every slot is a wedge. There is no centre.** A pad once carried a non-positional centre
+ * slot, on the reasoning that an action with no direction of its own could live where a tap
+ * lands. It was retired because it made a tap mean two incompatible things at once - run
+ * that one action, or show me what this chip holds - and because "the one with no direction"
+ * was never true of the action itself: Down is as spatial as Up, it simply had no wedge
+ * pointing at it. Giving it one is the honest fix, and it frees the tap to open the dial on
+ * every pad rather than on the ones that happened to leave the centre empty.
  */
 export type RailPadSlotKey = string
 
-export const PAD_CENTER: RailPadSlotKey = 'center'
+/** The retired centre key. Read forever so a stored binding can be carried onto a wedge
+ *  rather than silently lost, for the same reason `RETIRED_RAIL_IDS` exists. Never written,
+ *  and never an addressable position. */
+const LEGACY_PAD_CENTER_KEY = 'center'
 export const padSlotKey = (ring: number, wedge: number): RailPadSlotKey => `${ring}:${wedge}`
 
-/** `null` for the centre, which has no wedge or ring. */
+/** `null` for a key that names no position - a malformed one, or the retired centre. */
 export function parsePadSlotKey(key: RailPadSlotKey): { ring: number; wedge: number } | null {
   const match = /^(\d+):(\d+)$/.exec(key)
   return match ? { ring: Number(match[1]), wedge: Number(match[2]) } : null
@@ -229,13 +240,12 @@ function clampPadCount(value: unknown, low: number, high: number, fallback: numb
   return Math.min(high, Math.max(low, count))
 }
 
-/** Every addressable slot in canonical order: wedge-major within a ring, then the centre. */
+/** Every addressable slot in canonical order: wedge-major within a ring. */
 export function padSlotKeys(pad: RailPadConfig | undefined): RailPadSlotKey[] {
   const keys: RailPadSlotKey[] = []
   for (let ring = 0; ring < padRingCount(pad); ring += 1) {
     for (let wedge = 0; wedge < padWedgeCount(pad); wedge += 1) keys.push(padSlotKey(ring, wedge))
   }
-  keys.push(PAD_CENTER)
   return keys
 }
 
@@ -319,15 +329,38 @@ export function normalizeRailPad(raw: unknown): RailPadConfig {
   const migrated = migratedPadShape(source)
   const shape: RailPadConfig = { wedges: migrated.wedges, rings: migrated.rings, slots: {} }
   const rawSlots = isRecord(source.slots) ? source.slots : {}
-  for (const key of padSlotKeys(shape)) {
+  const positions = padSlotKeys(shape)
+  for (const key of positions) {
     const entry = rawSlots[key] ?? migrated.aliases[key]
-    if (!isRecord(entry) || typeof entry.item !== 'string' || !entry.item) continue
-    const mode = RAIL_PAD_TRIGGER_MODES.includes(entry.mode as RailPadTriggerMode)
-      ? entry.mode as RailPadTriggerMode
-      : undefined
-    shape.slots[key] = { item: migratedRailItemId(entry.item), ...(mode ? { mode } : {}) }
+    const slot = readPadSlot(entry)
+    if (slot) shape.slots[key] = slot
+  }
+  // The retired centre, carried onto the first free wedge rather than dropped.
+  //
+  // Dropping is what happens to a slot the operator *shrinks* out of existence, and that is
+  // right because they asked for it and can see the result. Nobody asked for the centre to
+  // go, so the same silence would just be a binding that vanished between two builds. The
+  // first free wedge is the only placement that needs no guess: it moves nothing already
+  // bound, so no wedge changes meaning under an operator's fingers. A pad with every wedge
+  // taken has nowhere to put it and it is dropped, which is the honest end of the same rule.
+  //
+  // Idempotent, which fork-equality depends on: the output has no `center` key, so a second
+  // pass through here is a no-op and a saved copy still compares equal to a shipped literal.
+  const centre = readPadSlot(rawSlots[LEGACY_PAD_CENTER_KEY])
+  if (centre) {
+    const free = positions.find(key => !shape.slots[key])
+    if (free) shape.slots[free] = centre
   }
   return shape
+}
+
+/** One stored binding, validated. `null` for anything that does not name a catalog id. */
+function readPadSlot(entry: unknown): RailPadSlot | null {
+  if (!isRecord(entry) || typeof entry.item !== 'string' || !entry.item) return null
+  const mode = RAIL_PAD_TRIGGER_MODES.includes(entry.mode as RailPadTriggerMode)
+    ? entry.mode as RailPadTriggerMode
+    : undefined
+  return { item: migratedRailItemId(entry.item), ...(mode ? { mode } : {}) }
 }
 
 /**
@@ -601,30 +634,33 @@ export const BUILTIN_RAIL: RailItem[] = [
   // ordinary catalog entries, so nothing downstream needs a special case: the items
   // they hold stay in the catalog, keep their own backend gating, and can still be
   // placed as individual chips by anyone who wants them back.
-  // Three wedges, and Down is not one of them: the fan opens upward, so the arrows pad
-  // carries the three that have somewhere to go and `down` stays an ordinary chip beside it.
-  // Four chips become two rather than one, which is still the saving and does not require
-  // pretending a downward key can live in an upward fan.
+  // All four arrows, on four wedges.
+  //
+  // Down used to sit in the centre, on the reasoning that the fan opens upward so a downward
+  // key has nowhere spatial to go. Two things were wrong with it. A wedge in an upward fan
+  // does not claim to *be* a compass heading - Jump's four wedges are line and document
+  // starts and ends, and nobody reads the leftmost one as pointing west - so a wedge for Down
+  // is no more a lie than any other slot. And the centre cost the tap, which is worth more
+  // than the tidiness: a tap now opens the dial on every pad instead of running one arbitrary
+  // slot on one of them.
+  //
+  // Read left to right the four are left, up, down, right: the ends are the horizontal pair,
+  // and the vertical pair sits between them in the two upper wedges. Down is the upper-right
+  // one, next to Up, so the two keys that scroll a transcript are neighbours under the thumb.
   {
     id: 'padArrows',
     type: 'pad',
     label: 'Arrows',
     className: 'term-key',
-    title: 'Left, up and right; tap for Down. Hold a direction to repeat.',
-    // Down is the centre, which is the one non-spatial mapping in the whole design and is
-    // deliberate: the fan opens upward, so there is no south wedge to put it in, and the
-    // alternatives were a chip of its own (costing rail width and separating it from Up) or
-    // a fourth wedge pointing somewhere that is not down (spatially false). "The one with no
-    // direction is the one you tap" is a rule you learn once, and it keeps the arrow pair
-    // together on one chip.
+    title: 'All four arrows. Drag a wedge, or tap to open. Hold to repeat.',
     pad: normalizeRailPad({
-      wedges: 3,
+      wedges: 4,
       rings: 1,
       slots: {
         '0:0': { item: 'right' },
-        '0:1': { item: 'up' },
-        '0:2': { item: 'left' },
-        center: { item: 'down' },
+        '0:1': { item: 'down' },
+        '0:2': { item: 'up' },
+        '0:3': { item: 'left' },
       },
     }),
   },
@@ -641,7 +677,7 @@ export const BUILTIN_RAIL: RailItem[] = [
     type: 'pad',
     label: 'Jump',
     className: 'term-key',
-    title: 'Line and document jumps. Drag a direction.',
+    title: 'Line and document jumps. Drag a wedge, or tap to open.',
     pad: normalizeRailPad({
       wedges: 4,
       rings: 1,
@@ -661,7 +697,7 @@ export const BUILTIN_RAIL: RailItem[] = [
     id: 'padCopy',
     type: 'pad',
     label: 'Copy',
-    title: 'Copy from this session. Drag a direction.',
+    title: 'Copy from this session. Drag a wedge, or tap to open.',
     pad: normalizeRailPad({
       wedges: 3,
       rings: 1,
@@ -678,7 +714,7 @@ export const BUILTIN_RAIL: RailItem[] = [
     id: 'padPickers',
     type: 'pad',
     label: 'Pick',
-    title: 'Clipboard, skills, prompts, Actions. Drag a direction.',
+    title: 'Clipboard, skills, prompts, Actions. Drag a wedge, or tap to open.',
     pad: normalizeRailPad({
       wedges: 4,
       rings: 1,

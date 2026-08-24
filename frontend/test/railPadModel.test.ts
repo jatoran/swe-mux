@@ -5,7 +5,6 @@ import test from 'node:test'
 import {
   BUILTIN_RAIL,
   DEFAULT_RAIL_ORDER,
-  PAD_CENTER,
   RAIL_PAD_MAX_RINGS,
   RAIL_PAD_MAX_WEDGES,
   defaultPadTriggerMode,
@@ -34,24 +33,49 @@ import { resolveRailVoiceEntries } from '../src/railVoice.ts'
 const padOf = (config: { items: RailItem[] }, id: string): RailItem =>
   config.items.find(item => item.id === id)!
 
-test('a slot key is a position, and the centre is not one', () => {
+test('a slot key is a position, and nothing else is', () => {
   assert.deepEqual(parsePadSlotKey(padSlotKey(1, 2)), { ring: 1, wedge: 2 })
-  assert.equal(parsePadSlotKey(PAD_CENTER), null)
+  assert.equal(parsePadSlotKey('center'), null, 'the retired centre is not a position')
   assert.equal(parsePadSlotKey('up'), null, 'the old compass names are not positions')
 })
 
-test('a pad offers wedges times rings, plus a centre', () => {
+test('a pad offers exactly wedges times rings, and no non-positional slot', () => {
   for (let wedges = 1; wedges <= RAIL_PAD_MAX_WEDGES; wedges += 1) {
     for (let rings = 1; rings <= RAIL_PAD_MAX_RINGS; rings += 1) {
       const keys = padSlotKeys({ wedges, rings, slots: {} })
-      assert.equal(keys.length, wedges * rings + 1)
-      assert.equal(keys.at(-1), PAD_CENTER)
+      assert.equal(keys.length, wedges * rings)
+      assert.ok(keys.every(key => !!parsePadSlotKey(key)), 'every slot is a wedge')
       // Wedge-major within a ring, which is the order `railPadResolve` and the dial both
       // index into.
       assert.equal(keys[0], padSlotKey(0, 0))
       if (rings > 1) assert.equal(keys[wedges], padSlotKey(1, 0))
     }
   }
+})
+
+test('a stored centre binding is carried onto the first free wedge, not dropped', () => {
+  // Dropping is what a slot the operator *shrinks* out of existence gets, and that is right
+  // because they asked for it. Nobody asked for the centre to go, so the same silence would
+  // just be a binding that vanished between two builds.
+  const carried = normalizeRailPad({
+    wedges: 3,
+    rings: 1,
+    slots: { '0:1': { item: 'up' }, center: { item: 'down', mode: 'release' } },
+  })
+  assert.deepEqual(carried.slots['0:0'], { item: 'down', mode: 'release' }, 'first free wedge, mode intact')
+  assert.equal(carried.slots['0:1']?.item, 'up', 'and nothing already bound moved')
+  assert.equal(carried.slots.center, undefined)
+
+  // Idempotent, which fork-equality depends on: a second pass has no centre left to carry.
+  assert.deepEqual(normalizeRailPad(carried), carried)
+
+  // A pad with every wedge taken has nowhere to put it, which is the honest end of the rule.
+  const full = normalizeRailPad({
+    wedges: 1,
+    rings: 1,
+    slots: { '0:0': { item: 'up' }, center: { item: 'down' } },
+  })
+  assert.deepEqual(railPadSlotItemIds({ id: 'x', type: 'pad', label: 'x', pad: full }), ['up'])
 })
 
 test('the counts are clamped, so a stored nonsense shape is still a usable pad', () => {
@@ -158,11 +182,12 @@ test('the repeatable flag is one fact: the standalone chip and the pad slot read
 
 test('the four shipped pads hold what they say they hold', () => {
   const config = defaultRailConfig()
-  // Three wedges and a centre. Down has no wedge in an upward fan, so it is the tap - the
-  // one non-spatial mapping in the design, and what keeps the arrow pair on one chip.
-  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padArrows')), ['right', 'up', 'left', 'down'])
-  assert.equal(padOf(config, 'padArrows').pad?.slots[PAD_CENTER]?.item, 'down')
-  assert.equal(padWedgeCount(padOf(config, 'padArrows').pad), 3)
+  // Four wedges, reading left to right as left, up, down, right: the ends are the horizontal
+  // pair and the vertical pair sits between them, with Down in the upper-right wedge beside
+  // Up. Down held the centre before the centre was retired.
+  assert.deepEqual(railPadSlotItemIds(padOf(config, 'padArrows')), ['right', 'down', 'up', 'left'])
+  assert.equal(padWedgeCount(padOf(config, 'padArrows').pad), 4)
+  assert.equal(padOf(config, 'padArrows').pad?.slots.center, undefined)
   // Four wedges, reading left to right as document-start, line-start, line-end, document-end.
   assert.deepEqual(railPadSlotItemIds(padOf(config, 'padJump')), ['ctrlEnd', 'end', 'home', 'ctrlHome'])
   assert.equal(padWedgeCount(padOf(config, 'padJump').pad), 4)
@@ -297,13 +322,14 @@ test('a saved pad override survives a round trip through the blob', () => {
   const reloaded = railConfigFromBlob(blob)
   assert.deepEqual(padOf(reloaded, 'padArrows').pad?.slots['0:1'], { item: 'esc', mode: 'release' })
   // The rest of the pad is untouched, and the shipped definition still supplies it.
-  assert.equal(padOf(reloaded, 'padArrows').pad?.slots['0:2']?.item, 'left')
+  assert.equal(padOf(reloaded, 'padArrows').pad?.slots['0:3']?.item, 'left')
 })
 
 test('clearing a slot leaves a dead wedge rather than shuffling the others', () => {
   const cleared = updateRailPadSlot(defaultRailConfig(), 'padArrows', padSlotKey(0, 2), { item: null })
   const pad = padOf(cleared, 'padArrows').pad!
   assert.equal(pad.slots['0:2'], undefined)
+  assert.equal(pad.slots['0:3']?.item, 'left', 'and left did not slide into it either')
   assert.equal(pad.slots['0:0']?.item, 'right', 'right did not slide into the gap')
 })
 
@@ -312,24 +338,25 @@ test('a pad slot edit refuses anything that is not a pad', () => {
   assert.equal(updateRailPadSlot(config, 'esc', padSlotKey(0, 0), { item: 'enter' }), config)
   assert.equal(updateRailPadSlot(config, 'nope', padSlotKey(0, 0), { item: 'enter' }), config)
   assert.equal(setRailPadShape(config, 'esc', { wedges: 4 }), config)
-  assert.equal(setRailPadShape(config, 'padArrows', { wedges: 3 }), config, 'already there')
+  assert.equal(setRailPadShape(config, 'padArrows', { wedges: 4 }), config, 'already there')
 })
 
 test('growing a pad keeps every binding; shrinking drops what no longer has a position', () => {
   const grown = setRailPadShape(defaultRailConfig(), 'padArrows', { wedges: 5 })
   assert.equal(padWedgeCount(padOf(grown, 'padArrows').pad), 5)
-  // Position for position, and the two new wedges are empty.
-  assert.deepEqual(railPadSlotItemIds(padOf(grown, 'padArrows')), ['right', 'up', 'left', 'down'])
-  assert.equal(padOf(grown, 'padArrows').pad?.slots['0:2']?.item, 'left')
+  // Position for position, and the new wedge is empty.
+  assert.deepEqual(railPadSlotItemIds(padOf(grown, 'padArrows')), ['right', 'down', 'up', 'left'])
+  assert.equal(padOf(grown, 'padArrows').pad?.slots['0:3']?.item, 'left')
 
   const shrunk = setRailPadShape(defaultRailConfig(), 'padJump', { wedges: 2 })
   // Four wedges into two: the outer two have nowhere to go, and dropping them beats
   // stacking two actions on one wedge.
   assert.deepEqual(railPadSlotItemIds(padOf(shrunk, 'padJump')), ['ctrlEnd', 'end'])
 
-  // The centre survives every reshape, because it has no wedge or ring to lose.
+  // Nothing survives a reshape by having no position: every slot has one now, so shrinking
+  // to a single wedge keeps exactly that wedge and releases the rest.
   const reshaped = setRailPadShape(defaultRailConfig(), 'padArrows', { wedges: 1 })
-  assert.equal(padOf(reshaped, 'padArrows').pad?.slots[PAD_CENTER]?.item, 'down')
+  assert.deepEqual(railPadSlotItemIds(padOf(reshaped, 'padArrows')), ['right'])
 })
 
 test('adding a ring keeps the near ring and offers an empty far one', () => {

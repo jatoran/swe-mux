@@ -87,7 +87,7 @@ The model - orientations, directions, rings, slot bindings, trigger modes and `n
 
 **The fan opens upward and has no downward wedge.**
 The rail is on the bottom edge of the screen, so the 180° above the finger is divided instead (plus `RAIL_PAD_SKIRT_DEG` at each end) and the lower half is the abort zone.
-An action with no direction of its own goes in the centre, which is also what a tap runs.
+Every slot is a wedge: `padSlotKeys` enumerates positions and nothing else, and the retired `center` key is read only by `normalizeRailPad`, which carries its binding onto the first free wedge and is idempotent so fork-equality still holds.
 
 **The fan is divided two ways, and they cost different things.**
 `padWedgeCount` divides it by angle (1..`RAIL_PAD_MAX_WEDGES`), costing angular tolerance; `padRingCount` divides it by distance (1 or 2), costing fire-on-entry.
@@ -102,9 +102,17 @@ Named compass keys could not survive the wedge count becoming a choice, so `padW
 The gesture is live from the first pixel; the sole timer repeats an already-committed direction, and `RAIL_PAD_DIAL_DELAY_MS` governs only when the dial is *drawn*.
 `RAIL_PAD_DEAD_RADIUS_PX` is the commit distance and is deliberately unrelated to the wedge sizes, which is what lets the targets be thumb-sized without the control being slow.
 
+**The press and the origin are two different points, and conflating them is the bug the split exists to prevent.**
+`RAIL_PAD_LIFT_PX` puts the fan's origin above the press, so a press that has not moved is already `lift` pixels from the origin.
+`createRailPadGesture` therefore keeps both: `startX/startY` is the finger, and `originX/originY` is the finger lifted.
+Everything geometric — wedge, ring, band, dial — is measured from the origin; the two readings that are genuinely about the finger are the `RAIL_PAN_SLOP_PX` axis arbitration and `RAIL_PAD_TAP_SLOP_PX`, which is what makes a release a tap.
+That tap slop is a constant of its own precisely because the hub no longer sits under the finger and hub membership stopped answering "did this press move".
+
 `railPadResolve` is the whole geometry: it biases the point back along the latched wedge's own centre line before reading its angle, which is one expression covering every boundary at every wedge count, then reads the ring off the raw radius with a margin that moves **both ways**.
 A one-sided ring margin makes crossing outward free, which is the direction it happens by accident.
-`railPadScaleFor` shrinks both radii to the room above the press, and `peek()` exposes the resulting bands so the dial is drawn from exactly what the gesture is using.
+`railPadScaleFor` shrinks every radius to the room above the press — the lift is in the *denominator* it fits against, since it is part of the reach — and `peek()` exposes the resulting bands so the dial is drawn from exactly what the gesture is using.
+`RailPadBands.lift` is carried on the bands rather than read from the constant for that reason: `RailPad.tsx` positions the dial at `clientY - bands.lift`, so drawing and gesture share one origin at every squeeze.
+The invariant that makes the arrangement legible — `bands.lift < bands.dead`, so a press always opens *inside* the neutral hub — holds at every scale because both scale together and `RAIL_PAD_MIN_SCALE` never lets either reach a floor the other does not.
 
 Arbitration reuses `pointerDragClaim` and adds nothing to `RailScroller` or the mobile recognizer.
 A pad claims only the axes its bound wedges span; a single-axis pad defers to the pan, decided at `RAIL_PAN_SLOP_PX` so exactly one of them takes the pointer.
@@ -132,7 +140,7 @@ Ownership rules the rest of the layer relies on:
 - **`railPadSlotLabel` is the only route to a wedge's face**, and it cannot land on a `title`.
   A title is a sentence written for a tooltip, and four of them across a dial is prose rather than four labels - which shipped once, from a fallback chain that reached for one.
 - `updateRailPadSlot` and `setRailPadShape` in `railLayout.ts` are open to built-in pads, unlike `updateRailCatalogItem`.
-  Reshaping carries bindings across position for position as far as the new shape has positions: growing keeps everything, shrinking drops the rest, and the centre survives either.
+  Reshaping carries bindings across position for position as far as the new shape has positions: growing keeps everything, shrinking drops the rest.
 
 ### Sticky modifiers
 

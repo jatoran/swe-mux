@@ -150,12 +150,34 @@ With `pty_supervisor_enabled`, the daemon talks to the standalone PTY supervisor
 loopback TCP socket discovered through `<data_dir>/supervisor.json` (pid, port, random token,
 protocol version). Frames are length-prefixed JSON headers with optional binary payloads;
 `hello` performs a constant-time token check plus a protocol-version handshake and announces
-existing sessions. Messages: `spawn / write / resize / set_graceful_exit / subscribe /
-unsubscribe / set_meta / stop / release / remove / list / ping / reap_all_and_exit`. This
+existing sessions; it is payload-free by enforcement, is read under a small header cap, and has
+a deadline, so an unauthenticated peer can neither make the supervisor allocate nor hold a
+connection open by never speaking. Messages: `spawn / spawn_status / write / resize /
+set_graceful_exit / subscribe / unsubscribe / set_meta / stop / release / remove / list /
+job_pids / ping / reap_all_and_exit`. This
 surface is process-local plumbing, not a public API: it is bound to 127.0.0.1, authenticated
 by a token readable only from the local data directory, and versioned so a mismatched daemon
 refuses to attach (falling back to in-process PTYs). `muxd --shutdown` is the explicit
 kill-server command: it reaps all supervised sessions and stops the supervisor.
+
+`spawn` is idempotent on the session id: a request for an id that is already reserved or live
+returns the first attempt's outcome (`{ok, pid, reaper_assignment, started_at, state, deduped}`)
+rather than erroring or starting a second process, and a failed spawn releases the id so a
+retry really retries. `spawn_status` is payload-free, takes the target `sid`, and answers
+`{ok, sid, state}` where state is `unknown | reserved | live | exited`, carrying `pid`,
+`started_at`, and `reaper_assignment` once the spawn resolved and `exit_code` when it exited.
+It is what a daemon whose spawn reply was lost asks before any in-process fallback: only
+`unknown` proves nothing was reserved, and therefore that falling back cannot put a second
+agent on one workspace. Neither `spawn_status` nor `job_pids` is gated on the protocol
+version - an older supervisor answers "unknown message type" and the daemon degrades, where a
+version bump would stop a new daemon driving a running older supervisor and orphan every live
+session.
+
+Daemon-inbound frames are capped (header and payload) and a length that is negative or
+unparseable is refused before it reaches `readexactly`; the supervisor-to-daemon direction is
+deliberately left unbounded, because a legitimate `subscribe` reply carries a whole scrollback
+buffer sized by `scrollback_bytes`. A refused frame closes the connection rather than being
+skipped: the stream is desynced at an unknown offset.
 
 ## Canonical Projects and Groups
 
