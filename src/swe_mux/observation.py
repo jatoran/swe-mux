@@ -4659,6 +4659,41 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             )
 
 
+def _codex_subagent_activity(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """One subagent record, in whichever shape the CLI that wrote it uses.
+
+    Codex wrote a top-level ``sub_agent_activity`` payload through 2026-08-06 and
+    since 2026-08-07 (0.149) nests the same three fields — ``kind``,
+    ``agent_thread_id``, ``agent_path`` — inside ``item_completed``'s ``item``
+    under the type ``SubAgentActivity``. Only the envelope moved.
+
+    Both are read rather than the newer one replacing the older: a resumed or
+    forked conversation can carry records from either era in one file, and reading
+    an archived rollout is a supported path.
+    """
+    if payload.get("type") == "sub_agent_activity":
+        return payload
+    if payload.get("type") == "item_completed":
+        item = payload.get("item")
+        if isinstance(item, dict) and item.get("type") == "SubAgentActivity":
+            return item
+    return None
+
+
+def _codex_subagent_depth(agent_path: Any) -> int:
+    """How far below the root thread this subagent sits.
+
+    Codex writes ``agent_path`` as a slash-joined string (``/root/child_check``),
+    so a length is a character count rather than a depth; the segments below
+    ``/root`` are the depth. A list is accepted too, because that is the shape the
+    detection fixtures were authored in.
+    """
+    if isinstance(agent_path, (list, tuple)):
+        return len(agent_path)
+    segments = [part for part in str(agent_path or "").split("/") if part]
+    return max(len(segments) - 1, 0)
+
+
 async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> None:
     payload = event.get("payload") or {}
     outer_type, payload_type = event.get("type"), payload.get("type")
@@ -4922,7 +4957,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             source="transcript",
             scope="root",
         )
-    elif payload_type == "sub_agent_activity":
+    elif (activity := _codex_subagent_activity(payload)) is not None:
         # This is the fallback tier until lifecycle hooks arrive. Once they do,
         # SubagentStart/SubagentStop own the count and transcript records only
         # refresh recency, so a trailing record cannot reopen a stopped agent.
@@ -4940,8 +4975,8 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             session_id=session.record.id,
             source="transcript",
             scope="subagent",
-            kind=str(payload.get("kind") or "activity"),
-            depth=len(payload.get("agent_path") or []),
+            kind=str(activity.get("kind") or "activity"),
+            depth=_codex_subagent_depth(activity.get("agent_path")),
         )
     elif payload_type == "context_compacted" or outer_type == "compacted":
         # Durable per-session operational telemetry: attributing a stranger's

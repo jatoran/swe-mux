@@ -87,6 +87,13 @@ CODEX_KNOWN_PAYLOADS = {
     "exec_command_output_delta",
     "function_call",
     "function_call_output",
+    # Codex 0.149's per-item envelope, which the observer has known since it
+    # appeared and this vocabulary did not. Every record in it is a restatement of
+    # something already counted (a reasoning block, a command, a subagent start),
+    # so counting the envelope as drift put a long real session at a 0.31-0.34
+    # unknown ratio — above the 0.25 threshold the drift signal fires at — while
+    # nothing had actually drifted.
+    "item_completed",
     "mcp_tool_call_end",
     "message",
     "patch_apply_end",
