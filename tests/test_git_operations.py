@@ -144,7 +144,7 @@ async def test_prunable_remove_repairs_exact_path_then_forces_removal(
         return True
 
     monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
-    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "run_git_mutation", mutate)
     monkeypatch.setattr(worktree_mutation, "worktree_root_matches", root_matches)
     events = FakeEvents()
     response = await git_routes.remove_worktree(
@@ -198,7 +198,7 @@ async def test_repaired_dirty_worktree_requires_explicit_force(
         return True
 
     monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
-    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "run_git_mutation", mutate)
     monkeypatch.setattr(worktree_mutation, "worktree_root_matches", root_matches)
     response = await git_routes.remove_worktree(
         request({"cwd": str(tmp_path), "path": str(worktree)}, FakeEvents())
@@ -243,7 +243,7 @@ async def test_nonzero_repair_continues_when_post_state_is_exact_and_usable(
         return True
 
     monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
-    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "run_git_mutation", mutate)
     monkeypatch.setattr(worktree_mutation, "worktree_root_matches", root_matches)
     response = await git_routes.remove_worktree(
         request(
@@ -288,7 +288,7 @@ async def test_remove_quarantines_orphan_after_git_drops_registration(
         )
 
     monkeypatch.setattr(worktree_mutation, "listed_worktree_entries", listed)
-    monkeypatch.setattr(git_routes, "run_git_mutation", mutate)
+    monkeypatch.setattr(worktree_mutation, "run_git_mutation", mutate)
     events = FakeEvents()
     response = await git_routes.remove_worktree(
         request({"cwd": str(tmp_path), "path": str(worktree)}, events)

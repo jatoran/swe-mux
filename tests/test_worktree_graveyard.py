@@ -231,7 +231,7 @@ async def test_git_refusing_after_the_rename_puts_the_tree_back(
         del cwd, args, kwargs
         return GitMutationResult(1, "git refused for reasons of its own")
 
-    monkeypatch.setattr(git_routes, "run_git_mutation", refuse)
+    monkeypatch.setattr(worktree_mutation, "run_git_mutation", refuse)
     request = Request({"cwd": str(repo), "path": str(worktree)})
     response = await git_routes.remove_worktree(request)  # type: ignore[arg-type]
 

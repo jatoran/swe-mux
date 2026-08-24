@@ -641,284 +641,39 @@ async def spawn_worktree_session(request: web.Request) -> web.Response:
 
 
 async def remove_worktree(request: web.Request) -> web.Response:
-    started_at = time.perf_counter()
-    operation_id = uuid4().hex
     body = await request.json()
     cwd = str(body["cwd"])
     requested = str(Path(str(body["path"])).resolve())
-    force = body.get("force") is True
-    log.info(
-        "worktree_remove_started operation_id=%s cwd=%s path=%s force=%s",
-        operation_id,
+    operation_id = uuid4().hex
+    outcome = await worktree_mutation.remove_registered_worktree(
         cwd,
         requested,
-        force,
-    )
-    listed = await worktree_mutation.listed_worktree_entries(cwd)
-    entry = listed.get(requested.casefold())
-    if not entry:
-        log.warning(
-            "worktree_remove_refused operation_id=%s cwd=%s path=%s "
-            "reason=not_registered duration_ms=%.1f",
-            operation_id,
-            cwd,
-            requested,
-            (time.perf_counter() - started_at) * 1000,
-        )
-        return json_response(
-            {
-                "error": "path is not a registered worktree for this repository",
-                "code": "not_registered_worktree",
-                "operation_id": operation_id,
-            },
-            409,
-        )
-    registered = str(entry["worktree"])
-    repaired = False
-    if "prunable" in entry:
-        worktree_path = Path(registered)
-        if not worktree_path.is_dir() or (worktree_path / ".git").exists():
-            log.warning(
-                "worktree_remove_refused operation_id=%s cwd=%s path=%s "
-                "reason=prunable_not_repairable prune_reason=%s duration_ms=%.1f",
-                operation_id,
-                cwd,
-                registered,
-                entry.get("prunable"),
-                (time.perf_counter() - started_at) * 1000,
-            )
-            return json_response(
-                {
-                    "error": "worktree is prunable but cannot be repaired at its registered path",
-                    "code": "prunable_worktree",
-                    "operation_id": operation_id,
-                },
-                409,
-            )
-        log.info(
-            "worktree_remove_repair_started operation_id=%s cwd=%s path=%s prune_reason=%s",
-            operation_id,
-            cwd,
-            registered,
-            entry.get("prunable"),
-        )
-        repair = await run_git_mutation(
-            cwd,
-            "worktree",
-            "repair",
-            registered,
-            operation="worktree_repair",
-            operation_id=operation_id,
-        )
-        try:
-            repaired_entries = await worktree_mutation.listed_worktree_entries(cwd)
-        except ValueError as exc:
-            log.warning(
-                "worktree_remove_repair_failed operation_id=%s cwd=%s path=%s "
-                "reason=relist_failed git_code=%s duration_ms=%.1f",
-                operation_id,
-                cwd,
-                registered,
-                repair.code,
-                (time.perf_counter() - started_at) * 1000,
-            )
-            return json_response(
-                {
-                    "error": repair.output or str(exc),
-                    "code": "git_timeout"
-                    if repair.timed_out
-                    else "worktree_repair_failed",
-                    "operation_id": operation_id,
-                },
-                504 if repair.timed_out else 409,
-            )
-        repaired_entry = repaired_entries.get(requested.casefold())
-        repair_is_usable = bool(
-            repaired_entry
-            and "prunable" not in repaired_entry
-            and (Path(str(repaired_entry["worktree"])) / ".git").exists()
-            and await worktree_mutation.worktree_root_matches(
-                str(repaired_entry["worktree"]), requested
-            )
-        )
-        if not repair_is_usable:
-            log.warning(
-                "worktree_remove_repair_failed operation_id=%s cwd=%s path=%s "
-                "reason=unusable_post_state git_code=%s duration_ms=%.1f",
-                operation_id,
-                cwd,
-                registered,
-                repair.code,
-                (time.perf_counter() - started_at) * 1000,
-            )
-            return json_response(
-                {
-                    "error": repair.output or "Git did not restore the worktree registration",
-                    "code": "git_timeout"
-                    if repair.timed_out
-                    else "worktree_repair_failed",
-                    "operation_id": operation_id,
-                },
-                504 if repair.timed_out else 409,
-            )
-        assert repaired_entry is not None
-        registered = str(repaired_entry["worktree"])
-        repaired = True
-        log.log(
-            logging.WARNING if repair.code else logging.INFO,
-            "worktree_remove_repair_completed operation_id=%s cwd=%s path=%s git_code=%s",
-            operation_id,
-            cwd,
-            registered,
-            repair.code,
-        )
-    # The fast path, when it applies: the directory is renamed into the repository's
-    # graveyard with one call, and what Git removes afterwards is a registration whose
-    # tree is already gone - measured to succeed and to drop only this entry, where
-    # `git worktree prune` is global and would take unrelated broken checkouts with it.
-    # `worktree_mutation.bury_worktree` answers `None` for every case where this
-    # would change what the
-    # removal means, and the code below is then exactly what it always was.
-    buried = await worktree_mutation.bury_worktree(
-        registered,
-        entry,
-        # Git lists the main working tree first, and the pre-repair listing is where
-        # that is read from because the main tree is not the thing a repair moves.
-        is_main=next(iter(listed), None) == requested.casefold(),
-        force=force,
+        force=body.get("force") is True,
         operation_id=operation_id,
     )
-    args = ["worktree", "remove"]
-    if force:
-        args.append("--force")
-    args.append(registered)
-    mutation = await run_git_mutation(
-        cwd, *args, operation="worktree_remove", operation_id=operation_id
-    )
-    if mutation.code and buried is not None:
-        # Git kept the registration after the tree was renamed away, which is a state
-        # nothing here knows how to reason about. Put the tree back exactly where it
-        # was and let the ordinary in-place removal produce Git's own answer.
-        restored = await asyncio.to_thread(worktree_graveyard.exhume, buried, registered)
-        log.warning(
-            "worktree_remove_fast_path_reverted operation_id=%s cwd=%s path=%s "
-            "git_code=%s restored=%s",
-            operation_id,
-            cwd,
-            registered,
-            mutation.code,
-            restored,
-        )
-        buried = None
-        if restored:
-            mutation = await run_git_mutation(
-                cwd, *args, operation="worktree_remove", operation_id=operation_id
-            )
-    if mutation.code:
-        try:
-            post_remove_entries = await worktree_mutation.listed_worktree_entries(cwd)
-        except ValueError:
-            post_remove_entries = {requested.casefold(): entry}
-        if requested.casefold() not in post_remove_entries:
-            cleanup_status = "removed"
-            orphaned_path: str | None = None
-            if Path(registered).exists():
-                try:
-                    orphaned_path = await asyncio.to_thread(
-                        worktree_mutation.quarantine_orphaned_worktree, registered, operation_id
-                    )
-                    cleanup_status = "quarantined"
-                except OSError as exc:
-                    log.warning(
-                        "worktree_remove_cleanup_failed operation_id=%s cwd=%s path=%s "
-                        "git_code=%s error_type=%s duration_ms=%.1f",
-                        operation_id,
-                        cwd,
-                        registered,
-                        mutation.code,
-                        type(exc).__name__,
-                        (time.perf_counter() - started_at) * 1000,
-                    )
-                    return json_response(
-                        {
-                            "error": "Git removed the worktree registration but its directory "
-                            "could not be quarantined",
-                            "code": "worktree_cleanup_failed",
-                            "operation_id": operation_id,
-                            "repaired": repaired,
-                            "removed": True,
-                            "path": registered,
-                        },
-                        409,
-                    )
-            await request.app[keys.EVENTS].emit(
-                "worktree_removed", source="user", cwd=cwd, path=registered
-            )
-            log.warning(
-                "worktree_remove_completed operation_id=%s cwd=%s path=%s force=%s "
-                "repaired=%s git_code=%s cleanup_status=%s orphaned_path=%s "
-                "duration_ms=%.1f",
-                operation_id,
-                cwd,
-                registered,
-                force,
-                repaired,
-                mutation.code,
-                cleanup_status,
-                orphaned_path or "",
-                (time.perf_counter() - started_at) * 1000,
-            )
-            return json_response(
-                {
-                    "ok": True,
-                    "operation_id": operation_id,
-                    "repaired": repaired,
-                    "cleanup": {"status": cleanup_status, "path": orphaned_path},
-                }
-            )
-        log.warning(
-            "worktree_remove_failed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
-            "git_code=%s duration_ms=%.1f",
-            operation_id,
-            cwd,
-            registered,
-            force,
-            repaired,
-            mutation.code,
-            (time.perf_counter() - started_at) * 1000,
-        )
-        return json_response(
-            {
-                "error": mutation.output or "git worktree remove failed",
-                "code": "git_timeout" if mutation.timed_out else "git_error",
-                "operation_id": operation_id,
-                "repaired": repaired,
-            },
-            504 if mutation.timed_out else 400,
-        )
-    cleanup: dict[str, Any] = {"status": "removed", "path": None}
-    if buried is not None:
-        _schedule_graveyard_purge(request.app, buried.parent, operation_id)
-        cleanup = {"status": "purging", "path": str(buried)}
-    await request.app[keys.EVENTS].emit("worktree_removed", source="user", cwd=cwd, path=registered)
-    log.info(
-        "worktree_remove_completed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
-        "cleanup_status=%s buried_path=%s duration_ms=%.1f",
-        operation_id,
-        cwd,
-        registered,
-        force,
-        repaired,
-        cleanup["status"],
-        cleanup["path"] or "",
-        (time.perf_counter() - started_at) * 1000,
+    if isinstance(outcome, worktree_mutation.RemovalRefused):
+        payload: dict[str, Any] = {
+            "error": outcome.message,
+            "code": outcome.code,
+            "operation_id": operation_id,
+        }
+        if outcome.repaired is not None:
+            payload["repaired"] = outcome.repaired
+        if outcome.removed:
+            payload["removed"] = True
+            payload["path"] = outcome.path
+        return json_response(payload, outcome.status)
+    if outcome.purge_root is not None:
+        _schedule_graveyard_purge(request.app, outcome.purge_root, operation_id)
+    await request.app[keys.EVENTS].emit(
+        "worktree_removed", source="user", cwd=cwd, path=outcome.registered
     )
     return json_response(
         {
             "ok": True,
             "operation_id": operation_id,
-            "repaired": repaired,
-            "cleanup": cleanup,
+            "repaired": outcome.repaired,
+            "cleanup": {"status": outcome.cleanup_status, "path": outcome.cleanup_path},
         }
     )
 
