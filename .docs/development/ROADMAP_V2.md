@@ -305,14 +305,33 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 
 ### S9 - MCP and automation consumers (mcp.py, deterministic_consumers.py)
 
-- [ ] S9.1 `handle_rpc` narrowing (F24): catch `ScopeMiss`/`AmbiguousIdentity`, not base `KeyError`, so handler bugs error instead of reading as "no such session".
-- [ ] S9.2 Test-file classifier (F26): explicit path-segment and basename conventions (`tests/`, `test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.tsx`, `__tests__/`); false-positive tests for `latest.py`-class names.
-- [ ] S9.3 Blast-radius honesty (F/codex): failed provenance reads return `co_change_available: false` with a typed reason and a log line, not a silent empty list.
-- [ ] S9.4 Parse-timeout guard (F24): stop advising retry while the abandoned parse still occupies an executor slot; single-flight per transcript with the timeout attached to the flight, not the wait.
-- [ ] S9.5 Lock-map eviction (F24): evict per-key locks (scan_timeline, assistant dialogs, project_card) when their keyed entity ends.
-- [ ] S9.6 `list_sessions` size fitting (F24): per-item size accounting instead of full re-serialization per popped item.
-- [ ] S9.7 Doc-ownership cache (F/codex-K, F22): fingerprint paths+count+mtime_ns+size instead of max-mtime, and make the uncached `mcp.py` caller share the cached builder.
-- [ ] S9.T Tests for each of the seven items.
+- [x] S9.1 `handle_rpc` narrowing (F24): catch `ScopeMiss`/`AmbiguousIdentity`, not base `KeyError`, so handler bugs error instead of reading as "no such session".
+- [x] S9.2 Test-file classifier (F26): explicit path-segment and basename conventions (`tests/`, `test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.tsx`, `__tests__/`); false-positive tests for `latest.py`-class names.
+- [x] S9.3 Blast-radius honesty (F/codex): failed provenance reads return `co_change_available: false` with a typed reason and a log line, not a silent empty list.
+- [x] S9.4 Parse-timeout guard (F24): stop advising retry while the abandoned parse still occupies an executor slot; single-flight per transcript with the timeout attached to the flight, not the wait.
+- [x] S9.5 Lock-map eviction (F24): evict per-key locks (scan_timeline, assistant dialogs, project_card) when their keyed entity ends.
+- [x] S9.6 `list_sessions` size fitting (F24): per-item size accounting instead of full re-serialization per popped item.
+- [x] S9.7 Doc-ownership cache (F/codex-K, F22): fingerprint paths+count+mtime_ns+size instead of max-mtime, and make the uncached `mcp.py` caller share the cached builder.
+- [x] S9.T Tests for each of the seven items.
+
+Landed in `tests/test_mcp_consumer_hardening.py` (52 tests). Three notes for whoever reads
+this next:
+
+- S9.1 narrows to `ScopeMiss`/`AmbiguousIdentity` **and** adds a `-32603` catch-all with a
+  logged traceback, because narrowing alone would only have moved an accidental `KeyError`
+  into the transport middleware, which turns it into the same unlogged 404 (that half is
+  S7.3's). Two legitimate misses that used to ride the base-`KeyError` path were typed at
+  their call sites instead: `run_action`'s catalog race now answers `unknown_action`, and
+  `configurator_guide` already converted its own.
+- S9.4 keys the flight on the transcript path and *refuses* a request for a different page
+  of a transcript that is mid-parse, rather than running a second thread for it. The worker
+  thread cannot be cancelled, so the flight is retired on thread completion; a caller that
+  gave up is exactly the case the old code got wrong.
+- S9.5's `ProjectCardService.forget_project` has no caller: nothing constructs that service
+  yet (`project-card.md` already records this). The other two evict from their own
+  lifecycles - scan-timeline after an ended session's final scan, plus a liveness-gated sweep
+  that catches what a chained catch-up leaves behind, and the assistant when a dialog's turn
+  finishes with nothing queued behind it.
 
 ### S10 - frontend quality (Settings, CodeEditor, bundle; server half lands in the S3-created route modules)
 

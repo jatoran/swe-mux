@@ -271,6 +271,56 @@ def normalize_target(target: str | None, project_root: str | None = None) -> str
     return text.casefold()
 
 
+#: Directory names that make everything under them a test, by convention rather
+#: than by spelling. Deliberately a closed set of exact segments: a substring
+#: match is what let `attestation/` and `latest.py` read as tests.
+_TEST_DIR_SEGMENTS = frozenset({"test", "tests", "__tests__", "spec", "__mocks__"})
+#: Extensions that take the `<name>.test.<ext>` / `<name>.spec.<ext>` convention.
+_TEST_SUFFIX_EXTENSIONS = ("js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts")
+#: Whole basenames that are test infrastructure wherever they sit.
+_TEST_BASENAMES = frozenset({"conftest.py"})
+
+
+def is_test_path(path: str | None) -> bool:
+    """True when a path is a test file by an explicit naming convention.
+
+    Conventions, not spelling: a path segment that *is* a test directory
+    (`tests/`, `test/`, `__tests__/`, `spec/`), or a basename matching
+    `test_*.py`, `*_test.py`, `*_test.go`, `conftest.py`, or
+    `<name>.test|spec.<js/ts ext>`.
+
+    The predecessor was `"test" in path`, which classified `latest.py`,
+    `contest.py`, `attestation.ts`, and every file under a `protest/` directory
+    as tests. That fails in the unsafe direction twice over: `test_gap`
+    *suppresses* a finding for anything it thinks is a test (so real untested
+    code goes unreported), and `blast_radius` reports the same file as its own
+    covering test (so a change looks covered when nothing exercises it).
+    """
+    if not path:
+        return False
+    text = path.strip().replace("\\", "/").casefold()
+    if not text:
+        return False
+    segments = [segment for segment in text.split("/") if segment not in ("", ".")]
+    if not segments:
+        return False
+    if any(segment in _TEST_DIR_SEGMENTS for segment in segments[:-1]):
+        return True
+    name = segments[-1]
+    if name in _TEST_BASENAMES:
+        return True
+    if name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py")):
+        return True
+    if name.endswith("_test.go"):
+        return True
+    stem, _, extension = name.rpartition(".")
+    if extension in _TEST_SUFFIX_EXTENSIONS and (
+        stem.endswith(".test") or stem.endswith(".spec")
+    ):
+        return True
+    return False
+
+
 def _detail(fact: dict[str, Any]) -> dict[str, Any]:
     raw = fact.get("detail_json")
     if isinstance(raw, dict):
@@ -624,6 +674,68 @@ def build_doc_ownership(
         for path, docs in ownership.items()
         if len(docs) <= hub_owner_limit
     }
+
+
+#: Docs trees kept in the shared ownership cache. One entry per project root
+#: that any consumer has asked about; the bound exists because the cache is
+#: module-level and a daemon runs for weeks.
+_OWNERSHIP_CACHE_MAX_ROOTS = 32
+#: `docs_root -> (fingerprint, ownership map)`. Module-level so the MCP tools and
+#: the deterministic-consumer loop share one build instead of each paying for a
+#: full docs-tree parse (F22: `mcp.py` built it uncached on every `blast_radius`).
+_OWNERSHIP_CACHE: dict[str, tuple[tuple[Any, ...], dict[str, tuple[str, ...]]]] = {}
+
+
+def docs_fingerprint(docs_root: Path) -> tuple[Any, ...]:
+    """Identity of a docs tree: every markdown path with its `mtime_ns` and size.
+
+    The path set is part of the fingerprint, not just a count, because a delete
+    and a rename both leave the newest mtime untouched - keying on
+    `max(mtime)` alone (the previous scheme) made them invisible and served a
+    map that still owned a file no doc mentions.
+
+    Size is carried for a second reason: Windows freezes a file's reported mtime
+    while a handle is open, so a doc being written right now can grow without
+    its mtime moving. The size moves.
+    """
+    entries: list[tuple[str, int, int]] = []
+    try:
+        candidates = sorted(docs_root.rglob("*.md"))
+    except OSError:
+        return ()
+    for path in candidates:
+        try:
+            info = path.stat()
+        except OSError:
+            # A file that vanished between the walk and the stat is simply not
+            # in this fingerprint; the next call will agree with itself.
+            continue
+        entries.append((path.as_posix(), int(info.st_mtime_ns), int(info.st_size)))
+    return (len(entries), tuple(entries))
+
+
+def cached_doc_ownership(
+    docs_root: Path, *, hub_owner_limit: int = DOC_HUB_OWNER_LIMIT
+) -> dict[str, tuple[str, ...]]:
+    """`build_doc_ownership` behind a fingerprint cache shared by every consumer.
+
+    Blocking (it stats and may parse the whole docs tree); call it off the event
+    loop. The cache is deliberately lock-free: a concurrent miss costs a
+    duplicate build and the last writer wins, which is exactly what the
+    uncached callers did every time.
+    """
+    # The limit is part of the key: two callers asking with different hub limits
+    # want different maps, and sharing one would serve whichever asked first.
+    key = f"{docs_root.as_posix()}#{hub_owner_limit}"
+    stamp = docs_fingerprint(docs_root)
+    cached = _OWNERSHIP_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    ownership = build_doc_ownership(docs_root, hub_owner_limit=hub_owner_limit)
+    if key not in _OWNERSHIP_CACHE and len(_OWNERSHIP_CACHE) >= _OWNERSHIP_CACHE_MAX_ROOTS:
+        _OWNERSHIP_CACHE.pop(next(iter(_OWNERSHIP_CACHE)), None)
+    _OWNERSHIP_CACHE[key] = (stamp, ownership)
+    return ownership
 
 
 @dataclass(frozen=True, slots=True)
@@ -1008,7 +1120,6 @@ class DeterministicConsumerService:
         #: is serial, so a plain set needs no lock.
         self._graph_indexed: set[str] = set()
         self._queue: asyncio.Queue[Any] | None = None
-        self._ownership: dict[str, tuple[dict[str, tuple[str, ...]], float]] = {}
         self.findings = 0
         self.last_error: str | None = None
 
@@ -1035,23 +1146,13 @@ class DeterministicConsumerService:
     def _ownership_for(self, project_root: str) -> dict[str, tuple[str, ...]]:
         """Cached `source path -> owning docs` map, rebuilt when the docs change.
 
-        Keyed on the newest mtime in the docs tree rather than a TTL: the map is
-        derived from files in the repository the agent is editing, so a stale copy
-        would report debt against a doc that was just updated.
+        Fingerprinted rather than given a TTL: the map is derived from files in
+        the repository the agent is editing, so a stale copy would report debt
+        against a doc that was just updated. The fingerprint and the cache both
+        live in `cached_doc_ownership`, which the MCP `blast_radius` tool shares
+        - it used to rebuild the same map, uncached, on every call.
         """
-        docs_root = Path(project_root) / self._docs_root_name
-        try:
-            stamp = max(
-                (path.stat().st_mtime for path in docs_root.rglob("*.md")), default=0.0
-            )
-        except OSError:
-            stamp = 0.0
-        cached = self._ownership.get(project_root)
-        if cached is not None and cached[1] == stamp:
-            return cached[0]
-        ownership = build_doc_ownership(docs_root)
-        self._ownership[project_root] = (ownership, stamp)
-        return ownership
+        return cached_doc_ownership(Path(project_root) / self._docs_root_name)
 
     async def evaluate(self, session_id: str) -> list[dict[str, Any]]:
         """Run every enabled detector for one session's just-finished turn."""

@@ -40,12 +40,12 @@ No signal is ever pushed into an agent; it consults the tools on its own initiat
 
 | Tool | Returns |
 |---|---|
-| `blast_radius` | reverse callers (hop-ordered), the git co-change net, covering tests among the reachable set, and the owning docs for one file |
+| `blast_radius` | reverse callers (hop-ordered), the git co-change net, covering tests among the reachable set, and the owning docs for one file. Covering tests are classified by convention (`is_test_path`), never by the substring `test`. A co-change read that did not happen answers `co_change_available:false` with a reason rather than an empty list |
 | `find_definition` | where a symbol is defined, by leaf name or qualname |
 | `find_callers` | the (file, symbol) pairs that call into a file or symbol, import-aware, with unresolved same-name callers reported separately |
 | `find_references` | every call or reference to a symbol in a file |
 | `code_context` | a compact structural neighborhood for context packing: each file's key symbols, imports, and direct callers |
-| `test_gap` | recently-changed files whose blast radius contains no covering test |
+| `test_gap` | recently-changed files whose blast radius contains no covering test, over the same `is_test_path` conventions |
 
 ## Surface 2 — human-passive annotations
 

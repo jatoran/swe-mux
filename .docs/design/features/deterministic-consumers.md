@@ -39,6 +39,14 @@ Four detectors ship together:
   turn boundary returns the existing row rather than a second copy of the same finding.
 - **No delivery path.** Output is annotations. Nothing here writes a PTY, approves anything,
   spawns anything, or mutates a project. A `queue_draft` path arrives with the Phase 4 queue.
+- **A test file is one by convention, not by spelling.** `is_test_path` matches a
+  test *path segment* (`tests/`, `test/`, `__tests__/`, `spec/`) or a basename
+  convention (`test_*.py`, `*_test.py`, `*_test.go`, `conftest.py`,
+  `*.test|spec.{js,ts,tsx,…}`). It replaces `"test" in path` (audit F26), which
+  classified `latest.py`, `contest.py`, and `attestation.ts` as tests. That
+  failed in the unsafe direction in both consumers of it: `test_gap` *suppresses*
+  a finding for anything it believes is a test, and `blast_radius` counts it as
+  its own covering test — so untested code read as covered.
 
 ## Detector rules
 
@@ -177,6 +185,18 @@ because a doc past the cap lands on the next turn boundary.
 
 Debt accumulates with a visible count rather than nagging per turn, and a doc edited in the
 same window is not dirty — the debt was paid as it was incurred.
+
+**The ownership map is cached behind a fingerprint of the docs tree, and the cache is
+shared.** `cached_doc_ownership` keys on every markdown path with its `mtime_ns` and size,
+because the previous `max(mtime)` key could not see a delete or a rename: both leave the
+newest mtime untouched, so the map kept owning a file no doc mentions. Size is in the key
+for a second reason — Windows freezes a file's reported mtime while a handle is open, so a
+doc being written right now grows without its mtime moving.
+The cache is module-level rather than per-service so the MCP `blast_radius`/`doc_debt` tools
+share one build with the consumer loop; `mcp.py` used to reparse the whole `.docs` tree on
+every call while an identical map sat cached beside it (audit F22). It is lock-free — a
+concurrent miss costs a duplicate build, which is what the uncached callers did every time —
+and bounded to `_OWNERSHIP_CACHE_MAX_ROOTS` project roots, since a daemon runs for weeks.
 
 ### Provenance graph
 
