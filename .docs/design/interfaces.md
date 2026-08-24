@@ -10,13 +10,30 @@ code runs, so these statuses hold for every route unless a section says otherwis
 
 | Raised | Status | Body |
 |---|---|---|
-| `KeyError` | 404 | `{error: "not found: <key>"}` |
-| `ValueError` / `TypeError` | 400 | `{error}` |
+| `errors.NotFound` | 404 | `{error: "no such <kind>", code: "not_found", kind}` |
+| `ValueError` | 400 | `{error}` |
 | `SupervisorUnavailable` | 503 | `{error, code: "supervisor_unreachable"}` |
 | `TimeoutError` | 504 | `{error, code: "timeout"}` |
-| anything else | 500 | `{error: "internal server error"}` |
+| anything else, including a bare `KeyError` or `TypeError` | 500 | `{error: "internal server error"}` |
 
-The last two rows are recent.
+### Deliberate refusals and accidental ones are no longer the same answer
+
+A bare `KeyError` used to be a 404 and a `TypeError` a 400.
+The 404 was a real convention - some forty call sites raise one to mean "this id names nothing" - but a `KeyError` is also what a handler raises when it reads a key nobody wrote, and a `TypeError` is what it raises when it calls something with the wrong arguments.
+Reported as client errors, those bugs got a confident status, no log line and no traceback.
+
+The deliberate half is now `errors.NotFound`, a `KeyError` subclass (so existing `except KeyError` catch sites still catch it), carrying a `kind` and the key that missed.
+The `kind` is in the body; **the key is not**.
+Echoing it back made a 404 a reflection of arbitrary request text and told the caller nothing it had not just sent; it goes to `daemon.log` at debug with the method, the path and the request id instead.
+Route-level validation that wants a 400 raises `ValueError`, which is the only one of the two a caller can act on.
+
+### Every response carries `X-Request-ID`
+
+A well-formed inbound `X-Request-ID` (≤64 chars of `A-Za-z0-9._:-`) is adopted so a caller keeps one id across the boundary; anything else is replaced with a fresh one.
+The header is on every answer, including the two refusals that never reach a handler (`unsupported Host`, `daemon_starting`), and the same id is on every `daemon.log` line emitted while the request runs - and on the background tasks and threads it starts, which is the slow half of a request and the part an incident is usually about.
+`access.log` carries it as a trailing `request_id=` field, so a request line joins the lines it caused.
+
+Two of the rows above are older but still recent.
 `SupervisorUnavailable` subclasses `RuntimeError` and `TimeoutError` subclasses
 `OSError`, so both used to reach the generic clause and answer `500 internal
 server error` with the reason left in `daemon.log`.

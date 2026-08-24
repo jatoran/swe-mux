@@ -1755,6 +1755,7 @@ class AssistantService:
     def _turn_finished(self, dialog_id: str, task: asyncio.Task[None]) -> None:
         if self._turn_tasks.get(dialog_id) is task:
             self._turn_tasks.pop(dialog_id, None)
+        self._retire_dialog_lock(dialog_id)
         # Drained even when the turn was cancelled or failed: an interrupted
         # turn is usually interrupted *by* the operator saying the thing that is
         # now waiting, so that is exactly when it must run.
@@ -1765,6 +1766,28 @@ class AssistantService:
         error = task.exception()
         if error is not None:
             log.error("assistant turn task failed dialog=%s", dialog_id, exc_info=error)
+
+    def _retire_dialog_lock(self, dialog_id: str) -> None:
+        """Drop a dialog's turn lock once no turn is running or waiting (F24).
+
+        One `asyncio.Lock` per dialog ever spoken to, held for the daemon's
+        (weeks-long) life, for a map whose keys come from persisted rows the
+        operator keeps adding to. Same rule as `voice.py`: a held lock is never
+        dropped, because the next caller would build a second one and the mutual
+        exclusion would be gone. `setdefault` at the turn site rebuilds it the
+        moment the dialog is used again, so eviction costs nothing but the
+        allocation it saves.
+        """
+        lock = self._dialog_locks.get(dialog_id)
+        if lock is None or lock.locked():
+            return
+        if self._queued.get(dialog_id) is not None:
+            return
+        running = self._turn_tasks.get(dialog_id)
+        if running is not None and not running.done():
+            return
+        self._dialog_locks.pop(dialog_id, None)
+        self._interrupts.discard(dialog_id)
 
     def _start_queued(self, dialog_id: str) -> None:
         waiting = self._queued.pop(dialog_id, None)

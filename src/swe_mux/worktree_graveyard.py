@@ -32,9 +32,10 @@ directory while any handle inside it is open (`WinError 5`/`WinError 32`, measur
 and the source is left exactly as it was - so a defeated rename is a clean signal to
 take the slow path rather than a half-moved tree to reason about.
 
-Purging is idempotent and forgiving: whatever it cannot delete stays, and the next
-purge (the next removal, or the sweep at daemon start) tries again. Nothing here
-ever removes the graveyard root itself, so a purge racing a burial cannot delete a
+Purging is idempotent and forgiving, but no longer infinitely patient: whatever it
+cannot delete stays and the next purge (the next removal, or the sweep at daemon
+start) tries again, up to `PURGE_ATTEMPT_LIMIT` times per path. Nothing here ever
+removes the graveyard root itself, so a purge racing a burial cannot delete a
 directory another removal is renaming into.
 """
 
@@ -44,11 +45,52 @@ import logging
 import os
 import shutil
 import stat
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+#: How many times one buried path may fail to delete before the purge stops trying
+#: it and says so once. A purge that retried forever wrote 1,165 warnings over three
+#: days for a handful of paths (2026-08-21 to 08-24), which is the shape of a log
+#: nobody reads. The state is in memory and dies with the daemon, which is the
+#: intended bound: a restart is a cheap, deliberate "try that again", and a lock
+#: held by a process that has since exited gets one.
+PURGE_ATTEMPT_LIMIT = 5
+
+_attempt_lock = threading.Lock()
+#: Consecutive failures per buried path, cleared the moment the path is gone.
+_purge_attempts: dict[str, int] = {}
+#: Paths that exhausted the limit. Skipped, silently, until the daemon restarts.
+_purge_abandoned: set[str] = set()
+
+
+def reset_purge_attempts() -> None:
+    """Forget every attempt count and abandonment. For tests, and a deliberate retry."""
+    with _attempt_lock:
+        _purge_attempts.clear()
+        _purge_abandoned.clear()
+
+
+def _purge_key(entry: Path) -> str:
+    return os.path.normcase(os.path.abspath(entry))
+
+
+def _forget(key: str) -> None:
+    with _attempt_lock:
+        _purge_attempts.pop(key, None)
+        _purge_abandoned.discard(key)
+
+
+def _record_failure(key: str) -> int:
+    with _attempt_lock:
+        attempts = _purge_attempts.get(key, 0) + 1
+        _purge_attempts[key] = attempts
+        if attempts >= PURGE_ATTEMPT_LIMIT:
+            _purge_abandoned.add(key)
+    return attempts
 
 #: Inside the repository's common Git directory. Not dot-prefixed: `.git` already
 #: hides it from everything that walks a working tree, and a name that reads as a
@@ -120,6 +162,15 @@ def purge(root: Path) -> tuple[int, int]:
     Returns ``(removed, failed)``. Failures are counted rather than raised: a
     locked file means those bytes wait for the next purge, which is the whole
     reason the graveyard is a directory rather than a temporary name.
+
+    Two things bound that patience, and both come from a purge loop that had
+    neither (D2 soak, 2026-08-24). **An absent path is a purged path**: a directory
+    Windows has marked delete-pending stays in the listing while every operation on
+    it reports it missing, so a `FileNotFoundError` there is the deletion working,
+    not failing. And a path that genuinely will not go is retried
+    `PURGE_ATTEMPT_LIMIT` times and then abandoned with one terminal line, because
+    the twenty-fourth identical warning about one locked checkout is not new
+    information.
     """
     try:
         entries = sorted(root.iterdir())
@@ -130,31 +181,80 @@ def purge(root: Path) -> tuple[int, int]:
             "worktree_graveyard_unreadable root=%s error_type=%s", root, type(exc).__name__
         )
         return (0, 0)
-    removed = failed = 0
+    removed = failed = abandoned = 0
     for entry in entries:
+        key = _purge_key(entry)
+        with _attempt_lock:
+            already_abandoned = key in _purge_abandoned
+        if already_abandoned:
+            abandoned += 1
+            continue
+        if not entry.exists() and not entry.is_symlink():
+            # Gone before we touched it - a concurrent purge, or a delete-pending
+            # directory Windows still lists. Either way the postcondition holds.
+            removed += 1
+            _forget(key)
+            log.debug("worktree_graveyard_purge_already_absent path=%s", entry)
+            continue
         try:
             if entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry, onexc=_clear_readonly)
             else:
                 entry.unlink()
+        except FileNotFoundError:
+            removed += 1
+            _forget(key)
+            log.debug("worktree_graveyard_purge_already_absent path=%s", entry)
+            continue
         except OSError as exc:
             failed += 1
-            log.warning(
-                "worktree_graveyard_purge_failed path=%s error_type=%s error=%s",
-                entry,
-                type(exc).__name__,
-                exc,
+            _report_failure(
+                entry, key, "worktree_graveyard_purge_failed", type(exc).__name__, str(exc)
             )
             continue
         # `rmtree` with an error handler that swallows can return having left
         # files behind, so success is what the filesystem says afterwards.
         if entry.exists():
             failed += 1
-            log.warning("worktree_graveyard_purge_incomplete path=%s", entry)
+            _report_failure(
+                entry,
+                key,
+                "worktree_graveyard_purge_incomplete",
+                "Incomplete",
+                "files remained after rmtree",
+            )
         else:
             removed += 1
-    if removed or failed:
+            _forget(key)
+    if removed or failed or abandoned:
         log.info(
-            "worktree_graveyard_purged root=%s removed=%d failed=%d", root, removed, failed
+            "worktree_graveyard_purged root=%s removed=%d failed=%d abandoned=%d",
+            root,
+            removed,
+            failed,
+            abandoned,
         )
     return (removed, failed)
+
+
+def _report_failure(entry: Path, key: str, event: str, error_type: str, detail: str) -> None:
+    """Warn about one undeletable path, and say so once more when we give up on it."""
+    attempts = _record_failure(key)
+    if attempts >= PURGE_ATTEMPT_LIMIT:
+        log.warning(
+            "worktree_graveyard_purge_abandoned path=%s attempts=%d error_type=%s error=%s "
+            "detail=no further purge will retry this path until the daemon restarts",
+            entry,
+            attempts,
+            error_type,
+            detail,
+        )
+        return
+    log.warning(
+        event + " path=%s attempt=%d limit=%d error_type=%s error=%s",
+        entry,
+        attempts,
+        PURGE_ATTEMPT_LIMIT,
+        error_type,
+        detail,
+    )

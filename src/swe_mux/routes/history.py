@@ -11,6 +11,7 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
+from ..errors import NotFound
 from ..harness import (
     AGENT_BACKENDS,
     has_observable_transcript,
@@ -111,7 +112,7 @@ def _parse_conversation(
 async def history_transcript(request: web.Request) -> web.Response:
     row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
-        raise KeyError(request.match_info["sid"])
+        raise NotFound(request.match_info["sid"], kind="session")
     transcript = row.get("transcript_path")
     path = Path(str(transcript)) if transcript else None
     backend = str(row["backend"])
@@ -170,7 +171,7 @@ async def resume_history(request: web.Request) -> web.Response:
     """
     row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
-        raise KeyError(request.match_info["sid"])
+        raise NotFound(request.match_info["sid"], kind="session")
     if not row.get("agent_visible") or not has_observable_transcript(row.get("backend")):
         return json_response(
             {"error": "only observable agent history can be resumed", "code": "not_agent"},
@@ -282,7 +283,7 @@ async def repair_history_duplicates(request: web.Request) -> web.Response:
 async def delete_history_entry(request: web.Request) -> web.Response:
     row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row or not row.get("agent_visible"):
-        raise KeyError(request.match_info["sid"])
+        raise NotFound(request.match_info["sid"], kind="session")
     await request.app[keys.HISTORY].delete_history_entry(request.match_info["sid"])
     await request.app[keys.EVENTS].emit(
         "history_entry_deleted", session_id=request.match_info["sid"], source="user"

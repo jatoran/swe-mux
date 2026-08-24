@@ -34,6 +34,7 @@ from ..harness import (
     public_harness_registry,
 )
 from ..http_support import is_loopback_peer, json_response
+from ..lifecycle import planned_handoff
 from ..logsetup import current_log_level, set_log_level
 from ..prerequisites import detect_prerequisites
 from ..processes import PreviewRegistry
@@ -210,7 +211,20 @@ async def desktop_shutdown(request: web.Request) -> web.Response:
     mode = str(body.get("mode", "quit")) if isinstance(body, dict) else "quit"
     if mode not in {"quit", "restart"}:
         raise web.HTTPBadRequest(text="mode must be quit or restart")
-    request.app[keys.SHUTDOWN_STATE]["intent"] = "quit" if mode == "quit" else "detach"
+    intent = "quit" if mode == "quit" else "detach"
+    request.app[keys.SHUTDOWN_STATE]["intent"] = intent
+    # Recorded now rather than at the clean exit, because the caller that sent
+    # this request is usually the redeploy script, and it terminates this
+    # process as soon as health stops answering - several seconds before the
+    # teardown reaches its clean-exit write. Without this the successor reported
+    # a crash on every planned restart (`lifecycle.planned_handoff`).
+    #
+    # Looked up defensively for the same reason the broadcast below is: a
+    # minimal desktop-control app carries no config, and a forensic breadcrumb
+    # must never be the reason a shutdown request 500s instead of shutting down.
+    shutdown_config: Config | None = request.app.get(keys.CONFIG)
+    if shutdown_config is not None:
+        await asyncio.to_thread(planned_handoff, shutdown_config.data_dir, intent)
     # The one authoritative "the outage starts now" signal a client can get: the
     # redeploy script stops the daemon through this endpoint, so the daemon is
     # still alive and still has its sockets when it learns the build finished.
@@ -311,7 +325,12 @@ async def daemon_restart(request: web.Request) -> web.Response:
             409,
         )
     config: Config = request.app[keys.CONFIG]
-    request.app[keys.SHUTDOWN_STATE]["intent"] = "detach" if attached else "quit"
+    intent = "detach" if attached else "quit"
+    request.app[keys.SHUTDOWN_STATE]["intent"] = intent
+    # Before the successor is spawned: it reads this record to decide how long
+    # to wait for this daemon's drain, and to tell a planned handoff from a
+    # crash once it starts.
+    await asyncio.to_thread(planned_handoff, config.data_dir, intent)
     _spawn_daemon_successor(list(relaunch), config.data_dir / "daemon-relaunch.log")
     stop_event.set()
     response = json_response({"status": "restarting", "sessions_preserved": attached}, 202)

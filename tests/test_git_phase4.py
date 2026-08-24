@@ -682,15 +682,23 @@ async def test_git_timeout_kills_and_reaps(monkeypatch: pytest.MonkeyPatch) -> N
         killed = False
         reaped = False
 
-        async def communicate(self):  # type: ignore[no-untyped-def]
-            await asyncio.sleep(1)
-            self.returncode = -9
-            return b"", b""
+        def __init__(self) -> None:
+            # The bounded runner drains both pipes concurrently rather than
+            # buffering through `communicate()`, so a fake process needs streams.
+            self.stdout = asyncio.StreamReader()
+            self.stdout.feed_eof()
+            self.stderr = asyncio.StreamReader()
+            self.stderr.feed_eof()
+            self._killed = asyncio.Event()
 
         def kill(self) -> None:
             self.killed = True
+            self._killed.set()
 
         async def wait(self) -> int:
+            # Ends only when killed, so the timeout is what the runner observes
+            # and the reap is what ends the wait - the order under test.
+            await self._killed.wait()
             self.reaped = True
             self.returncode = -9
             return -9
@@ -744,8 +752,17 @@ async def test_repository_reads_never_write_the_repository(
     class FakeProcess:
         returncode = 0
 
+        def __init__(self) -> None:
+            self.stdout = asyncio.StreamReader()
+            self.stdout.feed_eof()
+            self.stderr = asyncio.StreamReader()
+            self.stderr.feed_eof()
+
         async def communicate(self) -> tuple[bytes, bytes]:
             return b"", b""
+
+        async def wait(self) -> int:
+            return 0
 
     async def fake_exec(*args: str, **_kwargs: object) -> FakeProcess:
         seen.append(args)

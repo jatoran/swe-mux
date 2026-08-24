@@ -17,12 +17,17 @@ from typing import Any, Literal, assert_never, cast
 import aiohttp
 
 from .background_tasks import background
+from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .harness import descriptor, provider_account_harnesses
 from .models import MuxEvent
 from .shim_paths import which_real
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
+#: What one provider CLI invocation may hold in memory. Login and status output
+#: is a few lines; the cap exists because how much a third-party CLI decides to
+#: print is not a number this daemon gets to assume.
+MAX_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
 QUOTA_POLL_LOOP = "provider-quota-poll"
 QUOTA_TURN_REFRESH_LOOP = "provider-quota-turn-refresh"
 SELECTION_GUARD_LOOP = "provider-selection-guard"
@@ -1568,26 +1573,29 @@ class ProviderAccountManager:
     async def _run_command(
         self, provider: Provider, args: list[str], *, timeout_seconds: float
     ) -> str:
+        """Run one provider CLI command and return its stdout.
+
+        The cap is new: a login flow that decides to stream a QR code, a progress
+        bar, or a stack trace is not this daemon's to size, and the diagnostic slice
+        below reads the *tail*, which head-and-tail truncation preserves.
+        """
         command = self._spawn_command(provider, args)
         try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                creationflags=background_creation_flags(),
+            outcome = await run_bounded(
+                command,
+                label=f"provider-{provider}",
+                timeout_seconds=timeout_seconds,
+                output_limit=MAX_COMMAND_OUTPUT_BYTES,
+                stderr_limit=MAX_COMMAND_OUTPUT_BYTES,
             )
         except OSError as exc:
             raise ProviderAccountError(f"Could not start {provider}: {exc}") from exc
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout_seconds)
-        except TimeoutError as exc:
-            await reap_process_tree(process)
-            raise ProviderAccountError(f"{provider} login timed out") from exc
-        output = stdout.decode(errors="replace").strip()
-        diagnostic = stderr.decode(errors="replace").strip()
-        if process.returncode:
-            detail = diagnostic[-500:] or output[-500:] or f"exit code {process.returncode}"
+        if outcome.timed_out:
+            raise ProviderAccountError(f"{provider} login timed out")
+        output = outcome.stdout.decode(errors="replace").strip()
+        diagnostic = outcome.stderr.decode(errors="replace").strip()
+        if outcome.exit_code:
+            detail = diagnostic[-500:] or output[-500:] or f"exit code {outcome.exit_code}"
             raise ProviderAccountError(f"{provider} command failed: {detail}")
         return output
 

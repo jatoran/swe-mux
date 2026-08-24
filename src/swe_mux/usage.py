@@ -13,12 +13,15 @@ from typing import Any
 from uuid import uuid4
 
 from .background_tasks import background
+from .bounded_subprocess import run_bounded
 from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
-from .subprocess_flags import background_creation_flags, reap_process_tree
 
 USAGE_REFRESH_LOOP = "usage-refresh"
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
+#: ccusage's diagnostics are read as a head slice for the operator's error message,
+#: so a cap far below the stdout one costs nothing and bounds a chatty failure.
+MAX_USAGE_STDERR_BYTES = 64 * 1024
 USAGE_TIMEOUT_SECONDS = 30.0
 CACHE_VERSION = 3
 
@@ -437,33 +440,35 @@ class UsageManager:
             )
 
     async def _invoke(self, command: list[str]) -> str:
+        """Run ccusage once and return its stdout, or raise a UsageAdapterError.
+
+        The 10 MiB limit used to be checked *after* `communicate()` had already
+        buffered the whole answer, so it bounded the error message and not the
+        daemon's memory. The bounded runner enforces it while reading, which is what
+        makes the number mean what it says.
+        """
         prepared = prepare_usage_command(command)
         try:
-            process = await asyncio.create_subprocess_exec(
-                *prepared,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                creationflags=background_creation_flags(),
+            outcome = await run_bounded(
+                prepared,
+                label="ccusage",
+                timeout_seconds=USAGE_TIMEOUT_SECONDS,
+                output_limit=MAX_USAGE_OUTPUT_BYTES,
+                stderr_limit=MAX_USAGE_STDERR_BYTES,
             )
         except OSError as exc:
             raise UsageAdapterError(
                 f"ccusage could not start; install {CCUSAGE_PACKAGE} or configure its "
                 f"command: {exc}"
             ) from exc
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=USAGE_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
-            await reap_process_tree(process)
+        if outcome.timed_out:
             raise UsageAdapterError("ccusage refresh timed out") from None
-        if len(stdout) > MAX_USAGE_OUTPUT_BYTES:
+        if outcome.stdout_truncated:
             raise UsageAdapterError("ccusage output exceeded 10 MiB")
-        if process.returncode:
-            detail = stderr.decode("utf-8", "replace").strip()[:2000]
-            raise UsageAdapterError(detail or f"ccusage exited with status {process.returncode}")
-        return stdout.decode("utf-8")
+        if outcome.exit_code:
+            detail = outcome.stderr.decode("utf-8", "replace").strip()[:2000]
+            raise UsageAdapterError(detail or f"ccusage exited with status {outcome.exit_code}")
+        return outcome.stdout.decode("utf-8")
 
     def _write_cache(self) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)

@@ -349,6 +349,19 @@
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`
+- Changing what a `daemon.log` line carries, how a request is correlated across it, or how a
+  raised exception becomes an HTTP status: `technical/backend/packages/daemon-runtime.md`
+  (`logsetup.py`, `errors.py`, `http_support.py`, the middleware chain), `design/interfaces.md`
+  ("Error shapes every route shares").
+  Three rules the split exists to enforce. **A field a call site passes must reach the sink**:
+  the format string used to drop every `extra=` keyword, so instrumentation written years apart
+  produced nothing, and anything added to `LOG_FORMAT` or to a handler's formatter has to keep
+  `StructuredFormatter`. **The correlation filter goes on handlers, never on a logger**:
+  `Logger.handle` consults only the filters of the logger the call was made on, so one on root
+  looks armed and stamps nothing a submodule logs. And **a deliberate refusal and a bug must
+  not be the same answer**: `errors.NotFound` is the 404, a bare `KeyError` or `TypeError` is a
+  500 with a traceback, and a 404 body names the *kind* of thing that was missing and never
+  echoes the key the caller sent.
 - Changing what the daemon does before it can serve - adding a startup phase, moving one
   behind the listener, or changing what health says while the runtime is being built:
   `development/PERFORMANCE_RUNBOOK.md` (§Startup latency), `design/architecture.md`

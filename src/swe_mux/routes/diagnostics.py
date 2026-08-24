@@ -18,6 +18,7 @@ from .. import (
 from ..background_tasks import background
 from ..config import Config
 from ..deterministic_consumers import DeterministicConsumerService
+from ..errors import NotFound
 from ..event_bus import EventBus
 from ..harness import (
     detect_installations_with_versions,
@@ -191,7 +192,7 @@ async def _post_mortem_state_log(
     timeline, truncated = await store.timeline(sid, from_ts=from_ts, to_ts=to_ts)
     history_row = await app[keys.HISTORY].history_entry(sid)
     if not timeline and not history_row:
-        raise KeyError(sid)
+        raise NotFound(sid, kind="session")
     runs = await store.runs_for_session(sid)
     if not runs and history_row:
         runs = await store.runs_for_session(str(history_row["id"]))
@@ -334,7 +335,7 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
     timeline, truncated = await store.timeline(identity, from_ts=from_ts, to_ts=to_ts)
     history_row = await request.app[keys.HISTORY].history_entry(identity)
     if session is None and not timeline and not history_row:
-        raise KeyError(sid)
+        raise NotFound(sid, kind="session")
     # Every run the window touches: the timeline's own run keys, plus the live
     # run and the history row for sessions the durable rows do not (yet) cover.
     run_ids = [str(entry["agent_run_id"]) for entry in timeline]

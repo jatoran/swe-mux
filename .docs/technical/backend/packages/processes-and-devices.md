@@ -14,7 +14,7 @@ Periodic psutil work in this area is the daemon's largest measured cost centre; 
 - Infrastructure reservation and ownership-conflict quarantine.
 - Project-wide loopback registration, discovery, listener attribution, and route maps.
 - Static document registration (`register_static`) and its derived route id (`static_preview_id`).
-- The reduced fleet projection for the browser watch.
+- The reduced fleet projection for the browser watch, built in one pass over the owned processes: `snapshot_all` indexes `session_id -> processes` once and serializes each process once, rather than re-scanning every owned process per session.
 - The `background_tasks` fast-clear, since a descendant older than the annotation cannot be its task.
 
 **Not:** proxy transport, authoritative ownership from PID alone, or deciding a process *is* a background task - it may only refute.

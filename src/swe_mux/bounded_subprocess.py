@@ -1,0 +1,283 @@
+"""One bounded runner for every daemon-owned one-shot subprocess.
+
+The daemon shells out in a dozen places - `ccusage`, provider login and status,
+read-only Git queries, repository-declared worktree commands - and each of those
+call sites needs the same four things: a timeout, a cap on how much output it is
+willing to hold in memory, a *tree* reap so a Windows `cmd.exe` wrapper cannot
+leave its real workers behind, and enough of a log line to correlate a slow or
+truncated run with the operation that asked for it.
+
+The pattern here is `worktree_exec.py`'s, which had all four; the other call sites
+had one to three each. What they were missing, exactly:
+
+  * **Buffer-then-check is not a cap.** `usage.py` read `ccusage` to completion
+    through `communicate()` and only then compared the result against its 10 MiB
+    limit, so the limit described the error message rather than the memory. Reading
+    in chunks and keeping only the head and tail is what makes the number true.
+  * **No cap at all** on `provider_accounts.py` and `git_monitor.py`, both of which
+    run programs whose output size is not the daemon's to decide.
+  * **No reap on `CancelledError`.** All three reaped on timeout - the audit's
+    claim that they leaked there was wrong - but every one of them runs inside a
+    supervised background loop, and a loop cancelled at shutdown left its child
+    alive with the pipes open.
+
+Two deliberate non-features. Nothing here interprets an exit status: a caller that
+wants to treat a nonzero code as a failure says so, because "the command did not
+run" and "the command said no" are the two answers that must never be conflated.
+And nothing here decodes: `git cat-file blob` needs the bytes git stores, and
+`errors="replace"` would silently digest a repaired string instead.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from .subprocess_flags import background_creation_flags, reap_process_tree
+
+log = logging.getLogger(__name__)
+
+#: How long a drain may take *after* the tree has been reaped. The pipes close as
+#: the tree dies, so this is milliseconds in every ordinary case; it exists because
+#: a descendant that escaped the reap and still holds the write end would otherwise
+#: hang the caller forever, and a daemon that hangs is worse than one that reports
+#: a partial capture.
+DRAIN_GRACE_SECONDS = 5.0
+
+#: One line per (label, kind) per window, with the suppressed count carried into
+#: the next one. A 4s Git query on a 5s poll would otherwise write 720 identical
+#: warnings an hour, which is the shape of log spam this repository has already
+#: had to clean up once (`worktree_graveyard_purge_failed`, 1,165 lines).
+LOG_WINDOW_SECONDS = 60.0
+
+_READ_CHUNK = 64 * 1024
+
+_log_windows: dict[tuple[str, str], tuple[float, int]] = {}
+
+
+def _rate_limited(kind: str, label: str, message: str, *args: object) -> None:
+    """Warn at most once per window per (label, kind), counting what was dropped."""
+    key = (label, kind)
+    now = time.monotonic()
+    opens_at, suppressed = _log_windows.get(key, (0.0, 0))
+    if now < opens_at:
+        _log_windows[key] = (opens_at, suppressed + 1)
+        return
+    _log_windows[key] = (now + LOG_WINDOW_SECONDS, 0)
+    if suppressed:
+        log.warning(message + " suppressed_since_last=%d", *args, suppressed)
+    else:
+        log.warning(message, *args)
+
+
+def reset_log_windows() -> None:
+    """Drop the rate-limiter state. For tests, and for a deliberate re-report."""
+    _log_windows.clear()
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessOutcome:
+    """What one bounded run produced, with no interpretation of its meaning.
+
+    `exit_code` is `None` only when no exit status exists to report, which today
+    means the run timed out. A caller must never read that as a zero.
+
+    Truncation is reported per stream rather than folded into the bytes, because a
+    caller that parses its output (`git diff --numstat`) has to be able to refuse a
+    capture that lost its middle, while one that only shows the tail to a human
+    does not.
+    """
+
+    exit_code: int | None
+    stdout: bytes
+    stderr: bytes
+    stdout_truncated: bool
+    stderr_truncated: bool
+    duration_ms: float
+    timed_out: bool = False
+
+    @property
+    def truncated(self) -> bool:
+        return self.stdout_truncated or self.stderr_truncated
+
+
+async def bounded_read(
+    stream: asyncio.StreamReader,
+    limit: int,
+    *,
+    label: str,
+    on_chunk: Callable[[bytes], None] | None = None,
+) -> tuple[bytes, bool]:
+    """Read a stream to EOF, retaining its head and tail within `limit` bytes.
+
+    Both ends are kept because they answer different questions: the head carries a
+    command's banner and its first error, the tail carries how it ended. A cap that
+    kept only one of them would have to be argued for per call site.
+
+    `on_chunk` observes the bytes as they arrive and changes nothing about them:
+    this is the only place a caller can watch a long command make progress, because
+    everything downstream sees the capture once, after the process has already
+    exited. An observer that raises is a bug in the observer, so it is contained
+    here rather than allowed to abandon the pipe mid-read - a half-read pipe would
+    block the process it is draining.
+    """
+    half = max(limit // 2, 0)
+    prefix = bytearray()
+    tail = bytearray()
+    total = 0
+    while chunk := await stream.read(_READ_CHUNK):
+        if on_chunk is not None:
+            try:
+                on_chunk(chunk)
+            except Exception:  # noqa: BLE001 - watching output must not stop reading it
+                log.debug("bounded_command_observer_failed label=%s", label)
+        total += len(chunk)
+        if len(prefix) < half:
+            take = min(half - len(prefix), len(chunk))
+            prefix.extend(chunk[:take])
+            chunk = chunk[take:]
+        if chunk:
+            tail.extend(chunk)
+            if len(tail) > half:
+                del tail[: len(tail) - half]
+    truncated = total > limit
+    if not truncated:
+        return bytes(prefix + tail), False
+    omitted = f"\n[swe-mux] ... {label} output omitted ...\n".encode()
+    return bytes(prefix) + omitted + bytes(tail), True
+
+
+async def _drain(
+    task: asyncio.Task[tuple[bytes, bool]] | None, *, label: str
+) -> tuple[bytes, bool]:
+    """Collect a reader task's capture, bounded so an escaped child cannot hang us."""
+    if task is None:
+        return b"", False
+    try:
+        return await asyncio.wait_for(task, DRAIN_GRACE_SECONDS)
+    except TimeoutError:
+        _rate_limited(
+            "drain",
+            label,
+            "bounded_command_drain_abandoned label=%s grace_s=%g",
+            label,
+            DRAIN_GRACE_SECONDS,
+        )
+        return b"", False
+
+
+async def _cancel(*tasks: asyncio.Task[tuple[bytes, bool]] | None) -> None:
+    live = [task for task in tasks if task is not None]
+    for task in live:
+        task.cancel()
+    if live:
+        await asyncio.gather(*live, return_exceptions=True)
+
+
+async def run_bounded(
+    argv: Sequence[str],
+    *,
+    label: str,
+    timeout_seconds: float,
+    output_limit: int,
+    stderr_limit: int | None = None,
+    merge_stderr: bool = False,
+    cwd: str | Path | None = None,
+    env: Mapping[str, str] | None = None,
+    on_chunk: Callable[[bytes], None] | None = None,
+    operation_id: str | None = None,
+) -> ProcessOutcome:
+    """Run one command to completion under a timeout and an output cap.
+
+    `argv` reaches the OS as given. `env` of `None` inherits this process's
+    environment, which is what every caller but the worktree commands wants;
+    stdin is always `DEVNULL`, so a program that decides to prompt fails fast
+    instead of blocking on a stdin the daemon holds and will never write to.
+
+    Raises `OSError` when the program cannot be started at all - that is the
+    caller's diagnostic to phrase ("install ccusage", "could not start codex"),
+    and swallowing it into an outcome would make every caller re-derive it.
+    Anything raised after the spawn reaps the tree on its way out, `CancelledError`
+    included.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    stdout_task: asyncio.Task[tuple[bytes, bool]] | None = None
+    stderr_task: asyncio.Task[tuple[bytes, bool]] | None = None
+
+    def elapsed() -> float:
+        return (loop.time() - started) * 1000
+
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=None if cwd is None else str(cwd),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT if merge_stderr else asyncio.subprocess.PIPE,
+        env=None if env is None else dict(env),
+        creationflags=background_creation_flags(),
+    )
+    try:
+        assert process.stdout is not None
+        stdout_task = asyncio.create_task(
+            bounded_read(process.stdout, output_limit, label=label, on_chunk=on_chunk)
+        )
+        if process.stderr is not None:
+            stderr_task = asyncio.create_task(
+                bounded_read(
+                    process.stderr,
+                    output_limit if stderr_limit is None else stderr_limit,
+                    label=f"{label} stderr",
+                )
+            )
+        try:
+            exit_code: int | None = await asyncio.wait_for(process.wait(), timeout_seconds)
+            timed_out = False
+        except TimeoutError:
+            await reap_process_tree(process)
+            exit_code, timed_out = None, True
+            _rate_limited(
+                "timeout",
+                label,
+                "bounded_command_timed_out label=%s executable=%s timeout_s=%g operation_id=%s",
+                label,
+                argv[0] if argv else "",
+                timeout_seconds,
+                operation_id,
+            )
+        out, out_capped = await _drain(stdout_task, label=label)
+        err, err_capped = await _drain(stderr_task, label=label)
+    except BaseException:
+        # `BaseException` rather than `Exception` for `CancelledError`, which is the
+        # whole point: every migrated caller runs inside a supervised background
+        # loop, and a loop cancelled at shutdown used to leave its child alive
+        # holding the daemon's pipes.
+        if process.returncode is None:
+            await reap_process_tree(process)
+        await _cancel(stdout_task, stderr_task)
+        raise
+    if out_capped or err_capped:
+        _rate_limited(
+            "capped",
+            label,
+            "bounded_command_output_capped label=%s executable=%s limit_bytes=%d "
+            "stream=%s operation_id=%s",
+            label,
+            argv[0] if argv else "",
+            output_limit,
+            "stdout" if out_capped else "stderr",
+            operation_id,
+        )
+    return ProcessOutcome(
+        exit_code=exit_code,
+        stdout=out,
+        stderr=err,
+        stdout_truncated=out_capped,
+        stderr_truncated=err_capped,
+        duration_ms=elapsed(),
+        timed_out=timed_out,
+    )

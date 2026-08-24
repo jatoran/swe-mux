@@ -15,6 +15,7 @@ from .. import (
     session_titles,
 )
 from ..config import Config
+from ..errors import NotFound
 from ..http_support import json_response
 from ..schedule_store import ScheduleStore
 from ..scheduler import ScheduleService, spec_from_row
@@ -192,7 +193,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
     schedule_id = request.match_info["schedule_id"]
     current = await store.get(schedule_id)
     if current is None:
-        raise KeyError(schedule_id)
+        raise NotFound(schedule_id, kind="schedule")
     body = await request.json()
     revision = body.get("revision")
     if revision is not None and not isinstance(revision, int):
@@ -226,7 +227,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
                 409,
             )
     if updated is None:
-        raise KeyError(schedule_id)
+        raise NotFound(schedule_id, kind="schedule")
     await request.app[keys.EVENTS].emit(
         "schedule_changed",
         source="user",
@@ -242,7 +243,7 @@ async def delete_schedule(request: web.Request) -> web.Response:
     schedule_id = request.match_info["schedule_id"]
     existing = await store.get(schedule_id)
     if not await store.delete(schedule_id):
-        raise KeyError(schedule_id)
+        raise NotFound(schedule_id, kind="schedule")
     await request.app[keys.EVENTS].emit(
         "schedule_changed",
         source="user",
@@ -264,7 +265,7 @@ async def run_schedule_now(request: web.Request) -> web.Response:
     schedule_id = request.match_info["schedule_id"]
     run = await service.run_now(schedule_id)
     if run is None:
-        raise KeyError(schedule_id)
+        raise NotFound(schedule_id, kind="schedule")
     store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule = await store.get(schedule_id)
     return json_response(
@@ -279,7 +280,7 @@ async def list_schedule_runs(request: web.Request) -> web.Response:
     store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule_id = request.match_info["schedule_id"]
     if await store.get(schedule_id) is None:
-        raise KeyError(schedule_id)
+        raise NotFound(schedule_id, kind="schedule")
     limit = int(request.query.get("limit") or 50)
     return json_response({"runs": await store.runs(schedule_id, limit=limit)})
 

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .background_tasks import background
+from .errors import NotFound
 from .event_bus import EventBus
 from .harness import is_agent_harness
 from .operational_telemetry import command_hash, process_identity
@@ -1305,7 +1306,7 @@ class ProcessInspector:
         if session_id not in self.sessions.sessions and not any(
             item.session_id == session_id for item in self.owned.values()
         ):
-            raise KeyError(session_id)
+            raise NotFound(session_id, kind="session")
         if not self.available:
             session = self.sessions.sessions.get(session_id)
             record = session.record if session else None
@@ -1388,17 +1389,21 @@ class ProcessInspector:
         await self._ensure_sampled()
         groups: list[dict[str, Any]] = []
         all_processes: list[dict[str, Any]] = []
+        # One pass over the owned processes, not one per session. The projection is
+        # unchanged: `by_session` reproduces the per-session filter, and
+        # `project_of_session` the first-match fallback the group used, both in the
+        # same `self.owned` iteration order the comprehensions walked.
+        by_session: dict[str, list[dict[str, Any]]] = {}
+        project_of_session: dict[str, str | None] = {}
+        for owned in self.owned.values():
+            project_of_session.setdefault(owned.session_id, owned.project_id)
+            if include_ended or owned.exited_at is None:
+                by_session.setdefault(owned.session_id, []).append(owned.snapshot())
         session_ids = list(self.sessions.sessions)
-        session_ids.extend(
-            sorted({item.session_id for item in self.owned.values()} - set(self.sessions.sessions))
-        )
+        session_ids.extend(sorted(set(project_of_session) - set(self.sessions.sessions)))
         for session_id in session_ids:
             session = self.sessions.sessions.get(session_id)
-            processes = [
-                item.snapshot()
-                for item in self.owned.values()
-                if item.session_id == session_id and (include_ended or item.exited_at is None)
-            ]
+            processes = by_session.get(session_id, [])
             processes.sort(key=lambda item: (item["exited_at"] is not None, item["pid"]))
             # A session whose processes have all ended contributes nothing to act
             # on. Keep live sessions listed even while empty so the operator can
@@ -1414,14 +1419,7 @@ class ProcessInspector:
                     "project_id": (
                         session.record.project_id
                         if session
-                        else next(
-                            (
-                                item.project_id
-                                for item in self.owned.values()
-                                if item.session_id == session_id
-                            ),
-                            None,
-                        )
+                        else project_of_session.get(session_id)
                     ),
                     "project_scope_id": session.record.trusted_scope_id if session else None,
                     "repo_group_id": (
@@ -2163,7 +2161,7 @@ class PreviewRegistry:
 
     def remove(self, preview_id: str) -> None:
         if preview_id not in self.items:
-            raise KeyError(preview_id)
+            raise NotFound(preview_id, kind="preview")
         removed = self.items.pop(preview_id)
         self._listener_seen.pop(preview_id, None)
         self._preview_probe_state.pop(preview_id, None)
