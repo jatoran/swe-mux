@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.models import SessionRecord
 from swe_mux.server import BRANCH_CUT_EXCERPT_CHARS, _branch_cut_excerpt, list_lineage
@@ -67,9 +68,9 @@ async def test_lineage_names_both_ends_the_way_every_other_surface_does(
     )
     live.agent_run_id = "run-live"
     app = web.Application()
-    app["automation_store"] = store
-    app["sessions"] = SimpleNamespace(sessions={"pty-live": SimpleNamespace(record=live)})
-    app["history"] = HistoryNamingStub(
+    app[keys.AUTOMATION_STORE] = store
+    app[keys.SESSIONS] = SimpleNamespace(sessions={"pty-live": SimpleNamespace(record=live)})
+    app[keys.HISTORY] = HistoryNamingStub(
         {"id": "run-source", "name": "Update ABC", "auto_named": 0},
         {"id": "run-ended", "name": "B2-Update ABC", "auto_named": 0},
     )
@@ -112,9 +113,9 @@ async def test_an_empty_lineage_costs_no_reads() -> None:
             raise AssertionError("an empty lineage must not read History")
 
     app = web.Application()
-    app["automation_store"] = SimpleNamespace(lineage=_no_edges)
-    app["sessions"] = SimpleNamespace(sessions={})
-    app["history"] = Exploding()
+    app[keys.AUTOMATION_STORE] = SimpleNamespace(lineage=_no_edges)
+    app[keys.SESSIONS] = SimpleNamespace(sessions={})
+    app[keys.HISTORY] = Exploding()
     app.router.add_get("/lineage", list_lineage)
 
     async with TestClient(TestServer(app)) as client:

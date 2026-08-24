@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.project_context import (
     MAX_PROJECT_CONTEXT_BYTES,
     PROJECT_CONTEXT_PATH,
@@ -103,9 +104,9 @@ async def test_project_context_http_surface_round_trips_the_fixed_file(tmp_path:
         return SimpleNamespace(
             match_info={"project_id": project.id},
             app={
-                "projects": SimpleNamespace(projects={project.id: project}),
-                "project_contexts": service,
-                "events": Events(),
+                keys.PROJECTS: SimpleNamespace(projects={project.id: project}),
+                keys.PROJECT_CONTEXTS: service,
+                keys.EVENTS: Events(),
             },
             json=payload,
         )

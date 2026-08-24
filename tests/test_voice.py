@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
@@ -413,7 +414,7 @@ async def last_reply_response(tmp_path: Path, events: list[dict[str, Any]]) -> d
         ),
     )
     request = SimpleNamespace(
-        app={"sessions": SimpleNamespace(resolve=lambda _sid: session)},
+        app={keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session)},
         match_info={"sid": "s1"},
     )
     response = await session_last_reply(cast(Any, request))
@@ -597,8 +598,8 @@ async def test_voice_generate_route_forwards_validated_one_shot_mode() -> None:
 
     request = SimpleNamespace(
         app={
-            "voice": VoiceStub(),
-            "sessions": SimpleNamespace(
+            keys.VOICE: VoiceStub(),
+            keys.SESSIONS: SimpleNamespace(
                 resolve=lambda _sid: SimpleNamespace(record=SimpleNamespace(id="s1"))
             ),
         },
@@ -1048,9 +1049,9 @@ async def test_voice_submit_writes_prompt_and_enter_once_and_marks_human_input(
     class Request:
         match_info = {"sid": "s1"}
         app = {
-            "voice": service,
-            "sessions": SimpleNamespace(resolve=lambda _sid: session),
-            "events": events,
+            keys.VOICE: service,
+            keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+            keys.EVENTS: events,
         }
 
         async def json(self) -> dict[str, str]:
@@ -1094,9 +1095,9 @@ async def test_voice_submit_pastes_a_multiline_draft_instead_of_submitting_early
     class Request:
         match_info = {"sid": "s1"}
         app = {
-            "voice": service,
-            "sessions": SimpleNamespace(resolve=lambda _sid: session),
-            "events": events,
+            keys.VOICE: service,
+            keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+            keys.EVENTS: events,
         }
 
         async def json(self) -> dict[str, str]:
@@ -1124,9 +1125,9 @@ async def test_voice_submit_refuses_a_protected_approval_prompt(tmp_path: Path) 
     class Request:
         match_info = {"sid": "s1"}
         app = {
-            "voice": service,
-            "sessions": SimpleNamespace(resolve=lambda _sid: session),
-            "events": events,
+            keys.VOICE: service,
+            keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+            keys.EVENTS: events,
         }
 
         async def json(self) -> dict[str, str]:
@@ -1154,9 +1155,9 @@ async def test_voice_prepare_submit_guards_without_writing(tmp_path: Path) -> No
     class Request:
         match_info = {"sid": "s1"}
         app = {
-            "voice": service,
-            "sessions": SimpleNamespace(resolve=lambda _sid: session),
-            "events": events,
+            keys.VOICE: service,
+            keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+            keys.EVENTS: events,
         }
 
         async def json(self) -> dict[str, object]:
@@ -1201,9 +1202,9 @@ async def test_voice_approval_requires_prepare_and_rechecks_the_screen(tmp_path:
     class Request:
         match_info = {"sid": "s1"}
         app = {
-            "voice": service,
-            "sessions": SimpleNamespace(resolve=lambda _sid: session),
-            "events": events,
+            keys.VOICE: service,
+            keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+            keys.EVENTS: events,
         }
         body: dict[str, str] = {"action": "prepare"}
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from swe_mux import app_keys as keys
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
 from swe_mux.server import repair_history_duplicates
@@ -180,9 +181,9 @@ def repair_request(history: HistoryIndex, *, live_run: str | None, body: Any) ->
 
     return SimpleNamespace(
         app={
-            "history": history,
-            "sessions": SimpleNamespace(sessions=sessions),
-            "events": SimpleNamespace(emit=emit),
+            keys.HISTORY: history,
+            keys.SESSIONS: SimpleNamespace(sessions=sessions),
+            keys.EVENTS: SimpleNamespace(emit=emit),
         },
         can_read_body=body is not None,
         json=read_json,

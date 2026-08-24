@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import git_operations, server
 from swe_mux.git_operations import GitMutationResult
 
@@ -106,7 +107,7 @@ def request(body: dict[str, Any], events: FakeEvents) -> Any:
     async def read_json() -> dict[str, Any]:
         return body
 
-    return SimpleNamespace(json=read_json, app={"events": events})
+    return SimpleNamespace(json=read_json, app={keys.EVENTS: events})
 
 
 @pytest.mark.asyncio

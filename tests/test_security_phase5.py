@@ -10,6 +10,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.processes import PreviewRegistration
 from swe_mux.server import (
     HOOK_RATE_LIMIT,
@@ -294,10 +295,10 @@ def test_preview_target_never_accepts_a_changed_destination() -> None:
 
 def _proxy_application(registration: PreviewRegistration) -> web.Application:
     app = web.Application(middlewares=[security_middleware], client_max_size=12 * 1024 * 1024)
-    app["previews"] = SimpleNamespace(items={registration.id: registration})
-    app["sessions"] = SimpleNamespace(sessions={registration.session_id: object()})
-    app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
-    app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
+    app[keys.PREVIEWS] = SimpleNamespace(items={registration.id: registration})
+    app[keys.SESSIONS] = SimpleNamespace(sessions={registration.session_id: object()})
+    app[keys.PREVIEW_HTTP_SEMAPHORE] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
+    app[keys.PREVIEW_WS_SEMAPHORE] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app.router.add_route("*", "/preview/{preview_id}/{tail:.*}", preview_proxy)
     return app
 
@@ -439,9 +440,9 @@ async def test_hook_ingress_rejects_expired_sessions_and_bounded_bursts() -> Non
     record = SimpleNamespace(id="session-a", state="running")
     session = SimpleNamespace(record=record, hook_secret="secret")
     app = web.Application(middlewares=[error_middleware, security_middleware])
-    app["sessions"] = SimpleNamespace(resolve=lambda _: session)
-    app["events"] = Events()
-    app["hook_ingress_windows"] = {"session-a": deque([time.monotonic()] * HOOK_RATE_LIMIT)}
+    app[keys.SESSIONS] = SimpleNamespace(resolve=lambda _: session)
+    app[keys.EVENTS] = Events()
+    app[keys.HOOK_INGRESS_WINDOWS] = {"session-a": deque([time.monotonic()] * HOOK_RATE_LIMIT)}
     app.router.add_post("/api/hooks/{sid}", hook_ingress)
     async with TestClient(TestServer(app)) as client:
         limited = await client.post(
@@ -451,7 +452,7 @@ async def test_hook_ingress_rejects_expired_sessions_and_bounded_bursts() -> Non
         )
         assert limited.status == 429
         record.state = "exited"
-        app["hook_ingress_windows"]["session-a"].clear()
+        app[keys.HOOK_INGRESS_WINDOWS]["session-a"].clear()
         expired = await client.post(
             "/api/hooks/session-a",
             json={"event": "Stop", "payload": {}},
@@ -474,8 +475,8 @@ async def test_hook_ingress_is_unavailable_across_a_nonlocal_boundary(
     record = SimpleNamespace(id="session-a", state="running", runtime_boundary=boundary)
     session = SimpleNamespace(record=record, hook_secret="secret")
     app = web.Application(middlewares=[error_middleware, security_middleware])
-    app["sessions"] = SimpleNamespace(resolve=lambda _: session)
-    app["hook_ingress_windows"] = {}
+    app[keys.SESSIONS] = SimpleNamespace(resolve=lambda _: session)
+    app[keys.HOOK_INGRESS_WINDOWS] = {}
     app.router.add_post("/api/hooks/{sid}", hook_ingress)
 
     async with TestClient(TestServer(app)) as client:
@@ -536,10 +537,10 @@ async def test_hook_ingress_requires_and_deduplicates_ordered_omp_sequences(
         note_hook_transcript_path=lambda _session, _payload: None,
     )
     app = web.Application(middlewares=[error_middleware, security_middleware])
-    app["sessions"] = sessions
-    app["events"] = Events()
-    app["automation"] = SimpleNamespace(note_native_hook=lambda _sid: None)
-    app["hook_ingress_windows"] = {}
+    app[keys.SESSIONS] = sessions
+    app[keys.EVENTS] = Events()
+    app[keys.AUTOMATION] = SimpleNamespace(note_native_hook=lambda _sid: None)
+    app[keys.HOOK_INGRESS_WINDOWS] = {}
     app.router.add_post("/api/hooks/{sid}", hook_ingress)
     headers = {"X-Mux-Hook-Secret": "secret"}
     envelope = {

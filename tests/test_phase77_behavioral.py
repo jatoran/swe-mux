@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.behavioral_consumers import (
     ADAPTIVE_TITLE_CHECKPOINT_PREFIX,
@@ -527,10 +528,10 @@ def _app(store: AutomationStore, sessions: Any, enabled: set[str]) -> Any:
         return frozenset(enabled)
 
     app = web.Application()
-    app["automation_store"] = store
-    app["sessions"] = sessions
-    app["automation_gate"] = gate
-    app["projects"] = SimpleNamespace(projects={"proj": SimpleNamespace(root="/root")})
+    app[keys.AUTOMATION_STORE] = store
+    app[keys.SESSIONS] = sessions
+    app[keys.AUTOMATION_GATE] = gate
+    app[keys.PROJECTS] = SimpleNamespace(projects={"proj": SimpleNamespace(root="/root")})
     app.router.add_get("/catch/{sid}", server.session_catch_me_up)
     app.router.add_get("/blockers", server.fleet_live_blockers)
     app.router.add_get("/search", server.scan_timeline_search)

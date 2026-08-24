@@ -16,6 +16,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
@@ -105,12 +106,12 @@ def build(tmp_path: Path, config: Config) -> tuple[web.Application, AutomationSt
     root.mkdir(exist_ok=True)
     store = AutomationStore(tmp_path / "automation.db")
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = config
-    app["projects"] = ProjectsStub(ProjectStub(root))
-    app["events"] = EventBus()
-    app["secret_store"] = SecretsStub()
-    app["automation_store"] = store
-    app["openrouter"] = ProviderStub()
+    app[keys.CONFIG] = config
+    app[keys.PROJECTS] = ProjectsStub(ProjectStub(root))
+    app[keys.EVENTS] = EventBus()
+    app[keys.SECRET_STORE] = SecretsStub()
+    app[keys.AUTOMATION_STORE] = store
+    app[keys.OPENROUTER] = ProviderStub()
     app.router.add_get("/api/automation/provider", automation_provider_status)
     app.router.add_post("/api/automation/provider/key", automation_provider_key)
     app.router.add_post("/api/automation/provider/verify", verify_automation_provider)
@@ -202,7 +203,7 @@ async def test_a_failed_verification_does_not_disprove_the_last_good_one(
     client = await client_for(app)
     try:
         await client.post("/api/automation/provider/verify", json={})
-        app["openrouter"] = ProviderStub(error="connection refused")
+        app[keys.OPENROUTER] = ProviderStub(error="connection refused")
         response = await client.post("/api/automation/provider/verify", json={})
         assert response.status == 422
         body = await response.json()
@@ -256,7 +257,7 @@ async def test_openrouter_is_ready_on_a_key_alone_so_no_install_regresses(
 ) -> None:
     config = Config(data_dir=tmp_path / "data")
     app, store = build(tmp_path, config)
-    app["secret_store"] = SecretsStub({"openrouter_api_key": "sk-or-v1-x"})
+    app[keys.SECRET_STORE] = SecretsStub({"openrouter_api_key": "sk-or-v1-x"})
     client = await client_for(app)
     try:
         payload = await (await client.get("/api/automation/provider")).json()
@@ -274,7 +275,7 @@ async def test_a_held_back_automation_arrives_with_its_reason(tmp_path: Path) ->
     # reason a switch is inert, never as a switch that is quietly missing from `enabled`.
     config = custom_config(tmp_path)
     app, store = build(tmp_path, config)
-    root = Path(app["projects"].projects["proj-1"].root)
+    root = Path(app[keys.PROJECTS].projects["proj-1"].root)
     current = await read_project_config(root)
     await write_project_config(
         root,

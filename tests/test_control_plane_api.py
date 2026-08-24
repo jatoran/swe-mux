@@ -9,6 +9,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.models import SessionRecord
@@ -105,9 +106,9 @@ async def test_delete_crashed_session_dismisses_it_without_stopping_pty(
     events = EventsStub()
     request = SimpleNamespace(
         app={
-            "sessions": manager,
-            "config": SimpleNamespace(data_dir=tmp_path),
-            "events": events,
+            keys.SESSIONS: manager,
+            keys.CONFIG: SimpleNamespace(data_dir=tmp_path),
+            keys.EVENTS: events,
         },
         match_info={"sid": record.id},
     )
@@ -147,9 +148,9 @@ async def test_delete_live_session_stops_it_and_records_how_long_that_took(
     events = EventsStub()
     request = SimpleNamespace(
         app={
-            "sessions": manager,
-            "config": SimpleNamespace(data_dir=tmp_path),
-            "events": events,
+            keys.SESSIONS: manager,
+            keys.CONFIG: SimpleNamespace(data_dir=tmp_path),
+            keys.EVENTS: events,
         },
         match_info={"sid": record.id},
     )
@@ -211,7 +212,7 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
 
     monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
     request = SimpleNamespace(
-        app={"sessions": manager, "config": SimpleNamespace(data_dir=tmp_path)},
+        app={keys.SESSIONS: manager, keys.CONFIG: SimpleNamespace(data_dir=tmp_path)},
         match_info={"sid": old_record.id},
     )
 
@@ -249,7 +250,7 @@ async def test_relaunch_refuses_a_non_relaunchable_session(tmp_path: Path) -> No
             raise AssertionError("a non-relaunchable session must never be stopped")
 
     request = SimpleNamespace(
-        app={"sessions": SessionsStub(), "config": SimpleNamespace(data_dir=tmp_path)},
+        app={keys.SESSIONS: SessionsStub(), keys.CONFIG: SimpleNamespace(data_dir=tmp_path)},
         match_info={"sid": record.id},
     )
 
@@ -305,7 +306,7 @@ async def test_a_recovered_shell_relaunches_without_becoming_a_task_terminal(
 
     monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
     request = SimpleNamespace(
-        app={"sessions": manager, "config": SimpleNamespace(data_dir=tmp_path)},
+        app={keys.SESSIONS: manager, keys.CONFIG: SimpleNamespace(data_dir=tmp_path)},
         match_info={"sid": old_record.id},
     )
 
@@ -333,7 +334,7 @@ async def test_a_recovered_agent_is_resumed_rather_than_relaunched(tmp_path: Pat
             return self.sessions[identity]
 
     request = SimpleNamespace(
-        app={"sessions": SessionsStub(), "config": SimpleNamespace(data_dir=tmp_path)},
+        app={keys.SESSIONS: SessionsStub(), keys.CONFIG: SimpleNamespace(data_dir=tmp_path)},
         match_info={"sid": record.id},
     )
 
@@ -387,10 +388,10 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
     monkeypatch.setattr("swe_mux.server._spawn_from_body", spawn_stub)
     monkeypatch.setattr("swe_mux.server._git", git_stub)
     app = web.Application(middlewares=[error_middleware])
-    app["history"] = HistoryStub(source)
-    app["automation_store"] = store
-    app["sessions"] = SimpleNamespace(sessions={}, stop=lambda _identity: None)
-    app["projects"] = ProjectsStub()
+    app[keys.HISTORY] = HistoryStub(source)
+    app[keys.AUTOMATION_STORE] = store
+    app[keys.SESSIONS] = SimpleNamespace(sessions={}, stop=lambda _identity: None)
+    app[keys.PROJECTS] = ProjectsStub()
     app.router.add_post("/review/{sid}", second_opinion)
     app.router.add_get("/lineage", list_lineage)
 
@@ -469,8 +470,8 @@ async def test_handoff_export_contains_only_reviewable_annotation_summary(tmp_pa
         provenance="openrouter_observer",
     )
     app = web.Application()
-    app["history"] = HistoryStub(source)
-    app["automation_store"] = store
+    app[keys.HISTORY] = HistoryStub(source)
+    app[keys.AUTOMATION_STORE] = store
     app.router.add_get("/handoff/{sid}", export_handoff)
 
     async with TestClient(TestServer(app)) as client:
@@ -505,13 +506,13 @@ async def test_repository_rules_are_diagnostic_only_and_never_loaded(tmp_path: P
 
     canonical_rules: list[Any] = []
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = Config(data_dir=tmp_path)
-    app["history"] = ProjectHistory()
-    app["automation"] = SimpleNamespace(
+    app[keys.CONFIG] = Config(data_dir=tmp_path)
+    app[keys.HISTORY] = ProjectHistory()
+    app[keys.AUTOMATION] = SimpleNamespace(
         rules=canonical_rules,
         status=lambda: {"enabled": False, "rules": canonical_rules},
     )
-    app["hooks"] = SimpleNamespace(rules=[], diagnostic=None)
+    app[keys.HOOKS] = SimpleNamespace(rules=[], diagnostic=None)
     app.router.add_get("/automation", get_automation_status)
 
     async with TestClient(TestServer(app)) as client:
@@ -537,8 +538,8 @@ async def test_batch_observer_requires_ended_transcripts_and_explicit_confirmati
         "transcript_path": str(tmp_path / "claude.jsonl"),
     }
     app = web.Application(middlewares=[error_middleware])
-    app["history"] = HistoryStub(row)
-    app["config"] = Config(data_dir=tmp_path)
+    app[keys.HISTORY] = HistoryStub(row)
+    app[keys.CONFIG] = Config(data_dir=tmp_path)
     app.router.add_post("/batches", create_observer_batch)
 
     async with TestClient(TestServer(app)) as client:
@@ -547,7 +548,7 @@ async def test_batch_observer_requires_ended_transcripts_and_explicit_confirmati
             json={"kind": "experience", "run_ids": ["run-source"], "confirm": False},
         )
         preview = await preview_response.json()
-        app["config"].automation_enabled = True
+        app[keys.CONFIG].automation_enabled = True
         unreviewed_response = await client.post(
             "/batches",
             json={"kind": "experience", "run_ids": ["run-source"], "confirm": True},
@@ -583,7 +584,7 @@ async def test_attention_records_dismiss_individually_and_in_bulk(tmp_path: Path
         for index in range(3)
     ]
     app = web.Application(middlewares=[error_middleware])
-    app["automation_store"] = store
+    app[keys.AUTOMATION_STORE] = store
     app.router.add_get("/notifications", automation_notifications)
     app.router.add_patch("/notifications", patch_automation_notifications)
     app.router.add_patch("/notifications/{notification_id}", patch_automation_notification)
@@ -667,7 +668,7 @@ async def test_the_findings_read_retracts_a_loop_finding_its_evidence_cannot_sup
     )
 
     app = web.Application(middlewares=[error_middleware])
-    app["automation_store"] = store
+    app[keys.AUTOMATION_STORE] = store
     app.router.add_get("/api/annotations", list_annotations)
     async with TestClient(TestServer(app)) as client:
         payload = await (await client.get("/api/annotations?project_id=proj")).json()
@@ -735,9 +736,9 @@ async def test_list_annotations_endpoint_scopes_and_reports_tag_counts(
             return [{"agent_run_id": "run-b"}]
 
     app = web.Application(middlewares=[error_middleware])
-    app["automation_store"] = store
-    app["sessions"] = SimpleNamespace(sessions={"sess": live})
-    app["history"] = SessionRunHistory()
+    app[keys.AUTOMATION_STORE] = store
+    app[keys.SESSIONS] = SimpleNamespace(sessions={"sess": live})
+    app[keys.HISTORY] = SessionRunHistory()
     app.router.add_get("/api/annotations", list_annotations)
 
     async with TestClient(TestServer(app)) as client:

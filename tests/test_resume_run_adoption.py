@@ -31,6 +31,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+from swe_mux import app_keys as keys
 from swe_mux.adapters import ClaudeAdapter, CodexAdapter
 from swe_mux.cli_state import ConversationHolder
 from swe_mux.history import HistoryIndex
@@ -146,17 +147,17 @@ def resume_call(
     )
     request = SimpleNamespace(
         app={
-            "history": history,
+            keys.HISTORY: history,
             # The real adapters: whether a resume continues the conversation is their
             # answer, and stubbing it would only pin the stub.
-            "sessions": SimpleNamespace(
+            keys.SESSIONS: SimpleNamespace(
                 spawn=spawn,
                 stop=stop,
                 conversation_holder=conversation_holder,
                 adapters={"claude": ClaudeAdapter("claude.exe"), "codex": CodexAdapter()},
                 sessions=panes,
             ),
-            "projects": SimpleNamespace(
+            keys.PROJECTS: SimpleNamespace(
                 projects={
                     "default": SimpleNamespace(
                         name="Main",
@@ -167,7 +168,7 @@ def resume_call(
                 },
                 update=update_project,
             ),
-            "automation_store": SimpleNamespace(
+            keys.AUTOMATION_STORE: SimpleNamespace(
                 add_lineage=add_lineage,
                 annotations=annotations,
             ),

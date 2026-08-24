@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from swe_mux import app_keys as keys
 from swe_mux.cli_state import CliStateMonitor
 from swe_mux.session import (
     STATE_TRANSITION_LOG_LIMIT,
@@ -436,10 +437,10 @@ async def test_state_log_range_query_serves_the_durable_timeline(tmp_path: Path)
             return session
 
     app = {
-        "sessions": Sessions(),
-        "status_timeline": store,
-        "history": SimpleNamespace(history_entry=_none_entry),
-        "device_presence": SimpleNamespace(
+        keys.SESSIONS: Sessions(),
+        keys.STATUS_TIMELINE: store,
+        keys.HISTORY: SimpleNamespace(history_entry=_none_entry),
+        keys.DEVICE_PRESENCE: SimpleNamespace(
             active_profiles=lambda: set(), leading_profile=lambda: None
         ),
     }
@@ -484,9 +485,9 @@ async def test_ended_session_state_log_is_served_post_mortem(tmp_path: Path) -> 
         return history_row if identity in {"gone-run"} else None
 
     app = {
-        "sessions": Sessions(),
-        "status_timeline": store,
-        "history": SimpleNamespace(history_entry=history_entry),
+        keys.SESSIONS: Sessions(),
+        keys.STATUS_TIMELINE: store,
+        keys.HISTORY: SimpleNamespace(history_entry=history_entry),
     }
     response = await get_session_state_log(_request(app, "gone-1"))
     payload = json.loads(response.text or "")
@@ -540,9 +541,9 @@ async def test_diagnostic_bundle_packages_timeline_health_and_transcript(
             raise KeyError(identity)
 
     app = {
-        "sessions": Sessions(),
-        "status_timeline": store,
-        "history": SimpleNamespace(history_entry=history_entry),
+        keys.SESSIONS: Sessions(),
+        keys.STATUS_TIMELINE: store,
+        keys.HISTORY: SimpleNamespace(history_entry=history_entry),
     }
     response = await get_session_diagnostic_bundle(
         _request(app, "gone-2", {"from": str(wall - 3600), "to": str(wall + 3600)})

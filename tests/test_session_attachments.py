@@ -9,6 +9,7 @@ from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 
 import swe_mux.session_attachments as attachment_store
+from swe_mux import app_keys as keys
 from swe_mux.models import SessionRecord
 from swe_mux.server import upload_session_attachment
 from swe_mux.session_attachments import (
@@ -103,15 +104,15 @@ async def test_attachment_endpoint_copies_file_into_owning_project(tmp_path: Pat
 
     events = Events()
     app = web.Application(client_max_size=26 * 1024 * 1024)
-    app["sessions"] = SimpleNamespace(
+    app[keys.SESSIONS] = SimpleNamespace(
         resolve=lambda _sid: session,
         adapters={"codex": SimpleNamespace(media_reference=lambda path: str(path))},
     )
-    app["projects"] = SimpleNamespace(
+    app[keys.PROJECTS] = SimpleNamespace(
         projects={"project-a": SimpleNamespace(root=str(tmp_path))}
     )
-    app["attachment_locks"] = {}
-    app["events"] = events
+    app[keys.ATTACHMENT_LOCKS] = {}
+    app[keys.EVENTS] = events
     app.router.add_post("/api/sessions/{sid}/attachments", upload_session_attachment)
 
     form = FormData()

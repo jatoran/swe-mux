@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.server import settings_bundle
 
@@ -62,14 +63,14 @@ class UsageStub:
 
 def _request(tmp_path: Path, *, usage_fails: bool = False, cwd: str | None = None) -> Any:
     app = {
-        "config": Config(data_dir=tmp_path),
-        "automation": AutomationStub(),
-        "history": HistoryStub(),
-        "hooks": SimpleNamespace(rules=[], diagnostic=None),
-        "projects": SimpleNamespace(ordered_projects=lambda: []),
-        "secret_store": SecretStoreStub(),
-        "automation_store": AutomationStoreStub(),
-        "usage": UsageStub(fail=usage_fails),
+        keys.CONFIG: Config(data_dir=tmp_path),
+        keys.AUTOMATION: AutomationStub(),
+        keys.HISTORY: HistoryStub(),
+        keys.HOOKS: SimpleNamespace(rules=[], diagnostic=None),
+        keys.PROJECTS: SimpleNamespace(ordered_projects=lambda: []),
+        keys.SECRET_STORE: SecretStoreStub(),
+        keys.AUTOMATION_STORE: AutomationStoreStub(),
+        keys.USAGE: UsageStub(fail=usage_fails),
     }
     query = {"cwd": cwd} if cwd else {}
     return SimpleNamespace(app=app, query=query)

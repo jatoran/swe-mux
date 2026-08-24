@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.adapters import ClaudeAdapter
 from swe_mux.adapters.base import SpawnOptions
 from swe_mux.config import Config, LaunchProfile
@@ -244,7 +245,7 @@ async def test_a_broken_project_default_degrades_to_a_diagnostic_not_a_failed_sp
         {"backend": "claude", "project_id": "default"},
         default_agent_profiles={"claude": "deleted-long-ago"},
     )
-    events = request.app["events"].subscribe(name="test")
+    events = request.app[keys.EVENTS].subscribe(name="test")
 
     await spawn_session(cast(Any, request))
 
@@ -437,10 +438,10 @@ def _spawn_request(
     project = ProjectRecord("default", "Main", str(tmp_path), 0)
     project.default_agent_profiles = dict(default_agent_profiles or {})
     app = {
-        "config": config,
-        "events": EventBus(),
-        "sessions": SimpleNamespace(spawn=spawn),
-        "projects": SimpleNamespace(projects={"default": project}),
+        keys.CONFIG: config,
+        keys.EVENTS: EventBus(),
+        keys.SESSIONS: SimpleNamespace(spawn=spawn),
+        keys.PROJECTS: SimpleNamespace(projects={"default": project}),
     }
 
     class Request:

@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
@@ -643,8 +644,8 @@ async def test_browser_startup_metrics_are_validated_and_persisted_once() -> Non
 
     class Request:
         app = {
-            "sessions": SimpleNamespace(resolve=lambda _sid: session),
-            "events": SimpleNamespace(emit=emit),
+            keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+            keys.EVENTS: SimpleNamespace(emit=emit),
         }
         match_info = {"sid": "mux"}
 

@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.layouts import attach_leaf, layout_terminal_ids, stack_leaf
 from swe_mux.preview_store import PreviewStore
@@ -1573,10 +1574,10 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
     record = SimpleNamespace(project_root=str(project_root), spawn_project_root=None,
                              project_id="p1")
     app = {
-        "previews": SimpleNamespace(items={"pv1": item}),
-        "config": Config(data_dir=tmp_path / "data"),
-        "sessions": SimpleNamespace(sessions={"s1": SimpleNamespace(record=record)}),
-        "projects": SimpleNamespace(projects={}),
+        keys.PREVIEWS: SimpleNamespace(items={"pv1": item}),
+        keys.CONFIG: Config(data_dir=tmp_path / "data"),
+        keys.SESSIONS: SimpleNamespace(sessions={"s1": SimpleNamespace(record=record)}),
+        keys.PROJECTS: SimpleNamespace(projects={}),
     }
 
     async def body() -> dict[str, object]:

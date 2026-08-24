@@ -7,6 +7,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
+from swe_mux import app_keys as keys
 from swe_mux.config import load_config
 from swe_mux.event_bus import EventBus
 from swe_mux.project_files import read_project_config
@@ -37,9 +38,9 @@ async def test_project_resource_context_actions_are_scoped_and_persisted(
     config = load_config(tmp_path / "config.toml")
     project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = config
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["events"] = EventBus()
+    app[keys.CONFIG] = config
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
+    app[keys.EVENTS] = EventBus()
     app.router.add_post("/projects/{project_id}/reveal", reveal_project_resource)
     app.router.add_post("/projects/{project_id}/ignore", ignore_project_resource)
 
@@ -75,7 +76,7 @@ async def test_project_image_content_route_is_pinned_and_inert(tmp_path) -> None
     (root / "diagram.png").write_bytes(image_bytes)
     project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
     app.router.add_get("/projects/{project_id}/file", get_project_file)
     app.router.add_get("/projects/{project_id}/file/content", get_project_file_content)
 
@@ -113,8 +114,8 @@ async def test_project_resource_create_route_is_exclusive_and_reports_ignored_it
     config.project_ignore_patterns = ["*.secret"]
     project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = config
-    app["projects"] = SimpleNamespace(projects={project.id: project})
+    app[keys.CONFIG] = config
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
     app.router.add_post("/projects/{project_id}/resources", post_project_resource)
 
     async with TestClient(TestServer(app)) as client:

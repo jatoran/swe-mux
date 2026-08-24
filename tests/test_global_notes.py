@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.project_files import GLOBAL_SCRATCHPAD_ID, global_note_path, read_global_note
 from swe_mux.server import error_middleware, get_global_note, put_global_note
@@ -13,8 +14,8 @@ from swe_mux.server import error_middleware, get_global_note, put_global_note
 
 def _app(data_dir: Path) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = SimpleNamespace(data_dir=data_dir)
-    app["events"] = EventBus()
+    app[keys.CONFIG] = SimpleNamespace(data_dir=data_dir)
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/global-notes/{note_id}", get_global_note)
     app.router.add_put("/global-notes/{note_id}", put_global_note)
     return app
@@ -59,7 +60,7 @@ async def test_scratchpad_is_lazy_global_and_revision_checked(tmp_path: Path) ->
 
 async def test_scratchpad_save_emits_global_note_event(tmp_path: Path) -> None:
     app = _app(tmp_path)
-    events: EventBus = app["events"]
+    events: EventBus = app[keys.EVENTS]
 
     async with TestClient(TestServer(app)) as client:
         queue = events.subscribe()

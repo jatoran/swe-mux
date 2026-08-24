@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.history import HistoryIndex
 from swe_mux.models import ProjectRecord
@@ -225,7 +226,7 @@ async def test_prompt_route_widens_to_every_project_only_when_asked(tmp_path: Pa
     await client.start_server()
     await wait_runtime_ready(client.app)
     try:
-        manager = client.app["projects"]
+        manager = client.app[keys.PROJECTS]
         alpha = await manager.create("alpha", str(roots["alpha"]))
         beta = await manager.create("beta", str(roots["beta"]))
         for project, title in ((alpha, "Alpha only"), (beta, "Beta only")):

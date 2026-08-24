@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import server, worktree_graveyard
 from swe_mux.git_operations import GitMutationResult
 
@@ -40,7 +41,7 @@ class Request:
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
         self.events = FakeEvents()
-        self.app: dict[str, Any] = {"events": self.events, "graveyard_tasks": set()}
+        self.app: dict[str, Any] = {keys.EVENTS: self.events, keys.GRAVEYARD_TASKS: set()}
 
     async def json(self) -> dict[str, Any]:
         return self._body
@@ -48,7 +49,7 @@ class Request:
 
 async def _settle(request: Request) -> None:
     """Wait for the background purge this removal scheduled, if any."""
-    pending = tuple(request.app["graveyard_tasks"])
+    pending = tuple(request.app[keys.GRAVEYARD_TASKS])
     if pending:
         await asyncio.gather(*pending)
 

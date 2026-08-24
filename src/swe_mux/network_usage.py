@@ -17,6 +17,8 @@ from typing import Any
 
 from aiohttp import WSMsgType, hdrs, web
 
+from . import app_keys as keys
+
 COMPRESS_MIN_BYTES = 1024
 _COMPRESSIBLE_CONTENT_TYPES = (
     "application/javascript",
@@ -300,7 +302,7 @@ class MeteredWebSocketResponse(web.WebSocketResponse):
 def metered_websocket(
     request: web.Request, channel: str, **kwargs: Any
 ) -> MeteredWebSocketResponse:
-    meter = request.app.get("network_usage")
+    meter = request.app.get(keys.NETWORK_USAGE)
     return MeteredWebSocketResponse(
         meter=meter if isinstance(meter, NetworkUsage) else None,
         peer=request_peer(request),
@@ -336,7 +338,7 @@ async def record_network_response(
 ) -> None:
     if request_route(request) == "/api/diagnostics/network":
         return
-    meter = request.app.get("network_usage")
+    meter = request.app.get(keys.NETWORK_USAGE)
     if isinstance(meter, NetworkUsage):
         meter.record_http(request, response)
 

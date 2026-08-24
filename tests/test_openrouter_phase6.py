@@ -9,6 +9,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.llm_endpoint import custom_endpoint, openrouter_endpoint
@@ -683,10 +684,10 @@ async def test_failed_replace_preserves_working_key_and_never_echoes_secret(
     store = PlatformSecretStore(tmp_path / "automation.secrets.json")
     store.set("openrouter_api_key", "working-key")
     app = web.Application()
-    app["config"] = Config(data_dir=tmp_path)
-    app["secret_store"] = store
-    app["openrouter"] = RejectingProvider()
-    app["automation_store"] = VerificationStoreStub()
+    app[keys.CONFIG] = Config(data_dir=tmp_path)
+    app[keys.SECRET_STORE] = store
+    app[keys.OPENROUTER] = RejectingProvider()
+    app[keys.AUTOMATION_STORE] = VerificationStoreStub()
     app.router.add_post("/key", automation_provider_key)
 
     async with TestClient(TestServer(app)) as client:

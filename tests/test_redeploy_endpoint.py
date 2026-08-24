@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 
 
@@ -60,9 +61,9 @@ class FakeEvents:
 
 def _app(tmp_path: Path, *, supervisor_connected: bool = True) -> dict[str, Any]:
     return {
-        "config": SimpleNamespace(data_dir=tmp_path),
-        "supervisor": SimpleNamespace(connected=supervisor_connected),
-        "events": FakeEvents(),
+        keys.CONFIG: SimpleNamespace(data_dir=tmp_path),
+        keys.SUPERVISOR: SimpleNamespace(connected=supervisor_connected),
+        keys.EVENTS: FakeEvents(),
     }
 
 
@@ -435,7 +436,7 @@ async def test_accepting_a_redeploy_broadcasts_the_build_stage(
     app = _app(tmp_path)
     response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
-    events: FakeEvents = app["events"]
+    events: FakeEvents = app[keys.EVENTS]
     assert events.types() == ["daemon_redeploy_started"]
     assert events.emitted[0][1]["pid"] == 4242
     assert events.emitted[0][1]["phase"] == "building"
@@ -446,7 +447,7 @@ async def test_a_refused_redeploy_broadcasts_nothing(tmp_path: Path, monkeypatch
     app = _app(tmp_path)
     response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 409
-    assert app["events"].types() == []
+    assert app[keys.EVENTS].types() == []
 
 
 async def test_the_daemon_spawns_the_script_with_the_lock_already_claimed(
@@ -470,7 +471,7 @@ async def test_announce_broadcasts_a_cli_started_redeploy(tmp_path: Path) -> Non
     (tmp_path / "redeploy.lock").write_text(str(os.getpid()), encoding="ascii")
     response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
-    assert app["events"].types() == ["daemon_redeploy_started"]
+    assert app[keys.EVENTS].types() == ["daemon_redeploy_started"]
 
 
 async def test_announce_refuses_when_no_redeploy_is_running(tmp_path: Path) -> None:
@@ -479,7 +480,7 @@ async def test_announce_refuses_when_no_redeploy_is_running(tmp_path: Path) -> N
     response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 409
     assert _payload(response)["error"] == "no_redeploy_in_flight"
-    assert app["events"].types() == []
+    assert app[keys.EVENTS].types() == []
     # A lock naming a dead process is not a redeploy either.
     (tmp_path / "redeploy.lock").write_text("999999999", encoding="ascii")
     response = await server.daemon_redeploy_announce(FakeRequest(app))  # type: ignore[arg-type]
@@ -493,7 +494,7 @@ async def test_announce_is_loopback_only(tmp_path: Path) -> None:
         await server.daemon_redeploy_announce(  # type: ignore[arg-type]
             FakeRequest(app, remote="10.0.0.4")
         )
-    assert app["events"].types() == []
+    assert app[keys.EVENTS].types() == []
 
 
 async def test_stopping_for_a_redeploy_is_broadcast_before_the_daemon_goes(
@@ -515,15 +516,17 @@ async def test_stopping_for_a_redeploy_is_broadcast_before_the_daemon_goes(
     shutdown = asyncio.Event()
     app = _app(tmp_path)
     app.update(
-        desktop_control_token="secret",
-        desktop_shutdown_event=shutdown,
-        shutdown_state={},
+        {
+            keys.DESKTOP_CONTROL_TOKEN: "secret",
+            keys.DESKTOP_SHUTDOWN_EVENT: shutdown,
+            keys.SHUTDOWN_STATE: {},
+        }
     )
     request = FakeRequest(app, {"mode": "restart"})
     request.headers["Authorization"] = "Bearer secret"
     response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
     assert response.status == 202
-    assert app["events"].types() == ["daemon_redeploy_stopping"]
+    assert app[keys.EVENTS].types() == ["daemon_redeploy_stopping"]
     # The frame the client most needs is the one the shutdown would otherwise
     # close the socket before writing.
     assert slept == [server.REDEPLOY_STOPPING_DRAIN_SECONDS]
@@ -535,15 +538,17 @@ async def test_an_ordinary_desktop_quit_broadcasts_no_redeploy(tmp_path: Path) -
     shutdown = asyncio.Event()
     app = _app(tmp_path)
     app.update(
-        desktop_control_token="secret",
-        desktop_shutdown_event=shutdown,
-        shutdown_state={},
+        {
+            keys.DESKTOP_CONTROL_TOKEN: "secret",
+            keys.DESKTOP_SHUTDOWN_EVENT: shutdown,
+            keys.SHUTDOWN_STATE: {},
+        }
     )
     request = FakeRequest(app, {"mode": "quit"})
     request.headers["Authorization"] = "Bearer secret"
     response = await server.desktop_shutdown(request)  # type: ignore[arg-type]
     assert response.status == 202
-    assert app["events"].types() == []
+    assert app[keys.EVENTS].types() == []
 
 
 async def test_a_shutdown_app_without_config_or_events_still_shuts_down() -> None:
@@ -555,9 +560,9 @@ async def test_a_shutdown_app_without_config_or_events_still_shuts_down() -> Non
     shutdown = asyncio.Event()
     request = FakeRequest(
         {
-            "desktop_control_token": "secret",
-            "desktop_shutdown_event": shutdown,
-            "shutdown_state": {},
+            keys.DESKTOP_CONTROL_TOKEN: "secret",
+            keys.DESKTOP_SHUTDOWN_EVENT: shutdown,
+            keys.SHUTDOWN_STATE: {},
         }
     )
     request.headers["Authorization"] = "Bearer secret"
@@ -880,7 +885,7 @@ async def test_accepting_a_redeploy_reports_what_goes_dark(
         server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
     )
     app = _app(tmp_path)
-    app["previews"] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080))
+    app[keys.PREVIEWS] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080))
     response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
     interrupted = _payload(response)["interrupted"]
@@ -904,7 +909,7 @@ async def test_an_open_port_never_refuses_a_redeploy(tmp_path: Path, monkeypatch
         server.subprocess, "Popen", lambda command, **kwargs: SimpleNamespace(pid=9)
     )
     app = _app(tmp_path)
-    app["previews"] = FakePreviews(*(_preview(f"p{index}", 3000 + index) for index in range(12)))
+    app[keys.PREVIEWS] = FakePreviews(*(_preview(f"p{index}", 3000 + index) for index in range(12)))
     response = await server.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
     assert response.status == 202
 
@@ -912,7 +917,7 @@ async def test_an_open_port_never_refuses_a_redeploy(tmp_path: Path, monkeypatch
 async def test_unlisted_previews_are_not_reported(tmp_path: Path) -> None:
     """`listed` is what belongs in navigation; the rest is routing plumbing."""
     app = _app(tmp_path)
-    app["previews"] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080, listed=False))
+    app[keys.PREVIEWS] = FakePreviews(_preview("aaa", 5173), _preview("bbb", 8080, listed=False))
     response = await server.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
     ports = [entry["port"] for entry in _payload(response)["interrupted"]["previews"]]
     assert ports == [5173]
@@ -923,7 +928,7 @@ async def test_the_status_reports_interruptions_before_any_redeploy_starts(
 ) -> None:
     """The confirm dialog reads this, which is the only moment it can change a decision."""
     app = _app(tmp_path)
-    app["previews"] = FakePreviews(_preview("aaa", 5173))
+    app[keys.PREVIEWS] = FakePreviews(_preview("aaa", 5173))
     response = await server.daemon_redeploy_status(FakeRequest(app))  # type: ignore[arg-type]
     body = _payload(response)
     assert body["running"] is False

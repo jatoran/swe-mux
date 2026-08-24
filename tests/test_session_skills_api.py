@@ -11,6 +11,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux import mcp_tools
 from swe_mux.agent_environment import capture_config_baseline
 from swe_mux.agent_environment import clear_cache as clear_environment_cache
@@ -69,9 +70,9 @@ def record(**overrides: Any) -> SessionRecord:
 
 def build(session_record: SessionRecord) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
-    app["sessions"] = ManagerStub(SessionStub(session_record))
-    app["runtime_inventories"] = mcp_tools.LiveSnapshotStore()
-    app["mcp_tools_windows"] = {}
+    app[keys.SESSIONS] = ManagerStub(SessionStub(session_record))
+    app[keys.RUNTIME_INVENTORIES] = mcp_tools.LiveSnapshotStore()
+    app[keys.MCP_TOOLS_WINDOWS] = {}
     app.router.add_get("/api/sessions/{sid}/skills", session_skills)
     app.router.add_get("/api/sessions/{sid}/agent-environment", session_agent_environment)
     app.router.add_post("/api/sessions/{sid}/agent-environment/mcp-tools", session_mcp_tools)

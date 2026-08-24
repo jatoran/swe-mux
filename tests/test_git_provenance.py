@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 from multidict import MultiDict
 
+from swe_mux import app_keys as keys
 from swe_mux import git_provenance, server
 from swe_mux.event_bus import EventBus
 from swe_mux.git_monitor import GitCommitChange, GitCommitMetadata, GitPosition
@@ -1455,14 +1456,14 @@ def _provenance_request(
     return SimpleNamespace(
         query=query,
         app={
-            "projects": SimpleNamespace(projects={"p": SimpleNamespace(id="p")}),
-            "history": SimpleNamespace(
+            keys.PROJECTS: SimpleNamespace(projects={"p": SimpleNamespace(id="p")}),
+            keys.HISTORY: SimpleNamespace(
                 git_provenance=rows,
                 git_ref_moves=ref_moves,
                 history_naming_rows=naming,
             ),
-            "sessions": SimpleNamespace(sessions=dict(live or {})),
-            "automation_store": SimpleNamespace(annotations=annotations),
+            keys.SESSIONS: SimpleNamespace(sessions=dict(live or {})),
+            keys.AUTOMATION_STORE: SimpleNamespace(annotations=annotations),
         },
     )
 
@@ -1475,7 +1476,7 @@ async def test_provenance_api_validates_and_filters() -> None:
         return [{"commit_oid": NEW, "role": "committer", "confidence": "exact"}]
 
     request = _provenance_request(MultiDict({"project_id": "p", "session_id": "s"}), [])
-    request.app["history"].git_provenance = rows
+    request.app[keys.HISTORY].git_provenance = rows
     response = await server.git_provenance(request)
     payload = json.loads(response.body)
 

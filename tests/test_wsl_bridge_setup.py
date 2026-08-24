@@ -16,6 +16,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.doctor import _wsl_bridge_checks
 from swe_mux.server import (
@@ -30,7 +31,7 @@ WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="WSL is a Wind
 
 def _app(tmp_path: Any) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = Config(data_dir=tmp_path, port=8765)
+    app[keys.CONFIG] = Config(data_dir=tmp_path, port=8765)
     app.router.add_get("/api/wsl/bridge", wsl_bridge_status)
     app.router.add_post("/api/wsl/bridge/install", wsl_bridge_install)
     app.router.add_post("/api/wsl/bridge/firewall/repair", wsl_bridge_firewall_repair)

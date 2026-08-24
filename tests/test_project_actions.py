@@ -10,6 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config, LaunchProfile
 from swe_mux.project_actions import (
     ActionStep,
@@ -315,8 +316,8 @@ async def test_action_api_discovers_but_refuses_untrusted_execution(tmp_path: Pa
     (root / "package.json").write_text('{"scripts":{"dev":"vite"}}', encoding="utf-8")
     project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["project_actions"] = ProjectActionService(tmp_path / "data")
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
+    app[keys.PROJECT_ACTIONS] = ProjectActionService(tmp_path / "data")
     app.router.add_get("/projects/{project_id}/actions", list_project_actions)
     app.router.add_post("/projects/{project_id}/actions/run", run_project_action)
 

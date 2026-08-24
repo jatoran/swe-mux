@@ -43,6 +43,14 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, a
 
 ## Transport
 
+### `app_keys.py`
+
+Every handle the daemon publishes into its `web.Application`, as a typed `web.AppKey` rather than a string.
+One module rather than per-route constants, because the key table *is* the contract between the composition root that writes a handle and the route modules that read it, and a second table would let the two disagree.
+The types are annotations (`CONFIG: web.AppKey[Config]`) with the runtime type argument omitted deliberately: aiohttp uses that argument for `repr` only, and requiring it would make the key table import the whole daemon and put a cycle between it and the services it names.
+
+**Not:** creating or owning any handle - it names them; and not request-scoped state, which belongs on the request.
+
 ### `server.py` startup
 
 - **Bind first, build behind it.** `runtime_context` returns at once and the runtime is constructed by a background task (`_build_runtime`), so the socket is open for the whole start.
@@ -50,7 +58,7 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, a
   `wait_runtime_ready(app)` is how a caller that needs a *built* daemon waits for one; a started server is only a reachable one.
 - A build that fails records the failure on the timeline and sets the daemon stop event.
   This is not defensiveness: while the build ran inline, an exception propagated out of `AppRunner.setup()` and the process died, which the tray and the redeploy script both already handle — a daemon left serving 503 forever would be worse than the crash it replaced.
-- `publish(app, ...)` writes handles into the started (frozen) application. aiohttp deprecates state writes after the runner starts, on the assumption that every handle exists before the socket does; the daemon inverts that ordering deliberately, and this keeps the coupling to one line, pinned by `tests/test_startup_gate.py`.
+- `publish(app, {keys.X: handle, ...})` writes handles into the started (frozen) application. aiohttp deprecates state writes after the runner starts, on the assumption that every handle exists before the socket does; the daemon inverts that ordering deliberately, and this keeps the coupling to one line, pinned by `tests/test_startup_gate.py`.
 - `_teardown_runtime` reads every handle back out of `app` and treats each as optional, because a shutdown can now arrive with the runtime half-built.
   Cancelling a task is not the same as stopping the work it started: a one-shot task waiting on `asyncio.to_thread` leaves its worker running, and the loop joins that worker in `shutdown_default_executor` after this function has already returned.
   The startup native-history reconcile is cancelled through `scan_external_transcripts_async`, which hands the worker a token it polls per file, so the walk ends here rather than after teardown (`development/PERFORMANCE_RUNBOOK.md` § Traps).

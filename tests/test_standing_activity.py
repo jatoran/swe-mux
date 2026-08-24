@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from swe_mux import app_keys as keys
 from swe_mux.models import SessionRecord, StandingActivity
 from swe_mux.session import (
     MAX_RUNNING_WORK_ANCHOR_AGE_SECONDS,
@@ -992,7 +993,7 @@ def _clear_request(session: Any, body: Any) -> Any:
         return body
 
     return SimpleNamespace(
-        app={"sessions": SessionsStub()},
+        app={keys.SESSIONS: SessionsStub()},
         match_info={"sid": "replay-session"},
         json=json_body,
     )

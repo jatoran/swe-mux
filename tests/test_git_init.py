@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import git_init, git_review, server
 from swe_mux.models import ProjectRecord
 
@@ -35,8 +36,8 @@ class Request:
         self.query: dict[str, str] = {}
         self.match_info: dict[str, str] = {}
         self.app = {
-            "projects": SimpleNamespace(projects={project.id: project}),
-            "events": Events(),
+            keys.PROJECTS: SimpleNamespace(projects={project.id: project}),
+            keys.EVENTS: Events(),
         }
 
     async def json(self) -> Any:
@@ -139,7 +140,7 @@ async def test_init_endpoint_creates_the_repository_and_announces_the_change(
     assert body["ok"] is True
     assert body["gitignore"] == "created"
     assert (tmp_path / ".git").exists()
-    assert ("git_changed", {"project_id": project.id}) in request.app["events"].emitted
+    assert ("git_changed", {"project_id": project.id}) in request.app[keys.EVENTS].emitted
 
 
 @pytest.mark.asyncio

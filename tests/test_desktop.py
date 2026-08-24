@@ -12,6 +12,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.build_support import publish_frontend
 from swe_mux.config import Config
 from swe_mux.desktop import (
@@ -439,10 +440,10 @@ def test_desktop_control_accepts_only_ip_loopback_peers() -> None:
 def control_app(token: str | None = None) -> tuple[web.Application, asyncio.Event]:
     app = web.Application()
     event = asyncio.Event()
-    app["shutdown_state"] = {"intent": None}
+    app[keys.SHUTDOWN_STATE] = {"intent": None}
     if token is not None:
-        app["desktop_control_token"] = token
-        app["desktop_shutdown_event"] = event
+        app[keys.DESKTOP_CONTROL_TOKEN] = token
+        app[keys.DESKTOP_SHUTDOWN_EVENT] = event
     app.router.add_post("/api/desktop/shutdown", desktop_shutdown)
     return app, event
 
@@ -465,7 +466,7 @@ async def test_desktop_shutdown_requires_the_exact_secret() -> None:
         assert accepted.status == 202
         assert await accepted.json() == {"status": "shutting_down", "mode": "quit"}
         assert event.is_set()
-        assert app["shutdown_state"]["intent"] == "quit"
+        assert app[keys.SHUTDOWN_STATE]["intent"] == "quit"
         restart = await client.post(
             "/api/desktop/shutdown",
             headers={"Authorization": "Bearer secret-token"},
@@ -473,7 +474,7 @@ async def test_desktop_shutdown_requires_the_exact_secret() -> None:
         )
         assert restart.status == 202
         assert await restart.json() == {"status": "shutting_down", "mode": "restart"}
-        assert app["shutdown_state"]["intent"] == "detach"
+        assert app[keys.SHUTDOWN_STATE]["intent"] == "detach"
         rejected = await client.post(
             "/api/desktop/shutdown",
             headers={"Authorization": "Bearer secret-token"},

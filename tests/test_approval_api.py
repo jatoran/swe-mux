@@ -16,6 +16,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import ApprovalPolicy, SessionRecord
@@ -78,10 +79,10 @@ def build(
 ) -> tuple[web.Application, SessionStub]:
     session = SessionStub(session_record)
     app = web.Application(middlewares=[error_middleware])
-    app["sessions"] = ManagerStub(session)
-    app["projects"] = ProjectsStub(ProjectStub(root))
-    app["events"] = EventBus()
-    app["config"] = config or Config(data_dir=root, approval_auto_enabled=True)
+    app[keys.SESSIONS] = ManagerStub(session)
+    app[keys.PROJECTS] = ProjectsStub(ProjectStub(root))
+    app[keys.EVENTS] = EventBus()
+    app[keys.CONFIG] = config or Config(data_dir=root, approval_auto_enabled=True)
     app.router.add_get("/api/sessions/{sid}/approvals", get_session_approvals)
     app.router.add_put("/api/sessions/{sid}/approvals", put_session_approvals)
     app.router.add_post("/api/sessions/{sid}/approvals/approve-once", approve_pending_request)

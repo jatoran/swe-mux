@@ -23,6 +23,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.project_actions import (
     ProjectActionService,
@@ -652,9 +653,9 @@ async def test_the_approval_diff_shows_what_changed_since_the_last_approval(
     )
     project = SimpleNamespace(id="p1", root=str(root), name="Work")
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["project_actions"] = service
-    app["events"] = EventBus()
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
+    app[keys.PROJECT_ACTIONS] = service
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/projects/{project_id}/actions/diff", diff_project_actions)
     app.router.add_post("/projects/{project_id}/actions/trust", trust_project_actions)
 
@@ -697,14 +698,14 @@ async def test_a_step_timeout_stops_a_session_that_is_still_running() -> None:
         stopped.append(sid)
 
     app: dict[str, Any] = {
-        "sessions": SimpleNamespace(sessions={"task-1": live}, stop=stop),
-        "events": EventBus(),
-        "action_timeout_tasks": set(),
+        keys.SESSIONS: SimpleNamespace(sessions={"task-1": live}, stop=stop),
+        keys.EVENTS: EventBus(),
+        keys.ACTION_TIMEOUT_TASKS: set(),
     }
     step = SimpleNamespace(name="slow", timeout_seconds=0.01)
 
     _arm_action_timeout(app, "task-1", step, "p1", "native:slow")  # type: ignore[arg-type]
-    await asyncio.gather(*app["action_timeout_tasks"])
+    await asyncio.gather(*app[keys.ACTION_TIMEOUT_TASKS])
 
     assert stopped == ["task-1"]
 
@@ -726,15 +727,15 @@ async def test_a_timeout_does_nothing_to_a_step_that_already_finished(state: str
         stopped.append(sid)
 
     app: dict[str, Any] = {
-        "sessions": SimpleNamespace(sessions={"task-1": finished}, stop=stop),
-        "events": EventBus(),
-        "action_timeout_tasks": set(),
+        keys.SESSIONS: SimpleNamespace(sessions={"task-1": finished}, stop=stop),
+        keys.EVENTS: EventBus(),
+        keys.ACTION_TIMEOUT_TASKS: set(),
     }
-    events = app["events"].subscribe(name="test")
+    events = app[keys.EVENTS].subscribe(name="test")
     step = SimpleNamespace(name="quick", timeout_seconds=0.01)
 
     _arm_action_timeout(app, "task-1", step, "p1", "native:quick")  # type: ignore[arg-type]
-    await asyncio.gather(*app["action_timeout_tasks"])
+    await asyncio.gather(*app[keys.ACTION_TIMEOUT_TASKS])
 
     assert stopped == []
     assert events.qsize() == 0
@@ -748,14 +749,14 @@ async def test_a_timeout_does_nothing_to_a_session_that_was_removed() -> None:
         stopped.append(sid)
 
     app: dict[str, Any] = {
-        "sessions": SimpleNamespace(sessions={}, stop=stop),
-        "events": EventBus(),
-        "action_timeout_tasks": set(),
+        keys.SESSIONS: SimpleNamespace(sessions={}, stop=stop),
+        keys.EVENTS: EventBus(),
+        keys.ACTION_TIMEOUT_TASKS: set(),
     }
     step = SimpleNamespace(name="quick", timeout_seconds=0.01)
 
     _arm_action_timeout(app, "task-1", step, "p1", "native:quick")  # type: ignore[arg-type]
-    await asyncio.gather(*app["action_timeout_tasks"])
+    await asyncio.gather(*app[keys.ACTION_TIMEOUT_TASKS])
 
     assert stopped == []
 

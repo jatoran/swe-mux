@@ -6,6 +6,7 @@ import json
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.network_usage import (
     NetworkUsage,
     compact_json_response,
@@ -36,12 +37,12 @@ async def _classified_output(request: web.Request) -> web.WebSocketResponse:
 
 
 async def _network_snapshot(request: web.Request) -> web.Response:
-    return compact_json_response(request.app["network_usage"].snapshot())
+    return compact_json_response(request.app[keys.NETWORK_USAGE].snapshot())
 
 
 def _app() -> web.Application:
     app = web.Application(middlewares=[compressible_response_middleware])
-    app["network_usage"] = NetworkUsage()
+    app[keys.NETWORK_USAGE] = NetworkUsage()
     app.on_response_prepare.append(record_network_response)
     app.router.add_get("/api/items/{item_id}", _payload)
     app.router.add_get("/api/diagnostics/network", _network_snapshot)
@@ -63,7 +64,7 @@ async def test_http_usage_counts_compressed_bytes_by_template_and_peer() -> None
     assert json.loads(decoded) == {"value": "repeated-value-" * 400}
     assert len(encoded) < len(decoded) // 4
 
-    snapshot = app["network_usage"].snapshot()
+    snapshot = app[keys.NETWORK_USAGE].snapshot()
     assert snapshot["totals"]["http"] == {
         "requests": 1,
         "request_bytes": 0,
@@ -84,7 +85,7 @@ async def test_websocket_usage_counts_application_frames_and_connections() -> No
         assert await ws.receive_str() == "PHONE"
         await ws.close()
 
-    channel = app["network_usage"].snapshot()["websocket_channels"][0]
+    channel = app[keys.NETWORK_USAGE].snapshot()["websocket_channels"][0]
     assert channel == {
         "channel": "test",
         "connections": 1,
@@ -105,7 +106,7 @@ async def test_websocket_payload_classification_is_peer_aware_and_not_double_cou
         assert await ws.receive_bytes() == b"retained terminal"
         await ws.close()
 
-    snapshot = app["network_usage"].snapshot()
+    snapshot = app[keys.NETWORK_USAGE].snapshot()
     assert snapshot["totals"]["websocket"]["sent_bytes"] == len(b"retained terminal")
     assert snapshot["websocket_sent_payloads"] == [
         {
@@ -137,4 +138,4 @@ async def test_snapshot_request_does_not_measure_itself() -> None:
         response = await client.get("/api/diagnostics/network")
         assert (await response.json())["totals"]["http"]["requests"] == 0
 
-    assert app["network_usage"].snapshot()["totals"]["http"]["requests"] == 0
+    assert app[keys.NETWORK_USAGE].snapshot()["totals"]["http"]["requests"] == 0

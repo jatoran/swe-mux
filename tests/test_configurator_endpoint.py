@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.config import Config
 from swe_mux.server import (
@@ -44,9 +45,9 @@ def _project(pid: str, root: Path) -> Any:
 def _app(config: Config, *projects: Any) -> dict[str, Any]:
     table = {item.id: item for item in projects}
     return {
-        "config": config,
-        "events": EventsStub(),
-        "projects": SimpleNamespace(
+        keys.CONFIG: config,
+        keys.EVENTS: EventsStub(),
+        keys.PROJECTS: SimpleNamespace(
             projects=table, ordered_projects=lambda: list(projects)
         ),
     }
@@ -173,7 +174,7 @@ async def test_a_launch_seeds_a_prompt_and_marks_the_session(
     # The marker is set here and republished, so every attached client sees it.
     assert record.configurator is True
     assert published == [True]
-    assert app["events"].emitted[0][0] == "configurator_launched"
+    assert app[keys.EVENTS].emitted[0][0] == "configurator_launched"
 
 
 @pytest.mark.asyncio
@@ -249,7 +250,7 @@ async def test_a_valid_batch_applies_and_reports_which_half_needs_a_restart(
     # a working setting reads as a broken one.
     assert result["restart_required"] == ["port"]
     assert config.theme == "nord"
-    assert app["events"].emitted[0][1]["source"] == "configurator"
+    assert app[keys.EVENTS].emitted[0][1]["source"] == "configurator"
 
 
 @pytest.mark.asyncio
@@ -263,7 +264,7 @@ async def test_an_invalid_batch_changes_nothing_and_names_the_field(config: Conf
     # All-or-nothing: `_validate` runs over the whole candidate before anything is
     # written, so the legal half of a rejected batch must not have landed either.
     assert config.theme == before
-    assert config_app["events"].emitted == []
+    assert config_app[keys.EVENTS].emitted == []
 
 
 @pytest.mark.asyncio
@@ -296,7 +297,7 @@ async def test_a_device_settings_edit_repaints_every_attached_browser(
     store.update("desktop", {"commandRail": {"layouts": {"mobile": {"strip": [
         {"id": "row-2", "items": ["up", "down", "padArrows"]}
     ]}}}})
-    app = {**_app(config), "settings_store": store}
+    app = {**_app(config), keys.SETTINGS_STORE: store}
     result = await server._configurator_edit_device_settings(
         app,
         profile="",
@@ -308,7 +309,7 @@ async def test_a_device_settings_edit_repaints_every_attached_browser(
         }],
     )
     assert result["document"]["layouts"]["mobile"]["strip"][0]["items"] == ["padArrows"]
-    name, payload = app["events"].emitted[0]
+    name, payload = app[keys.EVENTS].emitted[0]
     assert name == "settings_changed"
     assert payload["source"] == "configurator"
     # The rail is stored under `desktop` whatever device it describes, so an
@@ -347,7 +348,7 @@ async def test_a_project_settings_write_merges_rather_than_replaces(
     )
     app = {
         **_app(config, _project("p1", root)),
-        "history": SimpleNamespace(register_project_scope=_noop),
+        keys.HISTORY: SimpleNamespace(register_project_scope=_noop),
     }
     result = await server._configurator_apply_project_settings(
         app, project="p1", changes={"automations": {"tier0": True, "raw_store": True}}
@@ -355,7 +356,7 @@ async def test_a_project_settings_write_merges_rather_than_replaces(
     assert result["applied"] is True
     assert result["values"]["automations"] == {"tier0": True, "raw_store": True}
     assert result["values"]["preferred_backend"] == "codex"
-    assert app["events"].emitted[-1][0] == "project_configuration_changed"
+    assert app[keys.EVENTS].emitted[-1][0] == "project_configuration_changed"
 
 
 @pytest.mark.asyncio
@@ -372,14 +373,14 @@ async def test_a_forbidden_project_field_is_refused_as_a_result(
     root.mkdir()
     app = {
         **_app(config, _project("p1", root)),
-        "history": SimpleNamespace(register_project_scope=_noop),
+        keys.HISTORY: SimpleNamespace(register_project_scope=_noop),
     }
     result = await server._configurator_apply_project_settings(
         app, project="p1", changes={"token": "secret", "port": 9999}
     )
     assert result["applied"] is False
     assert result["errors"]
-    assert app["events"].emitted == []
+    assert app[keys.EVENTS].emitted == []
 
 
 async def _noop(*_args: Any, **_kwargs: Any) -> None:

@@ -16,6 +16,7 @@ from typing import Any
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
 from swe_mux.server import error_middleware, regenerate_session_title, session_transcript
@@ -51,8 +52,8 @@ def record(**overrides: Any) -> SessionRecord:
 
 def build(session_record: SessionRecord, transcript: Path | None) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
-    app["sessions"] = ManagerStub(SessionStub(session_record, transcript))
-    app["events"] = EventBus()
+    app[keys.SESSIONS] = ManagerStub(SessionStub(session_record, transcript))
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/api/sessions/{sid}/transcript", session_transcript)
     app.router.add_post("/api/sessions/{sid}/title/regenerate", regenerate_session_title)
     return app
@@ -189,7 +190,7 @@ async def test_the_limit_is_bounded_and_rejects_nonsense(tmp_path: Path) -> None
 
 async def test_generated_title_regeneration_emits_a_forced_async_request() -> None:
     app = build(record(agent_run_id="run-1", auto_named=True), None)
-    queue = app["events"].subscribe(name="title-regenerate-test")
+    queue = app[keys.EVENTS].subscribe(name="title-regenerate-test")
     async with TestClient(TestServer(app)) as client:
         response = await client.post("/api/sessions/sess-1/title/regenerate")
         assert response.status == 202

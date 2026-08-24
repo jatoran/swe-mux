@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.adapters import ClaudeAdapter
 from swe_mux.server import _branch_source_id, branch_session, session_branch_points
@@ -93,7 +94,7 @@ def _request(record: Any) -> Any:
             return self.sessions[identity]
 
     return SimpleNamespace(
-        app={"sessions": SessionsStub()},
+        app={keys.SESSIONS: SessionsStub()},
         match_info={"sid": record.id},
         can_read_body=False,
     )
@@ -187,10 +188,10 @@ class BranchHarness:
         )
         self.request = SimpleNamespace(
             app={
-                "sessions": self.manager,
-                "events": self.bus,
-                "automation_store": self.store,
-                "projects": SimpleNamespace(
+                keys.SESSIONS: self.manager,
+                keys.EVENTS: self.bus,
+                keys.AUTOMATION_STORE: self.store,
+                keys.PROJECTS: SimpleNamespace(
                     projects={
                         "default": SimpleNamespace(
                             name="Main", root=str(self.cwd),

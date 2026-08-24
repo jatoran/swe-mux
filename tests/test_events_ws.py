@@ -9,6 +9,7 @@ import pytest
 from aiohttp import ClientWebSocketResponse, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.device_presence import DevicePresenceStore
 from swe_mux.event_bus import EventBus
@@ -23,11 +24,11 @@ def _app(
     frontend_dir: Path | None = None,
 ) -> web.Application:
     app = web.Application()
-    app["history"] = history
-    app["events"] = events
-    app["device_presence"] = presence or DevicePresenceStore()
-    app["frontend_dir"] = frontend_dir or Path("__missing_frontend__")
-    app["daemon_generation"] = "test-generation"
+    app[keys.HISTORY] = history
+    app[keys.EVENTS] = events
+    app[keys.DEVICE_PRESENCE] = presence or DevicePresenceStore()
+    app[keys.FRONTEND_DIR] = frontend_dir or Path("__missing_frontend__")
+    app[keys.DAEMON_GENERATION] = "test-generation"
     app.router.add_get("/events", events_ws)
     return app
 

@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+from swe_mux import app_keys as keys
 from swe_mux.models import SessionRecord
 from swe_mux.session import Session, SessionManager, fleet_status_health
 
@@ -287,7 +288,7 @@ async def test_subagent_hooks_never_date_transcript_staleness_evidence(
     record.state = "idle"
     session = real_session(record, tmp_path)
     app = web.Application(middlewares=[error_middleware, security_middleware])
-    app["sessions"] = SimpleNamespace(
+    app[keys.SESSIONS] = SimpleNamespace(
         resolve=lambda _identity: session,
         sessions={record.id: session},
         maybe_heal_from_own_conversation_hook=AsyncMock(),
@@ -297,9 +298,9 @@ async def test_subagent_hooks_never_date_transcript_staleness_evidence(
         note_hook_cwd=lambda _session, _payload: None,
         note_hook_transcript_path=lambda _session, _payload: None,
     )
-    app["events"] = SimpleNamespace(emit=AsyncMock())
-    app["automation"] = SimpleNamespace(note_native_hook=lambda _sid: None)
-    app["hook_ingress_windows"] = {}
+    app[keys.EVENTS] = SimpleNamespace(emit=AsyncMock())
+    app[keys.AUTOMATION] = SimpleNamespace(note_native_hook=lambda _sid: None)
+    app[keys.HOOK_INGRESS_WINDOWS] = {}
     app.router.add_post("/api/hooks/{sid}", hook_ingress)
     async with TestClient(TestServer(app)) as client:
         subagent = await client.post(

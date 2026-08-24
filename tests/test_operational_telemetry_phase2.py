@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
@@ -1458,7 +1459,7 @@ async def test_notification_diagnostics_uses_a_bounded_recent_window() -> None:
     )
     request = cast(
         Any,
-        SimpleNamespace(query={"days": "2"}, app={"telemetry": telemetry}),
+        SimpleNamespace(query={"days": "2"}, app={keys.TELEMETRY: telemetry}),
     )
     response = await get_notification_diagnostics(request)
     assert response.status == 200

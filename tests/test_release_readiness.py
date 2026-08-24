@@ -20,6 +20,7 @@ import swe_mux.harness as harness_module
 import swe_mux.server as server
 import swe_mux.tailscale as tailscale
 import swe_mux.windows_firewall as firewall
+from swe_mux import app_keys as keys
 from swe_mux.adapters import ClaudeAdapter, CodexAdapter, SpawnOptions
 from swe_mux.config import Config, load_config, update_config
 from swe_mux.harness import (
@@ -315,11 +316,11 @@ def _diagnostics_app(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> web.Appl
 
     monkeypatch.setattr(server, "tailscale_status", fake_status)
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = Config(data_dir=tmp_path, port=8765)
-    app["sessions"] = SimpleNamespace(sessions={})
-    app["network_usage"] = SimpleNamespace(snapshot=lambda: {"totals": {}})
-    app["status_timeline"] = SimpleNamespace(stats=lambda: {"rows": 0})
-    app["supervisor"] = None
+    app[keys.CONFIG] = Config(data_dir=tmp_path, port=8765)
+    app[keys.SESSIONS] = SimpleNamespace(sessions={})
+    app[keys.NETWORK_USAGE] = SimpleNamespace(snapshot=lambda: {"totals": {}})
+    app[keys.STATUS_TIMELINE] = SimpleNamespace(stats=lambda: {"rows": 0})
+    app[keys.SUPERVISOR] = None
     app.router.add_get("/api/diagnostics/export", diagnostics_export)
     app.router.add_get("/api/remote/firewall", firewall_status)
     app.router.add_post("/api/remote/firewall/repair", firewall_repair)
@@ -364,7 +365,7 @@ async def test_diagnostics_export_config_is_the_public_shape(
     # dataclass. public_dict() is the vetted no-secret shape (it has no token and
     # OpenRouter keys live in the secret store, not config).
     app = _diagnostics_app(tmp_path, monkeypatch)
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     async with TestClient(TestServer(app)) as client:
         response = await client.get("/api/diagnostics/export")
         body = await response.json()
@@ -392,10 +393,10 @@ async def test_doctor_endpoint_assembles_a_report(
         server, "background", SimpleNamespace(health=lambda: {"degraded": [], "total_faults": 0})
     )
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = Config(data_dir=tmp_path, port=8765)
-    app["sessions"] = SimpleNamespace(sessions={}, unadopted_supervisor_sessions=0)
-    app["supervisor"] = None
-    app["frontend_dir"] = tmp_path
+    app[keys.CONFIG] = Config(data_dir=tmp_path, port=8765)
+    app[keys.SESSIONS] = SimpleNamespace(sessions={}, unadopted_supervisor_sessions=0)
+    app[keys.SUPERVISOR] = None
+    app[keys.FRONTEND_DIR] = tmp_path
     app.router.add_get("/api/diagnostics/doctor", get_doctor_report)
     async with TestClient(TestServer(app)) as client:
         response = await client.get("/api/diagnostics/doctor")

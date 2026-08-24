@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.models import SessionRecord
 from swe_mux.session import (
     acknowledge_turns,
@@ -275,7 +276,7 @@ def _read_request(session: Any, body: Any, events: Any) -> Any:
         return body
 
     return SimpleNamespace(
-        app={"sessions": SessionsStub(), "events": events},
+        app={keys.SESSIONS: SessionsStub(), keys.EVENTS: events},
         match_info={"sid": "s1"},
         body_exists=body is not None,
         json=json_body,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.project_files import (
@@ -40,11 +41,11 @@ def _project(root: Path):  # type: ignore[no-untyped-def]
 def _app(root: Path) -> web.Application:
     project = _project(root)
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(
+    app[keys.PROJECTS] = SimpleNamespace(
         projects={project.id: project}, ordered_projects=lambda: [project]
     )
-    app["sessions"] = SimpleNamespace(sessions={})
-    app["events"] = EventBus()
+    app[keys.SESSIONS] = SimpleNamespace(sessions={})
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/notes", list_notes)
     app.router.add_post("/projects/{project_id}/notes", create_project_note)
     app.router.add_get("/projects/{project_id}/notes/{note_id}", get_note)
@@ -214,7 +215,7 @@ async def test_note_change_events_use_one_generic_event_type(tmp_path: Path) -> 
     root = tmp_path / "project"
     root.mkdir()
     app = _app(root)
-    events: EventBus = app["events"]
+    events: EventBus = app[keys.EVENTS]
 
     async with TestClient(TestServer(app)) as client:
         queue = events.subscribe()

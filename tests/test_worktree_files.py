@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import git_review, server
 from swe_mux.models import ProjectRecord
 
@@ -26,7 +27,7 @@ class Request:
         self.query = query
         self._body = body
         self.match_info = {"project_id": project.id}
-        self.app = {"projects": SimpleNamespace(projects={project.id: project})}
+        self.app = {keys.PROJECTS: SimpleNamespace(projects={project.id: project})}
 
     async def json(self) -> Any:
         return self._body

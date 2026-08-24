@@ -11,6 +11,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.schedule_store import ScheduleStore
 from swe_mux.scheduler import ScheduleService
@@ -103,21 +104,21 @@ def build_app(tmp_path: Path, *, enabled: frozenset[str]) -> tuple[web.Applicati
     )
     config = Config(data_dir=tmp_path)
     app = web.Application(middlewares=[error_middleware])
-    app["schedule_store"] = store
-    app["projects"] = projects
-    app["config"] = config
-    app["events"] = EventsStub()
-    app["automation_gate"] = gate
+    app[keys.SCHEDULE_STORE] = store
+    app[keys.PROJECTS] = projects
+    app[keys.CONFIG] = config
+    app[keys.EVENTS] = EventsStub()
+    app[keys.AUTOMATION_GATE] = gate
     conversations = tmp_path / "conversations"
     conversations.mkdir(exist_ok=True)
-    app["history"] = HistoryStub({"run_a": conversation_row(conversations)})
-    app["automation_store"] = AutomationStoreStub()
-    app["schedules"] = ScheduleService(
+    app[keys.HISTORY] = HistoryStub({"run_a": conversation_row(conversations)})
+    app[keys.AUTOMATION_STORE] = AutomationStoreStub()
+    app[keys.SCHEDULES] = ScheduleService(
         store=store,
         projects=projects,
         sessions=sessions,
         config=config,
-        events=app["events"],
+        events=app[keys.EVENTS],
         automation_gate=gate,
         spawn_op=spawn,
         enqueue=enqueue,
@@ -150,7 +151,7 @@ def definition(**overrides: Any) -> dict[str, Any]:
 def app_and_spawns(tmp_path: Path):  # type: ignore[no-untyped-def]
     app, spawned = build_app(tmp_path, enabled=frozenset({"scheduled_runs"}))
     yield app, spawned
-    app["schedule_store"].close()
+    app[keys.SCHEDULE_STORE].close()
 
 
 async def test_create_list_and_delete(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
@@ -247,7 +248,7 @@ async def test_a_project_without_the_opt_in_reads_blocked(tmp_path: Path) -> Non
             assert result["run"]["outcome"] == "skipped"
             assert not spawned
     finally:
-        app["schedule_store"].close()
+        app[keys.SCHEDULE_STORE].close()
 
 
 async def test_preview_answers_the_next_fire_times(app_and_spawns) -> None:  # type: ignore[no-untyped-def]
@@ -309,7 +310,7 @@ async def test_a_resume_whose_conversation_is_gone_says_so(app_and_spawns) -> No
         row = await (
             await client.post("/api/projects/p1/schedules", json=resume_definition())
         ).json()
-        app["history"].rows.clear()
+        app[keys.HISTORY].rows.clear()
         listed = await (await client.get("/api/schedules")).json()
         target = next(item for item in listed["schedules"] if item["id"] == row["id"])["target"]
         assert target == {"run_id": "run_a", "missing": True}
@@ -353,7 +354,7 @@ async def test_cut_points_for_a_harness_that_cannot_fork_are_a_reason_not_an_err
     app_and_spawns,
 ) -> None:
     app, _ = app_and_spawns
-    app["history"].rows["run_a"]["backend"] = "codex"
+    app[keys.HISTORY].rows["run_a"]["backend"] = "codex"
     async with TestClient(TestServer(app)) as client:
         response = await client.get("/api/history/run_a/branch-points")
         assert response.status == 200

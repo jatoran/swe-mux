@@ -8,6 +8,7 @@ from typing import Any
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.clipboard_store import ClipboardStore, clipboard_preview, looks_like_secret
 from swe_mux.config import (
     MOBILE_GESTURE_SLOTS,
@@ -215,8 +216,8 @@ async def test_clipboard_api_capture_read_pin_delete_and_clear(tmp_path: Path) -
 
     store = ClipboardStore(tmp_path / "mux.db")
     app = web.Application(middlewares=[error_middleware])
-    app["clipboard"] = store
-    app["events"] = EventsStub()
+    app[keys.CLIPBOARD] = store
+    app[keys.EVENTS] = EventsStub()
     app.router.add_get("/api/clipboard", list_clipboard_entries)
     app.router.add_post("/api/clipboard", capture_clipboard_entry)
     app.router.add_delete("/api/clipboard", clear_clipboard_entries)
@@ -277,8 +278,8 @@ async def test_secret_shaped_capture_reports_why_it_was_skipped(tmp_path: Path) 
 
     store = ClipboardStore(tmp_path / "mux.db")
     app = web.Application(middlewares=[error_middleware])
-    app["clipboard"] = store
-    app["events"] = EventsStub()
+    app[keys.CLIPBOARD] = store
+    app[keys.EVENTS] = EventsStub()
     app.router.add_post("/api/clipboard", capture_clipboard_entry)
     try:
         async with TestClient(TestServer(app)) as client:

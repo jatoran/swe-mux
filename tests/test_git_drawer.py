@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import git_review, server
 
 
@@ -36,7 +37,7 @@ async def test_empty_repository_has_an_empty_graph_not_an_error(
         SimpleNamespace(
             query={"project_id": "p", "limit": "80"},
             app={
-                "projects": SimpleNamespace(
+                keys.PROJECTS: SimpleNamespace(
                     projects={"p": SimpleNamespace(id="p", root="C:/repo")}
                 )
             },
@@ -64,7 +65,7 @@ async def test_graph_limit_is_bounded_before_git_runs(
         SimpleNamespace(
             query={"project_id": "p", "limit": "201"},
             app={
-                "projects": SimpleNamespace(
+                keys.PROJECTS: SimpleNamespace(
                     projects={"p": SimpleNamespace(id="p", root="C:/repo")}
                 )
             },
@@ -78,7 +79,7 @@ def _overview_request(query: dict[str, str], headers: dict[str, str] | None = No
         query=query,
         headers=headers or {},
         app={
-            "projects": SimpleNamespace(
+            keys.PROJECTS: SimpleNamespace(
                 projects={
                     "p": SimpleNamespace(id="p", root="C:/repo", git_compare_ref=None)
                 }
@@ -189,7 +190,7 @@ async def test_overview_rejects_browser_supplied_git_parameters(
     request = SimpleNamespace(
         query={"project_id": "p", extra: "injected"},
         app={
-            "projects": SimpleNamespace(
+            keys.PROJECTS: SimpleNamespace(
                 projects={
                     "p": SimpleNamespace(
                         id="p", root="C:/repo", git_compare_ref=None
@@ -221,7 +222,7 @@ async def test_diff_rejects_extraneous_parameters_before_delegating(
             "cwd": "C:/other",
         },
         app={
-            "projects": SimpleNamespace(
+            keys.PROJECTS: SimpleNamespace(
                 projects={
                     "p": SimpleNamespace(
                         id="p", root="C:/repo", git_compare_ref=None

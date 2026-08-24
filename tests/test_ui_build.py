@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from aiohttp import web
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.ui_build import parse_ui_build_id, read_ui_build_id
 
@@ -48,7 +49,7 @@ async def test_health_exposes_the_served_ui_identity(tmp_path: Path) -> None:
     (tmp_path / "index.html").write_text(
         f'<meta name="ui-build" content="{build_id}">', encoding="utf-8"
     )
-    request = SimpleNamespace(app={"frontend_dir": tmp_path})
+    request = SimpleNamespace(app={keys.FRONTEND_DIR: tmp_path})
     response = await server.health(request)  # type: ignore[arg-type]
     assert json.loads(response.body)["ui_build_id"] == build_id
 

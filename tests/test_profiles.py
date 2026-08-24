@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import session_resume
 from swe_mux.adapters import CodexAdapter
 from swe_mux.config import Config, LaunchProfile, load_config, update_config
@@ -184,9 +185,9 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
         return SimpleNamespace(record=record)
 
     app = {
-        "config": config,
-        "sessions": SimpleNamespace(spawn=spawn),
-        "projects": SimpleNamespace(
+        keys.CONFIG: config,
+        keys.SESSIONS: SimpleNamespace(spawn=spawn),
+        keys.PROJECTS: SimpleNamespace(
             projects={"default": ProjectRecord("default", "Main", str(tmp_path), 0)}
         ),
     }
@@ -298,10 +299,10 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(
     )
     request = SimpleNamespace(
         app={
-            "history": history,
-            "sessions": manager,
-            "projects": projects,
-            "automation_store": SimpleNamespace(add_lineage=add_lineage),
+            keys.HISTORY: history,
+            keys.SESSIONS: manager,
+            keys.PROJECTS: projects,
+            keys.AUTOMATION_STORE: SimpleNamespace(add_lineage=add_lineage),
         },
         match_info={"sid": "history-id"},
         can_read_body=False,

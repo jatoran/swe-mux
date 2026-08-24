@@ -8,6 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import load_config, update_config
 from swe_mux.history import HistoryIndex
 from swe_mux.project_actions import action_spawn_body
@@ -160,9 +161,9 @@ async def test_init_script_endpoint_starts_selected_scripts_in_order(
 
     monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
     app = web.Application(middlewares=[error_middleware])
-    app["config"] = _config(tmp_path, SCRIPTS)
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["events"] = Events()
+    app[keys.CONFIG] = _config(tmp_path, SCRIPTS)
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
+    app[keys.EVENTS] = Events()
     app.router.add_post("/projects/{project_id}/init-scripts/run", run_project_init_scripts)
 
     async with TestClient(TestServer(app)) as client:

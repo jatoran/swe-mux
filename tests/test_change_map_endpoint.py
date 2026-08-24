@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.code_graph import CodeGraphStore, index_project, parsing_available
 from swe_mux.server import session_change_map
@@ -139,14 +140,14 @@ def _request(
         return enabled
 
     app = {
-        "sessions": SimpleNamespace(resolve=lambda _sid: session, sessions=sessions),
-        "projects": SimpleNamespace(
+        keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session, sessions=sessions),
+        keys.PROJECTS: SimpleNamespace(
             projects={"p1": SimpleNamespace(root=str(project_root or tmp_path))}
         ),
-        "code_graph": graph,
-        "tier0": tier0,
-        "history": history,
-        "automation_gate": gate,
+        keys.CODE_GRAPH: graph,
+        keys.TIER0: tier0,
+        keys.HISTORY: history,
+        keys.AUTOMATION_GATE: gate,
     }
     return SimpleNamespace(app=app, match_info={"sid": "s1"}, query=query)
 

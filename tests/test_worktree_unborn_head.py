@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.config import load_config
 
@@ -41,8 +42,8 @@ class Request:
     def __init__(self, tmp_path: Path, body: Any) -> None:
         self._body = body
         self.app = {
-            "config": load_config(tmp_path / "config.toml"),
-            "events": Events(),
+            keys.CONFIG: load_config(tmp_path / "config.toml"),
+            keys.EVENTS: Events(),
         }
 
     async def json(self) -> Any:

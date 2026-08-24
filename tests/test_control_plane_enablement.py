@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux import automation_registry as registry
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent
@@ -750,7 +751,7 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
     def request(body: dict[str, object] | None = None) -> object:
         return SimpleNamespace(
             match_info={"project_id": "p1"},
-            app={"projects": SimpleNamespace(projects={"p1": project}), "events": Events()},
+            app={keys.PROJECTS: SimpleNamespace(projects={"p1": project}), keys.EVENTS: Events()},
             json=lambda: _resolved(body or {}),
         )
 
@@ -822,13 +823,13 @@ async def test_the_project_matrix_reports_every_project_including_the_opted_out(
     await put_project_automations(  # type: ignore[arg-type]
         SimpleNamespace(
             match_info={"project_id": "p1"},
-            app={"projects": registry, "events": Events()},
+            app={keys.PROJECTS: registry, keys.EVENTS: Events()},
             json=body,
         )
     )
 
     response = await automation_project_matrix(  # type: ignore[arg-type]
-        SimpleNamespace(app={"projects": registry})
+        SimpleNamespace(app={keys.PROJECTS: registry})
     )
     payload = json.loads(response.body)
     # The registry ships once, beside the rows, exactly as the per-Project read ships it.
@@ -857,7 +858,7 @@ async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path)
     response = await put_project_automations(  # type: ignore[arg-type]
         SimpleNamespace(
             match_info={"project_id": "p1"},
-            app={"projects": SimpleNamespace(projects={"p1": project}), "events": None},
+            app={keys.PROJECTS: SimpleNamespace(projects={"p1": project}), keys.EVENTS: None},
             json=body,
         )
     )

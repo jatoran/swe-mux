@@ -10,6 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.server import daemon_restart
 from swe_mux.supervisor_client import (
@@ -77,15 +78,15 @@ def restart_app(
     supervisor_connected: bool | None = None,
 ) -> tuple[web.Application, asyncio.Event, list[list[str]]]:
     app = web.Application()
-    app["config"] = Config(data_dir=tmp_path)
-    app["shutdown_state"] = {"intent": None}
+    app[keys.CONFIG] = Config(data_dir=tmp_path)
+    app[keys.SHUTDOWN_STATE] = {"intent": None}
     stop_event = asyncio.Event()
     spawned: list[list[str]] = []
     if relaunchable:
-        app["daemon_stop_event"] = stop_event
-        app["daemon_relaunch_command"] = ["python", "-m", "swe_mux", "--relaunch-wait"]
+        app[keys.DAEMON_STOP_EVENT] = stop_event
+        app[keys.DAEMON_RELAUNCH_COMMAND] = ["python", "-m", "swe_mux", "--relaunch-wait"]
     if supervisor_connected is not None:
-        app["supervisor"] = SimpleNamespace(connected=supervisor_connected)
+        app[keys.SUPERVISOR] = SimpleNamespace(connected=supervisor_connected)
     app.router.add_post("/api/daemon/restart", daemon_restart)
     return app, stop_event, spawned
 
@@ -125,7 +126,7 @@ async def test_restart_refuses_to_kill_sessions_without_the_supervisor(
         assert forced.status == 202
         assert await forced.json() == {"status": "restarting", "sessions_preserved": False}
         # Without a supervisor the shutdown must still reap cleanly.
-        assert app["shutdown_state"]["intent"] == "quit"
+        assert app[keys.SHUTDOWN_STATE]["intent"] == "quit"
         assert stop_event.is_set()
         assert spawned == [["python", "-m", "swe_mux", "--relaunch-wait"]]
     finally:
@@ -147,7 +148,7 @@ async def test_restart_detaches_and_spawns_a_successor_with_supervisor(
         response = await client.post("/api/daemon/restart")
         assert response.status == 202
         assert await response.json() == {"status": "restarting", "sessions_preserved": True}
-        assert app["shutdown_state"]["intent"] == "detach"
+        assert app[keys.SHUTDOWN_STATE]["intent"] == "detach"
         assert stop_event.is_set()
         assert len(spawned) == 1
     finally:

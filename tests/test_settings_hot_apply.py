@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 from aiohttp import web
 
+from swe_mux import app_keys as keys
 from swe_mux.config import RESTART_FIELDS, Config, update_config
 from swe_mux.server import _apply_runtime_config
 from swe_mux.session import Session, SessionManager
@@ -52,11 +53,13 @@ class _FakeSessionManager:
         self.child_env: dict[str, str] = {}
 
 
-def _apply(config: Config, changes: dict[str, Any], **handles: Any) -> set[str]:
+def _apply(
+    config: Config, changes: dict[str, Any], **handles: Any
+) -> set[str]:
     app = web.Application()
-    app["config"] = config
+    app[keys.CONFIG] = config
     for name, handle in handles.items():
-        app[name] = handle
+        app[getattr(keys, name.upper())] = handle
     hot, restart = update_config(config, changes)
     _apply_runtime_config(app, hot)
     assert not restart, f"unexpected restart-required fields: {sorted(restart)}"

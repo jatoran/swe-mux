@@ -19,6 +19,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.preview_store import PreviewStore
 from swe_mux.processes import PreviewRegistry, static_preview_id
 from swe_mux.project_files import is_static_preview_entry, read_static_preview_file
@@ -285,8 +286,8 @@ def _register_request(root: Path, registry: PreviewRegistry) -> Any:
     project = SimpleNamespace(id="default", root=str(root))
     return SimpleNamespace(
         app={
-            "projects": SimpleNamespace(projects={"default": project}),
-            "previews": registry,
+            keys.PROJECTS: SimpleNamespace(projects={"default": project}),
+            keys.PREVIEWS: registry,
         }
     )
 
@@ -354,12 +355,12 @@ def test_registration_refuses_an_unknown_project(tmp_path: Path) -> None:
 
 def _proxy_application(registry: PreviewRegistry) -> web.Application:
     app = web.Application(middlewares=[security_middleware], client_max_size=12 * 1024 * 1024)
-    app["previews"] = registry
+    app[keys.PREVIEWS] = registry
     # Deliberately empty: a static preview has no owning session, and the route
     # must not be gated on one existing.
-    app["sessions"] = SimpleNamespace(sessions={})
-    app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
-    app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
+    app[keys.SESSIONS] = SimpleNamespace(sessions={})
+    app[keys.PREVIEW_HTTP_SEMAPHORE] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
+    app[keys.PREVIEW_WS_SEMAPHORE] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app.router.add_route("*", "/preview/{preview_id}/{tail:.*}", preview_proxy)
     return app
 

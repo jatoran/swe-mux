@@ -15,6 +15,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.land_queue import LandQueueService
@@ -87,12 +88,12 @@ def build(tmp_path: Path, trunk_root: Path) -> tuple[web.Application, LandStore]
         project_values=project_values,
     )
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = ProjectsStub(ProjectStub(trunk_root))
-    app["events"] = EventBus()
-    app["config"] = config
-    app["land_queue"] = service
-    app["land_store"] = store
-    app["verify_approvals"] = approvals
+    app[keys.PROJECTS] = ProjectsStub(ProjectStub(trunk_root))
+    app[keys.EVENTS] = EventBus()
+    app[keys.CONFIG] = config
+    app[keys.LAND_QUEUE] = service
+    app[keys.LAND_STORE] = store
+    app[keys.VERIFY_APPROVALS] = approvals
     app.router.add_get("/api/land", list_land_requests)
     app.router.add_post("/api/land", request_land)
     app.router.add_delete("/api/land/{request_id}", cancel_land_request)
@@ -182,7 +183,7 @@ async def test_the_status_reports_the_two_switches_that_stop_the_pipeline(
         # one, which is the honest reading of "permitted".
         assert listed["project_enabled"] is True
 
-        app["config"].land_queue_enabled = False
+        app[keys.CONFIG].land_queue_enabled = False
         stopped = await (await client.get("/api/land?project_id=proj-1")).json()
         assert stopped["installed_enabled"] is False
 
@@ -193,7 +194,7 @@ async def test_the_status_reports_the_two_switches_that_stop_the_pipeline(
             "/api/land", json={"project_id": "proj-1", "worktree_root": str(worktree)}
         )
         assert created.status == 201, await created.text()
-        assert (await app["land_queue"].tick()) == []
+        assert (await app[keys.LAND_QUEUE].tick()) == []
     finally:
         await client.close()
         store.close()

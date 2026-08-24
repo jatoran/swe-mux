@@ -15,6 +15,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.automation_registry import (
     RECOMMENDED_PROJECT_AUTOMATIONS,
     REGISTRY,
@@ -82,11 +83,11 @@ def build(tmp_path: Path) -> tuple[web.Application, Config, GateCacheStub, list[
     bus.emit = record  # type: ignore[method-assign]
     cache = GateCacheStub()
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = ProjectsStub(ProjectStub(root))
-    app["events"] = bus
-    app["config"] = config
-    app["automation_gate_cache"] = cache
-    app["project_contexts"] = None
+    app[keys.PROJECTS] = ProjectsStub(ProjectStub(root))
+    app[keys.EVENTS] = bus
+    app[keys.CONFIG] = config
+    app[keys.AUTOMATION_GATE_CACHE] = cache
+    app[keys.PROJECT_CONTEXTS] = None
     app.router.add_get("/api/grants", describe_grants)
     app.router.add_post("/api/grants", apply_grants)
     app.router.add_get("/api/projects/{project_id}/automations", get_project_automations)
@@ -100,7 +101,7 @@ async def client_for(app: web.Application) -> TestClient:
 
 
 def project_root(app: web.Application) -> str:
-    return app["projects"].projects["proj-1"].root
+    return app[keys.PROJECTS].projects["proj-1"].root
 
 
 # -- the plan ----------------------------------------------------------------

@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import app_keys as keys
 from swe_mux.attention_narration import AttentionNarrator, build_slice
 from swe_mux.attention_ranking import (
     CHEAP_BLOCKING,
@@ -473,7 +474,7 @@ async def test_the_routes_expose_ranking_feedback_and_rule_decisions(tmp_path: P
         ranking, _ = service(store)
         item = await ranking.ingest(finding())
         assert item is not None
-        app = {"attention_ranking": ranking}
+        app = {keys.ATTENTION_RANKING: ranking}
 
         response = await attention_inbox(  # type: ignore[arg-type]
             SimpleNamespace(query={}, app=app)

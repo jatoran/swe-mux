@@ -48,6 +48,9 @@ from . import (
     session_titles,
     worktree_graveyard,
 )
+from . import (
+    app_keys as keys,
+)
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -759,7 +762,7 @@ async def starting_middleware(request: web.Request, handler: Handler) -> web.Str
     non-2xx answer as "not up yet". Serving 200 with a `starting` body would make
     each of them declare victory on a daemon that cannot answer a single request.
     """
-    timeline: StartupTimeline | None = request.app.get("startup")
+    timeline: StartupTimeline | None = request.app.get(keys.STARTUP)
     if timeline is None or timeline.ready or startup_open(request.path):
         return await handler(request)
     response = json_response(
@@ -774,7 +777,7 @@ async def starting_middleware(request: web.Request, handler: Handler) -> web.Str
     return response
 
 
-def publish(app: web.Application, **handles: Any) -> None:
+def publish(app: web.Application, handles: Mapping[web.AppKey[Any], Any]) -> None:
     """Write runtime handles into an application whose runner has already started.
 
     aiohttp freezes an Application once its runner starts and deprecates state
@@ -787,13 +790,14 @@ def publish(app: web.Application, **handles: Any) -> None:
     `Application` is a MutableMapping and `_state` is the dict behind it, so this
     writes exactly the entries `app[key] = value` writes, minus a freeze check
     that exists to catch the accidental case rather than this deliberate one.
-    Reads are unaffected - `request.app["history"]` is the same mapping either
+    Reads are unaffected - `request.app[keys.HISTORY]` is the same mapping either
     way. Overriding the check by subclassing is the alternative, and aiohttp
     deprecates subclassing `Application` as well; this keeps the coupling to one
     greppable line, pinned by `tests/test_startup_gate.py` so an aiohttp upgrade
     that moves `_state` fails loudly instead of silently dropping every handle.
     """
-    app._state.update(handles)
+    for key, value in handles.items():
+        app._state[key] = value
 
 
 async def wait_runtime_ready(app: web.Application) -> None:
@@ -805,7 +809,7 @@ async def wait_runtime_ready(app: web.Application) -> None:
     caller owns the deadline (`asyncio.timeout`), because how long a build may
     take depends on the fleet being rebuilt and not on this function.
     """
-    build = app.get("runtime_build")
+    build = app.get(keys.RUNTIME_BUILD)
     if build is not None:
         await build
 
@@ -832,37 +836,37 @@ def create_app(
         ],
         client_max_size=MAX_ATTACHMENT_BYTES + 1024 * 1024,
     )
-    app["config"] = config
-    app["network_usage"] = NetworkUsage()
+    app[keys.CONFIG] = config
+    app[keys.NETWORK_USAGE] = NetworkUsage()
     app.on_response_prepare.append(record_network_response)
     # Every client snapshot carries this process-generation identity alongside
     # the session-local revision. Session revisions restart from zero when a
     # daemon adopts supervisor-owned PTYs, so revision alone cannot distinguish
     # a stale pre-restart response from the new daemon's current state.
-    app["daemon_generation"] = uuid4().hex
-    app["frontend_dir"] = frontend_dir or Path(__file__).parent / "static"
-    app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
-    app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
-    app["hook_ingress_windows"] = {}
-    app["mcp_rate_windows"] = {}
+    app[keys.DAEMON_GENERATION] = uuid4().hex
+    app[keys.FRONTEND_DIR] = frontend_dir or Path(__file__).parent / "static"
+    app[keys.PREVIEW_HTTP_SEMAPHORE] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
+    app[keys.PREVIEW_WS_SEMAPHORE] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
+    app[keys.HOOK_INGRESS_WINDOWS] = {}
+    app[keys.MCP_RATE_WINDOWS] = {}
     # Newest runtime tool inventory per session, published by the injected OMP
     # extension. In memory only: it describes one process generation, and a
     # snapshot that outlived its process would be a false liveness claim.
-    app["runtime_inventories"] = mcp_tools.LiveSnapshotStore()
-    app["mcp_tools_windows"] = {}
-    app["attachment_locks"] = {}
+    app[keys.RUNTIME_INVENTORIES] = mcp_tools.LiveSnapshotStore()
+    app[keys.MCP_TOOLS_WINDOWS] = {}
+    app[keys.ATTACHMENT_LOCKS] = {}
     # Mutable holder because aiohttp freezes app keys once started; carries the
     # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
-    app["shutdown_state"] = {"intent": None}
+    app[keys.SHUTDOWN_STATE] = {"intent": None}
     if desktop_control_token is not None and desktop_shutdown_event is not None:
-        app["desktop_control_token"] = desktop_control_token
-        app["desktop_shutdown_event"] = desktop_shutdown_event
+        app[keys.DESKTOP_CONTROL_TOKEN] = desktop_control_token
+        app[keys.DESKTOP_SHUTDOWN_EVENT] = desktop_shutdown_event
     # Self-restart needs a stop trigger and relaunch command in every mode,
     # independent of desktop-control authority.
     if desktop_shutdown_event is not None:
-        app["daemon_stop_event"] = desktop_shutdown_event
+        app[keys.DAEMON_STOP_EVENT] = desktop_shutdown_event
     if relaunch_command:
-        app["daemon_relaunch_command"] = list(relaunch_command)
+        app[keys.DAEMON_RELAUNCH_COMMAND] = list(relaunch_command)
     app.cleanup_ctx.append(runtime_context)
     app.add_routes(
         [
@@ -1253,13 +1257,13 @@ def create_app(
     # Windows' registry rarely maps .webmanifest; without this the manifest is
     # served as octet-stream and Chrome refuses to treat the app as installable.
     mimetypes.add_type("application/manifest+json", ".webmanifest")
-    assets = app["frontend_dir"] / "assets"
+    assets = app[keys.FRONTEND_DIR] / "assets"
     if assets.is_dir():
         app.router.add_static("/assets", assets)
-    notification_sounds = app["frontend_dir"] / "notification-sounds"
+    notification_sounds = app[keys.FRONTEND_DIR] / "notification-sounds"
     if notification_sounds.is_dir():
         app.router.add_static("/notification-sounds", notification_sounds)
-    icons = app["frontend_dir"] / "icons"
+    icons = app[keys.FRONTEND_DIR] / "icons"
     if icons.is_dir():
         app.router.add_static("/icons", icons)
     return app
@@ -1302,7 +1306,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     the redeploy script and the browser could not tell it from a hung daemon.
 
     So the build moved into a task and this context returns at once. The socket
-    opens, `/api/health` answers "starting, phase X" from `app["startup"]`, and
+    opens, `/api/health` answers "starting, phase X" from `app[keys.STARTUP]`, and
     `starting_middleware` refuses every route whose state does not exist yet.
     Readiness is a real signal rather than an assumption: `wait_runtime_ready`
     is how a caller that needs the built daemon waits for one.
@@ -1311,16 +1315,16 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     inline used to - see `_build_runtime`. Half-alive-forever is not an option
     that existed before this change and must not become one.
     """
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     # Death forensics first: report a predecessor that vanished without a clean
     # shutdown while this daemon is still barely started, then keep our own
     # heartbeat fresh so the next daemon can do the same for us.
     daemon_started(config.data_dir, log)
     timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
-    app["startup"] = timeline
+    app[keys.STARTUP] = timeline
     watchdog = asyncio.create_task(timeline.watchdog(), name="startup-watchdog")
     build = asyncio.create_task(_build_runtime(app, timeline), name="daemon-runtime-build")
-    app["runtime_build"] = build
+    app[keys.RUNTIME_BUILD] = build
     try:
         yield
     finally:
@@ -1350,7 +1354,7 @@ async def _build_runtime(app: web.Application, timeline: StartupTimeline) -> Non
     except BaseException as error:  # noqa: BLE001 - re-raised after being reported
         timeline.fail(error)
         log.exception("daemon runtime build failed; stopping the daemon")
-        stop_event: asyncio.Event | None = app.get("daemon_stop_event")
+        stop_event: asyncio.Event | None = app.get(keys.DAEMON_STOP_EVENT)
         if stop_event is not None:
             stop_event.set()
         raise
@@ -1359,7 +1363,7 @@ async def _build_runtime(app: web.Application, timeline: StartupTimeline) -> Non
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline
 ) -> None:
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
     # `PRAGMA quick_check` reads every page of the database and eleven stores
     # share `mux.db`, so this used to be paid eleven times, on the event loop,
@@ -1417,7 +1421,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # by the deterministic consumer and read by the blast-radius/navigation MCP
     # tools and the per-session change map. Shares mux.db.
     code_graph_store = CodeGraphStore(config.database_path)
-    publish(app, code_graph=code_graph_store)
+    publish(app, {keys.CODE_GRAPH: code_graph_store})
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
     # (status-detection.md § durable timeline). Pruned by its own flush loop.
@@ -1706,12 +1710,12 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     telemetry.start(events, sessions=sessions, history=history)
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
-    publish(app, automation_gate_cache=automation_gate_cache)
+    publish(app, {keys.AUTOMATION_GATE_CACHE: automation_gate_cache})
     # The install-wide half of the gate, cached beside the per-Project half and on
     # the same clock. Its input is a config read plus one SQLite row, which is
     # cheap but not free, and `_enabled_automations` runs on every Tier 0 write.
     llm_readiness_cache: dict[str, tuple[float, LlmReadiness]] = {}
-    publish(app, llm_readiness_cache=llm_readiness_cache)
+    publish(app, {keys.LLM_READINESS_CACHE: llm_readiness_cache})
 
     async def _llm_ready() -> LlmReadiness:
         """Whether a proven model provider exists, and the sentence saying why not.
@@ -1739,7 +1743,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         llm_readiness_cache["current"] = (now, answer)
         return answer
 
-    publish(app, llm_ready=_llm_ready)
+    publish(app, {keys.LLM_READY: _llm_ready})
 
     async def _enabled_automations(root: str) -> frozenset[str]:
         """Per-project opt-in closure, resolved off-loop with a short TTL cache.
@@ -1766,7 +1770,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
 
     # Exposed so module-level endpoints (Phase 7.7 scan-timeline consumers) can
     # resolve a Project's opt-in closure the same way the in-loop consumers do.
-    publish(app, automation_gate=_enabled_automations)
+    publish(app, {keys.AUTOMATION_GATE: _enabled_automations})
 
     # Phase 7.6 session control. Every bound lives here in the daemon operation;
     # the MCP tools are thin callers. The interrupt and graceful-end operations
@@ -1794,7 +1798,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         append_observation=append_observation,
         read_observations=read_observations,
     )
-    publish(app, session_control=session_control)
+    publish(app, {keys.SESSION_CONTROL: session_control})
 
     # Session-settle watches. Same shape again: the service owns the bounds and
     # the MCP tool is a caller. The only write it produces is a `rule`-sender
@@ -1822,16 +1826,16 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         events=events,
         queue_message=_session_watch_notice,
     )
-    publish(app, session_watch=session_watch)
+    publish(app, {keys.SESSION_WATCH: session_watch})
 
     # Phase 14 land queue. Same shape as session control: every bound lives in the
     # service and the MCP tool and HTTP route are thin callers. The trunk is the
     # Project root and the ref is the one the Git drawer and the session monitor
     # already share, so no third opinion about "the base" can appear here.
     land_store = LandStore(config.data_dir / "land-queue.sqlite3")
-    publish(app, land_store=land_store)
+    publish(app, {keys.LAND_STORE: land_store})
     verify_approvals = VerifyApprovalStore(config.data_dir)
-    publish(app, verify_approvals=verify_approvals)
+    publish(app, {keys.VERIFY_APPROVALS: verify_approvals})
 
     async def _land_compare_ref(root: str) -> str | None:
         project = next(
@@ -1957,7 +1961,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         record_fact=tier0.record_fact if tier0 is not None else None,
         draft_request=_land_draft,
     )
-    publish(app, land_queue=land_queue_service)
+    publish(app, {keys.LAND_QUEUE: land_queue_service})
     # The second half of the same consent: a session that asked to land is the waiting
     # half of an exchange it opened, so its grant must not lapse while the pipeline is
     # still computing the answer. Registered here rather than injected at construction
@@ -2229,8 +2233,8 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         action_preview=_assistant_action_preview,
         action_run=_assistant_run_action,
     )
-    publish(app, assistant=assistant)
-    publish(app, assistant_store=assistant_store)
+    publish(app, {keys.ASSISTANT: assistant})
+    publish(app, {keys.ASSISTANT_STORE: assistant_store})
 
     # Scheduled runs. Machine-local definitions, the same spawn path the Run menu
     # uses, and the same prompt queue for anything staged behind the seed prompt.
@@ -2254,8 +2258,8 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         history=history,
         automation_store=automation_store,
     )
-    publish(app, schedules=schedules)
-    publish(app, schedule_store=schedule_store)
+    publish(app, {keys.SCHEDULES: schedules})
+    publish(app, {keys.SCHEDULE_STORE: schedule_store})
 
     def _session_project_root(session_id: str) -> tuple[Any, str] | None:
         session = sessions.sessions.get(session_id)
@@ -2349,7 +2353,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         provider=openrouter,
         events=events,
     )
-    publish(app, behavioral_consumers=behavioral_consumers)
+    publish(app, {keys.BEHAVIORAL_CONSUMERS: behavioral_consumers})
     scan_timeline = ScanTimelineService(
         store=automation_store,
         tier0=tier0,
@@ -2428,7 +2432,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         process_inspector.start()
 
     deferred_tasks: list[asyncio.Task[Any]] = []
-    publish(app, startup_deferred_tasks=deferred_tasks)
+    publish(app, {keys.STARTUP_DEFERRED_TASKS: deferred_tasks})
     process_restore_task = asyncio.create_task(
         _restore_process_ownership(), name="process-ownership-restore"
     )
@@ -2479,7 +2483,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # the same moment everything that can stall it begins running.
     timeline.mark("background-loops")
     loop_lag = LoopLagMonitor()
-    publish(app, loop_lag=loop_lag)
+    publish(app, {keys.LOOP_LAG: loop_lag})
     background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag))
     background.start(CONFIG_WATCH_LOOP, lambda: _watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
@@ -2522,114 +2526,116 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         reconcile_task.add_done_callback(_log_task_failure)
     publish(
         app,
-        history=history,
-        events=events,
-        projects=projects,
-        history_backfills=history_backfills,
-        history_scan=history_scan,
-        sessions=sessions,
-        tier0=tier0,
-        mcp=McpService(
-            sessions,
-            history,
-            agent_messaging,
-            automation_store,
-            agent_context,
-            projects,
-            project_actions,
-            # A closure over the same app, so an agent-started action goes through the
-            # identical trust check, substitution, spawn path, and timeout arming as
-            # the Run menu. A second implementation would be a second authority path.
-            lambda project, action_id, inputs: _start_project_action(
-                app, project, action_id, inputs, origin="agent"
+        {
+            keys.HISTORY: history,
+            keys.EVENTS: events,
+            keys.PROJECTS: projects,
+            keys.HISTORY_BACKFILLS: history_backfills,
+            keys.HISTORY_SCAN: history_scan,
+            keys.SESSIONS: sessions,
+            keys.TIER0: tier0,
+            keys.MCP: McpService(
+                sessions,
+                history,
+                agent_messaging,
+                automation_store,
+                agent_context,
+                projects,
+                project_actions,
+                # A closure over the same app, so an agent-started action goes through the
+                # identical trust check, substitution, spawn path, and timeout arming as
+                # the Run menu. A second implementation would be a second authority path.
+                lambda project, action_id, inputs: _start_project_action(
+                    app, project, action_id, inputs, origin="agent"
+                ),
+                # Phase 7.5 memory reads: the deterministic fact store and the same
+                # per-project enablement closure Tier 0 capture and the detectors gate
+                # on, so an MCP read can never run under a stale opt-in answer one of
+                # them already refreshed.
+                tier0=tier0,
+                automation_gate=_enabled_automations,
+                session_control=session_control,
+                # Phase 7.9: the structural graph the blast-radius/navigation/context/
+                # test-gap reads answer from, gated on the same `code_graph` opt-in.
+                code_graph=code_graph_store,
+                # Phase 14: `request_land` is a caller over this service, which owns
+                # every bound including the grant the tool defaults to drafting under.
+                land_queue=land_queue_service,
+                # Phase 7.11: the scan service, read for its enablement/liveness block
+                # only. The records themselves come from the store, so the drawer and
+                # the `scan_timeline` tool answer "is this timeline stopped" from one
+                # implementation rather than two that can disagree.
+                scan_timeline_service=scan_timeline,
+                # The settle-watch service: `watch_session` arms through it and
+                # nothing else reaches it, because a watch is only ever asked for by
+                # the session that will receive the notice.
+                session_watch=session_watch,
+                # The configurator family's backing service. Reachable only from a
+                # session the daemon itself launched as a configurator; every other
+                # caller is never shown the tools and is refused if it guesses a name.
+                configurator=build_configurator_service(app),
             ),
-            # Phase 7.5 memory reads: the deterministic fact store and the same
-            # per-project enablement closure Tier 0 capture and the detectors gate
-            # on, so an MCP read can never run under a stale opt-in answer one of
-            # them already refreshed.
-            tier0=tier0,
-            automation_gate=_enabled_automations,
-            session_control=session_control,
-            # Phase 7.9: the structural graph the blast-radius/navigation/context/
-            # test-gap reads answer from, gated on the same `code_graph` opt-in.
-            code_graph=code_graph_store,
-            # Phase 14: `request_land` is a caller over this service, which owns
-            # every bound including the grant the tool defaults to drafting under.
-            land_queue=land_queue_service,
-            # Phase 7.11: the scan service, read for its enablement/liveness block
-            # only. The records themselves come from the store, so the drawer and
-            # the `scan_timeline` tool answer "is this timeline stopped" from one
-            # implementation rather than two that can disagree.
-            scan_timeline_service=scan_timeline,
-            # The settle-watch service: `watch_session` arms through it and
-            # nothing else reaches it, because a watch is only ever asked for by
-            # the session that will receive the notice.
-            session_watch=session_watch,
-            # The configurator family's backing service. Reachable only from a
-            # session the daemon itself launched as a configurator; every other
-            # caller is never shown the tools and is refused if it guesses a name.
-            configurator=build_configurator_service(app),
-        ),
-        reaper=reaper,
-        supervisor=supervisor_client,
-        git_monitor=git_monitor,
-        git_provenance=git_provenance_service,
-        hooks=hooks,
-        automation=automation,
-        automation_store=automation_store,
-        secret_store=secret_store,
-        openrouter=openrouter,
-        usage=usage,
-        telemetry=telemetry,
-        status_timeline=status_timeline,
-        session_recovery=session_recovery,
-        storage_usage=StorageUsage(
-            config.data_dir,
-            lambda: [
-                ProjectFootprintTarget(id=project.id, label=project.name, root=project.root)
-                for project in projects.ordered_projects()
-            ],
-        ),
-        deterministic_consumers=consumers,
-        attention_ranking=attention_ranking,
-        attention_narrator=attention_narrator,
-        project_contexts=project_contexts,
-        scan_timeline=scan_timeline,
-        provider_accounts=provider_accounts,
-        process_inspector=process_inspector,
-        ghost_windows=ghost_windows,
-        previews=previews,
-        fleet=fleet,
-        voice=voice,
-        voice_store=voice_store,
-        prompt_library=prompt_library,
-        prompt_queue=prompt_queue,
-        auto_delivery=auto_delivery,
-        schedules=schedules,
-        schedule_store=schedule_store,
-        agent_messaging=agent_messaging,
-        agent_context=agent_context,
-        settings_store=settings_store,
-        clipboard=clipboard,
-        push_store=push_store,
-        device_presence=device_presence,
-        project_actions=project_actions,
-        project_watcher=project_watcher,
-        automation_tasks=set(),
-        # One entry per running Project Action step that declared `timeout_seconds`.
-        # Kept beside the automation set and cancelled the same way, so a daemon
-        # shutdown does not leave a timer holding a reference to a dead session.
-        action_timeout_tasks=set(),
-        # One entry per worktree-removal purge in flight. Cancelled at shutdown like
-        # the rest: the graveyard is durable, so a cancelled purge costs disk until
-        # the next removal or the sweep at the next daemon start.
-        graveyard_tasks=set(),
-        # Cancelled in teardown alongside every other one-shot task; published
-        # rather than kept as a local because teardown no longer shares this
-        # function's scope.
-        reconcile_task=reconcile_task,
-        history_search_maintenance_task=history_search_maintenance_task,
-        prompt_queue_store=prompt_queue_store,
+            keys.REAPER: reaper,
+            keys.SUPERVISOR: supervisor_client,
+            keys.GIT_MONITOR: git_monitor,
+            keys.GIT_PROVENANCE: git_provenance_service,
+            keys.HOOKS: hooks,
+            keys.AUTOMATION: automation,
+            keys.AUTOMATION_STORE: automation_store,
+            keys.SECRET_STORE: secret_store,
+            keys.OPENROUTER: openrouter,
+            keys.USAGE: usage,
+            keys.TELEMETRY: telemetry,
+            keys.STATUS_TIMELINE: status_timeline,
+            keys.SESSION_RECOVERY: session_recovery,
+            keys.STORAGE_USAGE: StorageUsage(
+                config.data_dir,
+                lambda: [
+                    ProjectFootprintTarget(id=project.id, label=project.name, root=project.root)
+                    for project in projects.ordered_projects()
+                ],
+            ),
+            keys.DETERMINISTIC_CONSUMERS: consumers,
+            keys.ATTENTION_RANKING: attention_ranking,
+            keys.ATTENTION_NARRATOR: attention_narrator,
+            keys.PROJECT_CONTEXTS: project_contexts,
+            keys.SCAN_TIMELINE: scan_timeline,
+            keys.PROVIDER_ACCOUNTS: provider_accounts,
+            keys.PROCESS_INSPECTOR: process_inspector,
+            keys.GHOST_WINDOWS: ghost_windows,
+            keys.PREVIEWS: previews,
+            keys.FLEET: fleet,
+            keys.VOICE: voice,
+            keys.VOICE_STORE: voice_store,
+            keys.PROMPT_LIBRARY: prompt_library,
+            keys.PROMPT_QUEUE: prompt_queue,
+            keys.AUTO_DELIVERY: auto_delivery,
+            keys.SCHEDULES: schedules,
+            keys.SCHEDULE_STORE: schedule_store,
+            keys.AGENT_MESSAGING: agent_messaging,
+            keys.AGENT_CONTEXT: agent_context,
+            keys.SETTINGS_STORE: settings_store,
+            keys.CLIPBOARD: clipboard,
+            keys.PUSH_STORE: push_store,
+            keys.DEVICE_PRESENCE: device_presence,
+            keys.PROJECT_ACTIONS: project_actions,
+            keys.PROJECT_WATCHER: project_watcher,
+            keys.AUTOMATION_TASKS: set(),
+            # One entry per running Project Action step that declared `timeout_seconds`.
+            # Kept beside the automation set and cancelled the same way, so a daemon
+            # shutdown does not leave a timer holding a reference to a dead session.
+            keys.ACTION_TIMEOUT_TASKS: set(),
+            # One entry per worktree-removal purge in flight. Cancelled at shutdown like
+            # the rest: the graveyard is durable, so a cancelled purge costs disk until
+            # the next removal or the sweep at the next daemon start.
+            keys.GRAVEYARD_TASKS: set(),
+            # Cancelled in teardown alongside every other one-shot task; published
+            # rather than kept as a local because teardown no longer shares this
+            # function's scope.
+            keys.RECONCILE_TASK: reconcile_task,
+            keys.HISTORY_SEARCH_MAINTENANCE_TASK: history_search_maintenance_task,
+            keys.PROMPT_QUEUE_STORE: prompt_queue_store,
+        },
     )
     # The startup duration nobody could see. The listeners are already bound by
     # the time this runs, so it is no longer downtime - but it is still the
@@ -2653,9 +2659,9 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     runtime half-constructed, and a teardown that assumed a complete runtime
     would raise on the first missing handle and leak everything after it.
     """
-    config: Config = app["config"]
-    supervisor_client: SupervisorClient | None = app.get("supervisor")
-    network_usage: NetworkUsage | None = app.get("network_usage")
+    config: Config = app[keys.CONFIG]
+    supervisor_client: SupervisorClient | None = app.get(keys.SUPERVISOR)
+    network_usage: NetworkUsage | None = app.get(keys.NETWORK_USAGE)
     if network_usage is not None:
         network_snapshot = network_usage.snapshot()
         network_totals = network_snapshot["totals"]
@@ -2670,9 +2676,9 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     one_shot_tasks = [
         task
         for task in (
-            app.get("reconcile_task"),
-            app.get("history_search_maintenance_task"),
-            *(app.get("startup_deferred_tasks") or ()),
+            app.get(keys.RECONCILE_TASK),
+            app.get(keys.HISTORY_SEARCH_MAINTENANCE_TASK),
+            *(app.get(keys.STARTUP_DEFERRED_TASKS) or ()),
         )
         if task is not None
     ]
@@ -2709,7 +2715,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         await _stop_handle(app.get(key), key)
     # The fan-out estimate is built from weeks of interaction samples; persisting
     # them is what keeps a daemon restart from resetting the estimate to unknown.
-    attention_ranking = app.get("attention_ranking")
+    attention_ranking = app.get(keys.ATTENTION_RANKING)
     if attention_ranking is not None:
         try:
             await attention_ranking.persist_telemetry()
@@ -2744,8 +2750,8 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     # The intent comes from outside the daemon (desktop shutdown endpoint);
     # with a supervisor attached, an unqualified exit (Ctrl-C, crash-adjacent
     # teardown) defaults to detach — the tmux model.
-    intent = app["shutdown_state"]["intent"] or ("detach" if supervisor_client else "quit")
-    sessions: SessionManager | None = app.get("sessions")
+    intent = app[keys.SHUTDOWN_STATE]["intent"] or ("detach" if supervisor_client else "quit")
+    sessions: SessionManager | None = app.get(keys.SESSIONS)
     if sessions is not None:
         await sessions.shutdown(intent=intent)
     if supervisor_client is not None:
@@ -2840,7 +2846,7 @@ async def _loop_lag_loop(monitor: LoopLagMonitor) -> None:
 
 
 async def _watch_config(app: web.Application) -> None:
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     path = config.config_path
     if path is None:
         return
@@ -2865,11 +2871,11 @@ async def _watch_config(app: web.Application) -> None:
                 for field_name in Config.__dataclass_fields__:
                     setattr(config, field_name, getattr(loaded, field_name))
                 _apply_runtime_config(app, changed)
-                await app["events"].emit(
+                await app[keys.EVENTS].emit(
                     "configuration_changed", source="external_file", revision=config.revision
                 )
             except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError) as exc:
-                await app["events"].emit(
+                await app[keys.EVENTS].emit(
                     "configuration_error", source="external_file", error=str(exc)
                 )
 
@@ -2889,20 +2895,20 @@ def forget_llm_readiness(app: web.Application) -> None:
     under a five-second-old closure computed against the previous verdict, which
     is exactly long enough for a verify press to look like it did nothing.
     """
-    if cache := app.get("llm_readiness_cache"):
+    if cache := app.get(keys.LLM_READINESS_CACHE):
         cache.clear()
-    if gate_cache := app.get("automation_gate_cache"):
+    if gate_cache := app.get(keys.AUTOMATION_GATE_CACHE):
         gate_cache.clear()
 
 
 def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     if changed & LLM_ENDPOINT_FIELDS:
         forget_llm_readiness(app)
     if "log_level" in changed:
         with suppress(ValueError):  # _validate already constrains the value
             set_log_level(config.log_level)
-    sessions: SessionManager | None = app.get("sessions")
+    sessions: SessionManager | None = app.get(keys.SESSIONS)
     if sessions:
         if "scrollback_bytes" in changed:
             sessions.max_scrollback = config.scrollback_bytes
@@ -2925,16 +2931,16 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
                 prefix = f"MUX_{backend.upper().replace('-', '_')}"
                 sessions.child_env[f"{prefix}_EXE"] = resolve_command(executable)
                 sessions.child_env[f"{prefix}_ARGS"] = json.dumps(args)
-    git_monitor: GitMonitor | None = app.get("git_monitor")
+    git_monitor: GitMonitor | None = app.get(keys.GIT_MONITOR)
     if git_monitor and "git_poll_seconds" in changed:
         git_monitor.cadence = config.git_poll_seconds
-    process_inspector: ProcessInspector | None = app.get("process_inspector")
+    process_inspector: ProcessInspector | None = app.get(keys.PROCESS_INSPECTOR)
     if process_inspector:
         if "process_poll_seconds" in changed:
             process_inspector.cadence = config.process_poll_seconds
         if "process_orphan_grace_seconds" in changed:
             process_inspector.orphan_grace_seconds = config.process_orphan_grace_seconds
-    recovery: SessionRecoveryStore | None = app.get("session_recovery")
+    recovery: SessionRecoveryStore | None = app.get(keys.SESSION_RECOVERY)
     if recovery:
         # Three bounds the store reads at each checkpoint and each prune, so they
         # apply live. Whether the store exists at all is `session_recovery_enabled`,
@@ -2945,10 +2951,10 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             recovery.retention_days = config.session_recovery_retention_days
         if "session_recovery_max_sessions" in changed:
             recovery.max_cold_sessions = config.session_recovery_max_sessions
-    timeline_store: StatusTimelineStore | None = app.get("status_timeline")
+    timeline_store: StatusTimelineStore | None = app.get(keys.STATUS_TIMELINE)
     if timeline_store and "status_timeline_retention_days" in changed:
         timeline_store.retention_days = config.status_timeline_retention_days
-    ghost_windows: GhostWindowSweeper | None = app.get("ghost_windows")
+    ghost_windows: GhostWindowSweeper | None = app.get(keys.GHOST_WINDOWS)
     if ghost_windows:
         if "ghost_window_poll_seconds" in changed:
             ghost_windows.cadence = config.ghost_window_poll_seconds
@@ -2956,7 +2962,7 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             # The loop reads `enabled` each tick, so a live toggle takes effect
             # without restarting the task.
             ghost_windows.enabled = config.ghost_window_sweep_enabled
-    provider_accounts: ProviderAccountManager | None = app.get("provider_accounts")
+    provider_accounts: ProviderAccountManager | None = app.get(keys.PROVIDER_ACCOUNTS)
     if provider_accounts:
         if "provider_quota_poll_minutes" in changed:
             provider_accounts.poll_seconds = config.provider_quota_poll_minutes * 60
@@ -2969,12 +2975,12 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
         if "harness_exe" in changed:
             for provider in provider_accounts.executables:
                 provider_accounts.executables[provider] = config.harness_exe[provider]
-    clipboard: ClipboardStore | None = app.get("clipboard")
+    clipboard: ClipboardStore | None = app.get(keys.CLIPBOARD)
     if clipboard and any(field.startswith("clipboard_history_") for field in changed):
         # Owns its own side effects: disabling drops the ring, and turning
         # persistence off deletes the rows already written.
         clipboard.apply_config(config)
-    voice: VoiceService | None = app.get("voice")
+    voice: VoiceService | None = app.get(keys.VOICE)
     if voice:
         if "tts_lexicon" in changed:
             # Rebuilds the engine's merged lexicon and drops the per-word and
@@ -2984,7 +2990,7 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
         elif "tts_kokoro_speed" in changed:
             # Audition previews cache per voice at synthesis-time speed.
             voice.invalidate_kokoro_previews()
-    telemetry: OperationalTelemetryStore | None = app.get("telemetry")
+    telemetry: OperationalTelemetryStore | None = app.get(keys.TELEMETRY)
     if telemetry and "operational_telemetry_retention_days" in changed:
         telemetry.retention_days = config.operational_telemetry_retention_days
     if telemetry and "process_evidence_retention_days" in changed:
@@ -2992,7 +2998,7 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
 
 
 async def index(request: web.Request) -> web.StreamResponse:
-    path: Path = request.app["frontend_dir"] / "index.html"
+    path: Path = request.app[keys.FRONTEND_DIR] / "index.html"
     if not path.exists():
         return web.Response(
             text="swe-mux frontend is not built. Run: cd frontend; npm install; npm run build",
@@ -3002,7 +3008,7 @@ async def index(request: web.Request) -> web.StreamResponse:
 
 
 async def manifest(request: web.Request) -> web.StreamResponse:
-    path: Path = request.app["frontend_dir"] / "manifest.webmanifest"
+    path: Path = request.app[keys.FRONTEND_DIR] / "manifest.webmanifest"
     if not path.is_file():
         raise web.HTTPNotFound()
     return web.FileResponse(path)
@@ -3010,7 +3016,7 @@ async def manifest(request: web.Request) -> web.StreamResponse:
 
 async def service_worker(request: web.Request) -> web.StreamResponse:
     # Served from the origin root so its scope covers the whole app.
-    path: Path = request.app["frontend_dir"] / "sw.js"
+    path: Path = request.app[keys.FRONTEND_DIR] / "sw.js"
     if not path.is_file():
         raise web.HTTPNotFound()
     return web.FileResponse(
@@ -3032,13 +3038,13 @@ async def health(request: web.Request) -> web.Response:
     "not up yet"; the tray, the redeploy wait, and the browser's post-restart
     reload would each declare a daemon usable on a 200 here, and it would not be.
     """
-    timeline: StartupTimeline | None = request.app.get("startup")
+    timeline: StartupTimeline | None = request.app.get(keys.STARTUP)
     startup = timeline.snapshot() if timeline is not None else {"status": "ready"}
     if timeline is not None and not timeline.ready:
         return json_response({"ok": False, "version": "0.1.0", **startup}, 503)
-    sessions: SessionManager = request.app.get("sessions")
+    sessions: SessionManager | None = request.app.get(keys.SESSIONS)
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
-    supervisor = request.app.get("supervisor")
+    supervisor = request.app.get(keys.SUPERVISOR)
     connected = bool(supervisor is not None and supervisor.connected)
     # "lost" is deliberately distinct from "false": the supervisor is alive and
     # still holds live sessions, this daemon just cannot reach them. Reporting it
@@ -3050,7 +3056,7 @@ async def health(request: web.Request) -> web.Response:
             "ok": True,
             "live_sessions": live,
             "version": "0.1.0",
-            "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
+            "ui_build_id": read_ui_build_id(request.app[keys.FRONTEND_DIR]),
             "supervisor": connected,
             "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),
             # Supervised sessions this daemon could not rebuild (snapshot drift,
@@ -3063,7 +3069,7 @@ async def health(request: web.Request) -> web.Response:
             "cold_sessions": (
                 sum(1 for s in sessions.sessions.values() if s.record.cold) if sessions else 0
             ),
-            "session_recovery": request.app.get("session_recovery") is not None,
+            "session_recovery": request.app.get(keys.SESSION_RECOVERY) is not None,
             # The same block the starting answer carries, so one consumer reads
             # one shape either way - and so the phase breakdown of the start that
             # just finished stays readable without going to the log.
@@ -3073,7 +3079,7 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def get_harnesses(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     # Detection touches the filesystem (PATH resolution and a data-home stat per
     # harness), so it runs off the event loop. The configured executable override
     # is passed through so detection agrees with what the launcher would run.
@@ -3109,8 +3115,8 @@ async def desktop_shutdown(request: web.Request) -> web.Response:
     ones; "restart" detaches, leaving supervisor-owned sessions running for the
     next daemon to reattach.
     """
-    expected: str | None = request.app.get("desktop_control_token")
-    shutdown_event: asyncio.Event | None = request.app.get("desktop_shutdown_event")
+    expected: str | None = request.app.get(keys.DESKTOP_CONTROL_TOKEN)
+    shutdown_event: asyncio.Event | None = request.app.get(keys.DESKTOP_SHUTDOWN_EVENT)
     if expected is None or shutdown_event is None:
         raise web.HTTPNotFound()
     if not is_loopback_peer(request.remote or ""):
@@ -3126,7 +3132,7 @@ async def desktop_shutdown(request: web.Request) -> web.Response:
     mode = str(body.get("mode", "quit")) if isinstance(body, dict) else "quit"
     if mode not in {"quit", "restart"}:
         raise web.HTTPBadRequest(text="mode must be quit or restart")
-    request.app["shutdown_state"]["intent"] = "quit" if mode == "quit" else "detach"
+    request.app[keys.SHUTDOWN_STATE]["intent"] = "quit" if mode == "quit" else "detach"
     # The one authoritative "the outage starts now" signal a client can get: the
     # redeploy script stops the daemon through this endpoint, so the daemon is
     # still alive and still has its sockets when it learns the build finished.
@@ -3151,8 +3157,8 @@ async def _announce_redeploy_stopping(request: web.Request) -> None:
     # Everything here is looked up defensively. This runs on the daemon's way
     # out, including an ordinary desktop quit, and a courtesy broadcast must
     # never be the reason a shutdown request 500s instead of shutting down.
-    config: Config | None = request.app.get("config")
-    events: EventBus | None = request.app.get("events")
+    config: Config | None = request.app.get(keys.CONFIG)
+    events: EventBus | None = request.app.get(keys.EVENTS)
     if config is None or events is None or _redeploy_lock_pid(config) is None:
         return
     with suppress(Exception):
@@ -3188,8 +3194,8 @@ async def daemon_restart(request: web.Request) -> web.Response:
     would kill every session, so it is refused unless the caller passes
     ``{"force": true}`` — the same authority level as killing sessions.
     """
-    stop_event: asyncio.Event | None = request.app.get("daemon_stop_event")
-    relaunch: list[str] | None = request.app.get("daemon_relaunch_command")
+    stop_event: asyncio.Event | None = request.app.get(keys.DAEMON_STOP_EVENT)
+    relaunch: list[str] | None = request.app.get(keys.DAEMON_RELAUNCH_COMMAND)
     if stop_event is None or not relaunch:
         return json_response(
             {
@@ -3198,7 +3204,7 @@ async def daemon_restart(request: web.Request) -> web.Response:
             },
             409,
         )
-    supervisor = request.app.get("supervisor")
+    supervisor = request.app.get(keys.SUPERVISOR)
     attached = bool(supervisor is not None and supervisor.connected)
     try:
         body = await request.json()
@@ -3217,8 +3223,8 @@ async def daemon_restart(request: web.Request) -> web.Response:
             },
             409,
         )
-    config: Config = request.app["config"]
-    request.app["shutdown_state"]["intent"] = "detach" if attached else "quit"
+    config: Config = request.app[keys.CONFIG]
+    request.app[keys.SHUTDOWN_STATE]["intent"] = "detach" if attached else "quit"
     _spawn_daemon_successor(list(relaunch), config.data_dir / "daemon-relaunch.log")
     stop_event.set()
     response = json_response({"status": "restarting", "sessions_preserved": attached}, 202)
@@ -3289,7 +3295,7 @@ def _redeploy_interruptions(request: web.Request) -> dict[str, Any]:
     gate that refuses wrongly. The genuine blocker (a process anchoring the
     bundle, which really does fail the swap) is a separate, existing refusal.
     """
-    previews: PreviewRegistry | None = request.app.get("previews")
+    previews: PreviewRegistry | None = request.app.get(keys.PREVIEWS)
     items = []
     if previews is not None:
         items = [
@@ -3340,7 +3346,7 @@ async def _announce_redeploy_started(request: web.Request, *, pid: int) -> None:
     discovering the redeploy as a wall of failed requests when the daemon finally
     goes down.
     """
-    events: EventBus | None = request.app.get("events")
+    events: EventBus | None = request.app.get(keys.EVENTS)
     if events is None:
         return
     with suppress(Exception):
@@ -3356,7 +3362,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
     the bundle in, and rolls back to the previous bundle if the new one never
     reports healthy — so a failed redeploy never strands a remote client.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     root = redeploy_source_root()
     if root is None:
         return json_response(
@@ -3380,7 +3386,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
     except (ValueError, UnicodeDecodeError):
         body = {}
     force = bool(body.get("force")) if isinstance(body, dict) else False
-    supervisor = request.app.get("supervisor")
+    supervisor = request.app.get(keys.SUPERVISOR)
     attached = bool(supervisor is not None and supervisor.connected)
     if not attached and not force:
         return json_response(
@@ -3520,7 +3526,7 @@ async def daemon_redeploy_announce(request: web.Request) -> web.Response:
     this exists to describe a redeploy that is really happening, not to let
     anything put the fleet's UI into a fake maintenance mode.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     if not is_loopback_peer(request.remote or ""):
         raise web.HTTPForbidden(text="redeploy announcements are loopback-only")
     pid = _redeploy_lock_pid(config)
@@ -3566,7 +3572,7 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
     detect an early build failure (running=false without ever losing the
     daemon) and surface the log instead of waiting out a reconnect window.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     pid = _redeploy_lock_pid(config)
     tail = _redeploy_log_tail(config, running=pid is not None)
     response = json_response(
@@ -3592,14 +3598,14 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
 
 
 async def remote_status(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     return json_response(
         await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     )
 
 
 async def enable_mobile_voice(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     if request.headers.get("X-Mux-User-Gesture") != "mobile-voice-setup":
         return json_response({"error": "mobile voice setup requires an explicit user action"}, 400)
     if not config.tailnet_enabled:
@@ -3623,7 +3629,7 @@ async def firewall_status(request: web.Request) -> web.Response:
     UI hides the panel; the tailnet listener there is governed by the host's own
     firewall, covered by the reachability guidance instead.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     if not firewall_supported():
         return json_response(await inspect_firewall(None))
     # The tailnet adapter's network category decides which firewall profile
@@ -3646,7 +3652,7 @@ async def firewall_repair(request: web.Request) -> web.Response:
     Requires an explicit user gesture header so a stray poll can never trigger a
     UAC prompt.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     if request.headers.get("X-Mux-User-Gesture") != "firewall-repair":
         return json_response({"error": "firewall repair requires an explicit user action"}, 400)
     if not firewall_supported():
@@ -3666,7 +3672,7 @@ async def wsl_bridge_status(request: web.Request) -> web.Response:
     `?probe=1` inspects each distribution, which *starts* a stopped one and costs
     seconds. Off by default so opening a settings page never does that unasked.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     probe = request.query.get("probe") in {"1", "true", "yes"}
     payload = await asyncio.to_thread(
         wsl_setup_status,
@@ -3692,7 +3698,7 @@ async def wsl_bridge_install(request: web.Request) -> web.Response:
     distro = str(body.get("distro") or "").strip()
     if not distro:
         return json_response({"error": "distro is required"}, 400)
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     try:
         status = await asyncio.to_thread(install_wsl_bridge, distro)
     except WslBridgeError as exc:
@@ -3710,7 +3716,7 @@ async def wsl_bridge_firewall_repair(request: web.Request) -> web.Response:
     scopes are different and so is the consent: enabling the WSL bridge is not
     agreement to phone access, or the reverse.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     if request.headers.get("X-Mux-User-Gesture") != "wsl-firewall-repair":
         return json_response({"error": "firewall repair requires an explicit user action"}, 400)
     subnet = await asyncio.to_thread(wsl_adapter_subnet)
@@ -3719,7 +3725,7 @@ async def wsl_bridge_firewall_repair(request: web.Request) -> web.Response:
 
 
 async def get_config(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     response = json_response(config.public_dict())
     response.headers["ETag"] = f'"{config.revision}"'
     return response
@@ -3735,7 +3741,7 @@ async def settings_bundle(request: web.Request) -> web.Response:
     part degrades to null with the reason under `errors`, and the client
     decides which missing parts it can tolerate.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     cwd = request.query.get("cwd")
     parts: dict[str, Any] = {}
     errors: dict[str, str] = {}
@@ -3755,7 +3761,7 @@ async def settings_bundle(request: web.Request) -> web.Response:
         return await asyncio.to_thread(profile_payload, config)
 
     async def usage() -> Any:
-        return request.app["usage"].snapshot()
+        return request.app[keys.USAGE].snapshot()
 
     async def project_config() -> Any:
         return await read_project_config(cwd) if cwd else None
@@ -3773,7 +3779,7 @@ async def settings_bundle(request: web.Request) -> web.Response:
 
 
 async def patch_config(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     supplied = request.headers.get("If-Match", "").strip('"')
     if supplied and supplied != str(config.revision):
         return json_response(
@@ -3797,7 +3803,7 @@ async def patch_config(request: web.Request) -> web.Response:
             422,
         )
     _apply_runtime_config(request.app, hot)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "configuration_changed", source="settings", changed=sorted(hot | restart)
     )
     response = json_response(
@@ -3808,7 +3814,7 @@ async def patch_config(request: web.Request) -> web.Response:
 
 
 async def reset_config(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     defaults = Config(data_dir=config.data_dir)
     fields = {
         key: getattr(defaults, key)
@@ -3825,7 +3831,7 @@ async def reset_config(request: web.Request) -> web.Response:
         }
     }
     hot, restart = update_config(config, fields)
-    await request.app["events"].emit("configuration_changed", source="settings", reset=True)
+    await request.app[keys.EVENTS].emit("configuration_changed", source="settings", reset=True)
     return json_response(
         {**config.public_dict(), "hot_applied": sorted(hot), "restart_required": sorted(restart)}
     )
@@ -3848,7 +3854,7 @@ def _project_summaries(app: web.Application) -> list[dict[str, Any]]:
     per-Project counts, and a configurator reading its inventory needs none of
     it. A capabilities read must not cost a fan-out of history queries.
     """
-    manager: ProjectManager = app["projects"]
+    manager: ProjectManager = app[keys.PROJECTS]
     return [
         {"id": item.id, "name": item.name, "root": str(item.root)}
         for item in manager.ordered_projects()
@@ -3866,7 +3872,7 @@ async def _configurator_apply_settings(
     parse tells it neither. Nothing partial can happen either way - `_validate`
     runs over the whole candidate before anything is written.
     """
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     try:
         hot, restart = await asyncio.to_thread(update_config, config, changes)
     except ValueError as exc:
@@ -3880,7 +3886,7 @@ async def _configurator_apply_settings(
     # `source` is the provenance the event log keeps, and it is worth being able
     # to tell a configurator-driven change from one a human made in the panel
     # when reading back why a setting moved.
-    await app["events"].emit(
+    await app[keys.EVENTS].emit(
         "configuration_changed", source="configurator", changed=sorted(hot | restart)
     )
     log.info(
@@ -3914,12 +3920,12 @@ async def _configurator_edit_device_settings(
     which reads to the operator as a change that did not happen - the worst
     possible outcome for a tool whose whole value is doing the thing they asked.
     """
-    store: SettingsStore = app["settings_store"]
+    store: SettingsStore = app[keys.SETTINGS_STORE]
     target = profile or (RAIL_PROFILE if domain == RAIL_DOMAIN else "desktop")
     result = await asyncio.to_thread(
         store.apply_operations, target, domain, operations, expect_digest
     )
-    await app["events"].emit("settings_changed", source="configurator", profile=target)
+    await app[keys.EVENTS].emit("settings_changed", source="configurator", profile=target)
     log.info(
         "configurator_device_settings_applied profile=%s domain=%s operations=%d",
         target,
@@ -3936,7 +3942,7 @@ def _configurator_resolve_project(app: web.Application, requested: str) -> Any:
     projection and having to translate it back to a UUID to act on it is a
     round-trip that exists only to be got wrong.
     """
-    manager: ProjectManager = app["projects"]
+    manager: ProjectManager = app[keys.PROJECTS]
     needle = requested.strip()
     if not needle:
         raise ValueError("name a Project: this session is not owned by one")
@@ -3966,7 +3972,7 @@ async def _configurator_project_settings(
     # The same resolver the runtime gates on, through the same readiness probe,
     # so this can never report a Project as enabled for something the consumers
     # are declining to run.
-    readiness = await app["llm_ready"]()
+    readiness = await app[keys.LLM_READY]()
     resolution = resolve_automation_config(
         opt_ins if isinstance(opt_ins, dict) else {}, llm_ready=readiness.ready
     )
@@ -4032,8 +4038,8 @@ async def _configurator_apply_project_settings(
             "path": stored["path"],
         }
     identity = await resolve_project(result["project"]["root"])
-    await app["history"].register_project_scope(identity)
-    await app["events"].emit(
+    await app[keys.HISTORY].register_project_scope(identity)
+    await app[keys.EVENTS].emit(
         "project_configuration_changed", source="configurator", project_id=record.id
     )
     log.info(
@@ -4058,7 +4064,7 @@ def build_configurator_service(app: web.Application) -> ConfiguratorService:
     with three stubs, while every call it makes lands in the same implementation
     the browser reaches.
     """
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     return ConfiguratorService(
         config=config,
         projects=lambda: _project_summaries(app),
@@ -4068,7 +4074,7 @@ def build_configurator_service(app: web.Application) -> ConfiguratorService:
         # Read straight from the store (a plain file store, no HTTP layer) but
         # write through a closure, because a write has to emit the event that
         # repaints every attached browser.
-        settings_store=lambda: app["settings_store"],
+        settings_store=lambda: app[keys.SETTINGS_STORE],
         edit_device_settings=lambda **kwargs: _configurator_edit_device_settings(app, **kwargs),
         read_project_settings=lambda project: _configurator_project_settings(app, project),
         apply_project_settings=lambda **kwargs: _configurator_apply_project_settings(
@@ -4106,7 +4112,7 @@ def _configurator_project(app: web.Application, requested: str) -> Any:
     maintainer's configurator lands where swe-mux's own code is, which is the
     only place code changes are possible), then simply the first Project.
     """
-    manager: ProjectManager = app["projects"]
+    manager: ProjectManager = app[keys.PROJECTS]
     if requested and requested in manager.projects:
         return manager.projects[requested]
     ordered = manager.ordered_projects()
@@ -4129,9 +4135,9 @@ async def configurator_options(request: web.Request) -> web.Response:
     frontend asks once when the surface opens and renders a disabled control
     with a reason rather than a control that fails when clicked.
     """
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     candidates = await asyncio.to_thread(_configurator_candidates, config)
-    manager: ProjectManager = request.app["projects"]
+    manager: ProjectManager = request.app[keys.PROJECTS]
     return json_response(
         {
             "harnesses": list(candidates),
@@ -4159,7 +4165,7 @@ async def launch_configurator(request: web.Request) -> web.Response:
     `SessionRecord.configurator`), so no request an agent can compose reaches it.
     """
     body = await request.json() if request.can_read_body else {}
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     candidates = await asyncio.to_thread(_configurator_candidates, config)
     requested = str(body.get("harness") or "").strip()
     harness = _configurator_harness(config, requested, candidates)
@@ -4214,7 +4220,7 @@ async def launch_configurator(request: web.Request) -> web.Response:
     )
     session.record.configurator = True
     session.publish_update()
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "configurator_launched",
         source="user",
         session_id=session.record.id,
@@ -4334,7 +4340,7 @@ def _keybindings_payload(config: Config) -> dict[str, Any]:
 
 
 async def get_keybindings(request: web.Request) -> web.Response:
-    return json_response(_keybindings_payload(request.app["config"]))
+    return json_response(_keybindings_payload(request.app[keys.CONFIG]))
 
 
 async def put_keybindings(request: web.Request) -> web.Response:
@@ -4354,7 +4360,7 @@ async def put_keybindings(request: web.Request) -> web.Response:
         return json_response({"error": "invalid keybindings", "fields": rejected}, 422)
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
-    path = request.app["config"].data_dir / "keybindings.json"
+    path = request.app[keys.CONFIG].data_dir / "keybindings.json"
     temporary = path.with_suffix(".json.tmp")
     document = {
         "version": KEYBINDINGS_FILE_VERSION,
@@ -4363,17 +4369,17 @@ async def put_keybindings(request: web.Request) -> web.Response:
     }
     temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
-    await request.app["events"].emit("configuration_changed", source="keybindings")
+    await request.app[keys.EVENTS].emit("configuration_changed", source="keybindings")
     return await get_keybindings(request)
 
 
 async def get_hooks(request: web.Request) -> web.Response:
-    path = request.app["config"].data_dir / "hooks.toml"
+    path = request.app[keys.CONFIG].data_dir / "hooks.toml"
     return json_response({"text": path.read_text(encoding="utf-8") if path.exists() else ""})
 
 
 async def get_hook_status(request: web.Request) -> web.Response:
-    hooks: MetaHookEngine = request.app["hooks"]
+    hooks: MetaHookEngine = request.app[keys.HOOKS]
     return json_response(
         {
             "diagnostic": hooks.diagnostic,
@@ -4390,11 +4396,11 @@ async def put_hooks(request: web.Request) -> web.Response:
         return json_response({"error": "invalid hooks TOML", "fields": {"text": str(exc)}}, 422)
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
-    path = request.app["config"].data_dir / "hooks.toml"
+    path = request.app[keys.CONFIG].data_dir / "hooks.toml"
     temporary = path.with_suffix(".toml.tmp")
     temporary.write_text(text, encoding="utf-8")
     temporary.replace(path)
-    await request.app["events"].emit("configuration_changed", source="hooks")
+    await request.app[keys.EVENTS].emit("configuration_changed", source="hooks")
     return json_response({"text": text})
 
 
@@ -4447,8 +4453,8 @@ def _load_repo_rule_entry(project_id: str, root: str) -> dict[str, Any] | None:
 
 
 async def _automation_status_payload(request: web.Request) -> dict[str, Any]:
-    automation: AutomationEngine = request.app["automation"]
-    projects = await request.app["history"].project_scopes(include_hidden=True)
+    automation: AutomationEngine = request.app[keys.AUTOMATION]
+    projects = await request.app[keys.HISTORY].project_scopes(include_hidden=True)
     entries = await asyncio.gather(
         *(
             asyncio.to_thread(_load_repo_rule_entry, str(project["id"]), str(project["root"]))
@@ -4459,9 +4465,9 @@ async def _automation_status_payload(request: web.Request) -> dict[str, Any]:
     return {
         **automation.status(),
         "legacy": {
-            "path": str(request.app["config"].data_dir / "hooks.toml"),
-            "active": bool(request.app["hooks"].rules),
-            "diagnostic": request.app["hooks"].diagnostic,
+            "path": str(request.app[keys.CONFIG].data_dir / "hooks.toml"),
+            "active": bool(request.app[keys.HOOKS].rules),
+            "diagnostic": request.app[keys.HOOKS].diagnostic,
             "migration": "explicit-save-required",
         },
         "repository_rules": repository_rules,
@@ -4473,12 +4479,12 @@ async def get_automation_status(request: web.Request) -> web.Response:
 
 
 def _automation_rules_payload(request: web.Request) -> dict[str, Any]:
-    path = request.app["config"].data_dir / "rules.toml"
+    path = request.app[keys.CONFIG].data_dir / "rules.toml"
     return {
         "version": 1,
         "text": path.read_text(encoding="utf-8") if path.exists() else "version = 1\n",
-        "rules": [rule.snapshot() for rule in request.app["automation"].rules],
-        "diagnostic": request.app["automation"].diagnostic,
+        "rules": [rule.snapshot() for rule in request.app[keys.AUTOMATION].rules],
+        "diagnostic": request.app[keys.AUTOMATION].diagnostic,
     }
 
 
@@ -4494,14 +4500,14 @@ async def put_automation_rules(request: web.Request) -> web.Response:
         return json_response({"error": "invalid rules TOML", "fields": {"text": str(exc)}}, 422)
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
-    path = request.app["config"].data_dir / "rules.toml"
+    path = request.app[keys.CONFIG].data_dir / "rules.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".toml.tmp")
     temporary.write_text(text, encoding="utf-8")
     temporary.replace(path)
-    automation: AutomationEngine = request.app["automation"]
+    automation: AutomationEngine = request.app[keys.AUTOMATION]
     automation.reload()
-    await request.app["events"].emit("configuration_changed", source="settings")
+    await request.app[keys.EVENTS].emit("configuration_changed", source="settings")
     return await get_automation_rules(request)
 
 
@@ -4512,7 +4518,7 @@ async def patch_automation_rule(request: web.Request) -> web.Response:
     if any(not isinstance(value, bool) for value in body.values()):
         raise ValueError("enabled and shadow must be boolean")
     rule_id = request.match_info["rule_id"]
-    automation: AutomationEngine = request.app["automation"]
+    automation: AutomationEngine = request.app[keys.AUTOMATION]
     found = False
     rules = []
     for rule in automation.rules:
@@ -4531,19 +4537,19 @@ async def patch_automation_rule(request: web.Request) -> web.Response:
         raise KeyError(rule_id)
     text = serialize_rules(rules)
     parse_rules(text)
-    path = request.app["config"].data_dir / "rules.toml"
+    path = request.app[keys.CONFIG].data_dir / "rules.toml"
     temporary = path.with_suffix(".toml.tmp")
     temporary.write_text(text, encoding="utf-8")
     temporary.replace(path)
     automation.reload()
-    await request.app["events"].emit("configuration_changed", source="settings")
+    await request.app[keys.EVENTS].emit("configuration_changed", source="settings")
     return await get_automation_rules(request)
 
 
 async def automation_dry_run(request: web.Request) -> web.Response:
     body = await request.json()
     sequence = int(body.get("event_seq") or 0)
-    rows = await request.app["history"].events(after_seq=max(0, sequence - 1), limit=1)
+    rows = await request.app[keys.HISTORY].events(after_seq=max(0, sequence - 1), limit=1)
     if not rows or int(rows[0]["seq"]) != sequence:
         raise KeyError(sequence)
     row = rows[0]
@@ -4555,7 +4561,7 @@ async def automation_dry_run(request: web.Request) -> web.Response:
         row["payload"],
         int(row["seq"]),
     )
-    session = request.app["sessions"].sessions.get(row.get("session_id") or "")
+    session = request.app[keys.SESSIONS].sessions.get(row.get("session_id") or "")
     normalized = normalize_event(
         event,
         session.record if session else None,
@@ -4563,7 +4569,7 @@ async def automation_dry_run(request: web.Request) -> web.Response:
     )
     supplied = body.get("text")
     rules = parse_rules(str(supplied), source="dry-run") if supplied is not None else None
-    reports = await request.app["automation"].evaluate(normalized, rules=rules, dry_run=True)
+    reports = await request.app[keys.AUTOMATION].evaluate(normalized, rules=rules, dry_run=True)
     return json_response({"event": normalized.snapshot(), "reports": reports})
 
 
@@ -4695,7 +4701,7 @@ async def _price_cache_saving(request: web.Request, breakdown: dict[str, Any]) -
     other is arithmetic over prices that are always published, and collapsing
     them would leave nobody able to say which they were reading.
     """
-    store: AutomationStore = request.app["automation_store"]
+    store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     try:
         catalog = {
             str(entry["id"]): entry
@@ -4739,20 +4745,20 @@ async def _price_cache_saving(request: web.Request, breakdown: dict[str, Any]) -
 
 
 async def automation_dashboard(request: web.Request) -> web.Response:
-    store: AutomationStore = request.app["automation_store"]
-    engine = request.app["automation"].status()
+    store: AutomationStore = request.app[keys.AUTOMATION_STORE]
+    engine = request.app[keys.AUTOMATION].status()
     breakdown = await store.spend_breakdown(days=7)
     breakdown["rules"] = _label_spend_rows(
-        breakdown["rules"], engine, request.app["config"]
+        breakdown["rules"], engine, request.app[keys.CONFIG]
     )
     await _price_cache_saving(request, breakdown)
     return json_response(
         {
             **await store.dashboard(),
             "controls": {
-                "automation_enabled": bool(request.app["config"].automation_enabled),
+                "automation_enabled": bool(request.app[keys.CONFIG].automation_enabled),
                 "scan_timeline_enabled": bool(
-                    request.app["config"].scan_timeline_enabled
+                    request.app[keys.CONFIG].scan_timeline_enabled
                 ),
             },
             "engine": engine,
@@ -4771,7 +4777,7 @@ async def automation_dashboard(request: web.Request) -> web.Response:
 async def automation_firings(request: web.Request) -> web.Response:
     return json_response(
         {
-            "items": await request.app["automation_store"].firings(
+            "items": await request.app[keys.AUTOMATION_STORE].firings(
                 rule_id=request.query.get("rule"),
                 limit=int(request.query.get("limit", 200)),
             )
@@ -4789,12 +4795,12 @@ async def _annotation_session_run_ids(app: web.Application, session_id: str) -> 
     (a ``/clear`` mints a fresh one) live in history, so both are unioned.
     """
     run_ids: set[str] = set()
-    live = app["sessions"].sessions.get(session_id)
+    live = app[keys.SESSIONS].sessions.get(session_id)
     if live is not None:
         current = str(getattr(live.record, "agent_run_id", "") or "")
         if current:
             run_ids.add(current)
-    for row in await app["history"].agent_runs_for_session(session_id):
+    for row in await app[keys.HISTORY].agent_runs_for_session(session_id):
         run_id = str(row.get("agent_run_id") or "")
         if run_id:
             run_ids.add(run_id)
@@ -4832,7 +4838,7 @@ async def list_annotations(request: web.Request) -> web.Response:
     same scope but ignores the tag chip, so the human surface can tell a quiet
     scope from a filtered one.
     """
-    store = request.app["automation_store"]
+    store = request.app[keys.AUTOMATION_STORE]
     query = request.query
     agent_run_id = query.get("agent_run_id")
     project_id = query.get("project_id")
@@ -4875,12 +4881,12 @@ async def _llm_readiness(request: web.Request) -> LlmReadiness:
     was asked, which is different from both verdicts. The daemon installs
     `llm_ready` in `create_app`, so no real request reaches this branch.
     """
-    resolver = request.app.get("llm_ready")
+    resolver = request.app.get(keys.LLM_READY)
     if resolver is not None:
-        return cast(LlmReadiness, await resolver())
-    config = request.app.get("config")
-    store = request.app.get("secret_store")
-    automation_store = request.app.get("automation_store")
+        return await resolver()
+    config = request.app.get(keys.CONFIG)
+    store = request.app.get(keys.SECRET_STORE)
+    automation_store = request.app.get(keys.AUTOMATION_STORE)
     if config is None or store is None or automation_store is None:
         return LlmReadiness(
             True, "openrouter", "unknown", "No model provider is wired into this daemon."
@@ -4903,9 +4909,9 @@ async def _provider_status(request: web.Request) -> dict[str, Any]:
     the reason it is not usable when it is not. `llm` is the resolved verdict for
     the *active* one, which is what every gate in the app renders.
     """
-    config: Config = request.app["config"]
-    store: PlatformSecretStore = request.app["secret_store"]
-    automation_store: AutomationStore = request.app["automation_store"]
+    config: Config = request.app[keys.CONFIG]
+    store: PlatformSecretStore = request.app[keys.SECRET_STORE]
+    automation_store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     active = resolve_llm_endpoint(config)
     providers: list[dict[str, Any]] = []
     for name in LLM_PROVIDERS:
@@ -4954,7 +4960,7 @@ async def automation_provider_status(request: web.Request) -> web.Response:
 
 def _requested_endpoint(request: web.Request, body: dict[str, Any]) -> LlmEndpoint:
     """The endpoint a provider request names, defaulting to the active one."""
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     name = str(body.get("provider") or "").strip()
     if not name:
         return resolve_llm_endpoint(config)
@@ -4969,9 +4975,9 @@ async def automation_provider_key(request: web.Request) -> web.Response:
     body = await request.json()
     operation = str(body.get("operation") or "test")
     value = body.get("key")
-    store: PlatformSecretStore = request.app["secret_store"]
-    provider: OpenRouterClient = request.app["openrouter"]
-    automation_store: AutomationStore = request.app["automation_store"]
+    store: PlatformSecretStore = request.app[keys.SECRET_STORE]
+    provider: OpenRouterClient = request.app[keys.OPENROUTER]
+    automation_store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     try:
         endpoint = _requested_endpoint(request, body)
         secret_name = endpoint.secret_name
@@ -5019,9 +5025,9 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
     blip into a Project-wide switch-off.
     """
     body = await request.json() if request.can_read_body else {}
-    provider: OpenRouterClient = request.app["openrouter"]
-    store: PlatformSecretStore = request.app["secret_store"]
-    automation_store: AutomationStore = request.app["automation_store"]
+    provider: OpenRouterClient = request.app[keys.OPENROUTER]
+    store: PlatformSecretStore = request.app[keys.SECRET_STORE]
+    automation_store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     endpoint = _requested_endpoint(request, body)
     try:
         result = await provider.verify(endpoint=endpoint)
@@ -5049,7 +5055,7 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
         latency_ms=result.latency_ms,
     )
     forget_llm_readiness(request.app)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "llm_provider_verified",
         source="user",
         provider=endpoint.provider,
@@ -5082,9 +5088,9 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
 
 
 async def refresh_automation_models(request: web.Request) -> web.Response:
-    store: AutomationStore = request.app["automation_store"]
+    store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     try:
-        models = await request.app["openrouter"].models()
+        models = await request.app[keys.OPENROUTER].models()
         await store.cache_models(models)
     except OpenRouterError as exc:
         await store.record_model_error(str(exc))
@@ -5095,7 +5101,7 @@ async def refresh_automation_models(request: web.Request) -> web.Response:
 async def automation_notifications(request: web.Request) -> web.Response:
     return json_response(
         {
-            "items": await request.app["automation_store"].notifications(
+            "items": await request.app[keys.AUTOMATION_STORE].notifications(
                 unread=request.query.get("unread") == "1",
                 limit=int(request.query.get("limit", 200)),
             )
@@ -5105,7 +5111,7 @@ async def automation_notifications(request: web.Request) -> web.Response:
 
 async def patch_automation_notification(request: web.Request) -> web.Response:
     body = await request.json()
-    changed = await request.app["automation_store"].mark_notification(
+    changed = await request.app[keys.AUTOMATION_STORE].mark_notification(
         request.match_info["notification_id"], bool(body.get("read", True))
     )
     if not changed:
@@ -5116,7 +5122,7 @@ async def patch_automation_notification(request: web.Request) -> web.Response:
 async def patch_automation_notifications(request: web.Request) -> web.Response:
     """Bulk read/unread over the whole attention inbox (the drawer's "clear all")."""
     body = await request.json()
-    changed = await request.app["automation_store"].mark_all_notifications(
+    changed = await request.app[keys.AUTOMATION_STORE].mark_all_notifications(
         bool(body.get("read", True))
     )
     return json_response({"ok": True, "changed": changed})
@@ -5131,7 +5137,7 @@ async def list_lineage(request: web.Request) -> web.Response:
     deleted. A client holding one page of History results has none of those for the
     other end of an edge, which is how the lineage section came to print raw ids.
     """
-    edges = await request.app["automation_store"].lineage(request.query.get("run_id"))
+    edges = await request.app[keys.AUTOMATION_STORE].lineage(request.query.get("run_id"))
     await _decorate_lineage_endpoints(request.app, edges)
     return json_response({"items": edges})
 
@@ -5148,20 +5154,20 @@ async def _decorate_lineage_endpoints(
     """
     if not edges:
         return
-    manager: SessionManager = app["sessions"]
+    manager: SessionManager = app[keys.SESSIONS]
     endpoints = {
         str(edge.get(field) or "")
         for edge in edges
         for field in ("parent_run_id", "child_run_id")
     }
     endpoints.discard("")
-    rows = await app["history"].history_naming_rows(sorted(endpoints))
+    rows = await app[keys.HISTORY].history_naming_rows(sorted(endpoints))
     live_by_run = {
         session_titles.record_run_id(session.record): session
         for session in manager.sessions.values()
     }
     titles = await session_titles.generated_titles(
-        app["automation_store"],
+        app[keys.AUTOMATION_STORE],
         set(live_by_run) | {session_titles.row_run_id(row) for row in rows.values()},
     )
 
@@ -5195,7 +5201,7 @@ async def create_lineage(request: web.Request) -> web.Response:
     }:
         raise ValueError("parent_run_id, child_run_id, and a valid relation are required")
     return json_response(
-        await request.app["automation_store"].add_lineage(
+        await request.app[keys.AUTOMATION_STORE].add_lineage(
             parent, child, relation, body.get("metadata")
         ),
         201,
@@ -5211,21 +5217,21 @@ async def absence_report(request: web.Request) -> web.Response:
     a conversation was replaced mid-absence.
     """
     since = float(request.query["since"]) if request.query.get("since") else None
-    report = await request.app["fleet"].absence_report(since)
-    digest = await request.app["attention_ranking"].digest(report["since"])
+    report = await request.app[keys.FLEET].absence_report(since)
+    digest = await request.app[keys.ATTENTION_RANKING].digest(report["since"])
     return json_response({**report, **digest, "since": report["since"]})
 
 
 async def attention_inbox(request: web.Request) -> web.Response:
     limit = int(request.query.get("limit", 200))
-    return json_response(await request.app["attention_ranking"].inbox(limit=limit))
+    return json_response(await request.app[keys.ATTENTION_RANKING].inbox(limit=limit))
 
 
 async def attention_feedback(request: web.Request) -> web.Response:
     """Record what the user did with one ranked item; the only learning input."""
     body = await request.json()
     action = str(body.get("action") or "")
-    updated = await request.app["attention_ranking"].feedback(
+    updated = await request.app[keys.ATTENTION_RANKING].feedback(
         request.match_info["item_id"], action
     )
     if updated is None:
@@ -5240,24 +5246,24 @@ async def attention_rule_decision(request: web.Request) -> web.Response:
     channel = str(body.get("channel") or "")
     if not incident_class or not channel:
         raise ValueError("incident_class and channel are required")
-    ranking = request.app["attention_ranking"]
+    ranking = request.app[keys.ATTENTION_RANKING]
     await ranking.decide_rule(incident_class, channel, bool(body.get("accept", False)))
     return json_response({"rules": [rule.snapshot() for rule in await ranking.rules()]})
 
 
 async def injection_safety(request: web.Request) -> web.Response:
-    return json_response(request.app["fleet"].injection_safety())
+    return json_response(request.app[keys.FLEET].injection_safety())
 
 
 async def second_opinion(request: web.Request) -> web.Response:
     source_id = request.match_info["sid"]
-    history: HistoryIndex = request.app["history"]
+    history: HistoryIndex = request.app[keys.HISTORY]
     source = await history.history_entry(source_id)
     if not source:
         live = next(
             (
                 item.record
-                for item in request.app["sessions"].sessions.values()
+                for item in request.app[keys.SESSIONS].sessions.values()
                 if item.record.agent_run_id == source_id or item.record.id == source_id
             ),
             None,
@@ -5280,7 +5286,7 @@ async def second_opinion(request: web.Request) -> web.Response:
     # Phase 7.7: the scan timeline is the behavioral-summary substrate, so prior
     # run summaries come from its spine; fall back to `summary` annotations for a
     # run with no scan records.
-    scan_records = await request.app["automation_store"].scan_records(
+    scan_records = await request.app[keys.AUTOMATION_STORE].scan_records(
         agent_run_id=source_id, limit=500
     )
     summaries = [
@@ -5290,7 +5296,7 @@ async def second_opinion(request: web.Request) -> web.Response:
                      or str(record.get("intent") or "").strip()))
     ][-12:]
     if not summaries:
-        annotations = await request.app["automation_store"].annotations(
+        annotations = await request.app[keys.AUTOMATION_STORE].annotations(
             agent_run_id=source_id, limit=50
         )
         summaries = [
@@ -5338,7 +5344,7 @@ async def second_opinion(request: web.Request) -> web.Response:
             "argv": [prompt],
         },
     )
-    project_record = request.app["projects"].projects[target_project]
+    project_record = request.app[keys.PROJECTS].projects[target_project]
     next_layout = attach_terminal(
         project_record.layout,
         session.record.id,
@@ -5346,16 +5352,16 @@ async def second_opinion(request: web.Request) -> web.Response:
         direction=body.get("direction"),
     )
     try:
-        await request.app["projects"].update(
+        await request.app[keys.PROJECTS].update(
             target_project,
             layout=next_layout,
             layout_revision=project_record.layout_revision,
         )
     except Exception:
-        await request.app["sessions"].stop(session.record.id)
-        request.app["sessions"].sessions.pop(session.record.id, None)
+        await request.app[keys.SESSIONS].stop(session.record.id)
+        request.app[keys.SESSIONS].sessions.pop(session.record.id, None)
         raise
-    lineage = await request.app["automation_store"].add_lineage(
+    lineage = await request.app[keys.AUTOMATION_STORE].add_lineage(
         source_id,
         session.record.agent_run_id or session.record.id,
         "review",
@@ -5392,7 +5398,7 @@ async def _review_worktree_context(cwd: str) -> str:
 
 def _project_root_for(app: web.Application, project_id: str, cwd: Any) -> str:
     """Resolve a Project's checkout root from its id, falling back to the run cwd."""
-    projects = app.get("projects")
+    projects = app.get(keys.PROJECTS)
     if project_id and projects is not None:
         project = projects.projects.get(project_id)
         root = getattr(project, "root", None) if project else None
@@ -5403,10 +5409,11 @@ def _project_root_for(app: web.Application, project_id: str, cwd: Any) -> str:
 
 async def export_handoff(request: web.Request) -> web.Response:
     run_id = request.match_info["sid"]
-    row = await request.app["history"].history_entry(run_id)
+    row = await request.app[keys.HISTORY].history_entry(run_id)
     if not row or not has_observable_transcript(row.get("backend")):
         raise KeyError(run_id)
-    annotations = await request.app["automation_store"].annotations(agent_run_id=run_id, limit=200)
+    store = request.app[keys.AUTOMATION_STORE]
+    annotations = await store.annotations(agent_run_id=run_id, limit=200)
     # Historical `turn-summary` notes stay readable (the producer is retired, not
     # the records); the scan spine below is the primary source when available.
     summaries = [
@@ -5419,11 +5426,11 @@ async def export_handoff(request: web.Request) -> web.Response:
     # than from flat annotations. Falls back to annotation summaries when the
     # consumer is off or the run has no scan records.
     project_root = _project_root_for(request.app, str(row.get("project_id") or ""), row.get("cwd"))
-    gate = request.app.get("automation_gate")
+    gate = request.app.get(keys.AUTOMATION_GATE)
     enabled = await gate(project_root) if (gate and project_root) else frozenset()
     scan_progress: list[str] = []
     if "timeline_handoff" in enabled:
-        scan_records = await request.app["automation_store"].scan_records(
+        scan_records = await request.app[keys.AUTOMATION_STORE].scan_records(
             agent_run_id=run_id, limit=2000
         )
         scan_progress = handoff_progress(scan_records)
@@ -5482,10 +5489,10 @@ async def export_handoff(request: web.Request) -> web.Response:
 
 async def workload_telemetry(request: web.Request) -> web.Response:
     since = float(request.query.get("since", 0))
-    result = await request.app["history"].workload_telemetry(since)
-    result["observer_spend"] = await request.app["automation_store"].spend()
+    result = await request.app[keys.HISTORY].workload_telemetry(since)
+    result["observer_spend"] = await request.app[keys.AUTOMATION_STORE].spend()
     provider_costs: list[dict[str, Any]] = []
-    usage = request.app.get("usage")
+    usage = request.app.get(keys.USAGE)
     providers = (usage.cache.get("providers") or {}) if usage else {}
     for backend, payload in providers.items():
         for row in payload.get("models") or []:
@@ -5509,7 +5516,7 @@ async def workload_telemetry(request: web.Request) -> web.Response:
 async def list_experiences(request: web.Request) -> web.Response:
     return json_response(
         {
-            "items": await request.app["automation_store"].experiences(
+            "items": await request.app[keys.AUTOMATION_STORE].experiences(
                 query=request.query.get("q", ""),
                 project_scope_id=request.query.get("project_scope_id"),
                 limit=int(request.query.get("limit", 100)),
@@ -5522,7 +5529,7 @@ async def list_experiences(request: web.Request) -> web.Response:
 async def list_observer_batches(request: web.Request) -> web.Response:
     return json_response(
         {
-            "items": await request.app["automation_store"].batches(
+            "items": await request.app[keys.AUTOMATION_STORE].batches(
                 int(request.query.get("limit", 50))
             )
         }
@@ -5544,7 +5551,7 @@ async def create_observer_batch(request: web.Request) -> web.Response:
         raise ValueError("run_ids must select between 1 and 25 agent runs")
     rows: list[dict[str, Any]] = []
     for identity in run_ids:
-        row = await request.app["history"].history_entry(identity)
+        row = await request.app[keys.HISTORY].history_entry(identity)
         if (
             not row
             or not has_observable_transcript(row.get("backend"))
@@ -5555,8 +5562,8 @@ async def create_observer_batch(request: web.Request) -> web.Response:
         rows.append(row)
     estimate = {
         "calls": len(rows),
-        "maximum_input_tokens": len(rows) * request.app["config"].automation_max_input_tokens,
-        "maximum_output_tokens": len(rows) * request.app["config"].automation_max_output_tokens,
+        "maximum_input_tokens": len(rows) * request.app[keys.CONFIG].automation_max_input_tokens,
+        "maximum_output_tokens": len(rows) * request.app[keys.CONFIG].automation_max_output_tokens,
         "repository_mutation": False,
     }
     preview_token = hashlib.sha256(
@@ -5578,23 +5585,23 @@ async def create_observer_batch(request: web.Request) -> web.Response:
         )
     if not secrets.compare_digest(str(body.get("preview_token") or ""), preview_token):
         raise ValueError("batch confirmation requires the current preview token")
-    if not request.app["config"].automation_enabled:
+    if not request.app[keys.CONFIG].automation_enabled:
         raise ValueError("automation kill switch is off")
-    batch_id = await request.app["automation_store"].create_batch(kind, run_ids)
+    batch_id = await request.app[keys.AUTOMATION_STORE].create_batch(kind, run_ids)
     task = asyncio.create_task(
         _run_observer_batch(request.app, batch_id, kind, rows),
         name=f"observer-batch-{batch_id}",
     )
-    request.app["automation_tasks"].add(task)
-    task.add_done_callback(request.app["automation_tasks"].discard)
+    request.app[keys.AUTOMATION_TASKS].add(task)
+    task.add_done_callback(request.app[keys.AUTOMATION_TASKS].discard)
     return json_response({"id": batch_id, "status": "running", "estimate": estimate}, 202)
 
 
 async def _run_observer_batch(
     app: web.Application, batch_id: str, kind: str, rows: list[dict[str, Any]]
 ) -> None:
-    store: AutomationStore = app["automation_store"]
-    config: Config = app["config"]
+    store: AutomationStore = app[keys.AUTOMATION_STORE]
+    config: Config = app[keys.CONFIG]
     model = config.openrouter_standard_model or config.openrouter_cheap_model
     results: list[dict[str, Any]] = []
     calls = tokens = 0
@@ -5646,7 +5653,7 @@ async def _run_observer_batch(
             ):
                 raise ValueError("batch observer hourly call cap is exhausted")
             raw_path = row["transcript_path"]
-            transcript = await app["automation"].slices.build(
+            transcript = await app[keys.AUTOMATION].slices.build(
                 Path(str(raw_path)) if raw_path else None,
                 str(row["backend"]),
                 "last_n_messages",
@@ -5663,7 +5670,7 @@ async def _run_observer_batch(
                 input_bytes=transcript.bytes,
             )
             try:
-                completion = await app["openrouter"].complete_json(
+                completion = await app[keys.OPENROUTER].complete_json(
                     model=model,
                     messages=[
                         {"role": "system", "content": prompts[kind]},
@@ -5748,7 +5755,7 @@ async def _run_observer_batch(
 
 
 async def list_profiles(request: web.Request) -> web.Response:
-    return json_response(profile_payload(request.app["config"]))
+    return json_response(profile_payload(request.app[keys.CONFIG]))
 
 
 def _config_identity(request: web.Request, project_id: str) -> ProjectIdentity | None:
@@ -5761,7 +5768,7 @@ def _config_identity(request: web.Request, project_id: str) -> ProjectIdentity |
     """
     if not project_id:
         return None
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if not project:
         raise ValueError("unknown project")
     return _registered_identity(project)
@@ -5785,7 +5792,7 @@ async def put_project_config(request: web.Request) -> web.Response:
     if values.get("default_shell_profile"):
         try:
             resolve_profile(
-                request.app["config"], str(values["default_shell_profile"]), project_cwd
+                request.app[keys.CONFIG], str(values["default_shell_profile"]), project_cwd
             )
         except ValueError as exc:
             raise ValueError({"default_shell_profile": str(exc)}) from exc
@@ -5801,8 +5808,8 @@ async def put_project_config(request: web.Request) -> web.Response:
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
     project = await resolve_project(result["project"]["root"])
-    await request.app["history"].register_project_scope(project)
-    await request.app["events"].emit(
+    await request.app[keys.HISTORY].register_project_scope(project)
+    await request.app[keys.EVENTS].emit(
         "project_configuration_changed", project_id=result["project"]["id"]
     )
     return json_response(result)
@@ -5819,7 +5826,7 @@ def _prompt_project(request: web.Request, body: dict[str, Any] | None = None):  
     project_id = str((body or {}).get("project_id") or request.query.get("project_id") or "")
     if not project_id:
         return None
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise ValueError("unknown project")
     return project
@@ -5833,11 +5840,11 @@ async def list_prompts(request: web.Request) -> web.Response:
     others: list[ProjectRecord] = []
     if request.query.get("all_projects") in {"1", "true"}:
         others = sorted(
-            request.app["projects"].projects.values(),
+            request.app[keys.PROJECTS].projects.values(),
             key=lambda item: (item.position, item.name.casefold()),
         )
     return json_response(
-        request.app["prompt_library"].list(_prompt_project(request), other_projects=others)
+        request.app[keys.PROMPT_LIBRARY].list(_prompt_project(request), other_projects=others)
     )
 
 
@@ -5847,8 +5854,8 @@ async def create_prompt(request: web.Request) -> web.Response:
     if scope_value not in {"global", "project"}:
         raise ValueError({"scope": "must be global or project"})
     scope = cast(PromptScope, scope_value)
-    item = request.app["prompt_library"].create(scope, body, _prompt_project(request, body))
-    await request.app["events"].emit(
+    item = request.app[keys.PROMPT_LIBRARY].create(scope, body, _prompt_project(request, body))
+    await request.app[keys.EVENTS].emit(
         "prompt_template_changed", source="user", operation="created", template_id=item["id"]
     )
     return json_response(item, 201)
@@ -5857,7 +5864,7 @@ async def create_prompt(request: web.Request) -> web.Response:
 async def put_prompt(request: web.Request) -> web.Response:
     body = await request.json()
     try:
-        item = request.app["prompt_library"].update(
+        item = request.app[keys.PROMPT_LIBRARY].update(
             _prompt_scope(request),
             request.match_info["template_id"],
             body,
@@ -5868,7 +5875,7 @@ async def put_prompt(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "prompt_template_changed", source="user", operation="updated", template_id=item["id"]
     )
     return json_response(item)
@@ -5877,7 +5884,7 @@ async def put_prompt(request: web.Request) -> web.Response:
 async def delete_prompt(request: web.Request) -> web.Response:
     body = await request.json()
     try:
-        request.app["prompt_library"].delete(
+        request.app[keys.PROMPT_LIBRARY].delete(
             _prompt_scope(request),
             request.match_info["template_id"],
             str(body.get("revision") or ""),
@@ -5887,7 +5894,7 @@ async def delete_prompt(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "prompt_template_changed",
         source="user",
         operation="deleted",
@@ -5900,7 +5907,7 @@ async def use_prompt(request: web.Request) -> web.Response:
     project = _prompt_project(request, await request.json())
     del project
     key = f"{_prompt_scope(request)}:{request.match_info['template_id']}"
-    return json_response(request.app["prompt_library"].record_use(key))
+    return json_response(request.app[keys.PROMPT_LIBRARY].record_use(key))
 
 
 async def favorite_prompt(request: web.Request) -> web.Response:
@@ -5908,7 +5915,7 @@ async def favorite_prompt(request: web.Request) -> web.Response:
     _prompt_project(request, body)
     key = f"{_prompt_scope(request)}:{request.match_info['template_id']}"
     return json_response(
-        request.app["prompt_library"].set_favorite(key, bool(body.get("favorite")))
+        request.app[keys.PROMPT_LIBRARY].set_favorite(key, bool(body.get("favorite")))
     )
 
 
@@ -5924,7 +5931,7 @@ def _registered_identity(project) -> ProjectIdentity:  # type: ignore[no-untyped
 
 
 def _notes_project(request: web.Request):  # type: ignore[no-untyped-def]
-    project = request.app["projects"].projects.get(request.match_info["project_id"])
+    project = request.app[keys.PROJECTS].projects.get(request.match_info["project_id"])
     if not project:
         raise ValueError("unknown project")
     return project
@@ -5946,7 +5953,7 @@ def _global_note_id(request: web.Request) -> str:
 async def get_global_note(request: web.Request) -> web.Response:
     note_id = _global_note_id(request)
     note = await read_global_note(
-        request.app["config"].data_dir,
+        request.app[keys.CONFIG].data_dir,
         note_id,
         default_title="Scratchpad",
     )
@@ -5960,7 +5967,7 @@ async def put_global_note(request: web.Request) -> web.Response:
         raise ValueError("note request body must be an object")
     try:
         result = await write_global_note(
-            request.app["config"].data_dir,
+            request.app[keys.CONFIG].data_dir,
             note_id,
             str(body.get("markdown") or ""),
             str(body.get("revision") or "missing"),
@@ -5976,7 +5983,7 @@ async def put_global_note(request: web.Request) -> web.Response:
         result["revision"],
         result["bytes"],
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "note_changed",
         source="user",
         scope="global",
@@ -5988,13 +5995,13 @@ async def put_global_note(request: web.Request) -> web.Response:
 
 async def _legacy_note_titles(request: web.Request, project) -> dict[str, str]:  # type: ignore[no-untyped-def]
     titles: dict[str, str] = {}
-    if "history" in request.app:
-        owners = await request.app["history"].note_owner_labels(project.id)
+    if keys.HISTORY in request.app:
+        owners = await request.app[keys.HISTORY].note_owner_labels(project.id)
         titles.update(
             {str(note_id): str(owner.get("name") or note_id) for note_id, owner in owners.items()}
         )
-    if "sessions" in request.app:
-        for session in request.app["sessions"].sessions.values():
+    if keys.SESSIONS in request.app:
+        for session in request.app[keys.SESSIONS].sessions.values():
             if session.record.project_id == project.id:
                 titles[session.record.id] = session.record.name
     return titles
@@ -6012,7 +6019,7 @@ async def _project_note_items(request: web.Request, project) -> list[dict[str, A
 
 
 async def list_notes(request: web.Request) -> web.Response:
-    manager: ProjectManager = request.app["projects"]
+    manager: ProjectManager = request.app[keys.PROJECTS]
     requested = request.query.get("project_id") or ""
     projects = [
         project
@@ -6055,7 +6062,7 @@ async def create_project_note(request: web.Request) -> web.Response:
         result["id"],
         result["title"],
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "note_changed",
         source="user",
         scope="project",
@@ -6121,7 +6128,7 @@ async def _write_project_note(request: web.Request, *, title_only: bool = False)
         note_id,
         result["revision"],
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "note_changed",
         source="user",
         scope="project",
@@ -6165,7 +6172,7 @@ async def delete_project_note(request: web.Request) -> web.Response:
         result["bytes"],
         result["trashed_path"],
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "note_changed",
         source="user",
         scope="project",
@@ -6184,7 +6191,7 @@ async def delete_project_note(request: web.Request) -> web.Response:
 
 
 def _observations_project(request: web.Request):  # type: ignore[no-untyped-def]
-    project = request.app["projects"].projects.get(request.match_info["project_id"])
+    project = request.app[keys.PROJECTS].projects.get(request.match_info["project_id"])
     if not project:
         raise ValueError("unknown project")
     return project
@@ -6253,7 +6260,7 @@ async def _approve_control_request(
     app = request.app
     action = str(req.get("action") or "")
     target_id = str(req.get("target_session_id") or "")
-    target = app["sessions"].sessions.get(target_id)
+    target = app[keys.SESSIONS].sessions.get(target_id)
     extra: dict[str, Any] = {}
     if target is None or target.record.state in {"exited", "crashed"}:
         outcome = "target_gone"
@@ -6266,7 +6273,7 @@ async def _approve_control_request(
             409,
         )
     elif action == "interrupt":
-        evaluation = app["prompt_queue"].readiness.evaluate(target)
+        evaluation = app[keys.PROMPT_QUEUE].readiness.evaluate(target)
         if str(evaluation.get("delivery_state") or "unknown") != "safe":
             return json_response(
                 {
@@ -6295,7 +6302,7 @@ async def _approve_control_request(
         done=True,
         project=identity,
     )
-    await app["events"].emit(
+    await app[keys.EVENTS].emit(
         "agent_session_control",
         session_id=str(req.get("from_session") or "") or None,
         source="user",
@@ -6327,7 +6334,7 @@ async def _approve_land_request(
     """
     app = request.app
     try:
-        row = await app["land_queue"].request(
+        row = await app[keys.LAND_QUEUE].request(
             project_id=project.id,
             project_root=str(req.get("project_root") or project.root),
             worktree_root=str(req.get("worktree_root") or ""),
@@ -6350,7 +6357,7 @@ async def _approve_land_request(
         done=True,
         project=identity,
     )
-    await app["events"].emit(
+    await app[keys.EVENTS].emit(
         "agent_land_decided",
         session_id=str(req.get("from_session") or "") or None,
         source="user",
@@ -6410,7 +6417,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             done=True,
             project=identity,
         )
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             {
                 "control_request": "control_request_decided",
                 "land_request": "agent_land_decided",
@@ -6443,7 +6450,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     # configured default when that default is one, and otherwise takes the first
     # registered harness rather than a name written in here. `default_backend` is
     # allowed to be `shell` and cannot be used unfiltered.
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     configured_default = project.default_backend or config.default_backend
     spawn_body: dict[str, Any] = {
         "project_id": project.id,
@@ -6474,7 +6481,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         done=True,
         project=identity,
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "spawn_request_decided",
         session_id=str(spawn_request.get("from_session") or "") or None,
         source="user",
@@ -6582,7 +6589,7 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
             **await _project_automation_state(project, llm=llm),
             "project_name": project.name,
         }
-        for project in request.app["projects"].ordered_projects()
+        for project in request.app[keys.PROJECTS].ordered_projects()
     ]
     return json_response(
         {"automations": _automation_registry_payload(), "projects": rows}
@@ -6646,14 +6653,14 @@ async def put_project_automations(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
-    if gate_cache := request.app.get("automation_gate_cache"):
+    if gate_cache := request.app.get(keys.AUTOMATION_GATE_CACHE):
         gate_cache.clear()
-    if requested.get("scan_timeline") and request.app.get("project_contexts") is not None:
+    if requested.get("scan_timeline") and request.app.get(keys.PROJECT_CONTEXTS) is not None:
         await asyncio.to_thread(
-            request.app["project_contexts"].ensure,
+            request.app[keys.PROJECT_CONTEXTS].ensure,
             ProjectContext(project_id=project.id, project_root=project.root),
         )
-    await request.app["events"].emit("project_configuration_changed", project_id=project.id)
+    await request.app[keys.EVENTS].emit("project_configuration_changed", project_id=project.id)
     return await get_project_automations(request)
 
 
@@ -6704,7 +6711,7 @@ async def apply_grants(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("grant request body must be an object")
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     install_request = body.get("install") or {}
     if not isinstance(install_request, dict):
         raise ValueError("install must be a table of switches")
@@ -6723,7 +6730,7 @@ async def apply_grants(request: web.Request) -> web.Response:
     current_values: dict[str, Any] = {}
     if automations_request or values_request:
         project_id = str(body.get("project_id") or "")
-        project = request.app["projects"].projects.get(project_id)
+        project = request.app[keys.PROJECTS].projects.get(project_id)
         if project is None:
             raise ValueError("a Project grant needs a known project_id")
         project_config = await read_project_config(
@@ -6781,17 +6788,18 @@ async def apply_grants(request: web.Request) -> web.Response:
             if "changed externally" in str(exc):
                 return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
             raise
-        if gate_cache := request.app.get("automation_gate_cache"):
+        if gate_cache := request.app.get(keys.AUTOMATION_GATE_CACHE):
             gate_cache.clear()
-        if "scan_timeline" in plan.automations and request.app.get("project_contexts") is not None:
+        contexts = request.app.get(keys.PROJECT_CONTEXTS)
+        if "scan_timeline" in plan.automations and contexts is not None:
             # Parity with the registry's own write: permitting the timeline creates the
             # blank Project context file the scans read, so the first scan is not the
             # thing that discovers it is missing.
             await asyncio.to_thread(
-                request.app["project_contexts"].ensure,
+                request.app[keys.PROJECT_CONTEXTS].ensure,
                 ProjectContext(project_id=project.id, project_root=project.root),
             )
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "project_configuration_changed", project_id=project.id
         )
 
@@ -6800,7 +6808,7 @@ async def apply_grants(request: web.Request) -> web.Response:
         hot, restart = update_config(config, dict(plan.install))
         applied_install = sorted(plan.install)
         _apply_runtime_config(request.app, hot)
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "configuration_changed", source="grant", changed=sorted(hot | restart)
         )
 
@@ -6809,7 +6817,7 @@ async def apply_grants(request: web.Request) -> web.Response:
         # leaves exactly one `land_verify_approved`. Without it a permission raised from
         # a drawer pane would be indistinguishable, afterwards, from one that was
         # always on.
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "grant_applied",
             source="user",
             project_id=project.id if project is not None else None,
@@ -6847,10 +6855,10 @@ async def apply_grants(request: web.Request) -> web.Response:
 
 
 def _schedule_service(request: web.Request) -> ScheduleService:
-    service = request.app.get("schedules")
+    service = request.app.get(keys.SCHEDULES)
     if service is None:  # pragma: no cover - only a partially built app
         raise web.HTTPServiceUnavailable(text="scheduled runs are unavailable")
-    return cast(ScheduleService, service)
+    return service
 
 
 async def _schedule_view(
@@ -6863,16 +6871,16 @@ async def _schedule_view(
     `enabled` while nothing will ever fire is the exact lie this surface exists
     to avoid. `runs` is the recent history the tab shows under the row.
     """
-    store: ScheduleStore = request.app["schedule_store"]
-    project = request.app["projects"].projects.get(str(schedule["project_id"]))
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
+    project = request.app[keys.PROJECTS].projects.get(str(schedule["project_id"]))
     blocked = ""
     if project is None:
         blocked = "project_missing"
     else:
-        gate = request.app.get("automation_gate")
+        gate = request.app.get(keys.AUTOMATION_GATE)
         if gate is not None and "scheduled_runs" not in await gate(str(project.root)):
             blocked = "automation_disabled"
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     if not config.scheduled_runs_enabled:
         blocked = blocked or "install_disabled"
     return {
@@ -6902,7 +6910,7 @@ async def _schedule_target_view(
     if str(schedule.get("action") or "spawn") != "resume":
         return None
     run_id = str(schedule.get("target_run_id") or "")
-    history = request.app.get("history")
+    history = request.app.get(keys.HISTORY)
     if not run_id or history is None:
         return {"run_id": run_id, "missing": True}
     row = await history.history_entry(run_id)
@@ -6914,14 +6922,14 @@ async def _schedule_target_view(
             await resolve_latest_run(
                 run_id,
                 history=history,
-                automation_store=request.app["automation_store"],
+                automation_store=request.app[keys.AUTOMATION_STORE],
             )
             or row
         )
     # The two-name rule is `session_titles.py`'s, and asking it is what keeps this row in
     # step with the History browser, the sidebar, and every other surface that names a run.
     titles = await session_titles.generated_titles(
-        request.app.get("automation_store"),
+        request.app.get(keys.AUTOMATION_STORE),
         {session_titles.row_run_id(row), session_titles.row_run_id(resolved)},
     )
     return {
@@ -6943,9 +6951,9 @@ async def list_schedules(request: web.Request) -> web.Response:
     tonight" is not a per-Project question, even though every schedule belongs to
     exactly one Project.
     """
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     project_id = request.query.get("project_id") or None
-    if project_id and project_id not in request.app["projects"].projects:
+    if project_id and project_id not in request.app[keys.PROJECTS].projects:
         raise ValueError(f"unknown project: {project_id}")
     rows = await store.list_schedules(project_id)
     service = _schedule_service(request)
@@ -6959,7 +6967,7 @@ async def list_schedules(request: web.Request) -> web.Response:
 
 async def list_project_schedules(request: web.Request) -> web.Response:
     project = _observations_project(request)
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     rows = await store.list_schedules(project.id)
     service = _schedule_service(request)
     return json_response(
@@ -6980,7 +6988,7 @@ async def create_project_schedule(request: web.Request) -> web.Response:
     the response says so through `blocked`.
     """
     project = _observations_project(request)
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     body = await request.json()
     spec = parse_spec(body)
     now = time.time()
@@ -6991,7 +6999,7 @@ async def create_project_schedule(request: web.Request) -> web.Response:
         next_fire_at=first_occurrence(spec, now=now),
         now=now,
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "schedule_changed",
         source="user",
         action="created",
@@ -7009,7 +7017,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
     create, because a schedule is small and a partial-update surface over a
     trigger is how one ends up with a cron expression and an interval both set.
     """
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule_id = request.match_info["schedule_id"]
     current = await store.get(schedule_id)
     if current is None:
@@ -7048,7 +7056,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
             )
     if updated is None:
         raise KeyError(schedule_id)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "schedule_changed",
         source="user",
         action="updated",
@@ -7059,12 +7067,12 @@ async def patch_schedule(request: web.Request) -> web.Response:
 
 
 async def delete_schedule(request: web.Request) -> web.Response:
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule_id = request.match_info["schedule_id"]
     existing = await store.get(schedule_id)
     if not await store.delete(schedule_id):
         raise KeyError(schedule_id)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "schedule_changed",
         source="user",
         action="deleted",
@@ -7086,7 +7094,7 @@ async def run_schedule_now(request: web.Request) -> web.Response:
     run = await service.run_now(schedule_id)
     if run is None:
         raise KeyError(schedule_id)
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule = await store.get(schedule_id)
     return json_response(
         {
@@ -7097,7 +7105,7 @@ async def run_schedule_now(request: web.Request) -> web.Response:
 
 
 async def list_schedule_runs(request: web.Request) -> web.Response:
-    store: ScheduleStore = request.app["schedule_store"]
+    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule_id = request.match_info["schedule_id"]
     if await store.get(schedule_id) is None:
         raise KeyError(schedule_id)
@@ -7128,7 +7136,7 @@ async def preview_schedule(request: web.Request) -> web.Response:
 
 async def get_project_context(request: web.Request) -> web.Response:
     project = _observations_project(request)
-    service: ProjectContextService = request.app["project_contexts"]
+    service: ProjectContextService = request.app[keys.PROJECT_CONTEXTS]
     payload = await asyncio.to_thread(
         service.read,
         ProjectContext(project_id=project.id, project_root=project.root),
@@ -7143,7 +7151,7 @@ async def put_project_context(request: web.Request) -> web.Response:
         raise ValueError("markdown must be a string")
     if not isinstance(body.get("revision"), str):
         raise ValueError("revision must be a string")
-    service: ProjectContextService = request.app["project_contexts"]
+    service: ProjectContextService = request.app[keys.PROJECT_CONTEXTS]
     try:
         payload = await asyncio.to_thread(
             service.write,
@@ -7155,7 +7163,7 @@ async def put_project_context(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "project_context_changed",
         source="user",
         project_id=project.id,
@@ -7174,9 +7182,9 @@ async def resolve_project_scope(request: web.Request) -> web.Response:
     if not cwd.is_dir():
         raise ValueError("cwd must be an existing directory")
     project = await resolve_project(cwd)
-    await request.app["history"].register_project_scope(project)
+    await request.app[keys.HISTORY].register_project_scope(project)
     if sid := body.get("session_id"):
-        session = request.app["sessions"].sessions.get(str(sid))
+        session = request.app[keys.SESSIONS].sessions.get(str(sid))
         if session and session.record.runtime_cwd:
             try:
                 same = Path(session.record.runtime_cwd).resolve(strict=True) == cwd
@@ -7200,7 +7208,7 @@ async def resolve_project_scope(request: web.Request) -> web.Response:
 
 
 async def list_git_projects(request: web.Request) -> web.Response:
-    history: HistoryIndex = request.app["history"]
+    history: HistoryIndex = request.app[keys.HISTORY]
     scopes = await history.project_scopes(include_hidden=request.query.get("include_hidden") == "1")
     try:
         offset = max(0, int(request.query.get("offset", "0")))
@@ -7209,7 +7217,7 @@ async def list_git_projects(request: web.Request) -> web.Response:
         raise ValueError("project offset and limit must be integers") from exc
     total = len(scopes)
     scopes = scopes[offset : offset + limit]
-    live = list(request.app["sessions"].sessions.values())
+    live = list(request.app[keys.SESSIONS].sessions.values())
     for scope in scopes:
         scope["root_exists"] = Path(scope["root"]).is_dir()
         scope["live_count"] = sum(item.record.trusted_scope_id == scope["id"] for item in live)
@@ -7224,7 +7232,7 @@ async def list_git_projects(request: web.Request) -> web.Response:
 
 
 async def get_project_scope(request: web.Request) -> web.Response:
-    history: HistoryIndex = request.app["history"]
+    history: HistoryIndex = request.app[keys.HISTORY]
     scope = await history.project_scope(request.match_info["scope_id"])
     if not scope:
         raise KeyError(request.match_info["scope_id"])
@@ -7242,14 +7250,14 @@ async def get_project_scope(request: web.Request) -> web.Response:
         if (
             item["owner_type"] == "session"
             and not await history.history_entry(item["owner_id"])
-            and item["owner_id"] not in request.app["sessions"].sessions
+            and item["owner_id"] not in request.app[keys.SESSIONS].sessions
         )
     ]
     scope["artifacts"] = artifacts
     scope["blockers"] = await history.project_blockers(scope["id"])
     scope["sessions"] = [
         item.record.snapshot()
-        for item in request.app["sessions"].sessions.values()
+        for item in request.app[keys.SESSIONS].sessions.values()
         if item.record.trusted_scope_id == scope["id"]
     ]
     return json_response(scope)
@@ -7257,27 +7265,28 @@ async def get_project_scope(request: web.Request) -> web.Response:
 
 async def patch_project_scope(request: web.Request) -> web.Response:
     body = await request.json()
-    changed = await request.app["history"].set_project_hidden(
+    changed = await request.app[keys.HISTORY].set_project_hidden(
         request.match_info["scope_id"], bool(body.get("hidden"))
     )
     if not changed:
         raise KeyError(request.match_info["scope_id"])
-    return json_response(await request.app["history"].project_scope(request.match_info["scope_id"]))
+    history = request.app[keys.HISTORY]
+    return json_response(await history.project_scope(request.match_info["scope_id"]))
 
 
 async def forget_project_scope(request: web.Request) -> web.Response:
-    result = await request.app["history"].forget_project_scope(request.match_info["scope_id"])
+    result = await request.app[keys.HISTORY].forget_project_scope(request.match_info["scope_id"])
     return json_response(result, 200 if result["forgotten"] else 409)
 
 
 async def list_artifacts(request: web.Request) -> web.Response:
     return json_response(
-        {"items": await request.app["history"].artifacts(request.query.get("project_scope_id"))}
+        {"items": await request.app[keys.HISTORY].artifacts(request.query.get("project_scope_id"))}
     )
 
 
 async def transfer_artifact(request: web.Request) -> web.Response:
-    history: HistoryIndex = request.app["history"]
+    history: HistoryIndex = request.app[keys.HISTORY]
     artifact = next(
         (a for a in await history.artifacts() if a["id"] == request.match_info["artifact_id"]), None
     )
@@ -7344,26 +7353,26 @@ async def transfer_artifact(request: web.Request) -> web.Response:
 
 
 async def list_pinned_directories(request: web.Request) -> web.Response:
-    return json_response({"paths": request.app["config"].pinned_directories})
+    return json_response({"paths": request.app[keys.CONFIG].pinned_directories})
 
 
 async def pin_directory(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     path = str(Path(str((await request.json()).get("path", ""))).resolve())
     if not Path(path).is_dir():
         raise ValueError({"path": "directory does not exist"})
     values = list(dict.fromkeys([*config.pinned_directories, path]))
     update_config(config, {"pinned_directories": values})
-    await request.app["events"].emit("configuration_changed", source="directory_pins")
+    await request.app[keys.EVENTS].emit("configuration_changed", source="directory_pins")
     return json_response({"paths": values})
 
 
 async def unpin_directory(request: web.Request) -> web.Response:
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     path = str(Path(str((await request.json()).get("path", ""))).resolve())
     values = [item for item in config.pinned_directories if item.casefold() != path.casefold()]
     update_config(config, {"pinned_directories": values})
-    await request.app["events"].emit("configuration_changed", source="directory_pins")
+    await request.app[keys.EVENTS].emit("configuration_changed", source="directory_pins")
     return json_response({"paths": values})
 
 
@@ -7414,12 +7423,12 @@ async def filesystem_list(request: web.Request) -> web.Response:
 
 
 async def list_sessions(request: web.Request) -> web.Response:
-    manager: SessionManager = request.app["sessions"]
+    manager: SessionManager = request.app[keys.SESSIONS]
     sessions = []
-    readiness = request.app["fleet"].readiness
+    readiness = request.app[keys.FLEET].readiness
     for session in manager.sessions.values():
         item = session.record.snapshot()
-        item["_snapshot_generation"] = request.app["daemon_generation"]
+        item["_snapshot_generation"] = request.app[keys.DAEMON_GENERATION]
         item["_snapshot_revision"] = session.revision
         item["_snapshot_enriched"] = True
         # This readiness is display-only and never authorizes a PTY write. Reuse a
@@ -7461,7 +7470,7 @@ async def _decorate_generated_titles(app: web.Application, items: list[dict[str,
         return
     # Filtered by run id, not swept off the newest N: a page of old History rows would
     # otherwise fall outside the window and render as never having been titled.
-    annotations = await app["automation_store"].annotations(
+    annotations = await app[keys.AUTOMATION_STORE].annotations(
         agent_run_ids=sorted(run_ids), tag="title", limit=1000
     )
     by_run: dict[str, dict[str, Any]] = {}
@@ -7471,10 +7480,10 @@ async def _decorate_generated_titles(app: web.Application, items: list[dict[str,
             by_run[run_id] = annotation
     for item in items:
         run_id = str(item.get("agent_run_id") or item.get("id") or "")
-        annotation = by_run.get(run_id)
-        if annotation:
-            item["generated_title"] = annotation["content"]
-            item["generated_title_annotation"] = annotation
+        titled = by_run.get(run_id)
+        if titled:
+            item["generated_title"] = titled["content"]
+            item["generated_title_annotation"] = titled
 
 
 def _decorate_conversation_holders(app: web.Application, items: list[dict[str, Any]]) -> None:
@@ -7493,7 +7502,7 @@ def _decorate_conversation_holders(app: web.Application, items: list[dict[str, A
     names the pane), and describing a pane the operator can see as "another CLI"
     would be worse than saying nothing.
     """
-    manager = app.get("sessions")
+    manager = app.get(keys.SESSIONS)
     if manager is None or not items:
         return
     holders = manager.conversation_holders()
@@ -7561,7 +7570,7 @@ async def _project_agent_profile(
             selected,
             message,
         )
-        await app["events"].emit(
+        await app[keys.EVENTS].emit(
             "project_launch_profile_unavailable",
             source="projects",
             project_id=project_id,
@@ -7579,13 +7588,13 @@ async def _spawn_from_body(
     startup_started_at = time.perf_counter()
     startup_timing_ms: dict[str, float] = {}
     spec = SpawnRequest.parse(body)
-    manager: SessionManager = app["sessions"]
-    projects: ProjectManager = app["projects"]
+    manager: SessionManager = app[keys.SESSIONS]
+    projects: ProjectManager = app[keys.PROJECTS]
     project_id = spec.project_id
     if project_id not in projects.projects:
         raise ValueError(f"unknown project: {project_id}")
     owning_project = projects.projects[project_id]
-    config: Config = app["config"]
+    config: Config = app[keys.CONFIG]
     seed_cwd = owning_project.root
     project_started_at = time.perf_counter()
     project = await resolve_project(seed_cwd)
@@ -7599,7 +7608,7 @@ async def _spawn_from_body(
         project_config["values"] if project_config["status"] in {"ready", "read-only"} else {}
     )
     if project_config["status"] == "malformed":
-        await app["events"].emit(
+        await app[keys.EVENTS].emit(
             "project_configuration_error",
             source="project_file",
             path=project_config["path"],
@@ -7786,12 +7795,12 @@ async def _stage_spawn_text(app: web.Application, session: Any, text: str) -> No
             STAGE_READY_TIMEOUT_SECONDS,
         )
     _record_operator_input(
-        app["events"],
+        app[keys.EVENTS],
         session,
         _composer_insertion(session.record.backend, text),
         source="spawn_stage",
     )
-    await app["events"].emit(
+    await app[keys.EVENTS].emit(
         "spawn_text_staged",
         session_id=session.record.id,
         source="spawn_stage",
@@ -7807,7 +7816,7 @@ async def spawn_session(request: web.Request) -> web.Response:
 
 async def get_session(request: web.Request) -> web.Response:
     return json_response(
-        request.app["sessions"].resolve(request.match_info["sid"]).record.snapshot()
+        request.app[keys.SESSIONS].resolve(request.match_info["sid"]).record.snapshot()
     )
 
 
@@ -7923,8 +7932,8 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
             # The device classes the daemon believes are in use: a passive claim
             # from any other one is refused, so this is the first thing to check
             # when input ownership is not where it is expected to be.
-            "active_devices": sorted(app["device_presence"].active_profiles()),
-            "leading_device": app["device_presence"].leading_profile(),
+            "active_devices": sorted(app[keys.DEVICE_PRESENCE].active_profiles()),
+            "leading_device": app[keys.DEVICE_PRESENCE].leading_profile(),
             "owner_device": session.input_owner_device,
             "owner_epoch": session.input_owner_epoch,
             "attached_viewports": len(session.viewports),
@@ -7949,9 +7958,9 @@ async def _post_mortem_state_log(
     The timeline table records (session_id, agent_run_id) pairs, so the mux id
     or any of its run ids (a history row's key) reaches the same rows.
     """
-    store: StatusTimelineStore = app["status_timeline"]
+    store: StatusTimelineStore = app[keys.STATUS_TIMELINE]
     timeline, truncated = await store.timeline(sid, from_ts=from_ts, to_ts=to_ts)
-    history_row = await app["history"].history_entry(sid)
+    history_row = await app[keys.HISTORY].history_entry(sid)
     if not timeline and not history_row:
         raise KeyError(sid)
     runs = await store.runs_for_session(sid)
@@ -7984,12 +7993,12 @@ async def get_session_state_log(request: web.Request) -> web.Response:
     from_ts = _query_epoch(request, "from")
     to_ts = _query_epoch(request, "to")
     try:
-        session = request.app["sessions"].resolve(sid)
+        session = request.app[keys.SESSIONS].resolve(sid)
     except KeyError:
         return await _post_mortem_state_log(request.app, sid, from_ts, to_ts)
     now = time.time()
     payload = _live_state_log_payload(request.app, session, now)
-    store: StatusTimelineStore = request.app["status_timeline"]
+    store: StatusTimelineStore = request.app[keys.STATUS_TIMELINE]
     if from_ts is not None or to_ts is not None:
         await store.flush_session(session)
         timeline, truncated = await store.timeline(session.record.id, from_ts=from_ts, to_ts=to_ts)
@@ -8024,7 +8033,7 @@ async def _bundle_transcript_slices(
 
     slices: list[dict[str, Any]] = []
     for run_id in run_ids:
-        row = await app["history"].history_entry(run_id)
+        row = await app[keys.HISTORY].history_entry(run_id)
         if not row:
             slices.append({"agent_run_id": run_id, "error": "no history row"})
             continue
@@ -8079,10 +8088,10 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
         to_ts = now
     if from_ts is None:
         from_ts = to_ts - DIAGNOSTIC_BUNDLE_DEFAULT_WINDOW_SECONDS
-    store: StatusTimelineStore = request.app["status_timeline"]
+    store: StatusTimelineStore = request.app[keys.STATUS_TIMELINE]
     session = None
     try:
-        session = request.app["sessions"].resolve(sid)
+        session = request.app[keys.SESSIONS].resolve(sid)
     except KeyError:
         pass
     state_log: dict[str, Any] | None = None
@@ -8092,7 +8101,7 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
         state_log = _live_state_log_payload(request.app, session, now)
         identity = session.record.id
     timeline, truncated = await store.timeline(identity, from_ts=from_ts, to_ts=to_ts)
-    history_row = await request.app["history"].history_entry(identity)
+    history_row = await request.app[keys.HISTORY].history_entry(identity)
     if session is None and not timeline and not history_row:
         raise KeyError(sid)
     # Every run the window touches: the timeline's own run keys, plus the live
@@ -8117,7 +8126,9 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
             "timeline": timeline,
             "timeline_truncated": truncated,
             "timeline_sink": store.stats(),
-            "fleet_status_health": fleet_status_health(request.app["sessions"].sessions.values()),
+            "fleet_status_health": fleet_status_health(
+                request.app[keys.SESSIONS].sessions.values()
+            ),
             "transcripts": transcripts,
         }
     )
@@ -8132,7 +8143,7 @@ async def get_status_health(request: web.Request) -> web.Response:
     """
     from .session import fleet_status_health
 
-    return json_response(fleet_status_health(request.app["sessions"].sessions.values()))
+    return json_response(fleet_status_health(request.app[keys.SESSIONS].sessions.values()))
 
 
 async def get_background_health(request: web.Request) -> web.Response:
@@ -8142,10 +8153,10 @@ async def get_background_health(request: web.Request) -> web.Response:
     drop is attributed, so a dead poller or a starved consumer is visible here
     rather than presenting as a feature that quietly stopped working.
     """
-    tier0: Tier0Store = request.app["tier0"]
-    events: EventBus = request.app["events"]
-    consumers: DeterministicConsumerService = request.app["deterministic_consumers"]
-    loop_lag: LoopLagMonitor = request.app["loop_lag"]
+    tier0: Tier0Store = request.app[keys.TIER0]
+    events: EventBus = request.app[keys.EVENTS]
+    consumers: DeterministicConsumerService = request.app[keys.DETERMINISTIC_CONSUMERS]
+    loop_lag: LoopLagMonitor = request.app[keys.LOOP_LAG]
     return json_response(
         {
             **background.health(),
@@ -8156,20 +8167,20 @@ async def get_background_health(request: web.Request) -> web.Response:
             "loop_lag": loop_lag.snapshot(),
             "event_bus": events.drop_stats(),
             "tier0_capture": tier0.capture_stats(),
-            "git_provenance": request.app["git_provenance"].status(),
+            "git_provenance": request.app[keys.GIT_PROVENANCE].status(),
             # A detector that stopped producing findings is indistinguishable from
             # a quiet fleet unless the loop's own liveness is reported.
             "deterministic_consumers": consumers.status(),
             # Ranking that stopped routing looks exactly like a quiet fleet from
             # the inbox, so its counters and its loop liveness are reported here.
-            "attention_ranking": request.app["attention_ranking"].status(),
-            "attention_narration": request.app["attention_narrator"].status(),
-            "project_contexts": request.app["project_contexts"].status(),
-            "scan_timeline": request.app["scan_timeline"].status(),
-            "mcp": request.app["mcp"].status(),
+            "attention_ranking": request.app[keys.ATTENTION_RANKING].status(),
+            "attention_narration": request.app[keys.ATTENTION_NARRATOR].status(),
+            "project_contexts": request.app[keys.PROJECT_CONTEXTS].status(),
+            "scan_timeline": request.app[keys.SCAN_TIMELINE].status(),
+            "mcp": request.app[keys.MCP].status(),
             # A watch service that stopped resolving is indistinguishable from a
             # fleet nobody is watching, so its counters and open count are here.
-            "session_watch": request.app["session_watch"].status(),
+            "session_watch": request.app[keys.SESSION_WATCH].status(),
         }
     )
 
@@ -8181,7 +8192,7 @@ async def get_notification_diagnostics(request: web.Request) -> web.Response:
         days = float(request.query.get("days", "7"))
     except ValueError as exc:
         raise ValueError("days must be a number") from exc
-    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    telemetry: OperationalTelemetryStore = request.app[keys.TELEMETRY]
     if not math.isfinite(days) or days <= 0 or days > telemetry.retention_days:
         raise ValueError(
             f"days must be greater than zero and no more than {telemetry.retention_days}"
@@ -8198,14 +8209,14 @@ async def get_notification_diagnostics(request: web.Request) -> web.Response:
 async def get_network_usage(request: web.Request) -> web.Response:
     """Application-payload counters for one daemon boot or explicit measurement window."""
 
-    meter: NetworkUsage = request.app["network_usage"]
+    meter: NetworkUsage = request.app[keys.NETWORK_USAGE]
     return json_response(meter.snapshot())
 
 
 async def reset_network_usage(request: web.Request) -> web.Response:
     """Start a fresh measurement window without restarting the daemon or any session."""
 
-    meter: NetworkUsage = request.app["network_usage"]
+    meter: NetworkUsage = request.app[keys.NETWORK_USAGE]
     previous = meter.snapshot()
     totals = previous["totals"]
     log.info(
@@ -8229,7 +8240,7 @@ async def get_storage_usage(request: web.Request) -> web.Response:
     capacity. The walk is I/O-heavy (the WebView2 cache dominates), so it runs
     off the event loop and behind a TTL cache; `?refresh=1` forces a re-measure.
     """
-    storage: StorageUsage = request.app["storage_usage"]
+    storage: StorageUsage = request.app[keys.STORAGE_USAGE]
     force = request.query.get("refresh", "").lower() in {"1", "true", "yes"}
     report = await asyncio.to_thread(storage.snapshot, force=force)
     response = json_response(report)
@@ -8276,11 +8287,11 @@ async def diagnostics_export(request: web.Request) -> web.Response:
     """
     from .session import fleet_status_health
 
-    config: Config = request.app["config"]
-    sessions: SessionManager = request.app["sessions"]
-    meter: NetworkUsage = request.app["network_usage"]
-    store: StatusTimelineStore = request.app["status_timeline"]
-    supervisor = request.app.get("supervisor")
+    config: Config = request.app[keys.CONFIG]
+    sessions: SessionManager = request.app[keys.SESSIONS]
+    meter: NetworkUsage = request.app[keys.NETWORK_USAGE]
+    store: StatusTimelineStore = request.app[keys.STATUS_TIMELINE]
+    supervisor = request.app.get(keys.SUPERVISOR)
 
     remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     firewall: dict[str, object] = {"supported": False}
@@ -8327,7 +8338,7 @@ async def diagnostics_export(request: web.Request) -> web.Response:
         # export - the same reason scrollback itself is not in this bundle.
         "session_recovery_sink": (
             recovery_store.stats()
-            if (recovery_store := request.app.get("session_recovery")) is not None
+            if (recovery_store := request.app.get(keys.SESSION_RECOVERY)) is not None
             else None
         ),
         "cold_sessions": [
@@ -8376,9 +8387,9 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
     from .doctor import build_doctor_report, observation_freshness
     from .session import fleet_status_health
 
-    config: Config = app["config"]
-    sessions: SessionManager = app["sessions"]
-    supervisor = app.get("supervisor")
+    config: Config = app[keys.CONFIG]
+    sessions: SessionManager = app[keys.SESSIONS]
+    supervisor = app.get(keys.SUPERVISOR)
 
     live = sum(session.pty.isalive() for session in sessions.sessions.values())
     supervisor_state = (
@@ -8392,7 +8403,7 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         "ok": True,
         "version": "0.1.0",
         "live_sessions": live,
-        "ui_build_id": read_ui_build_id(app["frontend_dir"]),
+        "ui_build_id": read_ui_build_id(app[keys.FRONTEND_DIR]),
         "supervisor_state": supervisor_state,
         "supervisor_unadopted": int(
             getattr(sessions, "unadopted_supervisor_sessions", 0) or 0
@@ -8496,7 +8507,7 @@ def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:
 
 
 async def patch_session(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json()
     if "name" in body:
         session.record.name = str(body["name"]).strip() or session.record.name
@@ -8515,9 +8526,9 @@ async def patch_session(request: web.Request) -> web.Response:
         if content is not None and content not in {"summary", "verbatim"}:
             raise ValueError("voice_content must be summary, verbatim, or null to inherit")
         session.record.voice_content = content
-    await request.app["history"].update_session_metadata(session.record)
+    await request.app[keys.HISTORY].update_session_metadata(session.record)
     session.publish_update()
-    await request.app["events"].emit("session_updated", session_id=session.record.id)
+    await request.app[keys.EVENTS].emit("session_updated", session_id=session.record.id)
     return json_response(session.record.snapshot())
 
 
@@ -8541,7 +8552,7 @@ async def mark_session_read(request: web.Request) -> web.Response:
       it exists to survive the dwell of the visit that set it.
     - `{"read": false}` - explicit unread. Sets the pin and rolls the mark back.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json() if request.body_exists else {}
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
@@ -8560,7 +8571,7 @@ async def mark_session_read(request: web.Request) -> web.Response:
         session.publish_update()
         # Other devices hold their own copy of the mark; this is what converges
         # them. A client that acknowledged it itself already shows the result.
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "session_read",
             session_id=session.record.id,
             turn_seq=session.record.read_turn_seq,
@@ -8578,7 +8589,7 @@ async def mark_session_read(request: web.Request) -> web.Response:
 
 
 async def regenerate_session_title(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     if not has_observable_transcript(record.backend) or not record.agent_run_id:
         raise ValueError("title regeneration requires an active agent run")
@@ -8586,7 +8597,7 @@ async def regenerate_session_title(request: web.Request) -> web.Response:
         raise ValueError("an ended session cannot regenerate its title")
     if record.auto_named is False:
         raise ValueError("a manually named session keeps its user title")
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "title_regenerate_requested",
         session_id=record.id,
         source="user",
@@ -8612,7 +8623,7 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
     annotation, and the clear is ledgered like every other one (evidence
     `manual`) rather than silently mutating the record.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     try:
         body = await request.json()
     except (ValueError, json.JSONDecodeError):
@@ -8646,7 +8657,7 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
 def _approval_project_root(app: web.Application, session: Any) -> Path | None:
     """The Project root whose `.swe-mux/config.toml` governs this session."""
     project_id = getattr(session.record, "project_id", "")
-    project = app["projects"].projects.get(project_id) if project_id else None
+    project = app[keys.PROJECTS].projects.get(project_id) if project_id else None
     if project is not None and project.root:
         return Path(project.root)
     cwd = getattr(session.record, "trusted_cwd", "") or getattr(session.record, "cwd", "")
@@ -8659,7 +8670,7 @@ async def _approval_context(app: web.Application, session: Any) -> dict[str, Any
     The two Project-file reads happen here — off the hook path, on an explicit
     request — and never inside a decision, which runs while the agent is parked.
     """
-    config = app["config"]
+    config = app[keys.CONFIG]
     harness = descriptor(session.record.backend) if session.record.backend in HARNESSES else None
     supported = bool(harness and harness.hook_approval_decisions)
     root = _approval_project_root(app, session)
@@ -8710,7 +8721,7 @@ def _approval_snapshot(session: Any, context: dict[str, Any]) -> dict[str, Any]:
 
 
 async def get_session_approvals(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     context = await _approval_context(request.app, session)
     return json_response(_approval_snapshot(session, context))
 
@@ -8723,7 +8734,7 @@ async def put_session_approvals(request: web.Request) -> web.Response:
     reasonably conclude the control does not work, and then stop trusting the
     one it does have.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json()
     mode = str((body or {}).get("mode") or "").strip()
     if mode not in APPROVAL_MODES:
@@ -8743,7 +8754,7 @@ async def put_session_approvals(request: web.Request) -> web.Response:
                     "error": (
                         f"this Project's approval ceiling is {context['ceiling']}"
                         if context["ceiling"] != "allowlisted"
-                        or request.app["config"].approval_allow_all_permitted
+                        or request.app[keys.CONFIG].approval_allow_all_permitted
                         else "allow_all is disabled for this install"
                     ),
                     "code": "above_ceiling",
@@ -8767,7 +8778,7 @@ async def put_session_approvals(request: web.Request) -> web.Response:
         set_by=str((body or {}).get("set_by") or "ui"),
     )
     session.publish_update()
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "approval_mode_set",
         session_id=session.record.id,
         source="user",
@@ -8787,7 +8798,7 @@ async def approve_pending_request(request: web.Request) -> web.Response:
     minus voice's two-step challenge, because that exists to compensate for a
     caller who cannot see the screen and a UI button sits next to it.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     current = _current_voice_approval(session)
     if current is None:
         return json_response(
@@ -8801,8 +8812,8 @@ async def approve_pending_request(request: web.Request) -> web.Response:
         return json_response(
             {"error": "the approval changed; re-read it", "code": "fingerprint_changed"}, 409
         )
-    _record_operator_input(request.app["events"], session, "\r", source="approve-once")
-    await request.app["events"].emit(
+    _record_operator_input(request.app[keys.EVENTS], session, "\r", source="approve-once")
+    await request.app[keys.EVENTS].emit(
         "approval_answered_once",
         session_id=session.record.id,
         source="user",
@@ -8829,7 +8840,7 @@ async def _discard_session_media(app: web.Application, session_id: str) -> None:
     """
     await asyncio.to_thread(
         shutil.rmtree,
-        session_media_directory(app["config"].data_dir, session_id),
+        session_media_directory(app[keys.CONFIG].data_dir, session_id),
         ignore_errors=True,
     )
 
@@ -8845,7 +8856,7 @@ async def delete_session(request: web.Request) -> web.Response:
     took and whether it was live when asked. Keep it: without it, a close that quietly
     starts taking ten seconds is invisible to everyone.
     """
-    manager: SessionManager = request.app["sessions"]
+    manager: SessionManager = request.app[keys.SESSIONS]
     session = manager.resolve(request.match_info["sid"])
     started = time.monotonic()
     was_live = session.record.state not in {"exited", "crashed"}
@@ -8853,19 +8864,19 @@ async def delete_session(request: web.Request) -> web.Response:
         await manager.stop(session.record.id)
     stopped = time.monotonic()
     manager.sessions.pop(session.record.id, None)
-    attachment_locks = request.app.get("attachment_locks", {})
+    attachment_locks = request.app.get(keys.ATTACHMENT_LOCKS, {})
     for key in tuple(attachment_locks):
         if key[1] == session.record.id:
             attachment_locks.pop(key, None)
     await _discard_session_media(request.app, session.record.id)
-    recovery: SessionRecoveryStore | None = request.app.get("session_recovery")
+    recovery: SessionRecoveryStore | None = request.app.get(keys.SESSION_RECOVERY)
     if recovery is not None:
         # Dismissal is the one thing that deletes recovery data. An ordinary end
         # only *closes* the row, because "this session finished" and "I am done
         # looking at this session" are different statements, and only the second
         # one is a reason to throw away what it printed.
         await recovery.discard(session.record.id)
-    request.app["events"].emit_background(
+    request.app[keys.EVENTS].emit_background(
         "session_removed",
         session_id=session.record.id,
         source="http",
@@ -8895,7 +8906,7 @@ async def relaunch_session(request: web.Request) -> web.Response:
     `--session-id`, where the operator asked to return to the conversation. That
     is Resume's job, and a cold agent already has it.
     """
-    manager: SessionManager = request.app["sessions"]
+    manager: SessionManager = request.app[keys.SESSIONS]
     old = manager.resolve(request.match_info["sid"])
     cold_shell = bool(old.record.cold and old.record.backend == "shell")
     # The recovered-agent case first, so it gets its own answer rather than the
@@ -8928,12 +8939,12 @@ async def relaunch_session(request: web.Request) -> web.Response:
     if old.record.state not in {"exited", "crashed"}:
         await manager.stop(old_id)
     manager.sessions.pop(old_id, None)
-    attachment_locks = request.app.get("attachment_locks", {})
+    attachment_locks = request.app.get(keys.ATTACHMENT_LOCKS, {})
     for key in tuple(attachment_locks):
         if key[1] == old_id:
             attachment_locks.pop(key, None)
     await _discard_session_media(request.app, old_id)
-    recovery: SessionRecoveryStore | None = request.app.get("session_recovery")
+    recovery: SessionRecoveryStore | None = request.app.get(keys.SESSION_RECOVERY)
     if recovery is not None:
         # The replacement supersedes it, which is the operator being done with it.
         await recovery.discard(old_id)
@@ -9068,7 +9079,7 @@ async def _branch_pane_name(app: web.Application, record: Any) -> str:
     (`auto_named=False`), so the titler cannot take it back the moment the branch says
     its first word.
     """
-    store = app.get("automation_store")
+    store = app.get(keys.AUTOMATION_STORE)
     run_id = session_titles.record_run_id(record)
     titles = await session_titles.generated_titles(store, {run_id})
     display = session_titles.record_display_name(record, titles)
@@ -9139,7 +9150,7 @@ def _branch_source(request: web.Request) -> tuple[Any, str, Any] | web.Response:
     one conversation while the fork cut another is the exact class of bug the
     ``agent_lifecycle_id`` anchor already exists to prevent.
     """
-    manager: SessionManager = request.app["sessions"]
+    manager: SessionManager = request.app[keys.SESSIONS]
     session = manager.resolve(request.match_info["sid"])
     record = session.record
     if not has_observable_transcript(record.backend):
@@ -9151,7 +9162,7 @@ def _branch_source(request: web.Request) -> tuple[Any, str, Any] | web.Response:
         return json_response(
             {"error": "no conversation id to branch from yet", "code": "native_id_missing"}, 409
         )
-    project = request.app["projects"].projects.get(record.project_id)
+    project = request.app[keys.PROJECTS].projects.get(record.project_id)
     if project is None:
         return json_response({"error": "project missing", "code": "project_missing"}, 422)
     return session, conversation, project
@@ -9273,7 +9284,7 @@ async def history_branch_points(request: web.Request) -> web.Response:
     Every "nothing to offer" case answers 200 with a ``reason``, for the same reason the
     session listing does: asking a conversation with nothing to fork is ordinary.
     """
-    row = await request.app["history"].history_entry(request.match_info["sid"])
+    row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
     backend = str(row.get("backend") or "")
@@ -9329,7 +9340,7 @@ async def _branch_by_transcript_fork(
     memory.
     """
     record = session.record
-    manager: SessionManager = request.app["sessions"]
+    manager: SessionManager = request.app[keys.SESSIONS]
     adapter = manager.adapters.get(record.backend)
     if adapter is None:
         return json_response(
@@ -9470,7 +9481,7 @@ async def branch_session(request: web.Request) -> web.Response:
     if isinstance(resolved, web.Response):
         return resolved
     session, conversation, project = resolved
-    manager: SessionManager = request.app["sessions"]
+    manager: SessionManager = request.app[keys.SESSIONS]
     record = session.record
     strategy = branch_strategy(record.backend)
     if strategy is None:
@@ -9500,7 +9511,7 @@ async def branch_session(request: web.Request) -> web.Response:
         return json_response({"error": f"cannot branch while {why}", "code": code}, 409)
     branch_cwd = record.run_cwd or record.cwd
     started_at = time.monotonic()
-    events = request.app.get("events")
+    events = request.app.get(keys.EVENTS)
     fork: dict[str, Any] | None = None
     seed_text: str | None = None
     if strategy == "transcript_fork":
@@ -9582,7 +9593,7 @@ async def branch_session(request: web.Request) -> web.Response:
         direction=body.get("direction") or "after",
     )
     try:
-        await request.app["projects"].update(
+        await request.app[keys.PROJECTS].update(
             record.project_id, layout=next_layout, layout_revision=project.layout_revision
         )
     except Exception:
@@ -9616,7 +9627,7 @@ async def _record_branch_lineage(
     to record it is logged and swallowed — the branch itself is done, and losing the
     edge degrades the tree view rather than the conversation.
     """
-    store = request.app.get("automation_store")
+    store = request.app.get(keys.AUTOMATION_STORE)
     if store is None:
         return
     parent = record.agent_run_id or record.id
@@ -9786,9 +9797,9 @@ async def _interrupt_session_pty(app: web.Application, session: Any) -> None:
     delivery-readiness contract depends on.
     """
     _record_operator_input(
-        app["events"], session, _INTERRUPT_KEYS, source="agent_control"
+        app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control"
     )
-    await app["events"].emit(
+    await app[keys.EVENTS].emit(
         "agent_turn_interrupted", session_id=session.record.id, source="agent_control"
     )
 
@@ -9804,20 +9815,20 @@ async def _end_session_gracefully(
     The end reason is stamped on the record first, so a CLI that exits on its own
     still records `agent_ended` rather than the ordinary process-exit reason.
     """
-    sessions = app["sessions"]
-    config: Config = app["config"]
+    sessions = app[keys.SESSIONS]
+    config: Config = app[keys.CONFIG]
     sid = str(session.record.id)
     session.record.requested_end_reason = reason
     if session.record.state in {"exited", "crashed"}:
         return {"final_state": session.record.state, "graceful": True, "reason": reason}
     _record_operator_input(
-        app["events"], session, _INTERRUPT_KEYS, source="agent_control"
+        app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control"
     )
     await asyncio.sleep(_INTERRUPT_SETTLE_SECONDS)
     exit_keys = str(getattr(session.pty, "graceful_exit", "") or "")
     if exit_keys and session.record.state not in {"exited", "crashed"}:
         _record_operator_input(
-            app["events"], session, exit_keys, source="agent_control"
+            app[keys.EVENTS], session, exit_keys, source="agent_control"
         )
     deadline = time.monotonic() + float(config.session_control_graceful_timeout_s)
     while time.monotonic() < deadline:
@@ -9840,18 +9851,18 @@ async def _end_session_gracefully(
 
 async def session_input(request: web.Request) -> web.Response:
     body = await request.json()
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if session.record.state in {"exited", "crashed"}:
         return json_response({"error": "the session has ended"}, 409)
     data = str(body.get("data", ""))
     if not data:
         return json_response({"ok": True})
-    _record_operator_input(request.app["events"], session, data, source="http")
+    _record_operator_input(request.app[keys.EVENTS], session, data, source="http")
     return json_response({"ok": True})
 
 
 async def session_startup_metrics(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     raw = (await request.json()).get("timing_ms")
     if not isinstance(raw, dict):
         raise ValueError("timing_ms must be an object")
@@ -9871,7 +9882,7 @@ async def session_startup_metrics(request: web.Request) -> web.Response:
     if not session.record.client_startup_timing_ms:
         session.record.client_startup_timing_ms = timing_ms
         session.publish_update()
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "session_startup_client_measured",
             session_id=session.record.id,
             source="browser",
@@ -9881,10 +9892,10 @@ async def session_startup_metrics(request: web.Request) -> web.Response:
 
 
 async def broadcast_set(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     session.record.broadcast = bool((await request.json()).get("include", True))
     session.publish_update()
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "broadcast_membership_changed",
         session_id=session.record.id,
         included=session.record.broadcast,
@@ -9932,7 +9943,7 @@ async def deliver_broadcast(
 async def broadcast_input_route(request: web.Request) -> web.Response:
     data = str((await request.json()).get("data", ""))
     return json_response(
-        await deliver_broadcast(request.app["sessions"], data, request.app["events"])
+        await deliver_broadcast(request.app[keys.SESSIONS], data, request.app[keys.EVENTS])
     )
 
 
@@ -9942,14 +9953,14 @@ async def broadcast_input_route(request: web.Request) -> web.Response:
 
 
 async def queue_summary(request: web.Request) -> web.Response:
-    return json_response({"targets": await request.app["prompt_queue"].summary()})
+    return json_response({"targets": await request.app[keys.PROMPT_QUEUE].summary()})
 
 
 async def queue_messages(request: web.Request) -> web.Response:
     target = request.query.get("target_session_id", "").strip()
     if not target:
         raise ValueError("target_session_id is required")
-    return json_response(await request.app["prompt_queue"].target_view(target))
+    return json_response(await request.app[keys.PROMPT_QUEUE].target_view(target))
 
 
 def _human_sender_kind(request: web.Request) -> str:
@@ -9968,7 +9979,7 @@ def _human_sender_kind(request: web.Request) -> str:
 async def queue_create_message(request: web.Request) -> web.Response:
     body = await request.json()
     sender_kind = _human_sender_kind(request)
-    message = await request.app["prompt_queue"].enqueue(
+    message = await request.app[keys.PROMPT_QUEUE].enqueue(
         target_session_id=str(body.get("target_session_id") or ""),
         body=str(body.get("body") or ""),
         armed=bool(body.get("armed", False)),
@@ -9986,7 +9997,7 @@ async def queue_create_message(request: web.Request) -> web.Response:
 
 
 async def queue_patch_message(request: web.Request) -> web.Response:
-    queue: PromptQueueService = request.app["prompt_queue"]
+    queue: PromptQueueService = request.app[keys.PROMPT_QUEUE]
     message_id = request.match_info["message_id"]
     body = await request.json()
     if body.get("retarget_session_id"):
@@ -10014,7 +10025,7 @@ async def queue_patch_message(request: web.Request) -> web.Response:
 async def queue_cancel_message(request: web.Request) -> web.Response:
     body = await request.json()
     return json_response(
-        await request.app["prompt_queue"].cancel(
+        await request.app[keys.PROMPT_QUEUE].cancel(
             request.match_info["message_id"],
             kind=str(body.get("kind") or "cancelled"),
         )
@@ -10022,7 +10033,7 @@ async def queue_cancel_message(request: web.Request) -> web.Response:
 
 
 async def queue_delete_message(request: web.Request) -> web.Response:
-    result = await request.app["prompt_queue"].delete(request.match_info["message_id"])
+    result = await request.app[keys.PROMPT_QUEUE].delete(request.match_info["message_id"])
     log.info(
         "queue message deleted message_id=%s target_session_id=%s previous_state=%s "
         "sender_kind=%s already_deleted=%s",
@@ -10044,7 +10055,7 @@ async def queue_delete_message(request: web.Request) -> web.Response:
 async def queue_message_deliveries(request: web.Request) -> web.Response:
     return json_response(
         {
-            "deliveries": await request.app["prompt_queue"].store.deliveries(
+            "deliveries": await request.app[keys.PROMPT_QUEUE].store.deliveries(
                 request.match_info["message_id"]
             )
         }
@@ -10058,7 +10069,7 @@ async def queue_send_next(request: web.Request) -> web.Response:
     if not message_id or not isinstance(revision, int):
         raise ValueError("message_id and revision are required")
     return json_response(
-        await request.app["prompt_queue"].send_next(
+        await request.app[keys.PROMPT_QUEUE].send_next(
             message_id,
             revision=revision,
             idempotency_key=str(body["idempotency_key"]) if body.get("idempotency_key") else None,
@@ -10073,7 +10084,7 @@ async def queue_export(request: web.Request) -> web.Response:
         raise ValueError("target_session_id is required")
     redact = request.query.get("redact_secrets", "1") not in {"0", "false"}
     return json_response(
-        await request.app["prompt_queue"].export_target(target, redact_secrets=redact)
+        await request.app[keys.PROMPT_QUEUE].export_target(target, redact_secrets=redact)
     )
 
 
@@ -10084,13 +10095,13 @@ async def queue_export(request: web.Request) -> web.Response:
 
 
 async def queue_auto_status(request: web.Request) -> web.Response:
-    return json_response(await request.app["auto_delivery"].status())
+    return json_response(await request.app[keys.AUTO_DELIVERY].status())
 
 
 async def queue_auto_pause(request: web.Request) -> web.Response:
     """Pause-all / emergency disable. One flag, persisted, provider-independent."""
     body = await request.json()
-    controller: AutoDeliveryController = request.app["auto_delivery"]
+    controller: AutoDeliveryController = request.app[keys.AUTO_DELIVERY]
     await controller.set_paused(bool(body.get("paused", True)), by=_human_sender_kind(request))
     return json_response(await controller.status())
 
@@ -10103,7 +10114,7 @@ async def queue_auto_session(request: web.Request) -> web.Response:
     accepting interjections decides whether send may happen while a turn runs.
     Cycling one never rewrites another.
     """
-    controller: AutoDeliveryController = request.app["auto_delivery"]
+    controller: AutoDeliveryController = request.app[keys.AUTO_DELIVERY]
     session_id = request.match_info["sid"]
     body = await request.json()
     by = _human_sender_kind(request)
@@ -10136,7 +10147,7 @@ async def queue_auto_report_unsafe(request: web.Request) -> web.Response:
     average away.
     """
     body = await request.json()
-    controller: AutoDeliveryController = request.app["auto_delivery"]
+    controller: AutoDeliveryController = request.app[keys.AUTO_DELIVERY]
     await controller.report_unsafe(str(body.get("note") or ""))
     return json_response(await controller.status())
 
@@ -10151,7 +10162,7 @@ async def queue_mailbox(request: web.Request) -> web.Response:
     except ValueError as exc:
         raise QueueError("invalid_limit", "limit must be an integer", status=400) from exc
     return json_response(
-        await request.app["agent_messaging"].mailbox(
+        await request.app[keys.AGENT_MESSAGING].mailbox(
             author=author,
             role=role.strip() if role else None,
             project_id=project_id,
@@ -10362,13 +10373,13 @@ async def _upload_session_attachment(
     if request.headers.get("X-Mux-User-Gesture") not in allowed_gestures:
         noun = "image upload" if image_only else "attachment upload"
         raise web.HTTPForbidden(text=f"terminal {noun} requires an explicit user action")
-    session = request.app["sessions"].resolve(request.match_info["sid"])
-    adapter: BackendAdapter = request.app["sessions"].adapters[session.record.backend]
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    adapter: BackendAdapter = request.app[keys.SESSIONS].adapters[session.record.backend]
     if not is_agent_harness(session.record.backend):
         raise ValueError("attachments are supported only in registered agent sessions")
     if session.record.state in {"exited", "crashed"}:
         raise ValueError("attachments cannot be added to an ended session")
-    project = request.app["projects"].projects.get(session.record.project_id)
+    project = request.app[keys.PROJECTS].projects.get(session.record.project_id)
     if project is None:
         raise ValueError("the session's owning Project is unavailable")
     workspace = await asyncio.to_thread(
@@ -10394,7 +10405,7 @@ async def _upload_session_attachment(
         raise ValueError("exactly one multipart file is required")
     filename = part.filename or "attachment"
     lock_key = (str(workspace), session.record.id)
-    lock = request.app["attachment_locks"].setdefault(lock_key, asyncio.Lock())
+    lock = request.app[keys.ATTACHMENT_LOCKS].setdefault(lock_key, asyncio.Lock())
     async with lock:
         stored = await asyncio.to_thread(
             store_session_attachment,
@@ -10406,7 +10417,7 @@ async def _upload_session_attachment(
             image_only=image_only,
         )
     reference = adapter.media_reference(stored.path) if stored.kind == "image" else str(stored.path)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "session_media_uploaded" if image_only else "session_attachment_uploaded",
         session_id=session.record.id,
         attachment_kind=stored.kind,
@@ -10426,12 +10437,12 @@ async def upload_session_media(request: web.Request) -> web.Response:
 
 
 async def promote_session(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
     if not secrets.compare_digest(supplied, session.hook_secret):
         raise web.HTTPForbidden(text="invalid hook secret")
     body = await request.json()
-    promoted = await request.app["sessions"].promote(
+    promoted = await request.app[keys.SESSIONS].promote(
         session.record.id,
         str(body["backend"]),
         str(body["native_id"]),
@@ -10441,21 +10452,21 @@ async def promote_session(request: web.Request) -> web.Response:
 
 
 async def demote_session(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
     if not secrets.compare_digest(supplied, session.hook_secret):
         raise web.HTTPForbidden(text="invalid hook secret")
     body = await request.json()
-    demoted = await request.app["sessions"].demote(
+    demoted = await request.app[keys.SESSIONS].demote(
         session.record.id, str(body["backend"]), str(body["native_id"])
     )
     return json_response(demoted.record.snapshot())
 
 
 async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
-    manager: ProjectManager = request.app["projects"]
-    activity = await request.app["history"].project_last_activity()
-    history_counts = await request.app["history"].project_history_counts()
+    manager: ProjectManager = request.app[keys.PROJECTS]
+    activity = await request.app[keys.HISTORY].project_last_activity()
+    history_counts = await request.app[keys.HISTORY].project_history_counts()
     return await asyncio.gather(
         *(
             _project_snapshot(request, item, activity, history_counts)
@@ -10478,8 +10489,8 @@ async def record_project_use(request: web.Request) -> web.Response:
     reason = str(body.get("reason") or "")
     if reason not in _PROJECT_USE_REASONS:
         raise ValueError({"reason": "must be prompt_submitted or session_started"})
-    project = await request.app["projects"].touch_used(request.match_info["project_id"])
-    await request.app["events"].emit(
+    project = await request.app[keys.PROJECTS].touch_used(request.match_info["project_id"])
+    await request.app[keys.EVENTS].emit(
         "project_used",
         source="user",
         project_id=project.id,
@@ -10499,7 +10510,7 @@ async def _project_snapshot(  # type: ignore[no-untyped-def]
     portable = await read_project_config(project.root, project=identity)
     values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
     public_values = {key: value for key, value in values.items() if key != "resource_open_mode"}
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     effective = {
         "backend": project.default_backend
         or values.get("preferred_backend")
@@ -10561,21 +10572,21 @@ async def create_project(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body.get("create_missing", False), bool):
         raise ValueError({"create_missing": "must be a boolean"})
-    registration = await request.app["projects"].register(
+    registration = await request.app[keys.PROJECTS].register(
         str(body.get("name") or Path(str(body.get("root") or "")).name or "New project"),
         str(body.get("root") or ""),
         group_id=str(body["group_id"]) if body.get("group_id") else None,
         create_missing=bool(body.get("create_missing", False)),
     )
     project = registration.project
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "project_restored" if registration.restored else "project_created",
         source="user",
         project_id=project.id,
         root=project.root,
     )
-    activity = await request.app["history"].project_last_activity()
-    history_counts = await request.app["history"].project_history_counts()
+    activity = await request.app[keys.HISTORY].project_last_activity()
+    history_counts = await request.app[keys.HISTORY].project_history_counts()
     snapshot = await _project_snapshot(request, project, activity, history_counts)
     return json_response(
         {**snapshot, "restored": registration.restored},
@@ -10592,7 +10603,7 @@ async def patch_project(request: web.Request) -> web.Response:
     backend = body.get("default_backend")
     if backend is not None and backend != "shell" and not is_agent_harness(backend):
         raise ValueError({"default_backend": "must be shell, a registered agent, or null"})
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     profile_id = body.get("default_profile_id")
     if profile_id is not None and profile_id not in {
         profile.id for profile in config.shell_profiles if profile.backend == "shell"
@@ -10619,9 +10630,9 @@ async def patch_project(request: web.Request) -> web.Response:
                         )
                     }
                 )
-    project = await request.app["projects"].update(request.match_info["project_id"], **body)
-    activity = await request.app["history"].project_last_activity()
-    history_counts = await request.app["history"].project_history_counts()
+    project = await request.app[keys.PROJECTS].update(request.match_info["project_id"], **body)
+    activity = await request.app[keys.HISTORY].project_last_activity()
+    history_counts = await request.app[keys.HISTORY].project_history_counts()
     return json_response(await _project_snapshot(request, project, activity, history_counts))
 
 
@@ -10636,14 +10647,18 @@ async def reorder_projects(request: web.Request) -> web.Response:
     ):
         raise ValueError({"expected_order": "must be the last observed Project order"})
     try:
-        projects = await request.app["projects"].reorder(ordered_ids, expected_order=expected_order)
+        projects = await request.app[keys.PROJECTS].reorder(
+            ordered_ids, expected_order=expected_order
+        )
     except ValueError as exc:
         if "order changed" in str(exc):
             return json_response({"error": str(exc), "code": "order_conflict"}, 409)
         raise
-    await request.app["events"].emit("projects_reordered", source="user", project_ids=ordered_ids)
-    activity = await request.app["history"].project_last_activity()
-    history_counts = await request.app["history"].project_history_counts()
+    await request.app[keys.EVENTS].emit(
+        "projects_reordered", source="user", project_ids=ordered_ids
+    )
+    activity = await request.app[keys.HISTORY].project_last_activity()
+    history_counts = await request.app[keys.HISTORY].project_history_counts()
     return json_response(
         await asyncio.gather(
             *(_project_snapshot(request, item, activity, history_counts) for item in projects)
@@ -10655,7 +10670,7 @@ async def delete_project(request: web.Request) -> web.Response:
     project_id = request.match_info["project_id"]
     live = [
         item.record
-        for item in request.app["sessions"].sessions.values()
+        for item in request.app[keys.SESSIONS].sessions.values()
         if item.record.project_id == project_id
         and item.record.state not in {"exited", "crashed"}
     ]
@@ -10673,10 +10688,10 @@ async def delete_project(request: web.Request) -> web.Response:
             },
             409,
         )
-    project = request.app["projects"].projects[project_id]
-    history_count = len(await request.app["history"].project_session_ids(project_id))
-    await request.app["projects"].remove(project_id)
-    await request.app["events"].emit(
+    project = request.app[keys.PROJECTS].projects[project_id]
+    history_count = len(await request.app[keys.HISTORY].project_session_ids(project_id))
+    await request.app[keys.PROJECTS].remove(project_id)
+    await request.app[keys.EVENTS].emit(
         "project_removed",
         source="user",
         project_id=project_id,
@@ -10688,7 +10703,7 @@ async def delete_project(request: web.Request) -> web.Response:
 
 def _action_project(request: web.Request):  # type: ignore[no-untyped-def]
     project_id = request.match_info["project_id"]
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise ValueError(f"unknown project: {project_id}")
     return project
@@ -10696,7 +10711,7 @@ def _action_project(request: web.Request):  # type: ignore[no-untyped-def]
 
 async def list_project_actions(request: web.Request) -> web.Response:
     project = _action_project(request)
-    service: ProjectActionService = request.app["project_actions"]
+    service: ProjectActionService = request.app[keys.PROJECT_ACTIONS]
     return json_response(service.catalog(project.root).snapshot())
 
 
@@ -10710,7 +10725,7 @@ async def trust_project_actions(request: web.Request) -> web.Response:
     # approved. Without, the fingerprint is the whole-catalog digest, which is what
     # the Run menu's single prompt sends and what every existing client sends.
     source = str(body.get("source")) if body.get("source") else None
-    service: ProjectActionService = request.app["project_actions"]
+    service: ProjectActionService = request.app[keys.PROJECT_ACTIONS]
     catalog = service.trust(project.root, fingerprint, source=source)
     log.info(
         "project_actions_trusted project_id=%s source=%s files=%d",
@@ -10718,7 +10733,7 @@ async def trust_project_actions(request: web.Request) -> web.Response:
         source or "*",
         len(catalog.sources),
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "project_actions_trusted",
         source="user",
         project_id=project.id,
@@ -10738,7 +10753,7 @@ async def diff_project_actions(request: web.Request) -> web.Response:
     an empty diff as "nothing changed".
     """
     project = _action_project(request)
-    service: ProjectActionService = request.app["project_actions"]
+    service: ProjectActionService = request.app[keys.PROJECT_ACTIONS]
     catalog = service.catalog(project.root)
     root = Path(catalog.root)
     entries: list[dict[str, Any]] = []
@@ -10794,7 +10809,7 @@ async def _project_profile_id_for(  # type: ignore[no-untyped-def]
     return str(
         project.default_profile_id
         or values.get("default_shell_profile")
-        or app["config"].default_shell_profile
+        or app[keys.CONFIG].default_shell_profile
     )
 
 
@@ -10825,7 +10840,7 @@ async def put_project_actions_source(request: web.Request) -> web.Response:
     diagnostics = await asyncio.to_thread(
         write_actions_source, project.root, text, str(body.get("revision") or "missing")
     )
-    service: ProjectActionService = request.app["project_actions"]
+    service: ProjectActionService = request.app[keys.PROJECT_ACTIONS]
     catalog = service.catalog(project.root)
     log.info(
         "project_actions_source_saved project_id=%s bytes=%d actions=%d diagnostics=%d",
@@ -10834,7 +10849,7 @@ async def put_project_actions_source(request: web.Request) -> web.Response:
         len(catalog.actions),
         len(diagnostics),
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "project_actions_source_saved",
         source="user",
         project_id=project.id,
@@ -10864,7 +10879,7 @@ async def _start_project_action(
     check, the same substitution, and the same timeout arming. An agent-facing
     caller that reimplemented any of those would be a second authority path.
     """
-    service: ProjectActionService = app["project_actions"]
+    service: ProjectActionService = app[keys.PROJECT_ACTIONS]
     catalog, action = service.action(project.root, action_id)
     action = substituted_action(action, inputs, Path(catalog.root))
     profile_id = await _project_profile_id_for(app, project)
@@ -10878,7 +10893,7 @@ async def _start_project_action(
                     action_spawn_body(
                         step,
                         project_id=project.id,
-                        config=app["config"],
+                        config=app[keys.CONFIG],
                         profile_id=str(profile_id),
                     ),
                 )
@@ -10906,7 +10921,7 @@ async def _start_project_action(
         len(sessions),
         len(errors),
     )
-    await app["events"].emit(
+    await app[keys.EVENTS].emit(
         "project_action_started",
         source=origin,
         project_id=project.id,
@@ -10945,7 +10960,7 @@ def _arm_action_timeout(
 
     async def expire() -> None:
         await asyncio.sleep(seconds)
-        sessions = app["sessions"]
+        sessions = app[keys.SESSIONS]
         session = sessions.sessions.get(session_id)
         # The terminal states by name, not a word that reads like one: `SessionState`
         # has no "ended" member, and a finished one-shot step stays in the table as
@@ -10963,7 +10978,7 @@ def _arm_action_timeout(
             session_id,
             seconds,
         )
-        await app["events"].emit(
+        await app[keys.EVENTS].emit(
             "project_action_step_timeout",
             source="project_actions",
             session_id=session_id,
@@ -10976,8 +10991,8 @@ def _arm_action_timeout(
             await sessions.stop(session_id)
 
     task = asyncio.create_task(expire(), name=f"action-timeout-{session_id}")
-    app["action_timeout_tasks"].add(task)
-    task.add_done_callback(app["action_timeout_tasks"].discard)
+    app[keys.ACTION_TIMEOUT_TASKS].add(task)
+    task.add_done_callback(app[keys.ACTION_TIMEOUT_TASKS].discard)
 
 
 def _action_inputs(body: dict[str, Any]) -> dict[str, str]:
@@ -10997,7 +11012,7 @@ async def run_project_action(request: web.Request) -> web.Response:
     action_id = str(body.get("action_id") or "")
     if not action_id:
         raise ValueError({"action_id": "is required"})
-    service: ProjectActionService = request.app["project_actions"]
+    service: ProjectActionService = request.app[keys.PROJECT_ACTIONS]
     # The lookup is what can raise KeyError for an id nobody declares. Wrapping the
     # whole run in that `except` turned any incidental KeyError inside the spawn path
     # into "unknown Project Action", which is a wrong answer rather than a slow one.
@@ -11037,7 +11052,7 @@ async def run_project_init_scripts(request: web.Request) -> web.Response:
     raw_ids = body.get("script_ids")
     if not isinstance(raw_ids, list) or any(not isinstance(item, str) for item in raw_ids):
         raise ValueError({"script_ids": "must be an array of init script ids"})
-    config: Config = request.app["config"]
+    config: Config = request.app[keys.CONFIG]
     chosen, unknown = select_init_scripts(config, [str(item) for item in raw_ids])
     if unknown:
         raise ValueError({"script_ids": f"unknown init scripts: {', '.join(unknown)}"})
@@ -11061,7 +11076,7 @@ async def run_project_init_scripts(request: web.Request) -> web.Response:
         session.record.relaunchable = True
         session.publish_update()
         sessions.append(session.record.snapshot())
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "project_init_scripts_started",
         source="user",
         project_id=project.id,
@@ -11073,18 +11088,18 @@ async def run_project_init_scripts(request: web.Request) -> web.Response:
 
 
 async def list_project_groups(request: web.Request) -> web.Response:
-    manager: ProjectManager = request.app["projects"]
+    manager: ProjectManager = request.app[keys.PROJECTS]
     return json_response([item.snapshot() for item in manager.ordered_groups()])
 
 
 async def create_project_group(request: web.Request) -> web.Response:
     body = await request.json()
-    group = await request.app["projects"].create_group(str(body.get("name") or ""))
+    group = await request.app[keys.PROJECTS].create_group(str(body.get("name") or ""))
     return json_response(group.snapshot(), 201)
 
 
 async def patch_project_group(request: web.Request) -> web.Response:
-    group = await request.app["projects"].update_group(
+    group = await request.app[keys.PROJECTS].update_group(
         request.match_info["group_id"], **await request.json()
     )
     return json_response(group.snapshot())
@@ -11101,7 +11116,7 @@ async def reorder_project_groups(request: web.Request) -> web.Response:
     ):
         raise ValueError({"expected_order": "must be the last observed group order"})
     try:
-        groups = await request.app["projects"].reorder_groups(
+        groups = await request.app[keys.PROJECTS].reorder_groups(
             ordered_ids, expected_order=expected_order
         )
     except ValueError as exc:
@@ -11112,12 +11127,12 @@ async def reorder_project_groups(request: web.Request) -> web.Response:
 
 
 async def delete_project_group(request: web.Request) -> web.Response:
-    await request.app["projects"].delete_group(request.match_info["group_id"])
+    await request.app[keys.PROJECTS].delete_group(request.match_info["group_id"])
     return json_response({"ok": True})
 
 
 def _request_project(request: web.Request):  # type: ignore[no-untyped-def]
-    project = request.app["projects"].projects.get(request.match_info["project_id"])
+    project = request.app[keys.PROJECTS].projects.get(request.match_info["project_id"])
     if not project:
         raise ValueError("unknown project")
     return project
@@ -11132,7 +11147,7 @@ async def get_agent_context(request: web.Request) -> web.Response:
     """
 
     project = _request_project(request)
-    service: AgentContextService = request.app["agent_context"]
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     refresh = request.query.get("refresh", "") in {"1", "true"}
     payload = await asyncio.to_thread(
         lambda: service.inventory(project.id, project.name, project.root, refresh=refresh)
@@ -11142,7 +11157,7 @@ async def get_agent_context(request: web.Request) -> web.Response:
 
 async def get_agent_context_source(request: web.Request) -> web.Response:
     project = _request_project(request)
-    service: AgentContextService = request.app["agent_context"]
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     payload = await asyncio.to_thread(
         service.read_source, project.root, request.match_info["source_id"]
     )
@@ -11151,7 +11166,7 @@ async def get_agent_context_source(request: web.Request) -> web.Response:
 
 async def reveal_agent_context_source(request: web.Request) -> web.Response:
     project = _request_project(request)
-    service: AgentContextService = request.app["agent_context"]
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     path = await asyncio.to_thread(
         service.source_path, project.root, request.match_info["source_id"]
     )
@@ -11163,7 +11178,7 @@ async def preview_agent_context_sync(request: web.Request) -> web.Response:
     project = _request_project(request)
     body = await request.json()
     direction = str(body.get("direction") or "")
-    service: AgentContextService = request.app["agent_context"]
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     return json_response(await asyncio.to_thread(service.preview_sync, project.root, direction))
 
 
@@ -11175,7 +11190,7 @@ async def sync_agent_context(request: web.Request) -> web.Response:
     target_revision = str(body.get("target_revision") or "")
     if not source_revision or not target_revision:
         raise ValueError("source_revision and target_revision are required")
-    service: AgentContextService = request.app["agent_context"]
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     try:
         result = await asyncio.to_thread(
             service.sync,
@@ -11187,7 +11202,7 @@ async def sync_agent_context(request: web.Request) -> web.Response:
         )
     except AgentContextConflict as exc:
         return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "agent_context_changed",
         source="user",
         operation="sync",
@@ -11205,7 +11220,7 @@ async def restore_agent_context(request: web.Request) -> web.Response:
     target_revision = str(body.get("target_revision") or "")
     if not backup_id or not target_revision:
         raise ValueError("backup_id and target_revision are required")
-    service: AgentContextService = request.app["agent_context"]
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     try:
         result = await asyncio.to_thread(
             service.restore,
@@ -11216,7 +11231,7 @@ async def restore_agent_context(request: web.Request) -> web.Response:
         )
     except AgentContextConflict as exc:
         return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "agent_context_changed",
         source="user",
         operation="restore",
@@ -11230,7 +11245,7 @@ async def restore_agent_context(request: web.Request) -> web.Response:
 async def list_project_files(request: web.Request) -> web.Response:
     project = _request_project(request)
     patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
+        project.root, request.app[keys.CONFIG].project_ignore_patterns
     )
     return json_response(
         list_project_directory(
@@ -11266,7 +11281,7 @@ async def post_project_resource(request: web.Request) -> web.Response:
     patterns = await asyncio.to_thread(
         effective_project_ignores,
         project.root,
-        request.app["config"].project_ignore_patterns,
+        request.app[keys.CONFIG].project_ignore_patterns,
     )
     result["hidden"] = ignored_project_path(str(result["path"]), patterns)
     return json_response(result, 201)
@@ -11282,7 +11297,7 @@ async def list_project_files_tree(request: web.Request) -> web.Response:
 
     project = _request_project(request)
     patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
+        project.root, request.app[keys.CONFIG].project_ignore_patterns
     )
     paths = request.query.getall("path", [])
     # Always include the root, dedupe, and bound the fan-out so a hostile or
@@ -11306,7 +11321,7 @@ async def list_recent_project_files(request: web.Request) -> web.Response:
     patterns = await asyncio.to_thread(
         effective_project_ignores,
         project.root,
-        request.app["config"].project_ignore_patterns,
+        request.app[keys.CONFIG].project_ignore_patterns,
     )
     return json_response(await read_recent_files(project.root, ignore_patterns=patterns))
 
@@ -11318,7 +11333,7 @@ async def search_project_files_route(request: web.Request) -> web.Response:
         mode = "names"
     query = request.query.get("q", "")
     patterns = effective_project_ignores(
-        project.root, request.app["config"].project_ignore_patterns
+        project.root, request.app[keys.CONFIG].project_ignore_patterns
     )
     # The recursive walk (and any content reads) is blocking, so keep it off the event loop.
     result = await asyncio.get_running_loop().run_in_executor(
@@ -11423,13 +11438,13 @@ async def ignore_project_resource(request: web.Request) -> web.Response:
     pattern = target.name if scope == "global" else relative
 
     if scope == "global":
-        config: Config = request.app["config"]
+        config: Config = request.app[keys.CONFIG]
         patterns = list(config.project_ignore_patterns)
         added = pattern not in patterns
         if added:
             hot, _restart = update_config(config, {"project_ignore_patterns": [*patterns, pattern]})
             _apply_runtime_config(request.app, hot)
-            await request.app["events"].emit(
+            await request.app[keys.EVENTS].emit(
                 "configuration_changed",
                 source="project_file_browser",
                 changed=["project_ignore_patterns"],
@@ -11446,7 +11461,7 @@ async def ignore_project_resource(request: web.Request) -> web.Response:
     if added:
         values["ignore_patterns"] = [*patterns, pattern]
         await write_project_config(project.root, values, current["revision"], project=identity)
-        await request.app["events"].emit("project_configuration_changed", project_id=project.id)
+        await request.app[keys.EVENTS].emit("project_configuration_changed", project_id=project.id)
     return json_response({"ok": True, "scope": scope, "pattern": pattern, "added": added})
 
 
@@ -11460,7 +11475,7 @@ async def put_project_watch(request: web.Request) -> web.Response:
         raise ValueError("watch_id must be a string of 100 characters or fewer")
     project = _request_project(request)
     root = await _project_file_root(project.root, body.get("worktree"))
-    lease = request.app["project_watcher"].register(project.id, raw_paths, watch_id, root=root)
+    lease = request.app[keys.PROJECT_WATCHER].register(project.id, raw_paths, watch_id, root=root)
     return json_response(
         {
             "watch_id": lease.watch_id,
@@ -11472,7 +11487,7 @@ async def put_project_watch(request: web.Request) -> web.Response:
 
 
 async def delete_project_watch(request: web.Request) -> web.Response:
-    request.app["project_watcher"].remove(
+    request.app[keys.PROJECT_WATCHER].remove(
         request.match_info["project_id"], request.match_info["watch_id"]
     )
     return json_response({"ok": True})
@@ -11480,7 +11495,7 @@ async def delete_project_watch(request: web.Request) -> web.Response:
 
 async def list_history(request: web.Request) -> web.Response:
     external_value = request.query.get("external")
-    page = await request.app["history"].history_page(
+    page = await request.app[keys.HISTORY].history_page(
         query=request.query.get("q", ""),
         search_scope=request.query.get("scope", "all"),
         backend=request.query.get("backend"),
@@ -11491,16 +11506,16 @@ async def list_history(request: web.Request) -> web.Response:
         date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
         time_basis=request.query.get("time_basis", "started"),
         cursor=request.query.get("cursor"),
-        limit=int(request.query.get("limit", min(50, request.app["config"].history_limit))),
+        limit=int(request.query.get("limit", min(50, request.app[keys.CONFIG].history_limit))),
     )
-    await request.app["history"].refresh_time_summaries(page["items"])
+    await request.app[keys.HISTORY].refresh_time_summaries(page["items"])
     await _decorate_generated_titles(request.app, page["items"])
     _decorate_conversation_holders(request.app, page["items"])
     return json_response(page)
 
 
 async def list_history_projects(request: web.Request) -> web.Response:
-    return json_response({"items": await request.app["history"].history_projects()})
+    return json_response({"items": await request.app[keys.HISTORY].history_projects()})
 
 
 async def start_history_backfill(request: web.Request) -> web.Response:
@@ -11508,40 +11523,40 @@ async def start_history_backfill(request: web.Request) -> web.Response:
     project_id = str(body.get("project_id") or "")
     if not project_id:
         raise ValueError("project_id is required")
-    return json_response({"job": request.app["history_backfills"].start(project_id)}, 202)
+    return json_response({"job": request.app[keys.HISTORY_BACKFILLS].start(project_id)}, 202)
 
 
 async def list_history_backfills(request: web.Request) -> web.Response:
     return json_response(
-        {"items": request.app["history_backfills"].list(request.query.get("project_id"))}
+        {"items": request.app[keys.HISTORY_BACKFILLS].list(request.query.get("project_id"))}
     )
 
 
 async def get_history_backfill(request: web.Request) -> web.Response:
     return json_response(
-        {"job": request.app["history_backfills"].get(request.match_info["job_id"])}
+        {"job": request.app[keys.HISTORY_BACKFILLS].get(request.match_info["job_id"])}
     )
 
 
 async def cancel_history_backfill(request: web.Request) -> web.Response:
     return json_response(
-        {"job": request.app["history_backfills"].cancel(request.match_info["job_id"])}
+        {"job": request.app[keys.HISTORY_BACKFILLS].cancel(request.match_info["job_id"])}
     )
 
 
 async def get_history_scan(request: web.Request) -> web.Response:
-    return json_response({"job": request.app["history_scan"].status()})
+    return json_response({"job": request.app[keys.HISTORY_SCAN].status()})
 
 
 async def start_history_scan(request: web.Request) -> web.Response:
     # Scoped to the enabled harnesses inside the manager. Returns the running job so
     # the caller can begin polling immediately; a second start while one runs is a
     # no-op that returns the in-flight job rather than a second scan.
-    return json_response({"job": request.app["history_scan"].start()}, 202)
+    return json_response({"job": request.app[keys.HISTORY_SCAN].start()}, 202)
 
 
 async def cancel_history_scan(request: web.Request) -> web.Response:
-    return json_response({"job": request.app["history_scan"].cancel()})
+    return json_response({"job": request.app[keys.HISTORY_SCAN].cancel()})
 
 
 def _parse_conversation(
@@ -11556,7 +11571,7 @@ def _parse_conversation(
 
 
 async def history_transcript(request: web.Request) -> web.Response:
-    row = await request.app["history"].history_entry(request.match_info["sid"])
+    row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
     transcript = row.get("transcript_path")
@@ -11574,20 +11589,20 @@ async def history_transcript(request: web.Request) -> web.Response:
     # read.
     parsed = await asyncio.to_thread(_parse_conversation, path, backend, native_id)
     messages = parsed.messages
-    await request.app["history"].replace_history_messages(
+    await request.app[keys.HISTORY].replace_history_messages(
         str(row["id"]), messages, mtime_ns=parsed.mtime_ns, size=parsed.size
     )
-    row = await request.app["history"].history_entry(str(row["id"])) or row
-    matches = await request.app["history"].history_message_matches(
+    row = await request.app[keys.HISTORY].history_entry(str(row["id"])) or row
+    matches = await request.app[keys.HISTORY].history_message_matches(
         str(row["id"]), request.query.get("q", ""), request.query.get("scope", "all")
     )
-    annotations = await request.app["automation_store"].annotations(
+    annotations = await request.app[keys.AUTOMATION_STORE].annotations(
         agent_run_id=str(row["id"]), limit=200
     )
     # Phase 7.7: the scan timeline is the single behavioral-summary producer, so
     # the Run-notes view reads its per-record spine for this run alongside the
     # annotations. Historical `turn-summary` notes stay in `annotations`.
-    scan_records = await request.app["automation_store"].scan_records(
+    scan_records = await request.app[keys.AUTOMATION_STORE].scan_records(
         agent_run_id=str(row["id"]), limit=500
     )
     await _decorate_generated_titles(request.app, [row])
@@ -11615,7 +11630,7 @@ async def resume_history(request: web.Request) -> web.Response:
     here is what a *browser* resume owes and a scheduled one does not: the effective
     display name, where the pane is attached in the layout, and an HTTP answer.
     """
-    row = await request.app["history"].history_entry(request.match_info["sid"])
+    row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
     if not row.get("agent_visible") or not has_observable_transcript(row.get("backend")):
@@ -11627,7 +11642,7 @@ async def resume_history(request: web.Request) -> web.Response:
     # annotations. Resolve the effective visible name before Codex mints its new
     # run, otherwise the annotation remains keyed to the retired run and the
     # resumed pane falls back to `codex-<id>`.
-    annotation_reader = getattr(request.app.get("automation_store"), "annotations", None)
+    annotation_reader = getattr(request.app.get(keys.AUTOMATION_STORE), "annotations", None)
     if callable(annotation_reader):
         await _decorate_generated_titles(request.app, [row])
     body = await request.json() if request.can_read_body else {}
@@ -11635,15 +11650,15 @@ async def resume_history(request: web.Request) -> web.Response:
     try:
         outcome = await resume_run(
             row,
-            sessions=request.app["sessions"],
-            projects=request.app["projects"],
+            sessions=request.app[keys.SESSIONS],
+            projects=request.app[keys.PROJECTS],
             target_project_id=target_project,
             name=str(body.get("name") or ""),
         )
     except ResumeRefused as refusal:
         return json_response(refusal.payload(), refusal.status)
     session = outcome.session
-    owning_project = request.app["projects"].projects[target_project]
+    owning_project = request.app[keys.PROJECTS].projects[target_project]
     next_layout = attach_terminal(
         owning_project.layout,
         session.record.id,
@@ -11651,21 +11666,21 @@ async def resume_history(request: web.Request) -> web.Response:
         direction=body.get("direction"),
     )
     try:
-        await request.app["projects"].update(
+        await request.app[keys.PROJECTS].update(
             target_project,
             layout=next_layout,
             layout_revision=owning_project.layout_revision,
         )
     except Exception:
-        await request.app["sessions"].stop(session.record.id)
-        request.app["sessions"].sessions.pop(session.record.id, None)
+        await request.app[keys.SESSIONS].stop(session.record.id)
+        request.app[keys.SESSIONS].sessions.pop(session.record.id, None)
         raise
     child_run_id = session.record.agent_run_id or session.record.id
     # An inherited run is the same run, not a descendant of one: recording an
     # edge from a conversation to itself would make every consumer that walks
     # lineage see a cycle where nothing was forked.
     if child_run_id != str(row["id"]):
-        await request.app["automation_store"].add_lineage(
+        await request.app[keys.AUTOMATION_STORE].add_lineage(
             str(row["id"]),
             child_run_id,
             "resume",
@@ -11700,7 +11715,7 @@ def _live_history_run_ids(manager: SessionManager) -> frozenset[str]:
 
 async def list_history_duplicates(request: web.Request) -> web.Response:
     """Conversations whose history is split across more than one entry."""
-    return json_response({"items": await request.app["history"].duplicate_conversation_rows()})
+    return json_response({"items": await request.app[keys.HISTORY].duplicate_conversation_rows()})
 
 
 async def repair_history_duplicates(request: web.Request) -> web.Response:
@@ -11713,11 +11728,11 @@ async def repair_history_duplicates(request: web.Request) -> web.Response:
     """
     body = await request.json() if request.can_read_body else {}
     dry_run = bool(body.get("dry_run", True))
-    result = await request.app["history"].merge_duplicate_conversation_rows(
-        live_run_ids=_live_agent_run_ids(request.app["sessions"]), dry_run=dry_run
+    result = await request.app[keys.HISTORY].merge_duplicate_conversation_rows(
+        live_run_ids=_live_agent_run_ids(request.app[keys.SESSIONS]), dry_run=dry_run
     )
     if not dry_run and result["merged"]:
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "history_duplicates_merged",
             source="user",
             conversations=len(result["merged"]),
@@ -11727,11 +11742,11 @@ async def repair_history_duplicates(request: web.Request) -> web.Response:
 
 
 async def delete_history_entry(request: web.Request) -> web.Response:
-    row = await request.app["history"].history_entry(request.match_info["sid"])
+    row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row or not row.get("agent_visible"):
         raise KeyError(request.match_info["sid"])
-    await request.app["history"].delete_history_entry(request.match_info["sid"])
-    await request.app["events"].emit(
+    await request.app[keys.HISTORY].delete_history_entry(request.match_info["sid"])
+    await request.app[keys.EVENTS].emit(
         "history_entry_deleted", session_id=request.match_info["sid"], source="user"
     )
     return json_response({"ok": True, "native_transcript_deleted": False})
@@ -11739,7 +11754,7 @@ async def delete_history_entry(request: web.Request) -> web.Response:
 
 async def list_events(request: web.Request) -> web.Response:
     return json_response(
-        await request.app["history"].events(
+        await request.app[keys.HISTORY].events(
             float(request.query.get("since", 0)),
             request.query.get("session"),
             min(int(request.query.get("limit", 500)), 2000),
@@ -11749,18 +11764,18 @@ async def list_events(request: web.Request) -> web.Response:
 
 
 async def get_settings(request: web.Request) -> web.Response:
-    return json_response(request.app["settings_store"].all())
+    return json_response(request.app[keys.SETTINGS_STORE].all())
 
 
 async def put_settings(request: web.Request) -> web.Response:
     profile = request.match_info["profile"]
-    updated = request.app["settings_store"].update(profile, await request.json())
-    await request.app["events"].emit("settings_changed", source="user", profile=profile)
+    updated = request.app[keys.SETTINGS_STORE].update(profile, await request.json())
+    await request.app[keys.EVENTS].emit("settings_changed", source="user", profile=profile)
     return json_response({"profile": profile, "settings": updated})
 
 
 def _clipboard_store(request: web.Request) -> ClipboardStore:
-    store: ClipboardStore = request.app["clipboard"]
+    store: ClipboardStore = request.app[keys.CLIPBOARD]
     return store
 
 
@@ -11772,7 +11787,7 @@ async def _emit_clipboard_changed(request: web.Request, reason: str, entry_id: s
     memory-only default.
     """
 
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "clipboard_changed",
         source="user",
         reason=reason,
@@ -11848,13 +11863,13 @@ async def clear_clipboard_entries(request: web.Request) -> web.Response:
 
 
 async def get_vapid_public_key(request: web.Request) -> web.Response:
-    return json_response({"key": request.app["push_store"].application_server_key})
+    return json_response({"key": request.app[keys.PUSH_STORE].application_server_key})
 
 
 async def push_subscribe(request: web.Request) -> web.Response:
     body = await request.json()
     profile = str(body.get("profile") or "mobile")
-    request.app["push_store"].add(body.get("subscription"), profile)
+    request.app[keys.PUSH_STORE].add(body.get("subscription"), profile)
     return json_response({"ok": True})
 
 
@@ -11863,7 +11878,7 @@ async def push_unsubscribe(request: web.Request) -> web.Response:
     endpoint = str(body.get("endpoint") or "")
     if not endpoint:
         raise ValueError("endpoint is required")
-    request.app["push_store"].remove(endpoint)
+    request.app[keys.PUSH_STORE].remove(endpoint)
     return json_response({"ok": True})
 
 
@@ -11873,7 +11888,7 @@ async def push_presence(request: web.Request) -> web.Response:
     if not endpoint:
         raise ValueError("endpoint is required")
     ttl = body.get("ttl")
-    request.app["push_store"].set_presence(
+    request.app[keys.PUSH_STORE].set_presence(
         endpoint, bool(body.get("focused")), float(ttl) if isinstance(ttl, (int, float)) else 90.0
     )
     return json_response({"ok": True})
@@ -11885,12 +11900,12 @@ async def get_device_presence(request: web.Request) -> web.Response:
     The suppression it feeds is invisible by construction — the symptom of getting
     it wrong is a notification that never arrives — so the inputs are readable.
     """
-    return json_response(request.app["device_presence"].snapshot())
+    return json_response(request.app[keys.DEVICE_PRESENCE].snapshot())
 
 
 async def list_notifications(request: web.Request) -> web.Response:
-    hooks: MetaHookEngine = request.app["hooks"]
-    automation = await request.app["automation_store"].notifications(limit=200)
+    hooks: MetaHookEngine = request.app[keys.HOOKS]
+    automation = await request.app[keys.AUTOMATION_STORE].notifications(limit=200)
     return json_response(
         {
             "notifications": hooks.notifications,
@@ -11901,21 +11916,21 @@ async def list_notifications(request: web.Request) -> web.Response:
 
 
 async def assistant_status(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     return json_response(await assistant.status())
 
 
 async def assistant_dialogs(request: web.Request) -> web.Response:
-    store: AssistantStore = request.app["assistant_store"]
+    store: AssistantStore = request.app[keys.ASSISTANT_STORE]
     limit = int(request.query.get("limit", 20))
     return json_response({"items": await store.dialogs(limit=limit)})
 
 
 async def assistant_create_dialog(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     if not assistant.config.assistant_enabled:
         raise AssistantError("the assistant is disabled; enable it in Settings → Assistant")
-    store: AssistantStore = request.app["assistant_store"]
+    store: AssistantStore = request.app[keys.ASSISTANT_STORE]
     body = await request.json() if request.can_read_body else {}
     title = str(body.get("title") or "") if isinstance(body, dict) else ""
     dialog = await store.create_dialog(title)
@@ -11923,8 +11938,8 @@ async def assistant_create_dialog(request: web.Request) -> web.Response:
 
 
 async def assistant_dialog_detail(request: web.Request) -> web.Response:
-    store: AssistantStore = request.app["assistant_store"]
-    assistant: AssistantService = request.app["assistant"]
+    store: AssistantStore = request.app[keys.ASSISTANT_STORE]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     dialog_id = request.match_info["dialog_id"]
     dialog = await store.dialog(dialog_id)
     if dialog is None:
@@ -11940,7 +11955,7 @@ async def assistant_dialog_detail(request: web.Request) -> web.Response:
 
 
 async def assistant_turn(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("turn request body must be an object")
@@ -11958,18 +11973,18 @@ async def assistant_turn(request: web.Request) -> web.Response:
 
 
 async def assistant_interrupt(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     stopped = assistant.interrupt(request.match_info["dialog_id"])
     return json_response({"interrupted": stopped})
 
 
 async def assistant_confirm_action(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     return json_response(await assistant.confirm_action(request.match_info["action_id"]))
 
 
 async def assistant_cancel_action(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     return json_response(await assistant.cancel_action(request.match_info["action_id"]))
 
 
@@ -11980,12 +11995,12 @@ async def assistant_announced(request: web.Request) -> web.Response:
     spent synthesizing the sentence that tells them there is something to object
     to. A no-op for anything not currently scheduled.
     """
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     return json_response(await assistant.announce_action(request.match_info["action_id"]))
 
 
 async def assistant_ui_result(request: web.Request) -> web.Response:
-    assistant: AssistantService = request.app["assistant"]
+    assistant: AssistantService = request.app[keys.ASSISTANT]
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("ui-result body must be an object")
@@ -11994,12 +12009,12 @@ async def assistant_ui_result(request: web.Request) -> web.Response:
 
 
 async def voice_status(request: web.Request) -> web.Response:
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     return json_response(await voice.status())
 
 
 async def kokoro_model_status(request: web.Request) -> web.Response:
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     return json_response(voice.kokoro_models.status())
 
 
@@ -12016,7 +12031,7 @@ async def kokoro_voice_preview(request: web.Request) -> web.Response:
     same-origin URL plays — the same reason clip playback streams from
     `/api/voice/clips/{id}/audio` rather than from fetched bytes.
     """
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     try:
         data = await voice.kokoro_preview(str(request.query.get("voice") or ""))
     except VoiceError as exc:
@@ -12035,7 +12050,7 @@ async def voice_lexicon_check(request: web.Request) -> web.Response:
     respelling that would be rejected by the ladder's re-verification (and end
     up spelled out anyway) is visible before Save instead of failing silently.
     """
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("lexicon check body must be an object")
@@ -12052,7 +12067,7 @@ async def voice_lexicon_build(request: web.Request) -> web.Response:
     the word itself as its phonetic spelling. Failure to build is a verdict in
     a 200, not an HTTP error — the editor shows the diagnostic inline.
     """
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("lexicon build body must be an object")
@@ -12072,7 +12087,7 @@ async def voice_lexicon_preview(request: web.Request) -> web.Response:
     the voice picker preview (no `media-src`, so `blob:` sources are refused).
     Uncached: the value under audition changes as the user types.
     """
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     try:
         data = await voice.lexicon_preview(str(request.query.get("text") or ""))
     except VoiceError as exc:
@@ -12090,8 +12105,8 @@ async def kokoro_model_download(request: web.Request) -> web.Response:
     Progress reaches every client over the event stream, because the download
     outlives any single request and may have been started from another device.
     """
-    voice: VoiceService = request.app["voice"]
-    events: EventBus = request.app["events"]
+    voice: VoiceService = request.app[keys.VOICE]
+    events: EventBus = request.app[keys.EVENTS]
 
     async def progress(status: dict[str, Any]) -> None:
         await events.emit("voice_model_progress", source="daemon", model="kokoro", **status)
@@ -12104,13 +12119,13 @@ async def voice_transcribe(request: web.Request) -> web.Response:
     # Taken before anything else so the reported queue cost covers the body read
     # and the STT lock wait, not just the part of the path VoiceService can see.
     received_at = time.perf_counter()
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     # The session is what dictation is *for*, not what transcription needs. The
     # session-free form exists so the wake-word tester measures the real decoder and
     # the real grammar rather than a parallel implementation of both.
     sid = request.match_info.get("sid")
     if sid:
-        session = request.app["sessions"].resolve(sid)
+        session = request.app[keys.SESSIONS].resolve(sid)
         if not is_agent_harness(session.record.backend):
             return json_response({"error": "conversation mode requires an agent session"}, 409)
     if request.content_type not in {"audio/wav", "audio/x-wav", "application/octet-stream"}:
@@ -12145,7 +12160,7 @@ async def voice_latency(request: web.Request) -> web.Response:
     measurement run. Samples are also written to `daemon.log`, which is what makes a
     latency complaint answerable after a restart has emptied the ring.
     """
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     if request.method == "DELETE":
         voice.clear_stt_latency()
     elif request.method == "POST":
@@ -12158,7 +12173,7 @@ async def voice_latency(request: web.Request) -> web.Response:
 
 async def voice_barge_in_diagnostic(request: web.Request) -> web.Response:
     """Record whether the playback sidechain confirmed speech or rejected echo."""
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     try:
         sample = voice.record_barge_in_diagnostic(await request.json())
     except VoiceError as exc:
@@ -12168,7 +12183,7 @@ async def voice_barge_in_diagnostic(request: web.Request) -> web.Response:
 
 async def voice_capture_diagnostic(request: web.Request) -> web.Response:
     """Record a browser-side capture stall or recovery from the frame watchdog."""
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     try:
         sample = voice.record_capture_diagnostic(await request.json())
     except VoiceError as exc:
@@ -12178,7 +12193,7 @@ async def voice_capture_diagnostic(request: web.Request) -> web.Response:
 
 async def voice_deferral_diagnostic(request: web.Request) -> web.Response:
     """Record one unfinished-utterance deferral and the outcome that judges it."""
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     try:
         sample = voice.record_deferral_diagnostic(await request.json())
     except VoiceError as exc:
@@ -12198,7 +12213,7 @@ def _validate_voice_terminal_text(session: Any, text: str) -> None:
 
 
 def _voice_delivery_protected(app: Any, session: Any) -> list[str]:
-    fleet = app.get("fleet")
+    fleet = app.get(keys.FLEET)
     readiness_reasons = set(fleet.readiness.evaluate(session)["reasons"]) if fleet else set()
     if session.record.state in {"exited", "crashed"}:
         readiness_reasons.add("session_ended")
@@ -12223,7 +12238,7 @@ def _voice_delivery_protected_response(protected: list[str]) -> web.Response:
 
 async def voice_prepare_submit(request: web.Request) -> web.Response:
     """Validate a Talk append before the browser uses the mounted terminal path."""
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     text = str((await request.json()).get("text") or "").strip()
     try:
         _validate_voice_terminal_text(session, text)
@@ -12238,8 +12253,8 @@ async def voice_prepare_submit(request: web.Request) -> web.Response:
 
 
 async def voice_submit(request: web.Request) -> web.Response:
-    voice: VoiceService = request.app["voice"]
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    voice: VoiceService = request.app[keys.VOICE]
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json()
     text = str(body.get("text") or "").strip()
     try:
@@ -12262,7 +12277,7 @@ async def voice_submit(request: web.Request) -> web.Response:
         # separate Enter after the same settle delay. Single-line prompts keep the
         # one-write path they have always used.
         _record_operator_input(
-            request.app["events"],
+            request.app[keys.EVENTS],
             session,
             _composer_insertion(session.record.backend, text),
             source="voice",
@@ -12270,10 +12285,10 @@ async def voice_submit(request: web.Request) -> web.Response:
         await asyncio.sleep(SUBMIT_DELAY_SECONDS)
         if session.record.state in {"exited", "crashed"}:
             return json_response({"error": "the agent session ended during delivery"}, 409)
-        _record_operator_input(request.app["events"], session, SUBMIT_SEQUENCE, source="voice")
+        _record_operator_input(request.app[keys.EVENTS], session, SUBMIT_SEQUENCE, source="voice")
     else:
-        _record_operator_input(request.app["events"], session, f"{text}\r", source="voice")
-    await request.app["events"].emit(
+        _record_operator_input(request.app[keys.EVENTS], session, f"{text}\r", source="voice")
+    await request.app[keys.EVENTS].emit(
         "voice_prompt_submitted",
         session_id=session.record.id,
         source="voice",
@@ -12308,8 +12323,8 @@ def _current_voice_approval(session: Any) -> tuple[str, str] | None:
 
 async def voice_approval(request: web.Request) -> web.Response:
     """Prepare or consume one confirmation for one currently visible approval."""
-    voice: VoiceService = request.app["voice"]
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    voice: VoiceService = request.app[keys.VOICE]
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json()
     action = str(body.get("action") or "").strip()
     if action == "cancel":
@@ -12336,8 +12351,8 @@ async def voice_approval(request: web.Request) -> web.Response:
         challenge = voice.consume_approval(session.record.id, confirmation_id, run_id, fingerprint)
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
-    _record_operator_input(request.app["events"], session, "\r", source="voice")
-    await request.app["events"].emit(
+    _record_operator_input(request.app[keys.EVENTS], session, "\r", source="voice")
+    await request.app[keys.EVENTS].emit(
         "voice_approval_confirmed",
         session_id=session.record.id,
         source="voice",
@@ -12347,13 +12362,13 @@ async def voice_approval(request: web.Request) -> web.Response:
 
 
 async def voice_interrupt(request: web.Request) -> web.Response:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if not delivers_prompts_through_pty(session.record.backend):
         return json_response({"error": "conversation mode requires an agent session"}, 409)
     if session.record.state in {"exited", "crashed"}:
         return json_response({"ok": True, "already_ended": True})
-    _record_operator_input(request.app["events"], session, "\x03", source="voice")
-    await request.app["events"].emit(
+    _record_operator_input(request.app[keys.EVENTS], session, "\x03", source="voice")
+    await request.app[keys.EVENTS].emit(
         "voice_agent_interrupted", session_id=session.record.id, source="voice"
     )
     return json_response({"ok": True, "already_ended": False})
@@ -12373,7 +12388,7 @@ async def session_last_reply(request: web.Request) -> web.Response:
     hands the clipboard is the last agent message a reader can see and check,
     down to the tool boundary it starts at.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if not has_observable_transcript(session.record.backend):
         return json_response({"error": "last reply is available only for agent sessions"}, 409)
     path = session.transcript_path
@@ -12395,7 +12410,7 @@ async def session_last_reply(request: web.Request) -> web.Response:
 
 
 async def session_scan_timeline(request: web.Request) -> web.Response:
-    service: ScanTimelineService = request.app["scan_timeline"]
+    service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     return json_response(await service.snapshot(request.match_info["sid"]))
 
 
@@ -12403,13 +12418,13 @@ async def put_session_scan_timeline(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body.get("enabled"), bool):
         raise ValueError("enabled must be a boolean")
-    service: ScanTimelineService = request.app["scan_timeline"]
+    service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     if body["enabled"]:
-        session = request.app["sessions"].resolve(request.match_info["sid"])
-        project = request.app["projects"].projects.get(session.record.project_id or "")
+        session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+        project = request.app[keys.PROJECTS].projects.get(session.record.project_id or "")
         if project is not None:
             await asyncio.to_thread(
-                request.app["project_contexts"].ensure,
+                request.app[keys.PROJECT_CONTEXTS].ensure,
                 ProjectContext(project_id=project.id, project_root=project.root),
             )
     await service.set_enabled(request.match_info["sid"], bool(body["enabled"]))
@@ -12426,24 +12441,24 @@ async def put_session_scan_timeline(request: web.Request) -> web.Response:
 
 
 async def scan_session_now(request: web.Request) -> web.Response:
-    service: ScanTimelineService = request.app["scan_timeline"]
+    service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     record = await service.scan_now(request.match_info["sid"], "manual")
     return json_response({"record": record})
 
 
 async def backfill_session_scan_timeline(request: web.Request) -> web.Response:
-    service: ScanTimelineService = request.app["scan_timeline"]
+    service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     return json_response(await service.start_backfill(request.match_info["sid"]), 202)
 
 
 async def cancel_session_scan_timeline_backfill(request: web.Request) -> web.Response:
     """Stop a running full-session scan. Records already written stay readable."""
-    service: ScanTimelineService = request.app["scan_timeline"]
+    service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     return json_response(await service.cancel_backfill(request.match_info["sid"]))
 
 
 async def session_scan_timeline_record(request: web.Request) -> web.Response:
-    service: ScanTimelineService = request.app["scan_timeline"]
+    service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     return json_response(
         await service.record_detail(
             request.match_info["sid"],
@@ -12483,7 +12498,7 @@ def _project_compare_ref(app: web.Application, project_id: str) -> str | None:
     The same override the Git drawer and the sidebar measure against, so a branch
     delta on the change map cannot disagree with the numbers beside it.
     """
-    projects = app.get("projects")
+    projects = app.get(keys.PROJECTS)
     if not project_id or projects is None:
         return None
     project = projects.projects.get(project_id)
@@ -12732,7 +12747,7 @@ async def session_change_map(request: web.Request) -> web.Response:
     from . import code_graph as cg
     from .deterministic_consumers import RUN_FACT_WINDOW_SECONDS
 
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     run_id = str(record.agent_run_id or "")
     pid = str(record.project_id or "")
@@ -12765,15 +12780,15 @@ async def session_change_map(request: web.Request) -> web.Response:
         "lower_bound_note": _CHANGE_MAP_LOWER_BOUND,
     }
 
-    store = request.app.get("code_graph")
-    tier0 = request.app.get("tier0")
+    store = request.app.get(keys.CODE_GRAPH)
+    tier0 = request.app.get(keys.TIER0)
     if store is None or tier0 is None:
         return json_response({**base, "available": False, "disabled_reason": "unsupported"})
     if not pid or not root:
         return json_response({**base, "available": False, "disabled_reason": "no_project"})
     # The opt-in is the *Project's*, so it is asked of the Project root even when
     # the session is working in one of its worktrees.
-    enabled = await request.app["automation_gate"](project_root)
+    enabled = await request.app[keys.AUTOMATION_GATE](project_root)
     if "code_graph" not in enabled:
         return json_response({**base, "available": False, "disabled_reason": "automation_disabled"})
 
@@ -12808,7 +12823,7 @@ async def session_change_map(request: web.Request) -> web.Response:
         }
 
     admission = _SeedAdmission()
-    manager = request.app["sessions"]
+    manager = request.app[keys.SESSIONS]
     if scope == "branch" and branch is not None:
         _seeds_from_branch(admission, branch["paths"])
     else:
@@ -12840,7 +12855,7 @@ async def session_change_map(request: web.Request) -> web.Response:
         _seeds_from_facts(admission, facts, roots, record.id)
         # Landed work, which the fact window and the run rollover both drop. Without
         # it a session reads as having edited nothing the moment its branch merges.
-        history = request.app.get("history")
+        history = request.app.get(keys.HISTORY)
         if history is not None:
             _seeds_from_provenance(
                 admission,
@@ -12935,16 +12950,16 @@ async def session_catch_me_up(request: web.Request) -> web.Response:
     Gated on the Project opting into `catch_me_up`; returns `enabled: false` (never a
     fake empty digest) when it is off. Attributed to the run it came from.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     run_id = str(record.agent_run_id or "")
     root = _record_project_root(request, record)
-    enabled = await request.app["automation_gate"](root) if root else frozenset()
+    enabled = await request.app[keys.AUTOMATION_GATE](root) if root else frozenset()
     if "catch_me_up" not in enabled or not run_id:
         return json_response(
             {"enabled": False, "agent_run_id": run_id or None, "digest": None}
         )
-    records = await request.app["automation_store"].scan_records(
+    records = await request.app[keys.AUTOMATION_STORE].scan_records(
         agent_run_id=run_id, limit=2000
     )
     return json_response({"enabled": True, "digest": catch_me_up(records, run_id)})
@@ -12957,11 +12972,11 @@ async def fleet_live_blockers(request: web.Request) -> web.Response:
     opted into `live_blockers`. A session whose latest record is not blocked
     contributes nothing.
     """
-    store = request.app["automation_store"]
-    gate = request.app["automation_gate"]
+    store = request.app[keys.AUTOMATION_STORE]
+    gate = request.app[keys.AUTOMATION_GATE]
     blockers: list[dict[str, Any]] = []
     gate_cache: dict[str, frozenset[str]] = {}
-    for session in request.app["sessions"].sessions.values():
+    for session in request.app[keys.SESSIONS].sessions.values():
         record = session.record
         if record.state in {"exited", "crashed"}:
             continue
@@ -12996,7 +13011,7 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
     query = request.query.get("q", "").strip()
     run_id = request.query.get("run_id", "").strip()
     project_id = request.query.get("project_id", "").strip()
-    store = request.app["automation_store"]
+    store = request.app[keys.AUTOMATION_STORE]
     if run_id:
         records = await store.scan_records(agent_run_id=run_id, limit=2000)
     elif project_id:
@@ -13005,7 +13020,7 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
         raise ValueError("scan-timeline search requires a run_id or project_id scope")
     scope_project = project_id or (str(records[0].get("project_id") or "") if records else "")
     root = _project_root_for(request.app, scope_project, "") if scope_project else ""
-    enabled = await request.app["automation_gate"](root) if root else frozenset()
+    enabled = await request.app[keys.AUTOMATION_GATE](root) if root else frozenset()
     if "semantic_history_search" not in enabled:
         return json_response({"enabled": False, "query": query, "results": []})
     if not query:
@@ -13028,7 +13043,7 @@ async def session_transcript(request: web.Request) -> web.Response:
     record yet are ordinary states of a passive view, not failures, and the tab
     renders a sentence for each.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     try:
         limit = int(request.query.get("limit") or CONVERSATION_DEFAULT_LIMIT)
@@ -13099,7 +13114,7 @@ async def session_skills(request: web.Request) -> web.Response:
     working directory, so a session sitting in a worktree sees a different set
     than one in the primary checkout of the same Project.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if session.record.runtime_boundary != "local":
         boundary = session.record.runtime_boundary
         return json_response(
@@ -13182,7 +13197,7 @@ def _agent_environment_cwd(record: Any) -> Path:
 
 async def session_agent_environment(request: web.Request) -> web.Response:
     """Return a bounded passive inventory for the focused agent CLI."""
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     if record.runtime_boundary != "local":
         boundary = record.runtime_boundary
@@ -13245,7 +13260,7 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
     the payload every tab-open reads would start servers and open connections for
     a user who only wanted to see a model name.
     """
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     if record.runtime_boundary != "local":
         boundary = record.runtime_boundary
@@ -13277,9 +13292,9 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
     refresh = bool(body.get("refresh"))
 
     now = time.monotonic()
-    windows: dict[str, deque[float]] = request.app["mcp_tools_windows"]
+    windows: dict[str, deque[float]] = request.app[keys.MCP_TOOLS_WINDOWS]
     if len(windows) > HOOK_WINDOW_SWEEP_AT:
-        live = request.app["sessions"].sessions
+        live = request.app[keys.SESSIONS].sessions
         for stale in [sid for sid in windows if sid not in live]:
             windows.pop(stale, None)
     window = windows.setdefault(record.id, deque())
@@ -13317,8 +13332,8 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
         version=await asyncio.to_thread(
             agent_environment.probe_cli_version, record.backend, record.exe
         ),
-        mux_mcp_url=f"{request.app['sessions'].ingress_url}/mcp",
-        live_snapshot=request.app["runtime_inventories"].get(record.id),
+        mux_mcp_url=f"{request.app[keys.SESSIONS].ingress_url}/mcp",
+        live_snapshot=request.app[keys.RUNTIME_INVENTORIES].get(record.id),
         session_id=record.id,
         refresh=refresh,
     )
@@ -13340,7 +13355,7 @@ async def runtime_inventory_ingress(request: web.Request) -> web.Response:
     host = peer[0] if peer else ""
     if host not in {"127.0.0.1", "::1"}:
         raise web.HTTPForbidden(text="runtime inventory ingress is loopback-only")
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if session.record.state in {"exited", "crashed"}:
         raise web.HTTPGone(text="session has ended")
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
@@ -13350,9 +13365,9 @@ async def runtime_inventory_ingress(request: web.Request) -> web.Response:
     if len(raw) > 256 * 1024:
         raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=len(raw))
     snapshot = mcp_tools.normalize_live_snapshot(json.loads(raw))
-    store: mcp_tools.LiveSnapshotStore = request.app["runtime_inventories"]
+    store: mcp_tools.LiveSnapshotStore = request.app[keys.RUNTIME_INVENTORIES]
     store.put(session.record.id, snapshot)
-    store.sweep(set(request.app["sessions"].sessions))
+    store.sweep(set(request.app[keys.SESSIONS].sessions))
     log.info(
         "runtime inventory published session=%s tools=%d reason=%s",
         session.record.id,
@@ -13363,8 +13378,8 @@ async def runtime_inventory_ingress(request: web.Request) -> web.Response:
 
 
 async def voice_generate(request: web.Request) -> web.Response:
-    voice: VoiceService = request.app["voice"]
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+    voice: VoiceService = request.app[keys.VOICE]
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json() if request.can_read_body else {}
     content_mode = body.get("content_mode")
     if content_mode is not None and content_mode not in {"summary", "verbatim"}:
@@ -13399,7 +13414,7 @@ async def voice_speak(request: web.Request) -> web.Response:
     and empty text with `final` closes it — the shape an assistant turn that
     ended on a tool result needs, having no closing sentence to speak.
     """
-    voice: VoiceService = request.app["voice"]
+    voice: VoiceService = request.app[keys.VOICE]
     try:
         body = await request.json()
         if not isinstance(body, dict):
@@ -13421,10 +13436,10 @@ async def voice_speak(request: web.Request) -> web.Response:
 
 
 async def list_voice_clips(request: web.Request) -> web.Response:
-    store: VoiceStore = request.app["voice_store"]
+    store: VoiceStore = request.app[keys.VOICE_STORE]
     session_id = request.query.get("session") or None
     if session_id:
-        session_id = request.app["sessions"].resolve(session_id).record.id
+        session_id = request.app[keys.SESSIONS].resolve(session_id).record.id
     content_mode = request.query.get("kind") or None
     if content_mode is not None and content_mode not in {"summary", "verbatim"}:
         raise ValueError("kind must be summary or verbatim")
@@ -13442,7 +13457,7 @@ async def list_voice_clips(request: web.Request) -> web.Response:
 
 
 async def voice_clip_audio(request: web.Request) -> web.StreamResponse:
-    store: VoiceStore = request.app["voice_store"]
+    store: VoiceStore = request.app[keys.VOICE_STORE]
     row = await store.clip(request.match_info["clip_id"])
     if not row or row["status"] != "ready":
         raise web.HTTPNotFound(text="voice clip not found")
@@ -13454,7 +13469,7 @@ async def voice_clip_audio(request: web.Request) -> web.StreamResponse:
 
 
 async def delete_voice_clip(request: web.Request) -> web.Response:
-    store: VoiceStore = request.app["voice_store"]
+    store: VoiceStore = request.app[keys.VOICE_STORE]
     # Deleting a clip deletes its whole stream: half a reply is not something to
     # keep, and the segments are only separate rows for latency's sake.
     for file_path in await store.delete_clip(request.match_info["clip_id"]):
@@ -13464,23 +13479,23 @@ async def delete_voice_clip(request: web.Request) -> web.Response:
 
 
 async def get_usage(request: web.Request) -> web.Response:
-    usage: UsageManager = request.app["usage"]
+    usage: UsageManager = request.app[keys.USAGE]
     return json_response(usage.snapshot())
 
 
 async def refresh_usage(request: web.Request) -> web.Response:
-    usage: UsageManager = request.app["usage"]
+    usage: UsageManager = request.app[keys.USAGE]
     return json_response(await usage.refresh())
 
 
 async def clear_usage_cache(request: web.Request) -> web.Response:
-    usage: UsageManager = request.app["usage"]
-    await request.app["events"].emit("usage_cache_cleared", source="settings")
+    usage: UsageManager = request.app[keys.USAGE]
+    await request.app[keys.EVENTS].emit("usage_cache_cleared", source="settings")
     return json_response(usage.clear())
 
 
 async def operational_telemetry(request: web.Request) -> web.Response:
-    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    telemetry: OperationalTelemetryStore = request.app[keys.TELEMETRY]
     try:
         limit = int(request.query.get("limit", 200))
     except ValueError:
@@ -13495,7 +13510,7 @@ async def operational_telemetry(request: web.Request) -> web.Response:
 
 
 async def quota_telemetry_series(request: web.Request) -> web.Response:
-    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    telemetry: OperationalTelemetryStore = request.app[keys.TELEMETRY]
     try:
         limit = int(request.query.get("limit", 3650))
     except ValueError:
@@ -13520,14 +13535,14 @@ async def review_quota_resets(request: web.Request) -> web.Response:
     raw_ids = body.get("ids")
     if not isinstance(raw_ids, list):
         raise web.HTTPBadRequest(text="ids must be a list of quota reset ids")
-    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    telemetry: OperationalTelemetryStore = request.app[keys.TELEMETRY]
     try:
         reviewed = await telemetry.review_quota_resets([str(item) for item in raw_ids], resolution)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from None
     except KeyError as exc:
         raise web.HTTPNotFound(text=f"unknown quota reset {exc.args[0]}") from None
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "quota_reset_reviewed",
         source="user",
         reset_ids=[item["id"] for item in reviewed],
@@ -13538,9 +13553,9 @@ async def review_quota_resets(request: web.Request) -> web.Response:
 
 
 async def get_provider_accounts(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     snapshot = await accounts.reconcile_current()
-    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    telemetry: OperationalTelemetryStore = request.app[keys.TELEMETRY]
     latest = await telemetry.latest_quota_by_account()
     for account in snapshot["accounts"]:
         conflict = account.get("conflict")
@@ -13555,24 +13570,24 @@ async def get_provider_accounts(request: web.Request) -> web.Response:
 
 
 async def get_provider_account_audit(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     limit = max(1, min(1000, int(request.query.get("limit") or 100)))
     return json_response({"items": accounts.audit_entries(limit)})
 
 
 async def refresh_provider_accounts(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json() if request.can_read_body else {}
     return json_response(await accounts.refresh(body.get("account_id"), force_identity_probe=True))
 
 
 async def verify_provider_accounts(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     return json_response(await accounts.verify_identities())
 
 
 async def capture_provider_account(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json() if request.can_read_body else {}
     return json_response(
         await accounts.capture_current(
@@ -13584,7 +13599,7 @@ async def capture_provider_account(request: web.Request) -> web.Response:
 
 
 async def login_provider_account(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json() if request.can_read_body else {}
     return json_response(
         await accounts.login_and_capture(
@@ -13596,7 +13611,7 @@ async def login_provider_account(request: web.Request) -> web.Response:
 
 
 async def patch_provider_account(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json()
     return json_response(
         await accounts.rename(
@@ -13606,7 +13621,7 @@ async def patch_provider_account(request: web.Request) -> web.Response:
 
 
 async def select_provider_account(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     return json_response(
         await accounts.select(
             request.match_info["provider"],
@@ -13616,14 +13631,14 @@ async def select_provider_account(request: web.Request) -> web.Response:
 
 
 async def adopt_provider_account(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     return json_response(
         await accounts.adopt(request.match_info["provider"], request.match_info["account_id"])
     )
 
 
 async def purge_provider_account_telemetry(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json() if request.can_read_body else {}
     since = body.get("since")
     return json_response(
@@ -13636,7 +13651,7 @@ async def purge_provider_account_telemetry(request: web.Request) -> web.Response
 
 
 async def remove_provider_account(request: web.Request) -> web.Response:
-    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     return json_response(
         await accounts.remove(request.match_info["provider"], request.match_info["account_id"])
     )
@@ -13649,7 +13664,7 @@ async def list_processes(request: web.Request) -> web.Response:
     # Opt-in because unique-set-size sampling walks every working set. Views the user
     # opened ask for it; the background rail poll does not.
     unique_memory = request.query.get("unique_memory", "").lower() in {"1", "true", "yes"}
-    inspector: ProcessInspector = request.app["process_inspector"]
+    inspector: ProcessInspector = request.app[keys.PROCESS_INSPECTOR]
     if summary and (session_id or include_ended or unique_memory):
         raise ValueError("summary cannot be combined with session, include_ended, or unique_memory")
     if session_id:
@@ -13666,7 +13681,7 @@ async def list_processes(request: web.Request) -> web.Response:
 
 async def process_action(request: web.Request) -> web.Response:
     body = await request.json()
-    inspector: ProcessInspector = request.app["process_inspector"]
+    inspector: ProcessInspector = request.app[keys.PROCESS_INSPECTOR]
     return json_response(
         await inspector.act(
             str(body["session_id"]),
@@ -13678,7 +13693,7 @@ async def process_action(request: web.Request) -> web.Response:
 
 
 async def list_previews(request: web.Request) -> web.Response:
-    previews: PreviewRegistry = request.app["previews"]
+    previews: PreviewRegistry = request.app[keys.PREVIEWS]
     # Reap on read so a client never sees a preview whose server has stopped; the
     # browser drops the matching tab and sidebar row when it disappears from here.
     previews.prune()
@@ -13693,7 +13708,7 @@ async def _register_static_preview(request: web.Request, body: dict[str, Any]) -
     to, so it is the only one that can prove the requested path is inside that
     checkout before a route is minted for its directory.
     """
-    projects: ProjectManager = request.app["projects"]
+    projects: ProjectManager = request.app[keys.PROJECTS]
     project = projects.projects.get(str(body.get("project_id") or ""))
     if project is None:
         raise ValueError("unknown project")
@@ -13711,7 +13726,7 @@ async def _register_static_preview(request: web.Request, body: dict[str, Any]) -
     resolved_root = Path(root).resolve()
     doc_root = resolved_root if str(body.get("scope") or "file") == "project" else target.parent
     relative_doc_root = doc_root.relative_to(resolved_root).as_posix()
-    previews: PreviewRegistry = request.app["previews"]
+    previews: PreviewRegistry = request.app[keys.PREVIEWS]
     return previews.register_static(
         project_id=project.id,
         doc_root=str(doc_root),
@@ -13726,7 +13741,7 @@ async def _register_static_preview(request: web.Request, body: dict[str, Any]) -
 
 async def create_preview(request: web.Request) -> web.Response:
     body = await request.json()
-    previews: PreviewRegistry = request.app["previews"]
+    previews: PreviewRegistry = request.app[keys.PREVIEWS]
     static = str(body.get("kind") or "loopback") == "static"
     if static:
         item = await _register_static_preview(request, body)
@@ -13735,7 +13750,7 @@ async def create_preview(request: web.Request) -> web.Response:
             str(body["session_id"]), str(body["url"]), approved=bool(body.get("approved"))
         )
     if body.get("attach", True):
-        projects: ProjectManager = request.app["projects"]
+        projects: ProjectManager = request.app[keys.PROJECTS]
         project = projects.projects[item.project_id]
         # A preview belongs beside whatever spawned it: group it as a tab in the
         # owning session's region instead of splitting off an unrelated one. A
@@ -13762,8 +13777,8 @@ async def create_preview(request: web.Request) -> web.Response:
         project.layout_revision += 1
         await projects.history.upsert_project(project)
     else:
-        project = request.app["projects"].projects[item.project_id]
-    await request.app["events"].emit(
+        project = request.app[keys.PROJECTS].projects[item.project_id]
+    await request.app[keys.EVENTS].emit(
         "preview_registered",
         # A static preview is unowned, so it reports no session rather than the
         # empty string a consumer would have to know to read as "none".
@@ -13776,11 +13791,11 @@ async def create_preview(request: web.Request) -> web.Response:
 
 
 async def delete_preview(request: web.Request) -> web.Response:
-    previews: PreviewRegistry = request.app["previews"]
+    previews: PreviewRegistry = request.app[keys.PREVIEWS]
     preview_id = request.match_info["preview_id"]
     item = previews.items.get(preview_id)
     previews.remove(preview_id)
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "preview_removed",
         session_id=item.session_id if item else None,
         source="user",
@@ -13797,8 +13812,8 @@ async def capture_preview(request: web.Request) -> web.Response:
     inserts a reference into the target agent's composer — this route never writes
     a PTY or submits anything.
     """
-    previews: PreviewRegistry = request.app["previews"]
-    config: Config = request.app["config"]
+    previews: PreviewRegistry = request.app[keys.PREVIEWS]
+    config: Config = request.app[keys.CONFIG]
     item = previews.items.get(request.match_info["preview_id"])
     if not item:
         raise ValueError("unknown preview")
@@ -13827,18 +13842,18 @@ async def capture_preview(request: web.Request) -> web.Response:
     )
     # Save into the owning project's .swe-mux so a local agent can read it without
     # hunting through the mux data dir; fall back to the data dir if unresolvable.
-    session = request.app["sessions"].sessions.get(item.session_id)
+    session = request.app[keys.SESSIONS].sessions.get(item.session_id)
     root: str | None = None
     if session is not None:
         record = session.record
         root = record.project_root or record.spawn_project_root
         if not root and record.project_id:
-            project = request.app["projects"].projects.get(record.project_id)
+            project = request.app[keys.PROJECTS].projects.get(record.project_id)
             root = project.root if project else None
     if not root and item.project_id:
         # The unowned case: a static preview belongs to a Project, not a session,
         # so its shot still lands in the repository an agent is working in.
-        owner = request.app["projects"].projects.get(item.project_id)
+        owner = request.app[keys.PROJECTS].projects.get(item.project_id)
         root = owner.root if owner else None
     shot_dir = (Path(root) / ".swe-mux" if root else config.data_dir) / "preview-shots"
     out_path = shot_dir / f"{item.id}-{uuid4().hex[:8]}.png"
@@ -14252,7 +14267,7 @@ async def _acquire_preview_slot(semaphore: asyncio.Semaphore) -> None:
 
 
 async def _proxy_websocket(request: web.Request, target: str, origin: str) -> web.WebSocketResponse:
-    semaphore: asyncio.Semaphore = request.app["preview_ws_semaphore"]
+    semaphore: asyncio.Semaphore = request.app[keys.PREVIEW_WS_SEMAPHORE]
     await _acquire_preview_slot(semaphore)
     offered_protocols = tuple(
         value.strip()
@@ -14330,7 +14345,7 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
             request.method, ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
         )
     preview_id = request.match_info["preview_id"]
-    item = request.app["previews"].items.get(preview_id)
+    item = request.app[keys.PREVIEWS].items.get(preview_id)
     if item is None:
         raise web.HTTPNotFound(text="preview registration not found")
     static = getattr(item, "kind", "loopback") == "static"
@@ -14338,10 +14353,10 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
     # at a listener a session owns, so an ended session means the destination is
     # gone. A static preview points at bytes on disk in a Project that outlives
     # every session, and has no owning session to check in the first place.
-    if not static and item.session_id not in request.app["sessions"].sessions:
+    if not static and item.session_id not in request.app[keys.SESSIONS].sessions:
         raise web.HTTPGone(text="preview session is no longer live")
     tail = request.match_info.get("tail", "")
-    previews = request.app["previews"]
+    previews = request.app[keys.PREVIEWS]
     ensure_detected = getattr(previews, "ensure_detected", None)
     if ensure_detected is not None:
         await ensure_detected(item.project_id)
@@ -14361,7 +14376,7 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
     body = await request.read()
     if len(body) > PREVIEW_REQUEST_BYTES:
         raise web.HTTPRequestEntityTooLarge(max_size=PREVIEW_REQUEST_BYTES, actual_size=len(body))
-    semaphore: asyncio.Semaphore = request.app["preview_http_semaphore"]
+    semaphore: asyncio.Semaphore = request.app[keys.PREVIEW_HTTP_SEMAPHORE]
     await _acquire_preview_slot(semaphore)
     try:
         # Per-operation timeouts (not a wall-clock total) so a legitimately large
@@ -14514,15 +14529,15 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
     host = peer[0] if peer else ""
     if host not in {"127.0.0.1", "::1"}:
         raise web.HTTPForbidden(text="the mux MCP endpoint is loopback-only")
-    service: McpService = request.app["mcp"]
+    service: McpService = request.app[keys.MCP]
     try:
         caller = service.resolve_caller(request.headers.get("Authorization"))
     except McpAuthError as exc:
         return json_response({"error": str(exc)}, 401)
     now = time.monotonic()
-    windows: dict[str, deque[float]] = request.app["mcp_rate_windows"]
+    windows: dict[str, deque[float]] = request.app[keys.MCP_RATE_WINDOWS]
     if len(windows) > HOOK_WINDOW_SWEEP_AT:
-        live = request.app["sessions"].sessions
+        live = request.app[keys.SESSIONS].sessions
         for stale in [sid for sid in windows if sid not in live]:
             windows.pop(stale, None)
     window = windows.setdefault(caller.record.id, deque())
@@ -14565,7 +14580,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
     if host not in {"127.0.0.1", "::1"}:
         raise web.HTTPForbidden(text="hook ingress is loopback-only")
     sid = request.match_info["sid"]
-    session = request.app["sessions"].resolve(sid)
+    session = request.app[keys.SESSIONS].resolve(sid)
     if session.record.state in {"exited", "crashed"}:
         raise web.HTTPGone(text="hook session has ended")
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
@@ -14588,11 +14603,11 @@ async def hook_ingress(request: web.Request) -> web.Response:
             409,
         )
     now = time.monotonic()
-    windows: dict[str, deque[float]] = request.app["hook_ingress_windows"]
+    windows: dict[str, deque[float]] = request.app[keys.HOOK_INGRESS_WINDOWS]
     if len(windows) > HOOK_WINDOW_SWEEP_AT:
         # One entry plus up to HOOK_RATE_LIMIT timestamps per session that ever
         # received a hook, retained for the daemon's (weeks-long) lifetime.
-        live = request.app["sessions"].sessions
+        live = request.app[keys.SESSIONS].sessions
         for stale in [sid for sid in windows if sid not in live]:
             windows.pop(stale, None)
     window = windows.setdefault(session.record.id, deque())
@@ -14676,7 +14691,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
             else ""
         )
         try:
-            await request.app["sessions"].roll_agent_conversation(
+            await request.app[keys.SESSIONS].roll_agent_conversation(
                 session.record.id,
                 native_id=decision.roll_to,
                 reason="conversation_rolled",
@@ -14712,7 +14727,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 "reason": decision.refusal_reason,
             }
         )
-        await request.app["events"].emit(
+        await request.app[keys.EVENTS].emit(
             "conversation_rollover_refused",
             session_id=session.record.id,
             source="hook",
@@ -14728,7 +14743,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
     # The session's own spawn conversation speaking while the record is bound
     # elsewhere is proof the identity was stolen (a nested child rolled it away);
     # heal before the foreign check below would discard the evidence.
-    await request.app["sessions"].maybe_heal_from_own_conversation_hook(session, payload)
+    await request.app[keys.SESSIONS].maybe_heal_from_own_conversation_hook(session, payload)
     if foreign_conversation_hook_id(session, payload) is None:
         # Only this session's own conversation counts as evidence: a nested
         # child's hooks must not refresh liveness, date staleness, or reach the
@@ -14753,11 +14768,11 @@ async def hook_ingress(request: web.Request) -> web.Response:
         # session's cwd and its observation onto a conversation it does not own.
         # Only staged here — the ingress must return fast, because Claude blocks the
         # user's turn on this POST.
-        request.app["sessions"].note_hook_cwd(session, payload)
-        request.app["sessions"].note_hook_transcript_path(session, payload)
-        request.app["automation"].note_native_hook(session.record.id)
+        request.app[keys.SESSIONS].note_hook_cwd(session, payload)
+        request.app[keys.SESSIONS].note_hook_transcript_path(session, payload)
+        request.app[keys.AUTOMATION].note_native_hook(session.record.id)
         if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
-            await request.app["events"].emit(
+            await request.app[keys.EVENTS].emit(
                 event_type,
                 session_id=session.record.id,
                 source="hook",
@@ -14765,7 +14780,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 **event_payload,
             )
     hook_decision = await apply_hook_observation(
-        session, event_type, payload, request.app["events"]
+        session, event_type, payload, request.app[keys.EVENTS]
     )
     if sequence is not None:
         sequence_state = session.observation_state.setdefault("hook_sequences", {})
@@ -14808,7 +14823,7 @@ async def list_worktrees(request: web.Request) -> web.Response:
             "invalid_parameters", "detail must be 'full' or 'summary'"
         )
     project_id = request.query.get("project_id", "")
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     payload = await git_review.shared_worktree_overview(
@@ -14860,7 +14875,7 @@ async def git_graph(request: web.Request) -> web.Response:
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
     project_id = request.query.get("project_id", "")
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     raw_limit = request.query.get("limit") or str(GIT_GRAPH_DEFAULT_LIMIT)
@@ -14897,7 +14912,7 @@ async def git_provenance(request: web.Request) -> web.Response:
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
     project_id = request.query.get("project_id", "")
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     raw_limit = request.query.get("limit") or "200"
@@ -14913,7 +14928,7 @@ async def git_provenance(request: web.Request) -> web.Response:
     ):
         return json_response({"error": "commit must contain full Git object IDs"}, 400)
     subject = request.query.get("subject", "")[:200]
-    history = request.app["history"]
+    history = request.app[keys.HISTORY]
     items = await history.git_provenance(
         project_id=project.id,
         session_id=request.query.get("session_id") or None,
@@ -14965,7 +14980,7 @@ async def _decorate_provenance_identity(
     """
     if not items:
         return
-    manager: SessionManager = app["sessions"]
+    manager: SessionManager = app[keys.SESSIONS]
     lookup_ids: set[str] = set()
     for item in items:
         session_id = str(item.get("session_id") or "")
@@ -14974,13 +14989,13 @@ async def _decorate_provenance_identity(
             lookup_ids.add(session_id)
             if run_id:
                 lookup_ids.add(run_id)
-    rows = await app["history"].history_naming_rows(sorted(lookup_ids))
+    rows = await app[keys.HISTORY].history_naming_rows(sorted(lookup_ids))
     run_ids = {
         session_titles.record_run_id(session.record)
         for session in manager.sessions.values()
     }
     run_ids |= {session_titles.row_run_id(row) for row in rows.values()}
-    titles = await session_titles.generated_titles(app["automation_store"], run_ids)
+    titles = await session_titles.generated_titles(app[keys.AUTOMATION_STORE], run_ids)
     unresolved = 0
     for item in items:
         session_id = str(item.get("session_id") or "")
@@ -15015,7 +15030,7 @@ async def git_commit_changes(request: web.Request) -> web.Response:
         raise git_review.GitReviewError(
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
-    project = request.app["projects"].projects.get(request.query.get("project_id", ""))
+    project = request.app[keys.PROJECTS].projects.get(request.query.get("project_id", ""))
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     return json_response(
@@ -15044,7 +15059,7 @@ async def git_diff(request: web.Request) -> web.Response:
         raise git_review.GitReviewError(
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
-    project = request.app["projects"].projects.get(request.query.get("project_id", ""))
+    project = request.app[keys.PROJECTS].projects.get(request.query.get("project_id", ""))
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     scope = request.query.get("scope", "")
@@ -15228,7 +15243,7 @@ def _schedule_graveyard_purge(app: web.Application, root: Path, operation_id: st
         name=f"worktree-graveyard-purge-{operation_id}",
     )
     task.add_done_callback(_log_task_failure)
-    tasks = app.get("graveyard_tasks")
+    tasks = app.get(keys.GRAVEYARD_TASKS)
     if isinstance(tasks, set):
         tasks.add(task)
         task.add_done_callback(tasks.discard)
@@ -15319,7 +15334,7 @@ async def _prepare_worktree_setup(
     if not isinstance(spawn_body, dict) or not spawn_body.get("project_id"):
         return WorktreeSetupResult("not_configured")
     project_id = str(spawn_body["project_id"])
-    project = app["projects"].projects.get(project_id)
+    project = app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         return WorktreeSetupResult("not_configured")
     try:
@@ -15376,7 +15391,7 @@ async def init_repository(request: web.Request) -> web.Response:
 
     operation_id = uuid4().hex
     body = await request.json()
-    project = request.app["projects"].projects.get(str(body.get("project_id", "")))
+    project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id", "")))
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     if not Path(project.root).is_dir():
@@ -15413,7 +15428,7 @@ async def init_repository(request: web.Request) -> web.Response:
         return json_response(
             {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
         )
-    await request.app["events"].emit("git_changed", project_id=project.id)
+    await request.app[keys.EVENTS].emit("git_changed", project_id=project.id)
     return json_response(
         {
             "ok": True,
@@ -15445,7 +15460,7 @@ async def create_worktree(request: web.Request) -> web.Response:
     )
     if not Path(cwd).is_dir():
         raise ValueError({"cwd": "repository directory does not exist"})
-    _ensure_worktree_parent(request.app["config"], Path(path))
+    _ensure_worktree_parent(request.app[keys.CONFIG], Path(path))
     existing = await _listed_worktree_paths(cwd)
     if path.casefold() in existing:
         raise ValueError({"path": "target is already a registered worktree"})
@@ -15507,7 +15522,7 @@ async def create_worktree(request: web.Request) -> web.Response:
     if spawn_body is not None:
         setup = await _prepare_worktree_setup(request.app, spawn_body, path)
         result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path, setup)
-    await request.app["events"].emit("worktree_created", source="user", cwd=cwd, path=path)
+    await request.app[keys.EVENTS].emit("worktree_created", source="user", cwd=cwd, path=path)
     log.info(
         "worktree_create_completed operation_id=%s cwd=%s path=%s branch=%s "
         "spawn_status=%s session_id=%s duration_ms=%.1f",
@@ -15524,7 +15539,7 @@ async def create_worktree(request: web.Request) -> web.Response:
 
 def _land_project(request: web.Request) -> Any:
     project_id = request.query.get("project_id") or ""
-    project = request.app["projects"].projects.get(project_id)
+    project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise ValueError("unknown project")
     return project
@@ -15532,9 +15547,9 @@ def _land_project(request: web.Request) -> Any:
 
 async def list_land_requests(request: web.Request) -> web.Response:
     """The queue, for the Git tab's Land panel. Read-only."""
-    service = request.app["land_queue"]
+    service = request.app[keys.LAND_QUEUE]
     project_id = request.query.get("project_id") or None
-    project = request.app["projects"].projects.get(project_id or "")
+    project = request.app[keys.PROJECTS].projects.get(project_id or "")
     return json_response(
         await service.status(
             project_id=project_id, project_root=project.root if project else None
@@ -15553,7 +15568,7 @@ async def request_land(request: web.Request) -> web.Response:
     for exactly what it always asked for.
     """
     body = await request.json()
-    project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
+    project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
     if project is None:
         raise ValueError("unknown project")
     worktree_root = str(body.get("worktree_root") or "").strip()
@@ -15563,7 +15578,7 @@ async def request_land(request: web.Request) -> web.Response:
     if kind not in ("land", "verify"):
         raise ValueError("kind must be 'land' or 'verify'")
     try:
-        row = await request.app["land_queue"].request(
+        row = await request.app[keys.LAND_QUEUE].request(
             project_id=project.id,
             project_root=project.root,
             worktree_root=worktree_root,
@@ -15577,7 +15592,7 @@ async def request_land(request: web.Request) -> web.Response:
 
 async def cancel_land_request(request: web.Request) -> web.Response:
     try:
-        row = await request.app["land_queue"].cancel(request.match_info["request_id"])
+        row = await request.app[keys.LAND_QUEUE].cancel(request.match_info["request_id"])
     except LandConflict as exc:
         return json_response({"error": str(exc), "code": "not_cancellable"}, 409)
     return json_response(row)
@@ -15585,7 +15600,7 @@ async def cancel_land_request(request: web.Request) -> web.Response:
 
 async def land_request_events(request: web.Request) -> web.Response:
     """The per-step audit trail for one request: who asked, what verified, what moved."""
-    store: LandStore = request.app["land_store"]
+    store: LandStore = request.app[keys.LAND_STORE]
     return json_response({"events": await store.events(request.match_info["request_id"])})
 
 
@@ -15607,14 +15622,14 @@ async def read_land_verify_command(request: web.Request) -> web.Response:
     info = describe_verify_command(
         Path(worktree_root),
         values,
-        request.app["verify_approvals"],
+        request.app[keys.VERIFY_APPROVALS],
         project_root=project.root,
     )
     worktree_config = values.get("worktree")
     configured = ""
     if isinstance(worktree_config, dict):
         configured = str(worktree_config.get("verify_command") or "")
-    store: LandStore = request.app["land_store"]
+    store: LandStore = request.app[keys.LAND_STORE]
     plan = await store.verify_plan(project.root, info.digest or "")
     return json_response(
         {
@@ -15658,7 +15673,7 @@ async def write_land_verify_command(request: web.Request) -> web.Response:
     distinguished from "leave it alone" by the field being absent from the request.
     """
     body = await request.json()
-    project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
+    project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
     if project is None:
         raise ValueError("unknown project")
     command = str(body.get("command") or "").strip()
@@ -15691,20 +15706,20 @@ async def write_land_verify_command(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "project_configuration_changed", project_id=written["project"]["id"]
     )
     # Its own audit record, exactly as an approval leaves one. Without it, "who changed
     # the gate" would be answerable only from the repository's own history - which is
     # the wrong place to look for a change this endpoint made on this machine.
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "land_verify_command_changed", source="user", project_id=project.id
     )
     worktree_root = str(body.get("worktree_root") or project.root)
     refreshed = describe_verify_command(
         Path(worktree_root),
         written.get("values") or {},
-        request.app["verify_approvals"],
+        request.app[keys.VERIFY_APPROVALS],
         project_root=project.root,
     )
     return json_response(
@@ -15733,13 +15748,13 @@ async def approve_land_verify_command(request: web.Request) -> web.Response:
     to bytes nobody read.
     """
     body = await request.json()
-    project = request.app["projects"].projects.get(str(body.get("project_id") or ""))
+    project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
     if project is None:
         raise ValueError("unknown project")
     worktree_root = str(body.get("worktree_root") or project.root)
     digest = str(body.get("digest") or "")
     values = await read_project_config(project.root)
-    approvals: VerifyApprovalStore = request.app["verify_approvals"]
+    approvals: VerifyApprovalStore = request.app[keys.VERIFY_APPROVALS]
     info = describe_verify_command(
         Path(worktree_root), values, approvals, project_root=project.root
     )
@@ -15762,7 +15777,7 @@ async def approve_land_verify_command(request: web.Request) -> web.Response:
     refreshed = describe_verify_command(
         Path(worktree_root), values, approvals, project_root=project.root
     )
-    await request.app["events"].emit(
+    await request.app[keys.EVENTS].emit(
         "land_verify_approved", source="user", project_id=project.id
     )
     return json_response({**refreshed.public_dict(), "project_id": project.id})
@@ -16010,7 +16025,7 @@ async def remove_worktree(request: web.Request) -> web.Response:
                         },
                         409,
                     )
-            await request.app["events"].emit(
+            await request.app[keys.EVENTS].emit(
                 "worktree_removed", source="user", cwd=cwd, path=registered
             )
             log.warning(
@@ -16059,7 +16074,7 @@ async def remove_worktree(request: web.Request) -> web.Response:
     if buried is not None:
         _schedule_graveyard_purge(request.app, buried.parent, operation_id)
         cleanup = {"status": "purging", "path": str(buried)}
-    await request.app["events"].emit("worktree_removed", source="user", cwd=cwd, path=registered)
+    await request.app[keys.EVENTS].emit("worktree_removed", source="user", cwd=cwd, path=registered)
     log.info(
         "worktree_remove_completed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
         "cleanup_status=%s buried_path=%s duration_ms=%.1f",
@@ -16133,8 +16148,9 @@ class PtyOutputFlow:
 
 
 async def pty_ws(request: web.Request) -> web.WebSocketResponse:
-    session = request.app["sessions"].resolve(request.match_info["sid"])
-    snapshot_generation = str(request.app.get("daemon_generation") or "legacy")
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    generation = request.app.get(keys.DAEMON_GENERATION)
+    snapshot_generation = generation or "legacy"
     connection_id = secrets.token_urlsafe(12)
     ws = metered_websocket(request, "pty", heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
@@ -16205,7 +16221,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         snapshot, revision, replay_kind, replay, ring_position, subscriber = (
             session.attach_and_subscribe(attach_since)
         )
-        request.app["events"].emit_background(
+        request.app[keys.EVENTS].emit_background(
             "terminal_attached",
             session_id=session.record.id,
             source="daemon",
@@ -16302,7 +16318,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                     "epoch": session.input_owner_epoch,
                 }
             )
-        request.app["events"].emit_background(
+        request.app[keys.EVENTS].emit_background(
             "terminal_detached",
             session_id=session.record.id,
             source="daemon",
@@ -16455,7 +16471,7 @@ def _note_input_rejected(request: web.Request, session: Session, byte_count: int
     if now - session.last_input_reject_report_ts < 2:
         return
     session.last_input_reject_report_ts = now
-    request.app["events"].emit_background(
+    request.app[keys.EVENTS].emit_background(
         "terminal_input_rejected",
         session_id=session.record.id,
         source="daemon",
@@ -16478,7 +16494,7 @@ async def _claim_terminal_input(
     # session, so it comes from the daemon's presence tracking rather than from the
     # claiming client. Absent (older client, or a test app that wires no store) means
     # "no signal", which leaves the per-session rules to decide exactly as before.
-    presence: DevicePresenceStore | None = request.app.get("device_presence")
+    presence: DevicePresenceStore | None = request.app.get(keys.DEVICE_PRESENCE)
     # The device class whose human touched it most recently. Not "is any other device
     # active": a desktop left open and focused stays active for two minutes after the
     # last keystroke, so both classes are active exactly when someone picks up their
@@ -16538,7 +16554,7 @@ async def _claim_terminal_input(
         # The device a human is typing into dictates the size everyone else renders.
         if session.apply_geometry():
             _schedule_resize_repaint(request, session)
-        request.app["events"].emit_background(
+        request.app[keys.EVENTS].emit_background(
             "terminal_input_owner",
             session_id=session.record.id,
             source="daemon",
@@ -16600,7 +16616,7 @@ async def _handle_terminal_input(
         cancel_pending_approval(session, "terminal_input")
         session.input_revision += 1
         note_remote_shell_submission(session, data)
-        _note_composer_write(request.app["events"], session, data, "browser")
+        _note_composer_write(request.app[keys.EVENTS], session, data, "browser")
         note_interrupt_intent(session, data, source="terminal_input")
         session.last_input_event_ts = now
         # Typing is the strongest evidence of where the human is; it renews this
@@ -16622,7 +16638,7 @@ async def _handle_terminal_input(
                     "source": "terminal_input",
                 }
             )
-            request.app["events"].emit_background(
+            request.app[keys.EVENTS].emit_background(
                 "unwitnessed_turn_armed",
                 session_id=session.record.id,
                 source="terminal_input",
@@ -16650,7 +16666,7 @@ async def _handle_terminal_input(
             if input_source in {"beforeinput", "input", "keydown", "paste"}:
                 input_diagnostic["input_source"] = input_source
             input_diagnostic["server_received_at_ms"] = server_received_at_ms
-        request.app["events"].emit_background(
+        request.app[keys.EVENTS].emit_background(
             "terminal_input",
             session_id=session.record.id,
             source="daemon",
@@ -16672,9 +16688,9 @@ async def _handle_terminal_input(
             )
     if frame.get("broadcast") and not is_terminal_response:
         await deliver_broadcast(
-            request.app["sessions"],
+            request.app[keys.SESSIONS],
             data,
-            request.app["events"],
+            request.app[keys.EVENTS],
             source_id=session.record.id,
         )
 
@@ -16751,7 +16767,7 @@ async def _repaint_when_resize_settles(request: web.Request, session: Session) -
         return
     size = session.geometry
     repainted = await session.repaint_current_geometry()
-    request.app["events"].emit_background(
+    request.app[keys.EVENTS].emit_background(
         "terminal_repaint_requested",
         session_id=session.record.id,
         source="daemon",
@@ -16786,7 +16802,7 @@ def _schedule_resize_repaint(request: web.Request, session: Session) -> None:
 
 async def _repaint_after_truncated_replay(request: web.Request, session: Session) -> None:
     repainted = await session.repaint_current_geometry()
-    request.app["events"].emit_background(
+    request.app[keys.EVENTS].emit_background(
         "terminal_repaint_requested",
         session_id=session.record.id,
         source="daemon",
@@ -16860,7 +16876,7 @@ async def _handle_client_repaint(request: web.Request, session: Session) -> None
     session.last_client_repaint_ts = now
     repainted = await session.repaint_current_geometry()
     if repainted:
-        request.app["events"].emit_background(
+        request.app[keys.EVENTS].emit_background(
             "terminal_repaint_requested",
             session_id=session.record.id,
             source="browser",
@@ -16905,7 +16921,7 @@ def _handle_client_diagnostic(
     else:
         event_type = "terminal_input_diagnostic"
         detail_limit = CLIENT_DIAGNOSTIC_DETAIL_LIMIT
-    request.app["events"].emit_background(
+    request.app[keys.EVENTS].emit_background(
         event_type,
         session_id=session.record.id,
         source="browser",
@@ -16937,12 +16953,12 @@ async def _handle_pty_client_message(
         now = time.monotonic()
         session.input_revision += 1
         note_remote_shell_submission(session, message.data)
-        _note_composer_write(request.app["events"], session, message.data, "browser")
+        _note_composer_write(request.app[keys.EVENTS], session, message.data, "browser")
         session.last_input_event_ts = now
         session.note_owner_input(now)
         if now - session.last_input_report_ts >= 2:
             session.last_input_report_ts = now
-            request.app["events"].emit_background(
+            request.app[keys.EVENTS].emit_background(
                 "terminal_input",
                 session_id=session.record.id,
                 source="daemon",
@@ -16963,7 +16979,7 @@ async def _handle_pty_client_message(
             session.terminal_mode = mode
             session.terminal_mode_updated_at = time.monotonic()
             if changed:
-                request.app["events"].emit_background(
+                request.app[keys.EVENTS].emit_background(
                     "terminal_mode_changed",
                     session_id=session.record.id,
                     source="browser",
@@ -16985,8 +17001,8 @@ async def _handle_pty_client_message(
 async def events_ws(request: web.Request) -> web.WebSocketResponse:
     ws = metered_websocket(request, "events", heartbeat=20)
     await ws.prepare(request)
-    bus: EventBus = request.app["events"]
-    presence: DevicePresenceStore = request.app["device_presence"]
+    bus: EventBus = request.app[keys.EVENTS]
+    presence: DevicePresenceStore = request.app[keys.DEVICE_PRESENCE]
     connection_id = secrets.token_urlsafe(12)
     session_filter = request.query.get("session")
     # Parsed before subscribing: an int() failure between subscribe and the try
@@ -16997,11 +17013,12 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
         last_sequence = int(raw_cursor) if raw_cursor else 0
     except ValueError:
         raise web.HTTPBadRequest(text="after_seq must be an integer") from None
+    generation = request.app.get(keys.DAEMON_GENERATION)
     await ws.send_json(
         {
             "type": "events_hello",
-            "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
-            "daemon_generation": str(request.app.get("daemon_generation") or "legacy"),
+            "ui_build_id": read_ui_build_id(request.app[keys.FRONTEND_DIR]),
+            "daemon_generation": generation or "legacy",
         }
     )
     queue = bus.subscribe(name="events-ws")
@@ -17009,7 +17026,7 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
         if last_sequence > 0:
             # Resume a small gap in order. Anything wider is cheaper and safer to
             # recover with one authoritative REST refresh.
-            catch_up = await request.app["history"].events(
+            catch_up = await request.app[keys.HISTORY].events(
                 session_id=session_filter,
                 limit=EVENTS_CATCHUP_LIMIT + 1,
                 after_seq=last_sequence,
@@ -17018,7 +17035,7 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
         else:
             # The initial REST load already supplies authoritative state. Start at
             # the durable watermark instead of replaying historical side effects.
-            latest, _truncated = await request.app["history"].recent_events(
+            latest, _truncated = await request.app[keys.HISTORY].recent_events(
                 session_id=session_filter, limit=1
             )
             last_sequence = int(latest[-1]["seq"]) if latest else 0
@@ -17032,7 +17049,7 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
                 session_filter or "*",
             )
         if truncated:
-            latest, _truncated = await request.app["history"].recent_events(
+            latest, _truncated = await request.app[keys.HISTORY].recent_events(
                 session_id=session_filter, limit=1
             )
             watermark = int(latest[-1]["seq"]) if latest else last_sequence
@@ -17108,13 +17125,13 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
                 if reader in done:
                     getter.cancel()
                     break
-                event = getter.result()
-                if event.seq <= last_sequence:
+                live_event = getter.result()
+                if live_event.seq <= last_sequence:
                     continue
-                last_sequence = event.seq
-                if event.type in BROWSER_OMITTED_EVENT_TYPES:
+                last_sequence = live_event.seq
+                if live_event.type in BROWSER_OMITTED_EVENT_TYPES:
                     continue
-                await ws.send_json(event.snapshot())
+                await ws.send_json(live_event.snapshot())
         finally:
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)

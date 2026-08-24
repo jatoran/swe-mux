@@ -8,6 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_layout
@@ -328,8 +329,8 @@ async def test_project_use_api_persists_and_broadcasts_shared_recency(tmp_path: 
     events = EventBus(sink=history.append_event)
     subscriber = events.subscribe(name="recency-test")
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = projects
-    app["events"] = events
+    app[keys.PROJECTS] = projects
+    app[keys.EVENTS] = events
     app.router.add_post("/projects/{project_id}/used", record_project_use)
 
     async with TestClient(TestServer(app)) as client:
@@ -376,12 +377,12 @@ async def test_project_removal_api_reports_live_session_conflict(tmp_path: Path)
     )
     events = EventBus(sink=history.append_event)
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = projects
-    app["history"] = history
-    app["sessions"] = SimpleNamespace(
+    app[keys.PROJECTS] = projects
+    app[keys.HISTORY] = history
+    app[keys.SESSIONS] = SimpleNamespace(
         sessions={record.id: SimpleNamespace(record=record)}
     )
-    app["events"] = events
+    app[keys.EVENTS] = events
     app.router.add_delete("/projects/{project_id}", delete_project)
 
     async with TestClient(TestServer(app)) as client:

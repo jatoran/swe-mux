@@ -28,6 +28,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.server import (
     STARTUP_OPEN_PATHS,
@@ -229,8 +230,8 @@ def test_publish_writes_into_a_frozen_application() -> None:
     """
     app = web.Application()
     app.freeze()
-    publish(app, history="a handle")
-    assert app["history"] == "a handle"
+    publish(app, {keys.HISTORY: "a handle"})
+    assert app[keys.HISTORY] == "a handle"
 
 
 def test_only_health_and_the_app_shell_serve_during_startup() -> None:
@@ -365,6 +366,6 @@ async def test_shutdown_during_startup_tears_down_a_partial_runtime(
     await asyncio.wait_for(started.wait(), timeout=10)
     # The stores exist; nothing after `projects` does. Closing here exercises
     # exactly the partial state.
-    assert app.get("history") is None
+    assert app.get(keys.HISTORY) is None
     await client.close()
     assert real_prepare is prepare_database

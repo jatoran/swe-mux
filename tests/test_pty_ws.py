@@ -10,6 +10,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux import server
 from swe_mux.device_presence import DevicePresenceStore, DeviceReport
 from swe_mux.event_bus import EventBus
@@ -123,9 +124,9 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
 
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
-    app["sessions"] = manager
-    app["events"] = EventBus()
-    events = app["events"].subscribe(name="input-diagnostic-test")
+    app[keys.SESSIONS] = manager
+    app[keys.EVENTS] = EventBus()
+    events = app[keys.EVENTS].subscribe(name="input-diagnostic-test")
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -260,11 +261,11 @@ def _repaint_test_session(backend: str, resizes: list[tuple[int, int]]) -> Sessi
 
 def _repaint_test_app(session: Session) -> web.Application:
     app = web.Application()
-    app["sessions"] = SimpleNamespace(
+    app[keys.SESSIONS] = SimpleNamespace(
         resolve=lambda _identity: session,
         sessions={session.record.id: session},
     )
-    app["events"] = EventBus()
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
     return app
 
@@ -368,7 +369,7 @@ async def test_windowed_replay_pulses_an_alternate_screen_child_once_per_session
     session = _repaint_test_session("claude", resizes)
     _outgrow_replay_budget(session)
     app = _repaint_test_app(session)
-    events = app["events"].subscribe(name="test")
+    events = app[keys.EVENTS].subscribe(name="test")
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
@@ -478,7 +479,7 @@ async def test_client_repaint_request_pulses_one_rate_limited_restatement() -> N
     resizes: list[tuple[int, int]] = []
     session = _repaint_test_session("omp", resizes)
     app = _repaint_test_app(session)
-    events = app["events"].subscribe(name="test")
+    events = app[keys.EVENTS].subscribe(name="test")
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
@@ -539,7 +540,7 @@ async def test_a_settled_drag_pulses_an_alternate_screen_child_exactly_once(
     resizes: list[tuple[int, int]] = []
     session = _repaint_test_session("claude", resizes)
     app = _repaint_test_app(session)
-    events = app["events"].subscribe(name="test")
+    events = app[keys.EVENTS].subscribe(name="test")
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
@@ -608,7 +609,7 @@ async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> 
     resizes: list[tuple[int, int]] = []
     session = _repaint_test_session("omp", resizes)
     app = _repaint_test_app(session)
-    events = app["events"].subscribe(name="test")
+    events = app[keys.EVENTS].subscribe(name="test")
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
@@ -661,7 +662,7 @@ async def test_paste_trace_persists_as_its_own_event_type_with_its_own_clamp() -
     """
     session = _repaint_test_session("omp", [])
     app = _repaint_test_app(session)
-    events = app["events"].subscribe(name="test")
+    events = app[keys.EVENTS].subscribe(name="test")
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
@@ -726,8 +727,8 @@ async def test_only_latest_gesture_claiming_browser_can_write_input() -> None:
     session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
-    app["sessions"] = manager
-    app["events"] = EventBus()
+    app[keys.SESSIONS] = manager
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -791,8 +792,8 @@ async def test_codex_drops_late_default_color_responses_from_current_and_stale_c
     session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
-    app["sessions"] = manager
-    app["events"] = EventBus()
+    app[keys.SESSIONS] = manager
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
 
     foreground = "\x1b]10;rgb:c0c0/caca/f5f5\x1b\\"
@@ -843,11 +844,11 @@ async def test_pty_replay_does_not_wait_for_event_persistence() -> None:
     session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
     session.scrollback.append(b"ready")
     app = web.Application()
-    app["sessions"] = SimpleNamespace(
+    app[keys.SESSIONS] = SimpleNamespace(
         resolve=lambda _identity: session,
         sessions={record.id: session},
     )
-    app["events"] = EventBus(blocked_sink)
+    app[keys.EVENTS] = EventBus(blocked_sink)
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -882,11 +883,11 @@ async def test_pty_replay_has_a_bounded_fallback_for_clients_without_readiness(
     )
     session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
     app = web.Application()
-    app["sessions"] = SimpleNamespace(
+    app[keys.SESSIONS] = SimpleNamespace(
         resolve=lambda _identity: session,
         sessions={record.id: session},
     )
-    app["events"] = EventBus()
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -983,8 +984,8 @@ async def test_http_session_input_guards_ended_sessions_and_carries_evidence() -
         class Request:
             match_info = {"sid": session.record.id}
             app = {
-                "sessions": SimpleNamespace(resolve=lambda _sid: session),
-                "events": SimpleNamespace(
+                keys.SESSIONS: SimpleNamespace(resolve=lambda _sid: session),
+                keys.EVENTS: SimpleNamespace(
                     emit_background=lambda kind, **payload: background.append(
                         (kind, payload)
                     )
@@ -1039,8 +1040,8 @@ async def test_pty_ws_unsubscribes_when_the_replay_send_fails() -> None:
     session.scrollback.append(b"scrollback")
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
-    app["sessions"] = manager
-    app["events"] = EventBus()
+    app[keys.SESSIONS] = manager
+    app[keys.EVENTS] = EventBus()
 
     async def failing_pty_ws(request: web.Request) -> web.WebSocketResponse:
         real_prepare = web.WebSocketResponse.prepare
@@ -1090,8 +1091,8 @@ async def test_pty_ws_unsubscribes_for_an_already_ended_session() -> None:
     session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
-    app["sessions"] = manager
-    app["events"] = EventBus()
+    app[keys.SESSIONS] = manager
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -1123,18 +1124,18 @@ def _arbitration_app() -> tuple[Session, web.Application, list[str], list[tuple[
     )
     session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
     app = web.Application()
-    app["sessions"] = SimpleNamespace(
+    app[keys.SESSIONS] = SimpleNamespace(
         resolve=lambda _identity: session, sessions={record.id: session}
     )
-    app["events"] = EventBus()
-    app["device_presence"] = DevicePresenceStore()
+    app[keys.EVENTS] = EventBus()
+    app[keys.DEVICE_PRESENCE] = DevicePresenceStore()
     app.router.add_get("/pty/{sid}", pty_ws)
     return session, app, writes, resizes
 
 
 def _in_use(app: web.Application, profile: str, interaction_age: float = 1.0) -> None:
     """Report `profile` as the device class the human is using right now."""
-    app["device_presence"].report(
+    app[keys.DEVICE_PRESENCE].report(
         f"{profile}-events",
         DeviceReport(profile=profile, visible=True, focused=True, interaction_age=interaction_age),
     )

@@ -8,6 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import app_keys as keys
 from swe_mux import server as server_module
 from swe_mux.agent_context import AgentContextConflict, AgentContextService
 from swe_mux.event_bus import EventBus
@@ -311,9 +312,9 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
         server_module, "open_in_file_manager", lambda path: revealed.append(Path(path))
     )
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["agent_context"] = service
-    app["events"] = EventBus()
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
+    app[keys.AGENT_CONTEXT] = service
+    app[keys.EVENTS] = EventBus()
     app.router.add_get("/projects/{project_id}/agent-context", get_agent_context)
     app.router.add_get(
         "/projects/{project_id}/agent-context/sources/{source_id}", get_agent_context_source
