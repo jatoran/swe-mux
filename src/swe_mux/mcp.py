@@ -4930,7 +4930,9 @@ class McpService:
         try:
             text = await asyncio.to_thread(read_guide, requested)
         except KeyError as exc:
-            raise ValueError(str(exc.args[0] if exc.args else exc)) from exc
+            # `errors.NotFound.__str__` is the message that names the catalog;
+            # `args[0]` is only the id the caller already sent.
+            raise ValueError(str(exc)) from exc
         return {"id": requested, "text": text}
 
     async def configurator_diagnostics(

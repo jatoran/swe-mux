@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .background_tasks import background
+from .errors import NotFound
 from .event_bus import EventBus
 from .harness import is_agent_harness
 from .operational_telemetry import command_hash, process_identity
@@ -1305,7 +1306,7 @@ class ProcessInspector:
         if session_id not in self.sessions.sessions and not any(
             item.session_id == session_id for item in self.owned.values()
         ):
-            raise KeyError(session_id)
+            raise NotFound(session_id, kind="session")
         if not self.available:
             session = self.sessions.sessions.get(session_id)
             record = session.record if session else None
@@ -2163,7 +2164,7 @@ class PreviewRegistry:
 
     def remove(self, preview_id: str) -> None:
         if preview_id not in self.items:
-            raise KeyError(preview_id)
+            raise NotFound(preview_id, kind="preview")
         removed = self.items.pop(preview_id)
         self._listener_seen.pop(preview_id, None)
         self._preview_probe_state.pop(preview_id, None)

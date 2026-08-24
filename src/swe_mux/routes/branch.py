@@ -17,6 +17,7 @@ from .. import (
 from .. import (
     session_titles,
 )
+from ..errors import NotFound
 from ..harness import (
     assigns_conversation_id,
     branch_strategy,
@@ -393,7 +394,7 @@ async def history_branch_points(request: web.Request) -> web.Response:
     """
     row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
-        raise KeyError(request.match_info["sid"])
+        raise NotFound(request.match_info["sid"], kind="session")
     backend = str(row.get("backend") or "")
     try:
         limit = int(request.query.get("limit") or CONVERSATION_DEFAULT_LIMIT)

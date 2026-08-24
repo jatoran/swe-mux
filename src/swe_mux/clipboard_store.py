@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .errors import NotFound
 from .sqlite_store import database_operation_lock, run_sqlite_operation
 
 log = logging.getLogger(__name__)
@@ -388,7 +389,7 @@ class ClipboardStore:
     async def set_pinned(self, entry_id: str, pinned: bool) -> ClipboardEntry:
         entry = self.entry(entry_id)
         if entry is None:
-            raise KeyError(entry_id)
+            raise NotFound(entry_id, kind="clipboard entry")
         entry.pinned = bool(pinned)
         await self._persist_entry(entry)
         return entry

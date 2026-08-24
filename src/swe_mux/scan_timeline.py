@@ -24,6 +24,7 @@ from .behavioral_consumers import ADAPTIVE_TITLE_CHECKPOINT_PREFIX
 from .budget import Budget, coerce_budget
 from .budget import gauges as budget_gauges
 from .config import BUDGET_FIELDS
+from .errors import NotFound
 from .event_bus import EventBus
 from .llm_endpoint import resolve_endpoint
 from .models import MuxEvent
@@ -648,7 +649,7 @@ class ScanTimelineService:
     async def snapshot(self, session_id: str) -> dict[str, Any]:
         session = self.sessions.sessions.get(session_id)
         if session is None:
-            raise KeyError(session_id)
+            raise NotFound(session_id, kind="session")
         run_id = str(session.record.agent_run_id or "")
         project_id = str(session.record.project_id or "")
         # Fleet-wide, matching the budget it is measured against. It used to be
@@ -711,7 +712,7 @@ class ScanTimelineService:
     ) -> dict[str, Any]:
         record = await self.store.scan_record(record_id)
         if record is None or record.get("session_id") != session_id:
-            raise KeyError(record_id)
+            raise NotFound(record_id, kind="scan record")
         source: list[dict[str, Any]] | None = None
         if rehydrate:
             session = self.sessions.sessions.get(session_id)
@@ -835,7 +836,7 @@ class ScanTimelineService:
         """Stop a running full-session scan and keep everything it already wrote."""
         session = self.sessions.sessions.get(session_id)
         if session is None:
-            raise KeyError(session_id)
+            raise NotFound(session_id, kind="session")
         run_id = str(session.record.agent_run_id or "")
         task = self._backfill_tasks.get(run_id)
         if task is None or task.done():

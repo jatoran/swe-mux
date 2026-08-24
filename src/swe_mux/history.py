@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .errors import NotFound
 from .git_projects import ProjectIdentity
 from .harness import AGENT_BACKENDS, has_observable_transcript, is_agent_harness
 from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
@@ -1216,7 +1217,7 @@ class HistoryIndex:
                 (used_at, project_id),
             )
             if cursor.rowcount != 1:
-                raise KeyError(project_id)
+                raise NotFound(project_id, kind="project")
             self._db.commit()
 
         await self._run(op)
@@ -1254,7 +1255,7 @@ class HistoryIndex:
                     (removed_at, project_id),
                 )
                 if cursor.rowcount != 1:
-                    raise KeyError(project_id)
+                    raise NotFound(project_id, kind="project")
 
         await self._run(op)
 

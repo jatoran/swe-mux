@@ -62,16 +62,16 @@ async def post_project_resource(request: web.Request) -> web.Response:
     project = _request_project(request)
     body = await request.json()
     if not isinstance(body, dict):
-        raise TypeError("project resource body must be an object")
+        raise ValueError("project resource body must be an object")
     parent = body.get("parent", "")
     name = body.get("name")
     kind = body.get("kind")
     if not isinstance(parent, str):
-        raise TypeError("project resource parent must be a string")
+        raise ValueError("project resource parent must be a string")
     if not isinstance(name, str):
-        raise TypeError("project resource name must be a string")
+        raise ValueError("project resource name must be a string")
     if not isinstance(kind, str):
-        raise TypeError("project resource kind must be a string")
+        raise ValueError("project resource kind must be a string")
 
     result = await asyncio.to_thread(
         create_project_resource,

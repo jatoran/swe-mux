@@ -25,6 +25,7 @@ from ..automation import (
 )
 from ..automation_store import AutomationStore
 from ..config import Config
+from ..errors import NotFound
 from ..git_monitor import _git
 from ..harness import (
     HarnessLevel,
@@ -59,7 +60,7 @@ async def second_opinion(request: web.Request) -> web.Response:
             source_id = live.agent_run_id
             source = await history.history_entry(source_id)
     if not source or not has_observable_transcript(source.get("backend")):
-        raise KeyError(source_id)
+        raise NotFound(source_id, kind="observable transcript")
     body = await request.json()
     # "The other agent" stopped being well defined at two harnesses. The request may
     # name any observed harness that is not the one under review; with none named,
@@ -187,7 +188,7 @@ async def export_handoff(request: web.Request) -> web.Response:
     run_id = request.match_info["sid"]
     row = await request.app[keys.HISTORY].history_entry(run_id)
     if not row or not has_observable_transcript(row.get("backend")):
-        raise KeyError(run_id)
+        raise NotFound(run_id, kind="observable transcript")
     store = request.app[keys.AUTOMATION_STORE]
     annotations = await store.annotations(agent_run_id=run_id, limit=200)
     # Historical `turn-summary` notes stay readable (the producer is retired, not

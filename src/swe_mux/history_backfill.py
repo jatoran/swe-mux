@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .errors import NotFound
 from .git_projects import resolve_project
 from .history import HistoryIndex
 from .projects import ProjectManager
@@ -66,7 +67,7 @@ class HistoryBackfillManager:
     def start(self, project_id: str) -> dict[str, Any]:
         project = self.projects.projects.get(project_id)
         if not project:
-            raise KeyError(project_id)
+            raise NotFound(project_id, kind="project")
         for job in self.jobs.values():
             if job.project_id == project_id and job.status in {"queued", "running"}:
                 return job.payload()
@@ -79,7 +80,7 @@ class HistoryBackfillManager:
     def get(self, job_id: str) -> dict[str, Any]:
         job = self.jobs.get(job_id)
         if not job:
-            raise KeyError(job_id)
+            raise NotFound(job_id, kind="history backfill job")
         return job.payload()
 
     def list(self, project_id: str | None = None) -> list[dict[str, Any]]:
@@ -94,7 +95,7 @@ class HistoryBackfillManager:
     def cancel(self, job_id: str) -> dict[str, Any]:
         job = self.jobs.get(job_id)
         if not job:
-            raise KeyError(job_id)
+            raise NotFound(job_id, kind="history backfill job")
         if job.status in {"queued", "running"}:
             job.cancel_requested = True
             job.phase = "cancelling"
