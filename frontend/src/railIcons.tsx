@@ -431,6 +431,19 @@ export const TrashIcon = () => <svg {...stroke}>
   <line x1="14" y1="11" x2="14" y2="17" />
 </svg>
 
+/** The bin with two more receding behind it: clear *every* ended row in this Project, not
+ *  only the one the menu was opened on. Split from `TrashIcon` for the reason
+ *  `CopyPathIcon` was split from `CopyIcon` — the two sit on adjacent rows of one menu,
+ *  and the same bin drawn twice would leave the icon column silent about which of them
+ *  removes one row and which removes all of them. */
+export const TrashSweepIcon = () => <svg {...stroke}>
+  <path d="M2.5 8h12" />
+  <path d="M6.5 8V6.2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V8" />
+  <path d="M4.5 8v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V8" />
+  <line x1="17.5" y1="8.5" x2="17.5" y2="17.5" />
+  <line x1="21" y1="10.5" x2="21" y2="15.5" />
+</svg>
+
 /** An eye struck through: still registered, just not drawn in the sidebar. Deliberately not
  *  the bin — hiding a Project loses nothing, and a mark that suggested otherwise would make
  *  the safe act look like the destructive one directly below it. */

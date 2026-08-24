@@ -14,7 +14,8 @@ Index: `../packages.md`.
 - One-minute safety refreshes and a 10-second reduced process watch run alongside.
 - `sessionSnapshots.ts` is the pure REST/PTY merge contract.
   It rejects stale same-generation revisions while preserving enriched title and readiness fields across raw PTY updates.
-- `sessionKills.ts` owns optimistic removal: tombstones, TTL, and `nextActiveAfterKill`.
+- `sessionKills.ts` owns optimistic removal: tombstones, TTL, `nextActiveAfterKill`, and
+  `clearableEndedSessions` (which ended rows a Project-wide sweep takes).
 - `sessionFocusHistory.ts` owns the bounded per-Project most-recently-focused stack that session choice consults.
   It is fed from the settled active session rather than from `setActiveId`'s many call sites, and is held in memory because it answers "where was I just now" (`../workspace-state.md`).
 

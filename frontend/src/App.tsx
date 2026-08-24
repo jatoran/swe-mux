@@ -96,7 +96,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
+import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, TrashSweepIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -138,8 +138,8 @@ import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
 import {
-  KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
-  nextActiveAfterKill, type KillTombstones,
+  KILL_TOMBSTONE_TTL_MS, applyKillTombstones, clearableEndedSessions, expiredKillIds,
+  killRemovedTheSession, nextActiveAfterKill, type KillTombstones,
 } from './sessionKills'
 import {
   forgetFocusedSession, recentFocusedSessions, recordFocusedSession, type SessionFocusHistory,
@@ -4081,6 +4081,97 @@ export function App() {
     await refresh()
   }
 
+  /**
+   * Clear every ended row in one Project off the sidebar at once.
+   *
+   * The single-row remove already skips confirmation, because an ended session has no
+   * process to interrupt and no turn left to lose - and that argument does not weaken
+   * when there are nine of them. What does not survive repetition is `killNow` in a
+   * loop: it writes the layout and re-reads the whole fleet once per session, so nine
+   * dead rows would be nine layout PATCHes racing each other's revision and nine
+   * refreshes, with the sidebar re-sorting under the pointer between each. So the sweep
+   * does what one kill does, once - one optimistic removal, one layout write, one
+   * refresh - with the DELETEs going out together underneath.
+   */
+  const clearEndedSessions = async (targetProjectId: string) => {
+    const ended = clearableEndedSessions(sessions, targetProjectId, pendingKills.current)
+    if (ended.length === 0) return
+    setConfirmKillId(null)
+    setContextMenu(null)
+    const endedIds = new Set(ended.map(session => session.id))
+    const currentLayout = resolveLayout(
+      layoutMap[targetProjectId],
+      projects.find(project => project.id === targetProjectId)?.layout,
+    )
+    let nextLayout = currentLayout
+    for (const session of ended) nextLayout = removeLeaf(nextLayout, 'terminal', session.id)
+    // Focus only has to move when the sweep takes the session holding it, and one
+    // `nextActiveAfterKill` answers for the whole batch rather than one call per
+    // session: it already refuses every exited or crashed id as a landing spot, and the
+    // layout it reads has all of their leaves out, so no member of the batch can be
+    // chosen as the successor to another.
+    const focusedOut = activeId && endedIds.has(activeId) ? activeId : null
+    const paneIds = focusedOut
+      ? stackForView(currentLayout, focusedOut)?.children.map(child => child.id) || []
+      : []
+    const nextActiveId = focusedOut
+      ? nextActiveAfterKill({
+        layout: nextLayout, sessions, killedId: focusedOut,
+        projectId: targetProjectId, activeId,
+        recent: recentFocusedSessions(sessionFocusHistory.current, targetProjectId),
+        paneIds,
+      })
+      : activeId
+    for (const session of ended) {
+      sessionFocusHistory.current = forgetFocusedSession(sessionFocusHistory.current, session.id)
+      pendingKills.current[session.id] = {
+        sessionId: session.id, projectId: targetProjectId, startedAt: Date.now(),
+      }
+    }
+    setSessions(items => items.filter(item => !endedIds.has(item.id)))
+    for (const session of ended) {
+      delete startupOrigins.current[session.id]
+      delete clientStartupTimingValues.current[session.id]
+    }
+    if (activeId && endedIds.has(activeId)) setActiveId(nextActiveId)
+    if (focusedViewId && endedIds.has(focusedViewId)) setFocusedViewId(nextActiveId)
+    if (zoomedId && endedIds.has(zoomedId)) setZoomedId(null)
+    layoutValues.current[targetProjectId] = nextLayout
+    setLayoutMap(current => ({ ...current, [targetProjectId]: nextLayout }))
+    const removed: Session[] = []
+    const failures: string[] = []
+    try {
+      await Promise.all(ended.map(async session => {
+        try {
+          await deleteSessionOnce(session.id)
+          removed.push(session)
+        } catch (cause) {
+          const reason = cause instanceof Error ? cause.message : String(cause)
+          failures.push(`${sessionName(session)}: ${reason}`)
+        }
+      }))
+    } finally {
+      for (const session of ended) delete pendingKills.current[session.id]
+    }
+    // The single kill's rule, applied per session: persist the leaf removal only for the
+    // ones the daemon agreed are gone. A failed DELETE keeps its leaf in the written
+    // layout, so the refresh below finds that session still there and puts its row back
+    // where it was rather than into a pane the layout no longer holds it in.
+    if (removed.length > 0) {
+      let settled = layoutValues.current[targetProjectId] ?? nextLayout
+      for (const session of removed) settled = removeLeaf(settled, 'terminal', session.id)
+      await updateLayout(targetProjectId, settled)
+    }
+    // One toast for the batch, naming the first failure. A sweep of nine that loses one
+    // is still eight rows cleared, and nine stacked errors would bury which one it was.
+    if (failures.length > 0) {
+      setError(failures.length === ended.length
+        ? `Could not remove the ended sessions: ${failures[0]}`
+        : `Removed ${removed.length} of ${ended.length} ended sessions - ${failures[0]}`)
+    }
+    await refresh()
+  }
+
   // Relaunch a task-launched terminal in place: the daemon spawns a fresh copy of the
   // exact retained argv and retires the old session, and we swap the new id into the old
   // one's layout leaf so the tab, split, and focus stay put. Only offered for sessions the
@@ -4669,6 +4760,14 @@ export function App() {
 
   const commandSession = contextMenu?.session || active
   const commandProject = projectMenu?.project || activeProject
+  // Which Project a "clear the ended rows" sweep acts on, and how many rows that is.
+  // The selected session's Project rather than the workspace's: the sidebar draws every
+  // Project's rows at once, so the menu can be opened on a row belonging to a Project that
+  // is not the one on screen, and sweeping that other Project would clear rows the operator
+  // was not pointing at. Falls back to the workspace's Project for the palette, which has
+  // no row under a pointer to read.
+  const clearEndedTarget = commandSession?.project_id || projectId
+  const clearEndedCount = clearableEndedSessions(sessions, clearEndedTarget, pendingKills.current).length
   // The focused tab, when it is a file tab holding a previewable document. Derived rather
   // than tracked: the file identity is already encoded in the leaf id, and a second copy of
   // "which file is focused" is one more thing that can disagree with the layout.
@@ -5459,6 +5558,7 @@ export function App() {
     })),
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
+    { id: 'session.clearEnded', label: `Remove all ended sessions from sidebar${clearEndedCount > 1 ? ` (${clearEndedCount})` : ''}`, category: 'session', available: clearEndedCount > 0, disabledReason: 'No ended sessions in this Project', run: () => void clearEndedSessions(clearEndedTarget) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     // Same endpoint, different framing: for a recovered shell this is not
     // "run that task again" but "give me this terminal back", which is the only
@@ -7499,6 +7599,15 @@ export function App() {
           only cleared off the list (bin). The label already switches; the icon has to
           switch with it or it contradicts the word beside it. */}
       <button class="menu-row danger" onClick={() => runNamedCommand('session.killImmediate')}><span class="menu-row-icon" aria-hidden="true">{isEndedSession(contextMenu.session) ? <TrashIcon/> : <PowerIcon/>}</span><span class="menu-row-label">{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</span></button>
+      {/* The sweep, offered only from a row that is itself dead and only when it would
+          clear more than that row. Ended sessions arrive in runs - a wave of worktree
+          agents finishes, a Project is left overnight - and clearing them one row at a
+          time is the same click repeated with the list re-sorting under the pointer
+          between each. At a count of one it is the row directly above it, word for word,
+          and a menu that offers the same act twice makes both rows worth reading to find
+          out they are the same. Beneath the single remove rather than above it: the
+          specific thing the menu was opened on comes first, the bulk act second. */}
+      {isEndedSession(contextMenu.session)&&clearEndedCount>1&&<button class="menu-row danger" onClick={() => runNamedCommand('session.clearEnded')}><span class="menu-row-icon" aria-hidden="true"><TrashSweepIcon/></span><span class="menu-row-label">Remove all {clearEndedCount} ended sessions</span></button>}
     </div>}
 
     {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 320)) }}>

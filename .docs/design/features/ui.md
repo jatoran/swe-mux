@@ -467,6 +467,15 @@ Its rules, and what each one is defending:
 - **Every session-menu row acts on that session, immediately.**
   `Insert prompt template` and `Processes and previews` left it entirely: both open a whole surface of their own (the prompt library, the Resources dialog) from a menu whose every other row does something to the session and closes, and both remain a palette command and a drawer tab away from wherever you already are.
   `Open in focused pane` left for a simpler reason - clicking the row already does it, from the same list the menu was opened on.
+- **One row acts on the Project instead, and it is the sweep.**
+  Beneath `Remove from sidebar`, a session that has already ended offers `Remove all N ended sessions`, which clears every ended row in *that session's* Project at once.
+  Ended sessions arrive in runs - a wave of worktree agents finishes, a Project is left overnight - so the row that clears exactly one of them is the row you click nine times, with the list re-sorting under the pointer between each.
+  It is the single exception to the rule above, and the exception is narrow in three ways.
+  It appears only on a row that is itself ended, so it is never offered as a way to reach past a live session.
+  It appears only when the count is above one, because at one it is the row directly above it word for word, and a menu that offers the same act twice makes both rows worth reading to find out they are the same.
+  And it acts on the Project of the session the menu was opened on, not the Project on screen: the sidebar draws every Project's rows at once, so the menu can be opened on a row belonging to a Project that is not the selected one, and sweeping that other Project would clear rows nobody was pointing at.
+  It carries its own mark rather than a second bin, for the same reason `Copy path` was split from `Copy` - the two sit on adjacent rows, and one glyph drawn twice would leave the icon column silent about which of them removes one row and which removes all of them.
+  Neither the row nor the palette command (`session.clearEnded`) confirms, on the same argument the single remove already makes: an ended session has no process to interrupt and no turn left to lose, and that does not weaken at nine.
 - **The session menu is still tiered by source.** A session's own header (`⋯`, or right-click on the pane bar) carries `Copy working directory`; a sidebar row, a desktop tab title and a mobile tab do not.
   Those menus are opened by pointing at a session from a list, and what a person points at a list row for is Rename, read state, broadcast, and Kill.
   Same action, same registry command, one surface.
