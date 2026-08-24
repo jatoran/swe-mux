@@ -319,10 +319,11 @@ and reattachable browser viewports.
   shell whose promoted run claimed a live sibling returns conservatively to shell/detection.
   Shutdown intent decides the sessions' fate: quit stops and reaps everything as before; detach
   (daemon restart) leaves supervised sessions running — and stops those sessions' tickers
-  first, because after the client disconnects `isalive()` is false by definition and one more
-  tick would persist a spurious exit for an agent that is still running. If the supervisor is
-  unreachable at spawn time the daemon falls back to today's in-process ConPTY, whose lifetime
-  is daemon-bound as before.
+  first, so a daemon that is deliberately going away stops narrating its own disconnection.
+  If the supervisor is unreachable at spawn time the daemon falls back to today's in-process
+  ConPTY, whose lifetime is daemon-bound as before — but only when it can establish that the
+  failure preceded the supervisor reserving the session (see "A spawn whose reply was lost"
+  below).
 - **The supervisor is the primary recovery path, not the only one.** It cannot survive its own
   death: its kill-on-close Job takes every process tree with it, and both the authoritative
   scrollback and the mirrored metadata are process memory. A supervisor crash, a force close, a
@@ -340,6 +341,31 @@ and reattachable browser viewports.
   fault leaves sessions running. Treating the second as the first fabricated an exit for
   every live session, recorded false history, and re-adopted them on the next boot. The
   daemon reports `supervisor_state: "lost"` instead, and recovery is a daemon restart.
+- **Liveness is three states, not a bool.** `RemotePtyHost.liveness()` answers `alive`,
+  `dead`, or `unreachable`, and `isalive()` is "not dead" — an unreachable session is a
+  *running* one this daemon cannot see. **A session may be recorded as ended on exactly two
+  pieces of evidence: a definitive `pty_exit`, or a supervisor death this daemon confirmed by
+  pid.** A dropped socket is neither, so the per-session ticker freezes instead: no state
+  transition, no metadata push, no durable end, and a log line naming the session and how long
+  it has been out of reach. It resumes by itself if the connection returns. The rule holds for
+  a malformed frame too, which is classified and counted as a protocol desync rather than
+  folded into "connection lost". Writability is separate from liveness: a broadcast skips an
+  unreachable session rather than reporting a delivery whose bytes were discarded.
+- **A spawn whose reply was lost is asked about, never assumed.** The supervisor reserves the
+  session id before creating the child and finishes the spawn whether or not its reply lands,
+  so an in-process fallback on a timed-out spawn RPC could put two agents in one workspace.
+  The daemon queries `spawn_status` first: `unknown` (never reserved) is the only definitive
+  licence to fall back; `reserved`/`live`/`exited` are adopted, because the connection is
+  already subscribed to that session. If the query itself cannot be answered, the supervisor's
+  own liveness decides — a confirmed-dead supervisor took any child with it, while a live one
+  makes the fallback a coin flip, so the spawn fails instead. A supervisor predating the query
+  keeps the old fallback and says so in the log; closing that window is what the deploy
+  checkpoint is for.
+- **Terminating a supervisor is guarded by identity, not by its name.** The last-resort reap
+  behind `kill_server` closes a Job that owns every session tree, so before it fires the target
+  pid is checked against the `started_at` in the discovery file (PID+creation-time, as
+  everywhere else) and against a command line that is actually a supervisor launch for this
+  config. Missing or unreadable evidence declines.
 - **Transcript ownership is corroborated, never assumed.** The candidate pool for a session's
   transcript is the backend's *shared* per-cwd directory, which every CLI on the machine writes
   into — a VS Code Claude extension, a scripted `claude -p`, a one-off terminal run. Three

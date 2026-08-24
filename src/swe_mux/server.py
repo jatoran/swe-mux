@@ -350,7 +350,7 @@ from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .subprocess_flags import background_creation_flags, popen_outside_job
-from .supervisor_client import SupervisorClient
+from .supervisor_client import Liveness, SupervisorClient, liveness_of
 from .tailscale import (
     enable_mobile_voice_serve,
     is_tailscale_ip,
@@ -9904,7 +9904,14 @@ async def deliver_broadcast(
     for candidate in manager.sessions.values():
         if candidate.record.id == source_id or not candidate.record.broadcast:
             continue
-        if candidate.record.state in {"exited", "crashed"} or not candidate.pty.isalive():
+        # Writable, not merely un-ended: a session whose supervisor connection
+        # dropped is still running (`isalive()` is True by design) but every byte
+        # written to it is discarded, and reporting those as delivered would be a
+        # lie the sender acts on.
+        if (
+            candidate.record.state in {"exited", "crashed"}
+            or liveness_of(candidate.pty) is not Liveness.ALIVE
+        ):
             skipped.append(candidate.record.id)
             continue
         # Each target gets the same evidence accounting as any other operator

@@ -38,14 +38,20 @@ Constraint reminder: while this branch is unmerged, `supervisor_bundle_current()
 Runs in parallel with S1.
 Where S2 depends on S1's protocol additions (S2.3), code the daemon to degrade gracefully when the running supervisor predates them, so S2 is correct both before and after D1.
 
-- [ ] S2.1 Tri-state liveness (F1, the P0): model alive / dead / unreachable instead of collapsing unreachable into dead. `RemotePtyHost.isalive()` must not return false merely because `client.connected` is false while `client.lost` says the supervisor pid is alive.
-- [ ] S2.2 Ticker gating (F1): the per-session ticker ends a session only on definitive `pty_exit` or confirmed supervisor death; on connection loss it freezes observation, surfaces the unreachable state (health/doctor already read `lost`), and never persists an end.
-- [ ] S2.3 Spawn fallback hardening (F2, daemon half): on RPC timeout or disconnect during spawn, query `spawn_status` (S1.1) before any in-process fallback; fall back only when failure is known to precede reservation. Against an old supervisor that rejects the query, keep current behavior but log the ambiguity.
-- [ ] S2.4 Control/data plane decoupling (F3): restructure the client read loop so one session's full output queue cannot block RPC responses or `pty_exit` delivery for other sessions (mirror the supervisor's per-connection drain pattern).
-- [ ] S2.5 Frame-desync handling (F1): a `ValueError` from one malformed frame must not silently take the whole-connection-lost path without distinct logging; classify and log desync separately.
-- [ ] S2.6 Discovery kill guard (F7): before `_terminate_supervisor`, validate pid plus the `started_at` the discovery file already records (and executable identity); fail closed when evidence is missing. Replaces the name-contains-"swe" check.
-- [ ] S2.7 `session.tasks` leak (F9): add the missing discard callbacks on the OSC7 and hook cwd-telemetry task registrations, matching every sibling site.
-- [ ] S2.T Tests: socket-loss-with-live-supervisor test proving no session is ended (the missing F1 test); ticker-gating test; discovery stale-pid fail-closed test; head-of-line test (one full queue, RPC on another session still answered); task-set growth regression test.
+- [x] S2.1 Tri-state liveness (F1, the P0): model alive / dead / unreachable instead of collapsing unreachable into dead. `RemotePtyHost.isalive()` must not return false merely because `client.connected` is false while `client.lost` says the supervisor pid is alive.
+- [x] S2.2 Ticker gating (F1): the per-session ticker ends a session only on definitive `pty_exit` or confirmed supervisor death; on connection loss it freezes observation, surfaces the unreachable state (health/doctor already read `lost`), and never persists an end.
+- [x] S2.3 Spawn fallback hardening (F2, daemon half): on RPC timeout or disconnect during spawn, query `spawn_status` (S1.1) before any in-process fallback; fall back only when failure is known to precede reservation. Against an old supervisor that rejects the query, keep current behavior but log the ambiguity.
+- [x] S2.4 Control/data plane decoupling (F3): restructure the client read loop so one session's full output queue cannot block RPC responses or `pty_exit` delivery for other sessions (mirror the supervisor's per-connection drain pattern).
+- [x] S2.5 Frame-desync handling (F1): a `ValueError` from one malformed frame must not silently take the whole-connection-lost path without distinct logging; classify and log desync separately.
+- [x] S2.6 Discovery kill guard (F7): before `_terminate_supervisor`, validate pid plus the `started_at` the discovery file already records (and executable identity); fail closed when evidence is missing. Replaces the name-contains-"swe" check.
+- [x] S2.7 `session.tasks` leak (F9): add the missing discard callbacks on the OSC7 and hook cwd-telemetry task registrations, matching every sibling site.
+- [x] S2.T Tests: socket-loss-with-live-supervisor test proving no session is ended (the missing F1 test); ticker-gating test; discovery stale-pid fail-closed test; head-of-line test (one full queue, RPC on another session still answered); task-set growth regression test.
+
+Delivered in `tests/test_supervisor_client_liveness.py`, `tests/test_supervisor_client_transport.py`, and `tests/test_supervisor_client_guards.py`, over a protocol-level `tests/support/fake_supervisor.py` (no ConPTY, so they run on every platform in milliseconds rather than joining the Windows-only real-console group).
+Two S2 decisions worth knowing before D1:
+
+- When a spawn RPC fails, the connection is gone, *and* the supervisor process is still alive, the daemon now **fails the spawn** rather than falling back in-process: it cannot ask what happened, and a fallback there is a coin flip on two agents in one workspace. A supervisor that predates `spawn_status` keeps the old fallback with an explicit ambiguity log, so this only bites when the socket dies mid-spawn.
+- Output backpressure toward the supervisor is deliberately weakened to keep the control plane free: per-session staging is bounded by that session's scrollback budget and drops oldest-first with a counter and a rate-limited error, instead of stalling the whole connection. D1.5 should watch for that drop line as much as for the unreachable one.
 
 ### D1 - deploy checkpoint: supervisor update (primary checkout; REAPS ALL SESSIONS)
 

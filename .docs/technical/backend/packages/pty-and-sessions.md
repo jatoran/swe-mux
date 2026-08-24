@@ -19,7 +19,20 @@ It imports only `pty_host.py`, `scrollback.py`, and the platform seams those two
 
 The daemon-side supervisor connection (framing, RPC, output dispatch), the `RemotePtyHost` PtyHost facade, discover-or-spawn, metadata and initial-scrollback transport, and `kill_server`.
 
-**Not:** ConPTY creation, or the session registry.
+Three rules this module exists to keep:
+
+- **Tri-state liveness.**
+  `Liveness` is `alive`/`dead`/`unreachable`, and `liveness_of()` reads it from any PtyHost-shaped object (an in-process host is two-state by construction).
+  `_alive` is cleared only by a definitive `pty_exit` or a confirmed supervisor death, so `isalive()` ("not dead") never reports a running child as gone because a socket dropped.
+- **Dispatching a frame never waits.**
+  RPC replies, output, and `pty_exit` for every session share one read loop, so output goes to a per-session staging deque drained by a per-session pump.
+  The deque is bounded by that session's scrollback budget (floor 1 MiB) and drops oldest-first with a counter and a rate-limited log.
+  It never drops the newest entry, which is what guarantees the exit sentinel is delivered.
+- **Irreversible actions ask first.**
+  `spawn_status`/`resolve_spawn_outcome` answer what became of a spawn whose reply was lost, separating "the supervisor says X" from "this supervisor cannot be asked" (`unsupported`) and "the question could not be delivered" (`indeterminate`).
+  `_terminate_supervisor` verifies pid creation time against the discovery file's `started_at` plus a supervisor command line for this config, and fails closed.
+
+**Not:** ConPTY creation, the session registry, or the decision of what a lost spawn reply means for a session (`session.py` owns that policy).
 
 ## `pty_host.py`
 

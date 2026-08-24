@@ -71,7 +71,17 @@ from .spawn_contract import (
     session_terminal_env,
 )
 from .status_timeline import LedgerRing, StatusTimelineStore, note_layer_reading
-from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
+from .supervisor_client import (
+    SPAWN_STATE_EXITED,
+    SPAWN_STATE_UNKNOWN,
+    SPAWN_STATE_UNSUPPORTED,
+    Liveness,
+    RemotePtyHost,
+    SupervisorClient,
+    SupervisorUnavailable,
+    host_for_adoption,
+    liveness_of,
+)
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .transcript_view import conversation_is_readable
 
@@ -1954,6 +1964,58 @@ def reset_session_observation_state(session: Any, evidence: str) -> None:
         session.observation_state["hook_sequence_duplicates"] = hook_sequence_duplicates
 
 
+# How often a session that stays unreachable repeats itself in the log. The
+# first line is immediate; the repeats exist so a supervisor that never comes
+# back is visible in `daemon.log` as an ongoing condition rather than as one
+# line an hour of scrollback ago.
+UNREACHABLE_LOG_INTERVAL_SECONDS = 60.0
+
+
+def note_supervisor_unreachable(session: Session) -> None:
+    """Record and log that this session's console cannot be reached right now.
+
+    Deliberately not a state transition: `unreachable` is a property of this
+    daemon's connection, not of the agent, and writing it into the session's
+    durable state would be the same mistake as ending it.
+    """
+    now = time.time()
+    first = session.supervisor_unreachable_since is None
+    if first:
+        session.supervisor_unreachable_since = now
+    elapsed = now - (session.supervisor_unreachable_since or now)
+    monotonic_now = time.monotonic()
+    if (
+        not first
+        and monotonic_now - session.supervisor_unreachable_logged_at
+        < UNREACHABLE_LOG_INTERVAL_SECONDS
+    ):
+        return
+    session.supervisor_unreachable_logged_at = monotonic_now
+    log.warning(
+        "session %s (%s): pseudoconsole unreachable for %.1fs - the supervisor process "
+        "is alive but its socket is not; observation is frozen and no end will be "
+        "recorded. Restart the daemon (mux reload-daemon) to reattach.",
+        session.record.id,
+        session.record.name,
+        elapsed,
+    )
+
+
+def note_supervisor_reachable(session: Session) -> None:
+    """Clear a previously reported unreachable window, once."""
+    since = session.supervisor_unreachable_since
+    if since is None:
+        return
+    session.supervisor_unreachable_since = None
+    session.supervisor_unreachable_logged_at = 0.0
+    log.info(
+        "session %s (%s): pseudoconsole reachable again after %.1fs",
+        session.record.id,
+        session.record.name,
+        time.time() - since,
+    )
+
+
 class Session:
     def __init__(
         self,
@@ -2170,6 +2232,11 @@ class Session:
         self.cwd_debounce_task: asyncio.Task[Any] | None = None
         self.cwd_switches: deque[float] = deque()
         self.cwd_telemetry_dropped = 0
+        # When this session's pseudoconsole became unreachable (the supervisor is
+        # alive, its socket is not). Observation freezes for as long as it is set;
+        # nothing about it is durable, because nothing about it is an ending.
+        self.supervisor_unreachable_since: float | None = None
+        self.supervisor_unreachable_logged_at = 0.0
         self.last_input_event_ts = 0.0
         self.last_input_report_ts = 0.0
         self.input_revision = 0
@@ -2770,6 +2837,86 @@ class SessionManager:
         """
         return self.cli_state_monitor.conversation_holders()
 
+    async def _resolve_failed_supervisor_spawn(
+        self, remote: RemotePtyHost, error: BaseException
+    ) -> RemotePtyHost | None:
+        """Decide what a failed supervisor spawn RPC actually means.
+
+        The failure the daemon sees is "no reply", and that says nothing about
+        the child. The supervisor reserves the session id *before* creating the
+        process and finishes the spawn regardless of whether its reply lands, so
+        the old unconditional in-process fallback could put a second agent in the
+        same workspace (audit F2). Ask before falling back:
+
+        - ``unknown`` - the supervisor never reserved the id. The failure
+          provably precedes reservation, so an in-process PTY is safe.
+        - ``reserved``/``live`` - it has the id. Adopt the session that already
+          exists; this connection is subscribed to it and its output is arriving.
+        - ``exited`` - it ran and is over. Adopt the ended session so the record
+          shows what happened rather than starting a second attempt.
+        - ``unsupported`` - a supervisor predating the query. Nothing can be
+          learned, so keep the historical behavior and say plainly in the log
+          that the fallback is being taken on ambiguous evidence.
+        - ``indeterminate`` - the question could not be delivered. If the
+          supervisor process is still alive, a fallback would be a coin flip on
+          duplicating an agent, so the spawn fails instead. If it is confirmed
+          gone, its kill-on-close job took any child with it and the fallback is
+          safe again.
+
+        Returns the host to use, or ``None`` when the caller should fall back to
+        an in-process PTY.
+        """
+        client = self.supervisor
+        sid = remote.sid
+        if client is None:
+            return None
+        log.error("supervisor spawn failed for %s", sid, exc_info=error)
+        status = await client.resolve_spawn_outcome(sid)
+        if status.reserved_or_live or status.state == SPAWN_STATE_EXITED:
+            client.adopt_spawned(remote, status)
+            return remote
+        if status.state == SPAWN_STATE_UNKNOWN:
+            log.warning(
+                "supervisor spawn for %s failed before the session was reserved "
+                "(supervisor reports 'unknown'); falling back to an in-process PTY",
+                sid,
+            )
+            client.unregister_host(remote)
+            return None
+        if status.state == SPAWN_STATE_UNSUPPORTED:
+            # Documented ambiguity, not a fault: this daemon is allowed to drive a
+            # supervisor older than itself rather than reap live sessions to
+            # update it. The fallback below is the pre-existing behavior, and the
+            # risk it carries is exactly why the query exists.
+            log.error(
+                "supervisor spawn for %s failed and this supervisor cannot answer "
+                "spawn_status (%s); falling back to an in-process PTY WITHOUT knowing "
+                "whether the supervisor already started a process for this session - "
+                "if it did, two processes now share the workspace. Deploy the "
+                "supervisor update (D1) to close this gap.",
+                sid,
+                status.detail or "unknown message type",
+            )
+            client.unregister_host(remote)
+            return None
+        if client.supervisor_process_alive():
+            client.unregister_host(remote)
+            raise SupervisorUnavailable(
+                f"the supervisor could not be asked what became of the spawn for {sid} "
+                f"({status.detail or status.state}) and its process (pid "
+                f"{client.supervisor_pid}) is still alive; refusing an in-process "
+                "fallback that could duplicate the agent"
+            )
+        log.warning(
+            "supervisor spawn for %s failed and the supervisor process (pid %d) is gone "
+            "(%s); its kill-on-close job reaped any child, so falling back in-process",
+            sid,
+            client.supervisor_pid,
+            status.detail or status.state,
+        )
+        client.unregister_host(remote)
+        return None
+
     async def spawn(
         self,
         *,
@@ -2974,11 +3121,8 @@ class SessionManager:
             try:
                 await asyncio.to_thread(remote.spawn)
                 pty = remote
-            except Exception:
-                log.exception(
-                    "supervisor spawn failed for %s; falling back to in-process PTY", sid
-                )
-                self.supervisor.unregister_host(remote)
+            except Exception as exc:
+                pty = await self._resolve_failed_supervisor_spawn(remote, exc)
         if pty is None:
             pty = PtyHost(
                 spawn_spec.executable,
@@ -6711,6 +6855,9 @@ class SessionManager:
         )
         session.cwd_debounce_task = task
         session.tasks.add(task)
+        # A shell emits OSC 7 once per prompt, so without the discard the set
+        # grows by a dead Task per prompt for the life of a weeks-old daemon.
+        task.add_done_callback(session.tasks.discard)
 
     def _accept_remote_boundary(
         self, session: Session, authority: str, *, source: str = "osc7"
@@ -6889,6 +7036,8 @@ class SessionManager:
         )
         session.cwd_debounce_task = task
         session.tasks.add(task)
+        # Same leak as the OSC 7 site above, on the once-per-turn hook path.
+        task.add_done_callback(session.tasks.discard)
 
     @staticmethod
     def _drop_runtime_cwd(session: Session) -> None:
@@ -6951,7 +7100,19 @@ class SessionManager:
     async def _ticker(self, session: Session) -> None:
         while not session.stopping and session.record.state not in {"exited", "crashed"}:
             await asyncio.sleep(1)
-            if not session.pty.isalive():
+            liveness = liveness_of(session.pty)
+            if liveness is Liveness.UNREACHABLE:
+                # The supervisor process is alive and its socket is not. The child
+                # is still running, so ending the session here would persist an
+                # exit that never happened, hide a working agent from the UI, and
+                # be contradicted by the next daemon start, which re-adopts it.
+                # Freeze instead: no state transition, no meta push (nothing can
+                # reach the supervisor anyway), and keep ticking so the session
+                # resumes by itself if the connection comes back.
+                note_supervisor_unreachable(session)
+                continue
+            note_supervisor_reachable(session)
+            if liveness is Liveness.DEAD:
                 await self._mark_ended(session, "process_exit")
                 return
             if session.meta_sink is not None:
@@ -7102,10 +7263,12 @@ class SessionManager:
             for session in self.sessions.values()
             if intent == "detach" and isinstance(session.pty, RemotePtyHost)
         ]
-        # Stop the per-session tickers of preserved sessions *first*. Once the
-        # client disconnects, `RemotePtyHost.isalive()` is False by definition, so
-        # one more tick would call `_mark_ended` on every live remote session and
-        # persist a spurious exit for an agent that is still running.
+        # Stop the per-session tickers of preserved sessions *first*. The ticker
+        # now refuses to end a session it cannot see (`Liveness.UNREACHABLE`), so
+        # this is no longer the only thing standing between a deliberate detach
+        # and a fabricated exit - but a ticker that keeps logging "unreachable"
+        # about a daemon that is deliberately going away is noise, and stopping
+        # them here keeps the detach silent.
         for session in preserved:
             session.stopping = True
             for task in tuple(session.tasks):

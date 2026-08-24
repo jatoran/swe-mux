@@ -229,7 +229,8 @@ to these counters and every readiness report emitted `partial_input_absent` /
 `operator_quiet` as satisfied for text sitting undelivered in a composer. All operator
 input paths now share one accounting helper (`_record_operator_input` in `server.py`): the
 HTTP route (`source="http"`, 409 for ended sessions), broadcast per-target
-(`source="broadcast"`, `input_owner=False`, ended targets skipped), voice
+(`source="broadcast"`, `input_owner=False`; ended targets skipped, and so are targets
+whose supervisor connection is unreachable, whose bytes would be discarded), voice
 (`source="voice"`), and — since Phase 4 — prompt-queue delivery (`source="queue"`,
 `input_owner=False`; both the paste and the submit write, see
 `features/prompt-queue.md`). Deliberately NOT counted: automation `write_pty`, the branch command
