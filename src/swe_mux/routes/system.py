@@ -271,6 +271,15 @@ async def daemon_restart(request: web.Request) -> web.Response:
     PTY supervisor's live sessions. Without an attached supervisor a restart
     would kill every session, so it is refused unless the caller passes
     ``{"force": true}`` — the same authority level as killing sessions.
+
+    "Attached" means the supervisor process is alive, not that this daemon can
+    currently talk to it. `connected` alone is the binary collapse that tri-state
+    liveness removed everywhere else: while the socket is down but the supervisor
+    is up (`client.lost`), the sessions are running and adoptable, and a restart
+    is precisely the recovery `supervisor_client` logs and `doctor` recommends.
+    Gating on `connected` refused that recovery, and the escape it advertised
+    made things worse - the same flag decided the shutdown intent, so `force=true`
+    quit rather than detached and reaped the sessions that were still alive.
     """
     stop_event: asyncio.Event | None = request.app.get(keys.DAEMON_STOP_EVENT)
     relaunch: list[str] | None = request.app.get(keys.DAEMON_RELAUNCH_COMMAND)
@@ -283,7 +292,7 @@ async def daemon_restart(request: web.Request) -> web.Response:
             409,
         )
     supervisor = request.app.get(keys.SUPERVISOR)
-    attached = bool(supervisor is not None and supervisor.connected)
+    attached = bool(supervisor is not None and (supervisor.connected or supervisor.lost))
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):

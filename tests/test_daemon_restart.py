@@ -76,6 +76,7 @@ def restart_app(
     *,
     relaunchable: bool = True,
     supervisor_connected: bool | None = None,
+    supervisor_lost: bool = False,
 ) -> tuple[web.Application, asyncio.Event, list[list[str]]]:
     app = web.Application()
     app[keys.CONFIG] = Config(data_dir=tmp_path)
@@ -86,7 +87,11 @@ def restart_app(
         app[keys.DAEMON_STOP_EVENT] = stop_event
         app[keys.DAEMON_RELAUNCH_COMMAND] = ["python", "-m", "swe_mux", "--relaunch-wait"]
     if supervisor_connected is not None:
-        app[keys.SUPERVISOR] = SimpleNamespace(connected=supervisor_connected)
+        # `lost` is the tri-state half: the socket is down but the supervisor
+        # process is alive, so its sessions are running and re-attachable.
+        app[keys.SUPERVISOR] = SimpleNamespace(
+            connected=supervisor_connected, lost=supervisor_lost
+        )
     app.router.add_post("/api/daemon/restart", daemon_restart)
     return app, stop_event, spawned
 
@@ -156,9 +161,10 @@ async def test_restart_detaches_and_spawns_a_successor_with_supervisor(
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
-async def test_restart_with_disconnected_supervisor_counts_as_not_attached(
+async def test_restart_with_a_dead_supervisor_counts_as_not_attached(
     tmp_path: Path,
 ) -> None:
+    """Not connected and not `lost` is the one case where nothing is running."""
     app, stop_event, _ = restart_app(tmp_path, supervisor_connected=False)
     client = TestClient(TestServer(app))
     await client.start_server()
@@ -166,5 +172,63 @@ async def test_restart_with_disconnected_supervisor_counts_as_not_attached(
         response = await client.post("/api/daemon/restart")
         assert response.status == 409
         assert not stop_event.is_set()
+    finally:
+        await client.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_restart_is_the_recovery_for_an_unreachable_but_live_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live supervisor behind a dead socket is attachable, and this is the fix.
+
+    Found in the D1 soak: the endpoint gated on `connected` alone, so the exact
+    situation the daemon logs "restart the daemon to reattach" for was answered
+    with `409 supervisor_not_attached`. Worse, the escape it advertised made it
+    permanent - `force=true` left the same flag false, so the shutdown intent
+    became `quit` and the reap destroyed the sessions that were still alive and
+    adoptable.
+    """
+    app, stop_event, spawned = restart_app(
+        tmp_path, supervisor_connected=False, supervisor_lost=True
+    )
+    monkeypatch.setattr(
+        "swe_mux.routes.system._spawn_daemon_successor",
+        lambda command, log_path: spawned.append(list(command)),
+    )
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        response = await client.post("/api/daemon/restart")
+        assert response.status == 202
+        assert await response.json() == {"status": "restarting", "sessions_preserved": True}
+        # The half that mattered most: detach, never quit. `quit` here would reap
+        # every session the restart exists to recover.
+        assert app[keys.SHUTDOWN_STATE]["intent"] == "detach"
+        assert stop_event.is_set()
+        assert spawned == [["python", "-m", "swe_mux", "--relaunch-wait"]]
+    finally:
+        await client.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_forcing_a_restart_past_a_live_supervisor_still_detaches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`force=true` must not turn an attachable supervisor into a reap."""
+    app, stop_event, spawned = restart_app(
+        tmp_path, supervisor_connected=False, supervisor_lost=True
+    )
+    monkeypatch.setattr(
+        "swe_mux.routes.system._spawn_daemon_successor",
+        lambda command, log_path: spawned.append(list(command)),
+    )
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        response = await client.post("/api/daemon/restart", json={"force": True})
+        assert response.status == 202
+        assert app[keys.SHUTDOWN_STATE]["intent"] == "detach"
+        assert stop_event.is_set()
     finally:
         await client.close()

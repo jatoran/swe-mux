@@ -75,7 +75,17 @@ sessions. Returns `202 {status: "restarting", sessions_preserved}`. Without an
 attached supervisor a restart would kill every session, so it returns
 `409 supervisor_not_attached` unless `force=true` (the same authority level as
 killing sessions); daemons started without a relaunchable entry point return
-`409 restart_unavailable`. This carries browser authority like the session
+`409 restart_unavailable`.
+
+"Attached" means the supervisor **process is alive**, which includes the case
+where this daemon's socket to it is down (`client.lost`).
+That is deliberate and it is the more important half: a live-but-unreachable
+supervisor still owns running sessions, and a restart is exactly the recovery
+`supervisor_client` logs and `doctor` recommends for it.
+Gating on the socket instead refused that recovery, and the `force=true` escape
+made it permanent, because the same flag chooses the shutdown intent: `quit`
+reaps every session, `detach` leaves them for the successor to adopt.
+`sessions_preserved` in the 202 reports the same answer. This carries browser authority like the session
 APIs — it is not gated on the desktop control token because a preserved
 restart is no more destructive than the existing kill-session surface.
 
