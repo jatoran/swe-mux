@@ -225,8 +225,61 @@ Done 2026-08-24. All three tiers are green on the live wire, and the two questio
 
 Precondition: W2.5 landed, so the live tiers D2.2 exercises are trustworthy.
 
-- [ ] D2.1 Full gate on master, `redeploy_desktop.py` (normal session-preserving flow).
-- [ ] D2.2 Live soak: UI regression pass on desktop and mobile (fleet refresh under a simulated hung endpoint, palette, sidebar tick); MCP `scan_search` against a >2000-record project; a land-queue cycle end-to-end; confirm retention runs without visible stalls.
+- [x] D2.1 Full gate on master, `redeploy_desktop.py` (normal session-preserving flow).
+- [x] D2.2 Live soak: UI regression pass on desktop and mobile (fleet refresh under a simulated hung endpoint, palette, sidebar tick); MCP `scan_search` against a >2000-record project; a land-queue cycle end-to-end; confirm retention runs without visible stalls.
+
+Run 2026-08-24 in the primary checkout against the real daemon on 8765, with 28 live sessions resident throughout.
+No reap: the supervisor bundle was already current (`supervisor_bundle_current()` is `True`, source hash `94066ae7`, the same one D1 built), and supervisor pid 89372 was never touched.
+
+The gate is green on master: 4756 passed / 16 skipped in 45.2s, ruff clean, mypy clean over 213 files, `tsc --noEmit` clean for both `src` and the renderer harnesses, and 2013 frontend tests passing.
+No frontend dependency landed this wave (the last `package.json` change is `f710c14`, 2026-08-22, already installed), so the `npm ci` trap did not apply.
+Only 7 pytest warnings remain, all the `@pytest.mark.asyncio` misuse in `test_assistant.py`: S3.4 did remove the app-key warning bulk, and the residue is now small enough to be S12.4's actual scope rather than its excuse.
+
+**The redeploy shipped, and the asset hash proves it rather than merely suggesting it.**
+Before: the live daemon, `src/swe_mux/static`, and the frozen bundle all served `index-D6ReKD38.css`, and 21 files under `frontend/src` were newer than that build - the S4 decomposition was on disk and in nobody's browser.
+After: all three serve `index-DQBLUWjn.css`.
+The running process is the frozen app (`dist/swe-mux/swe-mux.exe`), which is why a plain `npm run build` would have shipped nothing.
+
+What the soak proved:
+
+- **Fleet refresh under a failing and a hung slice, on the real UI.**
+  Driving the shipped frozen-app page with Playwright and intercepting one of the five slice GETs: a `/api/previews` that answers 500 leaves all 28 sidebar rows painted and raises one toast, the next clean cycle clears the toast, and a `/api/projects` that never settles leaves the fleet painted with a 6.9 ms rAF while it hangs and does not pin the refresh that follows it.
+  That is F4's freeze reproduced as a deliberate condition and found absent.
+  The palette opens and searches (9 hits for "settings"), and the 5 s clock still advances a row's age with the row below the shell.
+  `fleetRefresh.test.ts`'s 15 unit tests cover the same controller from the other side and all pass in the gate.
+- **`scan_search` against a 2554-record Project.**
+  The newest record in the database came back first (`c900b05c`, t1 16:46 the same afternoon), and the response carried `records_truncated: true` with a note naming the 2000-record window and the Project.
+  Both halves of S5.1 are live: before it, a search of this Project could not reach today's work at all.
+- **Two land-queue cycles end to end, on the redeployed daemon, driven by other agents rather than by this checkpoint.**
+  `lnd_f32db10b` (`worktree-untrack-generated-docs`, another Project) reconciled, ran the full gate (`verify_gate=full`, `verify_attempts=1`) and fast-forwarded trunk `28482dce` to `95cd8cfe` in 82 s at 16:53; `lnd_46d20655` (`worktree-wave-b-liveness`) landed in 39 s at 16:57.
+  The W2.5-repaired live wire agrees: `live_mcp` is 24/24 green in 156 s, which is the first time `test_request_land_enqueues_the_callers_own_worktree` has run inside a deploy checkpoint.
+  `live_agent` plus `live_subagent` are 8/8: observer conformance for claude, codex, omp and pi, the opencode store canary that W2.5.2 made diagnosable, and the three subagent canaries including the codex one whose envelope drift W2.5.3 fixed.
+- **Retention is fast and its per-table lines are real.**
+  The live hourly sweep logged `automation_retention_swept tables=14 rows_removed=0 elapsed_ms=3.9` - nothing in this database is 90 days old yet, so the live pass proves the absence of a stall but cannot show the batching.
+  Driving the same `prune` over a consistent 2.84 GB backup of the live `mux.db` with a 1-day window does: 33,657 rows across 10 tables in 517 ms total, per-table lines carrying rows-removed, batch count and elapsed (`automation_observer_calls` 17,034 rows in 35 batches / 330 ms is the largest), and no table anywhere near the 400-batch cap that would have logged `automation_retention_capped`.
+- **A session-preserving restart on the new build, which also answered why the first start was slow.**
+  The redeploy's daemon took 90.5 s to be ready, against ~13 s for the daemon it replaced, almost all of it in `database-integrity` (60.9 s).
+  A `POST /api/daemon/restart` afterwards was ready in 52 s with `database-integrity` back to 12.0 s, so that 60.9 s was the one-time cost of S5's new indexes over a 2.7 GB database and not a standing regression.
+  Every session survived both transitions (28, then 29 as another agent spawned one mid-soak), the supervisor stayed `connected`, and no session was ever marked ended.
+- **D2's log watch is clean.**
+  Across 962 post-redeploy requests the only 4xx/5xx were this checkpoint's own probes (four `/api/git/*` 404s from calls that sent no `project_id`, and the redeploy's health poll 503s during startup).
+  A registration sweep over the GET routes the S3 modules declare answers 200 on 79 of 89 and 82 with parameters supplied; the rest correctly demand a query parameter.
+  No `ERROR` or traceback after either daemon became ready, no AppKey fallout, and the S2 counters stayed at zero: no frame desync, no swallowed `PtyError`, no output-drop or backpressure line, and not one `unreachable`.
+
+Three defects, none of them Wave 2's and none blocking Wave 3:
+
+- **A session-preserving restart loses the dying daemon's last writes.**
+  While the successor holds the database and the predecessor is still flushing, `operational_telemetry`, `session_recovery`, `push` and `history` each raised `sqlite3.OperationalError: database is locked` and dropped what they were writing.
+  Pre-existing (seven of the ten occurrences in the log are dated 2026-08-23, before this wave landed), bounded to the overlap window, and invisible to the operator - which is the part worth fixing, since the lost rows are exactly the telemetry that would explain a restart.
+- **`worktree_graveyard_purge_failed` retries a path that no longer exists, forever.**
+  1,165 warnings since 2026-08-21 over a handful of buried worktrees, each one a `FileNotFoundError` for a directory that is already gone, up to 24 repeats of a single path.
+  Quiet since the redeploy, so this is a report rather than an active fire, but a purge that treats "already absent" as a failure will start again the next time one is buried.
+- **"previous daemon died without a clean shutdown" fires on every planned restart**, 39 times in this log, because `redeploy_desktop.py` and the restart path terminate the predecessor after asking it to detach.
+  A crash warning that is right 0% of the time is worse than no warning.
+
+Also noted, not defects of this wave: one scan-timeline record failed on `OpenRouter structured response must be an object` (the v4-flash behavior-repair path, and it repaired), and the `session_claimed_infrastructure` ownership diagnostic fired once for the relaunched daemon, as it does for every redeploy run from inside a session.
+
+Left for the operator, because they need hands on a phone or an eye on a real screen: the mobile pass (pull-to-refresh, palette, sidebar tick cadence, rail drag), a terminal-attach and scrollback check on a warm pane, and voice/assistant round-trip.
 
 ## Wave 3 - cross-cutting quality (S7-S10 in parallel, then D3)
 
