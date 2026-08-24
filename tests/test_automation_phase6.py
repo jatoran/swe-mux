@@ -1344,7 +1344,12 @@ async def test_debounce_coalesces_and_threshold_hysteresis_rearms(tmp_path: Path
     engine._tasks.append(asyncio.current_task())  # Mark the runtime scheduler as active.
     await engine.evaluate(normalized_event(item, 1), rules=debounce_rules)
     await engine.evaluate(normalized_event(item, 2), rules=debounce_rules)
-    await asyncio.sleep(0.08)
+    # Await the surviving debounce task rather than sleeping past its window. A fixed sleep
+    # before a positive assertion bets that the loop reaches the deferred `evaluate` inside
+    # 80ms, and under `-n auto` a worker sharing the host with fifteen others loses that bet
+    # (CLAUDE.md § Verification). The task is the exact thing being waited for: it holds the
+    # window, runs the evaluate, and writes the "fired" checkpoint before it completes.
+    await asyncio.wait_for(engine._debounce_tasks[("debounced", "run-1")], timeout=5)
     engine._tasks.clear()
 
     notifications = await store.notifications()
