@@ -30,6 +30,7 @@ from swe_mux.harness import (
     version_is_untested,
 )
 from swe_mux.prerequisites import detect_prerequisites
+from swe_mux.routes import diagnostics as diagnostics_routes
 from swe_mux.routes import system as system_routes
 from swe_mux.routes.diagnostics import diagnostics_export, get_doctor_report
 from swe_mux.routes.system import firewall_repair, firewall_status
@@ -311,7 +312,10 @@ def _diagnostics_app(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> web.Appl
     async def fake_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
         return {"available": True, "connection_state": "connected", "port": port}
 
+    # Both modules that serve a route registered below reach for it: the export
+    # is `routes/diagnostics.py`, the firewall pair is `routes/system.py`.
     monkeypatch.setattr(system_routes, "tailscale_status", fake_status)
+    monkeypatch.setattr(diagnostics_routes, "tailscale_status", fake_status)
     app = web.Application(middlewares=[error_middleware])
     app[keys.CONFIG] = Config(data_dir=tmp_path, port=8765)
     app[keys.SESSIONS] = SimpleNamespace(sessions={})
@@ -382,10 +386,14 @@ async def test_doctor_endpoint_assembles_a_report(
             "serve_configured": False,
         }
 
-    monkeypatch.setattr(system_routes, "tailscale_status", fake_status)
+    monkeypatch.setattr(diagnostics_routes, "tailscale_status", fake_status)
     # Keep the wiring test hermetic: no real PATH detection or background singleton.
-    monkeypatch.setattr(system_routes, "detect_prerequisites", lambda: [])
-    monkeypatch.setattr(system_routes, "detect_installations_with_versions", lambda exe: {})
+    # The report is assembled in `routes/diagnostics.py`, which holds its own
+    # references to these - patching `routes/system.py`'s copies takes, and does
+    # nothing, which showed up only as an intermittent "connected" that was the
+    # host's real Tailscale answering.
+    monkeypatch.setattr(diagnostics_routes, "detect_prerequisites", lambda: [])
+    monkeypatch.setattr(diagnostics_routes, "detect_installations_with_versions", lambda exe: {})
     monkeypatch.setattr(
         server, "background", SimpleNamespace(health=lambda: {"degraded": [], "total_faults": 0})
     )
