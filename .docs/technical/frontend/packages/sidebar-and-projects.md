@@ -5,7 +5,7 @@ Design: `../../../design/features/projects.md`, `../../../design/features/ui.md`
 
 ## Session rows
 
-`sessionRowConfig.ts`, `sessionRowFields.ts`, `sessionRowPrefs.ts`, `SessionRowBody.tsx`,
+`sessionRowConfig.ts`, `sessionRowFields.ts`, `sessionRowPrefs.ts`, `SessionRowLive.tsx`, `SessionRowBody.tsx`,
 `SessionRowSettings.tsx`, `StateIndicator.tsx`, `dotShapes.ts`
 
 ### `sessionRowConfig.ts` - the browser-free model
@@ -40,10 +40,16 @@ The unsent-input field unions the daemon's `unsent_input` with this device's mob
 
 ### `sessionRowPrefs.ts` - persistence and clocks
 
-The persistence bridge, the one shared quantized clock (`useRowClock`, 5 s, stopped while the tab is hidden - one timer for the whole sidebar, not one per row), and the publisher of the configured indicator size as the `--session-dot` root custom property (`applySessionDotSize`, re-resolved by `watchSessionDotProfile` when a window crosses the device-class breakpoint).
+The persistence bridge, the one shared quantized clock (`useRowClock`, 5 s, stopped while the tab is hidden), and the publisher of the configured indicator size as the `--session-dot` root custom property (`applySessionDotSize`, re-resolved by `watchSessionDotProfile` when a window crosses the device-class breakpoint).
 The size goes through CSS rather than through a prop on `StateIndicator`, because the sidebar's gutter column, the stack thread's geometry, the title line's height, and the row's own height are all derived from that variable; handing the number to the component would resize the glyph and leave every one of them behind.
 
+The interval behind that clock is module-scoped and shared by every subscriber, so the sidebar still runs one timer however many rows are on screen - which is what lets the clock live *in* the rows rather than above them.
+
 ### Rendering
+
+`SessionRowLive.tsx` is the sidebar's row body: it subscribes to the clock, builds that row's tokens (`buildSessionRowTokens`, or `identityRowTokens` for the phone's narrow projection), and is memoized on its four props.
+It exists so the five-second tick re-renders the rows that age instead of the whole shell around them; the composition root hands it the clock-free `deriveRowFleetFacts` and never reads `useRowClock` itself (`composition.md`, "Server clock").
+The two surfaces that render a row against a *fixed* time - the row-settings preview and the renderer harness - keep using `SessionRowBody` directly with a context they built themselves.
 
 `SessionRowBody.tsx` renders tokens and owns only three structural rules: separators between drawn tokens; sections that meet but never overlap, with the right one laid out first so a value pinned to the row's edge cannot be pushed off it; and a token drawn at the `icon` rung rendering its field's mark, whatever `gitGlyphs` says.
 The title is deliberately a `<strong>` so `sessionAttention.ts`'s attention-tier colour rules keep applying.

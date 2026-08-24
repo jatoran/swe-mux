@@ -146,10 +146,67 @@ export function useRowBudget(target: { current: HTMLElement | null }): RowBudget
 }
 
 /**
- * Shared quantized wall clock, in epoch seconds **on the daemon's clock**.
+ * The one interval behind every `useRowClock`, whatever subscribes to it.
  *
- * One timer for the whole sidebar instead of one per row, and stopped entirely
- * while the tab is hidden — a background tab has no rows to age.
+ * Module-scoped rather than per-hook so the clock can live *below* the shell
+ * without buying a timer per row. Every consumer of the tick renders a single
+ * sidebar row, and a hook that owned its own interval would make "one timer for
+ * the whole sidebar" and "the tick does not re-render the shell" mutually
+ * exclusive. Subscribers share one interval and one quantized value; the last
+ * one to leave stops it.
+ *
+ * Stopped entirely while the tab is hidden — a background tab has no rows to age.
+ */
+const rowClockListeners = new Set<(now: number) => void>()
+let rowClockTimer: number | undefined
+let rowClockValue = 0
+let rowClockVisibilityBound = false
+
+function rowClockTick() {
+  rowClockValue = Math.floor(serverNow())
+  for (const listener of rowClockListeners) listener(rowClockValue)
+}
+
+function startRowClock() {
+  if (rowClockTimer !== undefined || !rowClockListeners.size) return
+  rowClockTick()
+  rowClockTimer = window.setInterval(rowClockTick, ROW_CLOCK_INTERVAL_MS)
+}
+
+function stopRowClock() {
+  if (rowClockTimer === undefined) return
+  window.clearInterval(rowClockTimer)
+  rowClockTimer = undefined
+}
+
+function onRowClockVisibility() {
+  if (document.hidden) stopRowClock()
+  else startRowClock()
+}
+
+/**
+ * Join the shared tick. Exported as the seam the hook is built on, so a test can
+ * observe that N subscribers still cost one interval - the property that lets the
+ * clock live in the rows instead of above them.
+ */
+export function subscribeRowClock(listener: (now: number) => void): () => void {
+  rowClockListeners.add(listener)
+  if (!rowClockVisibilityBound) {
+    document.addEventListener('visibilitychange', onRowClockVisibility)
+    rowClockVisibilityBound = true
+  }
+  if (!document.hidden) startRowClock()
+  return () => {
+    rowClockListeners.delete(listener)
+    if (rowClockListeners.size) return
+    stopRowClock()
+    document.removeEventListener('visibilitychange', onRowClockVisibility)
+    rowClockVisibilityBound = false
+  }
+}
+
+/**
+ * Shared quantized wall clock, in epoch seconds **on the daemon's clock**.
  *
  * Corrected rather than local because every timestamp it is subtracted from was
  * written by the daemon. On the same machine the correction is zero and this is
@@ -160,22 +217,8 @@ export function useRowClock(active = true): number {
   const [now, setNow] = useState(() => Math.floor(serverNow()))
   useEffect(() => {
     if (!active) return
-    let timer: number | undefined
-    const tick = () => setNow(Math.floor(serverNow()))
-    const start = () => {
-      if (timer !== undefined) return
-      tick()
-      timer = window.setInterval(tick, ROW_CLOCK_INTERVAL_MS)
-    }
-    const stop = () => {
-      if (timer === undefined) return
-      window.clearInterval(timer)
-      timer = undefined
-    }
-    const onVisibility = () => (document.hidden ? stop() : start())
-    if (!document.hidden) start()
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility) }
+    setNow(rowClockValue || Math.floor(serverNow()))
+    return subscribeRowClock(setNow)
   }, [active])
   return now
 }

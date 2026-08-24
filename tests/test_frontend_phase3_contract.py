@@ -15,7 +15,11 @@ def test_recursive_layout_and_command_surfaces_are_wired() -> None:
     assert 'role="separator"' in app
     assert "paneNeighborIds" in app
     assert "pane.swapNext" not in app
-    assert "searchCommands(commands, paletteQuery)" in app
+    # Scoring is gated on the palette being open, and the gate lives in `commands.ts`
+    # so the renderer harness exercises the same function the app does.
+    assert "paletteResults(paletteOpen, commands, paletteQuery)" in app
+    commands = (root / "frontend" / "src" / "commands.ts").read_text(encoding="utf-8")
+    assert "return open ? searchCommands(commands, query) : NO_COMMANDS" in commands
 
 
 def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
@@ -636,12 +640,19 @@ def test_layout_refresh_defers_to_an_in_flight_layout_write() -> None:
     Overwriting optimistic state snapped a just-dropped tab back, and a second
     drag in that window based itself on the clobbered layout and then won the
     write — silently reverting the first move for every client.
-    """
-    app = (
-        Path(__file__).parents[1] / "frontend" / "src" / "App.tsx"
-    ).read_text(encoding="utf-8")
 
-    assert app.count("if(layoutWriteChains.current[project.id]!==undefined)continue") == 2
+    Both halves of the rule now live behind `layoutWriter.hasPendingWrite`: the
+    revision is not adopted (`adoptRevisions`) and the layout is not reconciled
+    (the planner's `hasPendingLayoutWrite`).
+    """
+    frontend = Path(__file__).parents[1] / "frontend" / "src"
+    app = (frontend / "App.tsx").read_text(encoding="utf-8")
+    writer = (frontend / "layoutWriter.ts").read_text(encoding="utf-8")
+
+    assert "layoutWriter.adoptRevisions(nextProjects)" in app
+    assert "hasPendingLayoutWrite: layoutWriter.hasPendingWrite" in app
+    assert "if (chains[project.id] !== undefined) continue" in writer
+    assert "hasPendingWrite: projectId => chains[projectId] !== undefined" in writer
 
 
 def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:

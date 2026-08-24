@@ -50,6 +50,22 @@ function fuzzyScore(label: string, query: string): number | null {
   return score + 100
 }
 
+/** Shared empty result, so a closed palette allocates nothing. */
+const NO_COMMANDS: Command[] = []
+
+/**
+ * The palette's result list - and, while the palette is closed, no work at all.
+ *
+ * `searchCommands` fuzzy-scores every command in the registry: a string build and a
+ * sort over hundreds of entries. Its only consumer is the palette's result list, and
+ * it used to be recomputed on every render of the composition root, including every
+ * five-second sidebar clock tick. Gating lives here rather than at the call site so
+ * the renderer harness exercises the same function the app does.
+ */
+export function paletteResults(open: boolean, commands: Command[], query: string): Command[] {
+  return open ? searchCommands(commands, query) : NO_COMMANDS
+}
+
 export function searchCommands(commands: Command[], query: string): Command[] {
   return commands
     .map((command, index) => ({ command, index, score: fuzzyScore(`${command.label} ${command.id} ${command.category}`, query) }))

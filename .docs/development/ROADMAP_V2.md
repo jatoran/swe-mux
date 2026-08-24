@@ -110,13 +110,35 @@ Pure moves plus the AppKey migration; no behavior changes, so review is structur
 
 ### S4 - App.tsx decomposition plus the refresh fix
 
-- [ ] S4.1 Fleet-refresh controller (F4): extract refresh into a controller module; give all five GETs a default `timeoutMs`, switch to `Promise.allSettled` with per-slice application, and make the in-flight dedupe abortable/resettable so a hung request can never pin future refreshes.
-- [ ] S4.2 Stale-await fix (F/frontend-new-3): a mutation that awaits refresh must not be handed a pre-mutation in-flight promise; return the queued follow-up instead.
-- [ ] S4.3 Command registry (F/codex, 5s clock): memoize the registry on its real inputs and gate `searchCommands` on the palette being open.
-- [ ] S4.4 Clock subtree isolation: move `useRowClock` consumers into memoized subtrees so the 5s tick re-renders the sidebar rows, not the shell.
-- [ ] S4.5 Controller extraction for the largest remaining App.tsx state clusters (layouts, overlays, gestures) to the extent it stays behavior-preserving; do not chase a line-count target.
-- [ ] S4.T Tests: unit tests for the refresh controller (hung request recovery, partial failure application, dedupe reset); renderer spec for palette gating; update any source-text tests that asserted on moved App.tsx code.
-- [ ] S4.D Docs: `technical/frontend/packages.md`.
+- [x] S4.1 Fleet-refresh controller (F4): extract refresh into a controller module; give all five GETs a default `timeoutMs`, switch to `Promise.allSettled` with per-slice application, and make the in-flight dedupe abortable/resettable so a hung request can never pin future refreshes.
+- [x] S4.2 Stale-await fix (F/frontend-new-3): a mutation that awaits refresh must not be handed a pre-mutation in-flight promise; return the queued follow-up instead.
+- [x] S4.3 Command registry (F/codex, 5s clock): memoize the registry on its real inputs and gate `searchCommands` on the palette being open.
+- [x] S4.4 Clock subtree isolation: move `useRowClock` consumers into memoized subtrees so the 5s tick re-renders the sidebar rows, not the shell.
+- [x] S4.5 Controller extraction for the largest remaining App.tsx state clusters (layouts, overlays, gestures) to the extent it stays behavior-preserving; do not chase a line-count target.
+- [x] S4.T Tests: unit tests for the refresh controller (hung request recovery, partial failure application, dedupe reset); renderer spec for palette gating; update any source-text tests that asserted on moved App.tsx code.
+- [x] S4.D Docs: `technical/frontend/packages.md`.
+
+Five modules came out of `App.tsx`: `fleetRefresh.ts` (deadlines, `allSettled`, the abandonable dedupe),
+`fleetLayouts.ts` (the pure layout/join reconciliation the refresh cycle runs), `layoutWriter.ts` (the
+optimistic write chain, generation guard and revisions), `fleetCommands.ts` (the fleet-derived half of the
+command registry), and `SessionRowLive.tsx` (the sidebar row, with the ageing clock inside it).
+
+Three decisions worth knowing:
+
+- **S4.3 is a deliberate half-memo.** The fleet-derived commands are memoized on what determines them,
+  with `run` handlers routed through a ref-backed facade so a memoized command cannot act on a stale
+  snapshot. The ~120 hand-written commands stay inline: their `available` and `label` expressions read
+  dozens of live UI values, and memoizing them correctly would mean passing every one as data - where a
+  missed input is a silently disabled or mislabelled command, a worse failure than the allocation it
+  saves. `searchCommands`, the expensive half, is gated on the palette instead.
+- **S4.4 needed the clock to become shareable, not per-row.** `useRowClock` now subscribes to one
+  module-scoped interval, so moving it below the shell did not trade "one timer for the whole sidebar"
+  for "one timer per row". `deriveRowContext` split into `deriveRowFleetFacts` plus `now`, and the type
+  makes it impossible to hand the clock-free facts where a full context is wanted.
+- **One behaviour change beyond the specified fixes**: `registryLoaded` (which gates pruning sidebar
+  fold state against the Group registry) is now set when the Groups read succeeds rather than when all
+  five do. Under `allSettled` the old rule would have left it false through any partial cycle, and the
+  flag is about the Group registry alone.
 
 ### S5 - store layer (automation_store, prompt_queue, voice, land_store; no S3/S4 overlap)
 

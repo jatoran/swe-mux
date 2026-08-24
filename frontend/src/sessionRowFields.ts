@@ -1026,6 +1026,17 @@ const mostCommon = (values: Array<string | undefined | null>): string | undefine
  * rather than once per row: "differs from the project default" is a question
  * about the other rows, and asking it per row is quadratic.
  */
+/**
+ * Everything on the row context except the clock.
+ *
+ * Split out because the two have different lifetimes: the fleet facts change when
+ * the daemon's snapshot does, while `now` moves every five seconds. Deriving them
+ * together made the composition root a subscriber of the clock, so a tick that only
+ * ages a handful of sidebar rows re-rendered the whole shell. The rows own the clock
+ * now (`SessionRowLive.tsx`) and merge it onto these facts themselves.
+ */
+export type SessionRowFleetFacts = Omit<SessionRowContext, 'now'>
+
 export function deriveRowContext(
   sessions: readonly Session[],
   queueDepth: Record<string, number>,
@@ -1034,6 +1045,16 @@ export function deriveRowContext(
   localDrafts: Record<string, number> = {},
   voice: VoiceModeDefaults = VOICE_MODE_OFF,
 ): SessionRowContext {
+  return { ...deriveRowFleetFacts(sessions, queueDepth, budget, localDrafts, voice), now }
+}
+
+export function deriveRowFleetFacts(
+  sessions: readonly Session[],
+  queueDepth: Record<string, number>,
+  budget: RowBudget = EMPTY_ROW_BUDGET,
+  localDrafts: Record<string, number> = {},
+  voice: VoiceModeDefaults = VOICE_MODE_OFF,
+): SessionRowFleetFacts {
   const byProject = new Map<string, Session[]>()
   for (const session of sessions) {
     const list = byProject.get(session.project_id)
@@ -1058,7 +1079,7 @@ export function deriveRowContext(
     if (root && !isEnded(session)) checkoutSessions[root] = (checkoutSessions[root] || 0) + 1
   }
   return {
-    now, defaultBranch, defaultModel,
+    defaultBranch, defaultModel,
     multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, voice, budget,
   }
 }
