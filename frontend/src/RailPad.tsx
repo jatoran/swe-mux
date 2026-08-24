@@ -11,7 +11,6 @@ import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import {
-  PAD_CENTER,
   padRingCount,
   padSlotKey,
   padSlotKeys,
@@ -78,13 +77,16 @@ interface RailPadHandlers {
   fire: (slot: RailPadSlotKey) => void
   latch: (slot: RailPadLatch, detail: { armed: boolean }) => void
   band: (beyond: boolean) => void
-  end: () => void
+  end: (detail: { standing: boolean }) => void
 }
 
 export interface RailPadController {
   gesture: RailPadGesture
   /** Take over the shared gesture for this pad's press, and follow it at the window. */
   begin(handlers: RailPadHandlers): void
+  /** Take it over *without* following a pointer, for the keyboard route: a dial opened by
+   *  Enter has no pointer stream, and the press that eventually touches it brings its own. */
+  bind(handlers: RailPadHandlers): void
 }
 
 /**
@@ -94,11 +96,17 @@ export interface RailPadController {
  * whichever one is, and `RailStrip` renders every chip a second time inside its overflow
  * popover - so two live instances of the same pad genuinely coexist and must share one press.
  *
+ * That second instance is also why the standing dial needs no ownership token: the handlers
+ * stay bound to whichever instance opened it, so exactly one of the two ever holds dial state
+ * and exactly one ever renders the portal. A token would be a second answer to a question
+ * `handlersRef` already answers.
+ *
  * The press is followed at the *window* rather than on the chip, for the reason
  * `RailRepeatKey` documents: the rail's pan takes pointer capture as soon as the same touch
  * starts scrolling, and capture retargets every later pointer event, so a chip-local
  * `pointermove` would never see the travel it has to answer for. The listeners exist only
- * while a press is open.
+ * while a press is open - a standing dial has no pointer to follow, and takes its input from
+ * its own surface instead.
  */
 export function useRailPad(resetKey: string): RailPadController {
   const handlersRef = useRef<RailPadHandlers | null>(null)
@@ -111,10 +119,13 @@ export function useRailPad(resetKey: string): RailPadController {
         fire: slot => handlersRef.current?.fire(slot),
         latch: (slot, detail) => handlersRef.current?.latch(slot, detail),
         band: beyond => handlersRef.current?.band(beyond),
-        end: () => {
+        // The handlers are released only when the dial goes with the press. A dial left
+        // standing still has to be told when it closes, and the instance that opened it is
+        // the one that has to hear it.
+        end: detail => {
           const handlers = handlersRef.current
-          handlersRef.current = null
-          handlers?.end()
+          if (!detail.standing) handlersRef.current = null
+          handlers?.end(detail)
         },
       },
       (callback, delayMs) => window.setTimeout(callback, delayMs),
@@ -138,6 +149,7 @@ export function useRailPad(resetKey: string): RailPadController {
       controller: {
         gesture,
         begin(handlers) { handlersRef.current = handlers; watch() },
+        bind(handlers) { handlersRef.current = handlers },
       },
       unwatch,
     }
@@ -179,6 +191,9 @@ type Dial = {
   /** Past the outer band, which is what arms an `enter-repeat-far` slot's stream. */
   beyond: boolean
   visible: boolean
+  /** The dial outlived its press, opened by a tap. It takes pointer events, dismisses on
+   *  Escape, and is announced - none of which a transient dial does. */
+  standing: boolean
 } | null
 
 /** A point on the dial, in its own local coordinates: the press is the origin, `angle` is
@@ -227,7 +242,6 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   // beyond one. Same radii; the meaning is the slot's.
   const banded = railPadBanded(rings, slots.map(slot => slot.mode))
   const byKey = new Map(slots.map(slot => [slot.key, slot]))
-  const centre = byKey.get(PAD_CENTER)
   /** The field holding the soft keyboard up when this press began, and the dismissal count
    *  at that moment, so the keyboard can be handed back when the gesture ends. */
   const keyboardRef = useRef<{ holder: HTMLElement | null; dismissals: number } | null>(null)
@@ -239,13 +253,118 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     setDial(null)
   }
 
+  /** Tear the dial down only if the gesture did not leave it standing. The chip's own
+   *  `pointerup` runs on every press, including the tap that just opened one. */
+  const closeUnlessStanding = () => { if (!controller.gesture.peek().standing) closeDial() }
+
+  const dismiss = () => { controller.gesture.dismiss() }
+
+  // A standing dial is an overlay level, so it takes the two dismissals every other overlay
+  // in the rail takes (`RailDropup`): Escape, and anything that moves the window out from
+  // under it. Its own surface covers the viewport, so an outside *tap* needs no listener -
+  // there is no outside. Resize and scroll are dismissals rather than re-placements because
+  // the dial is pinned to a press that has already ended: there is no live anchor to follow.
+  useEffect(() => {
+    if (!dial?.standing) return
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); dismiss() } }
+    window.addEventListener('keydown', key)
+    window.addEventListener('resize', dismiss)
+    window.visualViewport?.addEventListener('resize', dismiss)
+    return () => {
+      window.removeEventListener('keydown', key)
+      window.removeEventListener('resize', dismiss)
+      window.visualViewport?.removeEventListener('resize', dismiss)
+    }
+  }, [dial?.standing])
+
   const runSlot = (key: RailPadSlotKey) => {
     const slot = byKey.get(key)
     if (!slot || slot.disabled) return
     slot.run(buttonRef.current)
   }
 
-  const beginPress = (event: PointerEvent) => {
+  const slotSpecs = (): Partial<Record<RailPadSlotKey, RailPadSlotSpec>> => {
+    const specs: Partial<Record<RailPadSlotKey, RailPadSlotSpec>> = {}
+    for (const slot of slots) specs[slot.key] = { mode: slot.mode, disabled: slot.disabled }
+    return specs
+  }
+
+  /** The dial's own scale for a fan opened at `clientY`, and the room it was computed from.
+   *  Room above is measured against the *visual* viewport: the fan opens upward, so this is
+   *  the one direction that can run out, and a boundary you cannot travel to is a slot that
+   *  does not exist. */
+  const fitAbove = (clientY: number) => {
+    const roomAbove = Math.max(0, clientY - railOverlayView().top - DIAL_EDGE_MARGIN_PX)
+    return { roomAbove, scale: railPadScaleFor(banded, roomAbove) }
+  }
+
+  const padHandlers = () => {
+    let fired = false
+    return {
+      fire: (key: RailPadSlotKey) => {
+        buzz(fired ? HAPTIC_REPEAT : HAPTIC_ENTER)
+        fired = true
+        runSlot(key)
+      },
+      latch: (slot: RailPadLatch, detail: { armed: boolean }) => {
+        fired = false
+        if (slot && detail.armed) buzz(HAPTIC_ARM)
+        setDial(current => current && { ...current, latch: slot, armed: detail.armed })
+      },
+      // A distinct bump on arming the stream, because the finger is past the labels by then
+      // and the only channel left is the one it can feel.
+      band: (crossed: boolean) => {
+        if (crossed) buzz(HAPTIC_ARM)
+        setDial(current => current && { ...current, beyond: crossed })
+      },
+      // Torn down here rather than from the chip's own `pointerup`: by the time a real
+      // gesture ends the finger is well off the chip, and that event belongs to whatever is
+      // under it. The keyboard goes back on the same signal, and on a frame later so it
+      // lands after the slot's own action has done whatever it does with focus.
+      //
+      // A dial the gesture left *standing* survives its press by definition, so only its
+      // standing flag is raised here - and it is shown outright rather than waiting on the
+      // draw delay, because the tap that opened it was a request to see it.
+      end: (detail: { standing: boolean }) => {
+        if (detail.standing) setDial(current => current && { ...current, standing: true, visible: true })
+        else closeDial()
+        const held = keyboardRef.current
+        keyboardRef.current = null
+        if (held?.holder) requestAnimationFrame(() => restoreSoftKeyboard(held.holder, held.dismissals))
+      },
+    }
+  }
+
+  /**
+   * Enter or Space on a focused chip, which is the one route with no pointer behind it at all.
+   *
+   * It opens the dial rather than synthesising a press, because a press is a thing a pointer
+   * does and there is none: the fan is placed over the chip's own centre and simply stands
+   * there. Handlers are bound without the window listeners for the same reason - there is no
+   * pointer stream to follow until somebody touches the dial, and that press binds its own.
+   */
+  const openFromKeyboard = () => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect || !slots.length) return
+    const x = rect.left + rect.width / 2
+    const y = rect.top + rect.height / 2
+    const { roomAbove, scale } = fitAbove(y)
+    controller.bind(padHandlers())
+    if (!controller.gesture.open(x, y, { wedges, rings, slots: slotSpecs(), roomAbovePx: roomAbove })) return
+    setDial({
+      x,
+      y: y - railPadBands(banded, scale).lift,
+      scale,
+      banded,
+      latch: null,
+      armed: false,
+      beyond: false,
+      visible: true,
+      standing: true,
+    })
+  }
+
+  const beginPress = (event: PointerEvent, adoptStanding = false) => {
     // **The keyboard hold has to happen here, not on `mousedown`.**
     //
     // Every other rail chip acts on `click`, so its `onMouseDown` focus refusal has
@@ -260,50 +379,25 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     // the same shape `RailScroller` uses for its pan, which has the identical problem. The
     // dismissal count comes along so a *deliberate* dismissal during the gesture still wins.
     keyboardRef.current = { holder: softKeyboardHolder(), dismissals: softKeyboardDismissals() }
-    const specs: Partial<Record<RailPadSlotKey, RailPadSlotSpec>> = {}
-    for (const slot of slots) specs[slot.key] = { mode: slot.mode, disabled: slot.disabled }
-    // Room above the finger, measured against the *visual* viewport. The fan opens upward,
-    // so this is the one direction that can run out - a pad in a short pane near the top of
-    // the window has less than the far ring's reach, and a boundary you cannot travel to is
-    // a slot that does not exist.
-    const view = railOverlayView()
-    const roomAbove = Math.max(0, event.clientY - view.top - DIAL_EDGE_MARGIN_PX)
+    const { roomAbove, scale } = fitAbove(event.clientY)
     const opened = controller.gesture.press(event.pointerId, event.clientX, event.clientY, {
       wedges,
       rings,
-      slots: specs,
+      slots: slotSpecs(),
       roomAbovePx: roomAbove,
+      adoptStanding,
     })
     if (!opened) return
-    let fired = false
-    controller.begin({
-      fire: key => {
-        buzz(fired ? HAPTIC_REPEAT : HAPTIC_ENTER)
-        fired = true
-        runSlot(key)
-      },
-      latch: (slot, detail) => {
-        fired = false
-        if (slot && detail.armed) buzz(HAPTIC_ARM)
-        setDial(current => current && { ...current, latch: slot, armed: detail.armed })
-      },
-      // A distinct bump on arming the stream, because the finger is past the labels by then
-      // and the only channel left is the one it can feel.
-      band: crossed => {
-        if (crossed) buzz(HAPTIC_ARM)
-        setDial(current => current && { ...current, beyond: crossed })
-      },
-      // Torn down here rather than from the chip's own `pointerup`: by the time a real
-      // gesture ends the finger is well off the chip, and that event belongs to whatever is
-      // under it. The keyboard goes back on the same signal, and on a frame later so it
-      // lands after the slot's own action has done whatever it does with focus.
-      end: () => {
-        closeDial()
-        const held = keyboardRef.current
-        keyboardRef.current = null
-        if (held?.holder) requestAnimationFrame(() => restoreSoftKeyboard(held.holder, held.dismissals))
-      },
-    })
+    controller.begin(padHandlers())
+    // A press that adopted the standing dial leaves the dial exactly where it is: its origin,
+    // scale and visibility are the ones already on screen, and re-seeding them from this
+    // press would move the fan out from under the finger aiming at it. The first reading is
+    // driven here rather than from inside `press`, so the handlers above are bound before
+    // anything can fire.
+    if (adoptStanding) {
+      controller.gesture.move(event.pointerId, event.clientX, event.clientY)
+      return
+    }
     // Client coordinates go in raw because the dial is portalled to `document.body`, which
     // is the one mount where they mean screen pixels. Rendering it inside the chip is not an
     // option: the rail's scroller sits between the pane's transform and the chip, and a
@@ -314,16 +408,16 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     // itself. Read from the bands rather than from the constant so the drawing and the
     // gesture agree at every squeeze - a dial drawn around a different point than the one the
     // wedges are resolved against would be lying at exactly the moment it is being trusted.
-    const dialScale = railPadScaleFor(banded, roomAbove)
     setDial({
       x: event.clientX,
-      y: event.clientY - railPadBands(banded, dialScale).lift,
-      scale: dialScale,
+      y: event.clientY - railPadBands(banded, scale).lift,
+      scale,
       banded,
       latch: null,
       armed: false,
       beyond: false,
       visible: false,
+      standing: false,
     })
     // Cosmetic only. The gesture has been live since the line above; this decides nothing
     // except whether the operator is shown the map before they finish.
@@ -350,15 +444,23 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       const wedge = wedges - 1 - (digit % wedges)
       return ring < rings ? padSlotKey(ring, wedge) : null
     }
-    if (wedges !== 3 || rings !== 1) return null
-    return key === 'ArrowLeft' ? padSlotKey(0, 2)
-      : key === 'ArrowUp' ? padSlotKey(0, 1)
-        : key === 'ArrowRight' ? padSlotKey(0, 0) : null
+    if (rings !== 1) return null
+    // Matched on the wedge's own derived name rather than on the wedge *count*, so an arrow
+    // addresses the wedge that genuinely points that way at any count, and simply finds
+    // nothing at a count with no such wedge - four wedges have a Left and a Right but no Up,
+    // because their centres straddle the vertical. Still refusing rather than guessing; the
+    // rule is just stated over the geometry instead of over a single supported shape.
+    const wanted = key === 'ArrowLeft' ? 'Left' : key === 'ArrowUp' ? 'Up' : key === 'ArrowRight' ? 'Right' : null
+    if (!wanted) return null
+    for (let wedge = 0; wedge < wedges; wedge += 1) {
+      if (padWedgeName(wedge, wedges) === wanted) return padSlotKey(0, wedge)
+    }
+    return null
   }
 
   // Drawn and read left to right, which is the reverse of the wedge index: wedge 0 is the
   // rightmost, because the fan's angles grow counter-clockwise from due east.
-  const drawn = padSlotKeys(item.pad).filter(key => key !== PAD_CENTER)
+  const drawn = padSlotKeys(item.pad)
   const populated = drawn.filter(key => byKey.has(key))
   const accessible = [
     modifierPrefix ? `${modifierPrefix} pad` : 'Pad',
@@ -366,7 +468,6 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       const at = parsePadSlotKey(key)!
       return `${padWedgeName(at.wedge, wedges, at.ring)}: ${byKey.get(key)?.label}`
     }),
-    ...(centre ? [`Centre: ${centre.label}`] : []),
   ].join('. ')
 
   const bands = railPadBands(dial?.banded ?? banded, dial?.scale ?? 1)
@@ -377,8 +478,10 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     ref={buttonRef}
     type="button"
     class={`${className || 'term-key'} rail-pad rail-pad-w${wedges} rail-pad-r${rings}${dial ? ' rail-pad-pressed' : ''}`}
-    title={item.title || 'Drag a direction'}
+    title={item.title || 'Drag a wedge, or tap to open'}
     aria-label={accessible}
+    aria-haspopup="menu"
+    aria-expanded={!!dial?.standing}
     // Still here for the *tap*, which does deliver a `mousedown`. The drag is covered by the
     // capture-and-restore in `beginPress`, because a drag delivers none.
     onMouseDown={event => { event.preventDefault(); holdSoftKeyboard(event) }}
@@ -387,21 +490,28 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       if (!event.isPrimary || event.button !== 0) return
       beginPress(event as unknown as PointerEvent)
     }}
-    onPointerUp={closeDial}
-    onPointerCancel={closeDial}
-    onLostPointerCapture={closeDial}
+    onPointerUp={closeUnlessStanding}
+    onPointerCancel={closeUnlessStanding}
+    onLostPointerCapture={closeUnlessStanding}
     onKeyDown={event => {
+      // Escape closes a standing dial before anything else looks at the key, the same
+      // precedence every other rail overlay takes.
+      if (event.key === 'Escape' && dial?.standing) { event.preventDefault(); dismiss(); return }
       const key = keySlot(event.key)
       if (!key || !byKey.has(key)) return
       event.preventDefault()
+      // Running a slot ends the standing dial, exactly as a tapped wedge does: one
+      // activation, one outcome, whichever route reached it.
+      dismiss()
       runSlot(key)
     }}
     onClick={() => {
-      closeDial()
-      // A press the gesture already answered - any drag at all, and a centre tap it fired
-      // itself - leaves nothing for the click. Everything else is a plain tap.
+      // Enter and Space arrive here with no pointer behind them, which is the one route the
+      // gesture never saw. They do what a tap does - open the dial - so the keyboard and the
+      // finger agree about what a plain activation of this chip means.
       if (controller.gesture.consumeHandledClick()) return
-      if (centre) runSlot(PAD_CENTER)
+      if (dial?.standing) { dismiss(); return }
+      openFromKeyboard()
     }}
   >
     {content}
@@ -426,8 +536,33 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       })}
     </span>
     {dial && createPortal(<div
-      class={`rail-pad-dial${dial.visible ? ' rail-pad-dial-shown' : ''}`}
-      aria-hidden="true"
+      class={`rail-pad-dial${dial.visible ? ' rail-pad-dial-shown' : ''}${dial.standing ? ' rail-pad-dial-standing' : ''}`}
+      // A transient dial is a picture of a gesture in flight and says nothing worth hearing.
+      // A standing one is a control, and is announced as the menu the chip's `aria-haspopup`
+      // promised. It is deliberately not focus-managed: the number keys already run every
+      // wedge from the chip, which keeps focus and therefore keeps Escape, so a roving
+      // tabindex here would add a second navigation route to the same slots.
+      aria-hidden={dial.standing ? undefined : 'true'}
+      role={dial.standing ? 'menu' : undefined}
+      aria-label={dial.standing ? accessible : undefined}
+      // The whole surface, not the wedges. Hit-testing SVG paths would put a second copy of
+      // the geometry in the drawing, and the point of `railPadResolve` is that there is only
+      // one - so every press on the dial goes to the gesture as coordinates and the gesture
+      // says what it hit, exactly as it does for a drag.
+      onPointerDown={dial.standing
+        ? (event: PointerEvent) => {
+          if (!event.isPrimary || event.button !== 0) return
+          event.preventDefault()
+          beginPress(event, true)
+        }
+        : undefined}
+      // The same focus refusal every rail chip makes, and it is load-bearing here for a
+      // reason the chip's own guard cannot cover: the dial is already mounted and covering
+      // the viewport by the time Chrome synthesises the opening tap's `mousedown`, so that
+      // event lands on *this* element rather than the chip whose guard would have refused it.
+      // Without it, tapping a pad on Android drops the soft keyboard.
+      onMouseDown={dial.standing ? (event: Event) => event.preventDefault() : undefined}
+      onContextMenu={dial.standing ? (event: Event) => event.preventDefault() : undefined}
     >
       {/* A wash over the workspace, so the wedges read as one surface rather than as
           translucent shapes competing with whatever the terminal happens to be drawing. */}

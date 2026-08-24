@@ -2666,6 +2666,12 @@ body {
    gesture is resolved from coordinates, and a dial that could intercept its own drag would
    be the one way to break it. */
 .rail-pad-dial{position:fixed;inset:0;z-index:98;pointer-events:none;opacity:0;transition:opacity .1s ease-out}
+/* A dial left standing by a tap is a control rather than a picture of a gesture, so it takes
+   the pointer. Only the root does: every press on it is routed to the gesture as coordinates,
+   which keeps `railPadResolve` the one place the geometry lives. `touch-action:none` for the
+   same reason the chip has it - a drag started on the dial must not be answered as a scroll
+   by whatever is underneath. */
+.rail-pad-dial-standing{pointer-events:auto;touch-action:none}
 .rail-pad-dial-shown{opacity:1}
 @media(prefers-reduced-motion:reduce){.rail-pad-dial{transition:none}}
 .rail-pad-dial-scrim{position:absolute;inset:0;background:color-mix(in srgb,#000 38%,transparent);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
@@ -2718,7 +2724,6 @@ body {
    underneath where a tap lands. The column count comes from the pad, inline, because it is
    the operator's choice. */
 .rail-pad-grid{display:grid;gap:6px;margin-top:8px}
-.rail-pad-grid-centre{grid-template-columns:minmax(0,1fr)}
 .rail-pad-cell{min-width:0;display:flex;flex-direction:column;gap:3px}
 .rail-pad-cell-name{color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;letter-spacing:.04em;text-transform:uppercase}
 .rail-pad-cell-note{color:var(--muted);font-size:10px}

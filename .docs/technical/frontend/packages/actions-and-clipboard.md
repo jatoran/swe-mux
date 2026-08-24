@@ -87,7 +87,7 @@ The model - orientations, directions, rings, slot bindings, trigger modes and `n
 
 **The fan opens upward and has no downward wedge.**
 The rail is on the bottom edge of the screen, so the 180° above the finger is divided instead (plus `RAIL_PAD_SKIRT_DEG` at each end) and the lower half is the abort zone.
-An action with no direction of its own goes in the centre, which is also what a tap runs.
+Every slot is a wedge: `padSlotKeys` enumerates positions and nothing else, and the retired `center` key is read only by `normalizeRailPad`, which carries its binding onto the first free wedge and is idempotent so fork-equality still holds.
 
 **The fan is divided two ways, and they cost different things.**
 `padWedgeCount` divides it by angle (1..`RAIL_PAD_MAX_WEDGES`), costing angular tolerance; `padRingCount` divides it by distance (1 or 2), costing fire-on-entry.
@@ -140,7 +140,7 @@ Ownership rules the rest of the layer relies on:
 - **`railPadSlotLabel` is the only route to a wedge's face**, and it cannot land on a `title`.
   A title is a sentence written for a tooltip, and four of them across a dial is prose rather than four labels - which shipped once, from a fallback chain that reached for one.
 - `updateRailPadSlot` and `setRailPadShape` in `railLayout.ts` are open to built-in pads, unlike `updateRailCatalogItem`.
-  Reshaping carries bindings across position for position as far as the new shape has positions: growing keeps everything, shrinking drops the rest, and the centre survives either.
+  Reshaping carries bindings across position for position as far as the new shape has positions: growing keeps everything, shrinking drops the rest.
 
 ### Sticky modifiers
 

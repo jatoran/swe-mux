@@ -1,13 +1,22 @@
-// Pointer behaviour for a command-rail pad: one chip holding several actions plus a centre,
-// each reached by dragging a direction off it.
+// Pointer behaviour for a command-rail pad: one chip holding several actions, each reached by
+// dragging a direction off it - or by tapping the chip and then tapping one.
 //
 // **The pad is a fan that opens upward, and it has no downward wedge at all.** The rail sits
 // at the bottom of its pane, and on a phone that is the bottom of the screen - so a
 // downward wedge is drawn off the glass and competes with the system's own bottom-edge
 // gesture. Rather than squeeze it, there is no south: the 180° above the finger is divided
 // instead, and the whole lower half becomes the abort zone. Pulling down cancels, which is
-// the one gesture a bottom-edge rail can always complete. An action with no direction of its
-// own - Down, on the arrows pad - goes in the centre, where a tap lands.
+// the one gesture a bottom-edge rail can always complete.
+//
+// **Every slot is a wedge, and a tap opens the dial.** A pad used to keep a non-positional
+// centre slot, on the reasoning that an action with no heading of its own could live where a
+// tap lands. It cost the tap, which turned out to be worth more: the chip shows marks rather
+// than labels, so what a pad *holds* is the one thing a finger cannot discover, and a tap is
+// the obvious way to ask. So a release that never travelled leaves the dial standing with no
+// pointer at all, and the next press adopts its origin (`adoptStanding`) and runs the
+// ordinary gesture against the same geometry. That adoption is the whole design: every
+// trigger mode keeps exactly one meaning, rather than each growing a second tap-shaped
+// behaviour beside its drag-shaped one.
 //
 // The fan can be divided **two ways**, and they cost different things:
 //
@@ -58,7 +67,6 @@
 // listeners, the dial and the haptics.
 
 import {
-  PAD_CENTER,
   padSlotKey,
   padWedgeUnit,
   parsePadSlotKey,
@@ -239,8 +247,8 @@ export function railPadWedgeIndex(angle: number, wedges: number): number | null 
   return Math.min(count - 1, Math.floor((angle - RAIL_PAD_FAN_START_DEG) / width))
 }
 
-/** What the pad decides a press is currently pointing at. `null` is the centre or the abort
- *  zone, which behave identically: neither fires anything on the way through. */
+/** What the pad decides a press is currently pointing at. `null` is the hub or the abort
+ *  zone, which behave identically: neither is a slot, and neither ever fires anything. */
 export type RailPadLatch = RailPadSlotKey | null
 
 /** The shape a press is resolved against: how the fan is divided, and where its bands sit. */
@@ -307,6 +315,16 @@ export interface RailPadPressOptions {
   slots: Partial<Record<RailPadSlotKey, RailPadSlotSpec>>
   /** Room above the press, in CSS pixels. Squeezes the dial when a pane is short. */
   roomAbovePx?: number
+  /**
+   * Take over the standing dial instead of opening a new fan above this press.
+   *
+   * Set only by the standing dial's own surface. It is what makes a press on an open dial a
+   * press *of that dial* rather than a second one centred wherever the finger happened to
+   * land - so the wedge under the finger is the wedge that runs, and every trigger mode keeps
+   * exactly one meaning. Without it a tapped dial would need a second activation path per
+   * mode, which is two behaviours per slot and the place the bugs would live.
+   */
+  adoptStanding?: boolean
 }
 
 export interface RailPadCallbacks {
@@ -324,21 +342,33 @@ export interface RailPadCallbacks {
    *  The dial is torn down from here rather than from the chip's own `pointerup`, because by
    *  then the finger is a hundred-odd pixels away and that event belongs to whatever is
    *  under it. A chip that only cleaned up after events it received itself left its dial on
-   *  screen after every gesture that actually went somewhere. */
-  end(): void
+   *  screen after every gesture that actually went somewhere.
+   *
+   *  `standing` says the dial outlived the press and must *not* be torn down - the press was
+   *  a tap, and a tap opens. The two are reported together rather than as two callbacks
+   *  because the caller has exactly one decision to make here. */
+  end(detail: { standing: boolean }): void
 }
 
 export interface RailPadGesture {
   /** Open a press. Returns false if one is already open. Fires nothing. */
   press(pointerId: number, x: number, y: number, options: RailPadPressOptions): boolean
+  /** Stand a dial up over `x, y` with no press at all, for the keyboard route. Returns false
+   *  while a press is live, which owns the dial instead. */
+  open(x: number, y: number, options: RailPadPressOptions): boolean
   /** Report the pointer. Returns true once this press owns the pointer. */
   move(pointerId: number, x: number, y: number): boolean
-  /** End the press, firing a `release` slot still latched, or the centre from a clean tap. */
+  /** End the press: fires a `release` slot still latched, or opens the standing dial when
+   *  the press never travelled. */
   release(pointerId: number): boolean
-  /** Abandon without firing: cancel, blur, a hidden tab, a session swap, unmount. */
+  /** Abandon without firing: cancel, blur, a hidden tab, a session swap, unmount. Takes the
+   *  standing dial with it, which is what stops a full-viewport surface outliving the thing
+   *  that owns it. */
   cancel(): void
+  /** Close the standing dial without ending a press. Returns whether one was standing. */
+  dismiss(): boolean
   /** Whether a press is open, where it points, and the bands it is using. For the dial. */
-  peek(): { open: boolean; latch: RailPadLatch; armed: boolean; bands: RailPadBands }
+  peek(): { open: boolean; standing: boolean; latch: RailPadLatch; armed: boolean; bands: RailPadBands }
   /** Whether the trailing click was already answered by the gesture and must be swallowed
    *  rather than run as the chip's own tap. One-shot: reading it clears it. */
   consumeHandledClick(): boolean
@@ -375,11 +405,24 @@ export function createRailPadGesture<T>(
   let releaseClaim: (() => void) | null = null
   let handledClick = false
   /** Whether the finger ever really moved. Not "ever latched a wedge": pulling straight down
-   *  into the abort zone latches nothing, and firing the centre for that would turn the one
-   *  escape a bottom-edge rail can always complete into a different action. Measured from the
-   *  press rather than from the fan's origin, which the lift moved out from under it. */
-  let leftCentre = false
+   *  into the abort zone latches nothing, and it is still a gesture the operator abandoned
+   *  rather than a tap. Measured from the press rather than from the fan's origin, which the
+   *  lift moved out from under it. */
+  let travelled = false
   let axes: RailPadAxes = { horizontal: false, vertical: false }
+  /**
+   * The dial that outlived its press.
+   *
+   * A tap opens it and it stands with no pointer at all, which is a genuinely second state
+   * rather than a longer press: `pointer` is null, no timer is armed, and the only thing
+   * still true is *where the fan is*. Keeping the origin and the shape is what lets the next
+   * press adopt it (`adoptStanding`) and resolve against the same geometry, so a standing
+   * dial runs the ordinary gesture rather than a parallel one.
+   */
+  let standing: { originX: number; originY: number; shape: RailPadShape } | null = null
+  /** A press that adopted the standing dial but landed outside its drawn edge. Inert for its
+   *  whole life: it resolves nothing and its release only closes the dial. */
+  let adoptedOutside = false
 
   const clearTimer = () => {
     if (timer === null) return
@@ -392,7 +435,7 @@ export function createRailPadGesture<T>(
     releaseClaim = claimPointerDrag()
   }
 
-  const stop = () => {
+  const stop = (nowStanding: boolean) => {
     clearTimer()
     releaseClaim?.()
     releaseClaim = null
@@ -400,12 +443,13 @@ export function createRailPadGesture<T>(
     options = null
     latched = null
     beyond = false
-    leftCentre = false
+    travelled = false
+    adoptedOutside = false
     axes = { horizontal: false, vertical: false }
-    callbacks.end()
+    callbacks.end({ standing: nowStanding })
   }
 
-  const specFor = (slot: RailPadLatch): RailPadSlotSpec | undefined => options?.slots[slot ?? PAD_CENTER]
+  const specFor = (slot: RailPadLatch): RailPadSlotSpec | undefined => slot ? options?.slots[slot] : undefined
 
   const armRepeat = (slot: RailPadSlotKey, delayMs: number) => {
     timer = schedule(() => {
@@ -456,41 +500,100 @@ export function createRailPadGesture<T>(
     if (next) armRepeat(latched, RAIL_KEY_REPEAT_DELAY_MS)
   }
 
+  /** The standing dial's own hitbox is what is *drawn*. A one-ring pad resolves a wedge at
+   *  any radius, deliberately - a long drag is not an abort - but a tap out in the corner of
+   *  the screen is not a drag and must dismiss rather than run whatever wedge it happens to
+   *  be angularly aligned with. */
+  const withinStanding = (dx: number, dy: number): boolean => Math.hypot(dx, dy) <= shape.bands.outer
+
+  const clearStanding = (): boolean => {
+    if (!standing) return false
+    standing = null
+    return true
+  }
+
+  /** The shape a fan of this description takes, and the radii that go with it. */
+  const shapeFor = (next: RailPadPressOptions): RailPadShape => {
+    // The band exists if a second ring of slots needs it *or* a slot repeats beyond it.
+    // Same radii either way; what the boundary means is the slot's business.
+    const banded = railPadBanded(
+      next.rings,
+      Object.values(next.slots).flatMap(spec => spec ? [spec.mode] : []),
+    )
+    return {
+      wedges: next.wedges,
+      rings: next.rings,
+      bands: railPadBands(banded, railPadScaleFor(banded, next.roomAbovePx ?? Infinity)),
+    }
+  }
+
   return {
     press(pointerId, x, y, next) {
       // A gesture whose click never arrived must not swallow the next press's tap.
       handledClick = false
       if (pointer !== null) return false
+      const adopted = next.adoptStanding ? standing : null
+      // A press that is not the standing dial's own takes the screen from it. Whatever the
+      // operator just touched is what they meant, and leaving a full-viewport surface behind
+      // it is how a dial ends up eating clicks nobody can trace.
+      //
+      // Announced rather than dropped quietly, and *before* anything else: the caller binds
+      // its handlers off the back of this call, so a silent clear here would replace the
+      // handlers of the pad that owns the standing dial without ever telling it to take the
+      // dial down - which is precisely the stranded surface this is closing.
+      if (!adopted && clearStanding()) callbacks.end({ standing: false })
       pointer = pointerId
       options = next
-      // The band exists if a second ring of slots needs it *or* a slot repeats beyond it.
-      // Same radii either way; what the boundary means is the slot's business.
-      const banded = railPadBanded(
-        next.rings,
-        Object.values(next.slots).flatMap(spec => spec ? [spec.mode] : []),
-      )
-      shape = {
-        wedges: next.wedges,
-        rings: next.rings,
-        bands: railPadBands(banded, railPadScaleFor(banded, next.roomAbovePx ?? Infinity)),
+      if (adopted) {
+        shape = adopted.shape
+        originX = adopted.originX
+        originY = adopted.originY
+      } else {
+        shape = shapeFor(next)
+        // The fan is centred above the finger, never on it. Applied once here so every later
+        // reading - the wedge, the ring, the band, the dial - is measured from one origin.
+        originX = x
+        originY = y - shape.bands.lift
       }
       startX = x
       startY = y
-      // The fan is centred above the finger, never on it. Applied once here so every later
-      // reading - the wedge, the ring, the band, the dial - is measured from one origin.
-      originX = x
-      originY = y - shape.bands.lift
       latched = null
       beyond = false
       axes = railPadAxes(Object.keys(next.slots), next.wedges)
       // Nothing to yield to: every axis this pad uses is its own, so the pan and the menu
       // swipe are wrong about this finger from the very first pixel. A pad that leaves an
-      // axis free waits instead, and decides at the pan's own slop.
-      if (axes.horizontal && axes.vertical) claim()
+      // axis free waits instead, and decides at the pan's own slop. A press on the standing
+      // dial claims unconditionally: that surface already covers the workspace, so there is
+      // nothing underneath for a pan to belong to.
+      if (adopted || (axes.horizontal && axes.vertical)) claim()
+      // Where the finger lands on a standing dial is the whole decision, so it is taken once,
+      // here. Inside the drawn edge the press is an ordinary gesture from that point - which
+      // is what lets a tap on a wedge mean exactly what a drag into it means, mode for mode.
+      // Outside it the press is inert and its release only dismisses: a one-ring pad resolves
+      // a wedge at *any* radius on purpose (a long drag is not an abort), and without this a
+      // tap in an empty corner of the screen would run whatever wedge it happened to line up
+      // with rather than closing the menu the way every other overlay does.
+      //
+      // Nothing is resolved here. The caller drives the first reading through `move`, so the
+      // handlers are bound before anything can fire - a slot run from inside `press` would be
+      // delivered to whatever the *previous* press left behind.
+      adoptedOutside = !!adopted && !withinStanding(x - originX, y - originY)
+      return true
+    },
+    open(x, y, next) {
+      // A live press owns the dial and is about to decide what happens to it, so this loses.
+      if (pointer !== null) return false
+      const opened = shapeFor(next)
+      shape = opened
+      standing = { originX: x, originY: y - opened.bands.lift, shape: opened }
       return true
     },
     move(pointerId, x, y) {
       if (pointer !== pointerId || !options) return false
+      // A press that opened outside the standing dial stays inert wherever it goes. Sliding
+      // back onto the dial mid-press must not turn a dismissal into a selection: what the
+      // finger touched down on is the statement.
+      if (adoptedOutside) return true
       // Travel, which the arbitration and the tap test are about...
       const travelX = x - startX
       const travelY = y - startY
@@ -502,23 +605,23 @@ export function createRailPadGesture<T>(
         if (!wantsThis) {
           // Travel on an axis this pad does not use. Stand down for the whole press:
           // re-entering later would take a pan the strip has already begun.
-          stop()
+          stop(false)
           return false
         }
         claim()
       }
       // Recorded on travel alone, before any wedge is resolved: a drag straight down reaches
-      // no wedge at all, and it still has to count as movement or the lift would run the
-      // centre.
-      if (Math.hypot(travelX, travelY) >= RAIL_PAD_TAP_SLOP_PX) leftCentre = true
+      // no wedge at all, and it still has to count as movement or the lift would read an
+      // abandoned gesture as a tap.
+      if (Math.hypot(travelX, travelY) >= RAIL_PAD_TAP_SLOP_PX) travelled = true
       // ...and displacement from the fan's own origin, which every geometric reading is
       // against. The two differ by exactly the lift, and conflating them is the bug this
       // split exists to prevent: a press that has not moved is `lift` pixels from the origin.
       const dx = x - originX
       const dy = y - originY
       const radius = Math.hypot(dx, dy)
-      // Leaving for the centre uses the exit ratio; everything else is `railPadResolve`,
-      // which is also what the dial is drawn from.
+      // Leaving for the hub uses the exit ratio; everything else is `railPadResolve`, which
+      // is also what the dial is drawn from.
       if (latched !== null && radius < shape.bands.dead * RAIL_PAD_EXIT_RATIO) {
         setBeyond(false)
         setLatch(null)
@@ -532,40 +635,60 @@ export function createRailPadGesture<T>(
     },
     release(pointerId) {
       if (pointer !== pointerId) return false
-      const slot: RailPadSlotKey = latched ?? PAD_CENTER
       const spec = specFor(latched)
       // A latched direction fires only if it was waiting for exactly this. Every other mode
       // already fired on the way in, and a `release` slot the finger has since left is no
       // longer latched, which is the whole escape hatch.
       //
-      // Neutral fires the centre only when the press *never* reached a direction. Coming
-      // back to the middle to abort, or pulling down into the abort zone, must not resolve
-      // to a different action instead - an escape hatch that ran the centre would be a
-      // redirect, not an escape - so the centre stays what it is: what a tap does.
-      const fires = !!spec && !spec.disabled && (latched === null
-        ? !leftCentre && spec.mode !== 'release'
-        : spec.mode === 'release')
+      // Nothing fires from a neutral release, ever. There is no centre for one to resolve to,
+      // and that is the point: a press that reached no wedge - the abort pull, a drift, a
+      // touch the operator changed their mind about - has stated no direction, so a pad that
+      // ran something anyway would be answering a gesture nobody made.
+      const fires = latched !== null && !!spec && !spec.disabled && spec.mode === 'release'
       clearTimer()
-      if (fires) {
-        // A centre tap that fires *is* the chip's action for this press, so the click behind
-        // it is a duplicate. A press that resolved to nothing leaves the click alone, and an
-        // untravelled press on a padded chip is therefore still a tap.
-        if (latched === null) handledClick = true
-        callbacks.fire(slot)
-      }
+      if (fires && latched) callbacks.fire(latched)
       if (latched !== null) callbacks.latch(null, { armed: false, disabled: false })
-      stop()
+      // What a neutral release *does* mean, and the only thing it means: open the dial, or -
+      // if this press was already the standing dial's own - close it.
+      //
+      // A tap opens because a pad's four slots are the one thing about it a finger cannot
+      // discover: the chip shows marks, not labels. A drag that went somewhere has already
+      // said what it wanted, and re-opening after it would leave a surface over the workspace
+      // every time the pad was used properly. And any press on the standing dial ends it,
+      // whether it ran a slot or missed - one tap, one outcome, which is what every other
+      // menu in the app does.
+      const wasStanding = !!standing && !!options?.adoptStanding
+      let nowStanding = false
+      if (wasStanding) clearStanding()
+      else if (!travelled && latched === null) {
+        standing = { originX, originY, shape }
+        nowStanding = true
+        // The tap *is* answered by opening, so the trailing click must not also run the
+        // chip's own action.
+        handledClick = true
+      }
+      stop(nowStanding)
       return true
     },
     cancel() {
-      if (pointer === null) return
+      const dismissed = clearStanding()
+      if (pointer === null) {
+        if (dismissed) callbacks.end({ standing: false })
+        return
+      }
       callbacks.latch(null, { armed: false, disabled: false })
-      stop()
+      stop(false)
+    },
+    dismiss() {
+      if (!clearStanding()) return false
+      callbacks.end({ standing: false })
+      return true
     },
     peek() {
       const spec = specFor(latched)
       return {
         open: pointer !== null,
+        standing: !!standing,
         latch: latched,
         armed: !!latched && !!spec && !spec.disabled && spec.mode === 'release',
         beyond,

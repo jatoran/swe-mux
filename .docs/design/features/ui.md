@@ -1764,7 +1764,7 @@ Its rules, and what each one is defending:
 - **The drop-up pickers work from inside the popover.**
   A Clip, Skills, Prompts, or Actions chip opened there renders its drop-up *over* the panel and leaves it standing, which needs two exemptions rather than one: the tap that opens a drop-up is an outside press for the panel, and Escape reaches both listeners on `window` where `stopPropagation` stops neither — so the panel stands aside for as long as a drop-up is open.
   The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
-- A **pad** is one rail chip holding three or four other Actions plus a centre, each reached by pressing the chip and dragging that way.
+- A **pad** is one rail chip holding three to five other Actions, each reached by pressing the chip and dragging that way — or by tapping the chip and then tapping one.
   It is a container and never a behaviour of its own: every slot names an ordinary catalog id, so a pad composes with backend filtering, project deltas, splices and hides without any of them learning what a pad is.
 - **The fan opens upward, and a pad has no downward wedge at all.**
   The rail sits at the bottom of its pane, and on a phone that is the bottom of the screen — so a downward wedge is drawn off the glass, dragged where a thumb cannot reach, and in competition with the system's own bottom-edge gesture.
@@ -1778,9 +1778,12 @@ Its rules, and what each one is defending:
   The lift is always strictly less than the hub, at every squeeze, so the press lands *inside* the neutral disc rather than past it — "nothing is selected" and "you are in the middle" have to be the same state, or a dial would open already describing an escape.
   The dial marks the press as a dot low in the hub, which is the one thing about the arrangement an operator has to see once.
   The deliberate cost is the single direction the lift works against: committing straight up is lift-plus-hub of travel rather than hub alone.
-- **An action with no direction of its own goes in the centre, where a tap lands** — Down, on the arrows pad.
-  It is the one non-spatial mapping in the design and it is deliberate: a fourth wedge would have to point somewhere that is not down, and a chip of its own would cost rail width and separate Down from Up.
-  "The one with no direction is the one you tap" is a rule you learn once, and it keeps the arrow pair on a single chip.
+- **Every slot is a wedge, and there is no centre.**
+  A pad once carried a non-positional centre slot, on the reasoning that an action with no heading of its own could live where a tap lands — Down, on the arrows pad.
+  It was retired for two reasons.
+  A wedge in an upward fan does not claim to *be* a compass heading (Jump's four are line and document starts and ends, and nobody reads the leftmost as pointing west), so a wedge for Down is no more a lie than any other slot.
+  And the centre cost the tap, which is worth more: what a pad *holds* is the one thing a finger cannot discover, because the chip shows marks rather than labels.
+  A stored centre binding is carried onto the pad's first free wedge rather than dropped — dropping is what a slot the operator deliberately shrinks away gets, and nobody asked for the centre to go — and is dropped only when every wedge is already taken.
 - **The fan can be divided two ways, and they cost different things.**
   By **angle**, into 1–5 wedges: this costs angular tolerance and nothing else.
   By **distance**, into 1 or 2 rings: this costs *fire-on-entry*, because reaching the far ring means crossing the near one, so a ringed pad's slots default to firing on release.
@@ -1800,7 +1803,7 @@ Its rules, and what each one is defending:
 - **A slot's trigger mode says when it fires**, and it is a property of the binding rather than of the Action, so the same key may repeat in one pad and not another.
   `enter` fires on crossing into the wedge; `enter-repeat` then repeats at the rail's shared 350 ms/75 ms cadence while held anywhere in it; `enter-repeat-far` fires once on entry and repeats **only while pushed past the wedge's outer band**; `release` fires only if the press is *still* latched there when it ends.
   Dragging back out of a `release` slot cancels it, and that escape hatch is the whole value of the mode — so a release slot is drawn outlined while merely armed and filled only when it is not, because "armed" and "run" must never look the same.
-  Pulling down into the abort zone, or returning to the centre, runs nothing at all even with a centre bound: an escape hatch that ran the centre instead would be a redirect rather than an escape.
+  Pulling down into the abort zone, or returning to the hub, runs nothing at all: a press that reached no wedge has stated no direction, so anything the pad ran would be answering a gesture nobody made.
   Modes default from the Action (`defaultPadTriggerMode`), so an arrow arrives already repeating and anything wearing the rail's danger treatment already waiting for release; `release` composes with an Action's own confirm rather than replacing it, which makes ending a session from a pad an arm-then-confirm pair of drags.
 - **Repeating is armed by distance, not by dwell, and that is the arrows' default.**
   `enter-repeat` starts after 350 ms anywhere in the wedge, so a thumb that hesitates — or a drag that pauses to read the dial — begins spamming without being asked.
@@ -1838,11 +1841,24 @@ Its rules, and what each one is defending:
   The lift is inside that reach rather than added on top of it, because a lift held at full size in a short pane would spend the scarce pixels pushing the origin off the top of the window, and a hub off screen is one no finger can travel into at all.
   The hub scales for the same reason and needs no floor of its own: the 45% floor already leaves it larger than the whole full-size hub used to be.
   The wedges themselves may run off the sides of the screen and cost nothing there — a hitbox is angular — while their labels are pulled back inside the viewport, because a label off the edge is the one part of the drawing that mattered.
-- **A pad is transient and never opens.** It disappears on release, and is deliberately not a menu: an open state would make every press an overlay level, with dismissal semantics, back-button behaviour, and a gesture recognizer that resolves nothing while it stands.
+- **A tap leaves the dial standing, and that is the only thing a tap does.**
+  A drag has already said what it wanted; a tap has not, and what a pad holds is exactly what its chip cannot show.
+  So a release that never travelled opens the dial with no pointer behind it, and a release that reached a wedge — or aborted downward — closes as before.
+- **A standing dial runs the ordinary gesture, not a second tap-shaped one.**
+  The next press **adopts its origin** rather than opening a fan wherever the finger landed, so the wedge under the finger is the wedge that runs and every trigger mode keeps exactly one meaning: `release` still waits for the lift on that wedge, `enter-repeat` still repeats while held.
+  The alternative — a discrete tap behaviour per mode — is two behaviours per slot and the place the bugs would live.
+  Where the finger lands is the whole decision and is taken once: inside the drawn edge it is an ordinary gesture from that point, outside it the press is inert and its release only dismisses.
+  That outer edge is needed because a one-ring pad resolves a wedge at *any* radius on purpose — a long drag is not an abort — so without it a tap in an empty corner would run whatever wedge it happened to line up with.
+- **A standing dial is an overlay level and carries the costs of one**, which is what the transient-only design was avoiding and what the tap turned out to be worth.
+  It takes pointer events, dismisses on Escape and on anything that moves the window under it, and closes on the activation of any slot by any route — one tap, one outcome.
+  It is torn down by every signal that ends a press (blur, a hidden tab, a session swap, unmount), because a full-viewport surface outliving its owner swallows every click in the app.
+  It refuses focus on `mousedown` like every rail chip, and load-bearingly so: the dial is already mounted when Chrome synthesises the opening tap's mouse events, so that `mousedown` lands on the dial rather than on the chip whose guard would have refused it, and without the refusal tapping a pad on Android drops the soft keyboard.
   Pads and the rail's drop-ups stay distinct tools — a drop-up is for browsing a list you have to read, a pad for hitting one of a handful of things you already know.
-  Keyboard and trackpad reach it without any of that: a focused pad answers the **number keys**, `1` being the leftmost wedge as the dial is drawn and a second ring continuing the count, and Enter runs the centre.
+- **Keyboard and trackpad reach every slot without the dial**: a focused pad answers the **number keys**, `1` being the leftmost wedge as the dial is drawn and a second ring continuing the count.
   Numbers rather than arrows because the wedge count is a choice — three arrows could only ever address three of up to five wedges, and which three would depend on the pad.
-  A three-wedge pad also answers the arrows, where left/up/right genuinely *are* its wedges; at any other count they are refused rather than guessed at.
+  The arrows are a shorthand matched on the wedge's own derived name rather than on the wedge count, so an arrow addresses the wedge that genuinely points that way at any count and simply finds nothing where no wedge does: four wedges have a Left and a Right but no Up, because their centres straddle the vertical.
+  Enter and Space open the standing dial, so the keyboard and the finger agree about what a plain activation of the chip means; the chip keeps focus while it stands, which is what keeps Escape and the number keys reaching it.
+  The standing dial is announced as the menu `aria-haspopup` promises and is deliberately not focus-managed — the number keys already run every wedge, so a roving tabindex would be a second navigation route to the same slots.
 - **A chip that both taps and pads keeps its tap**, decided by distance rather than a timer: reaching a wedge is a pad gesture and the trailing click is suppressed, while a release without travel is an ordinary tap.
   What counts as travel is a **tap slop** of its own (14 px, measured from the press), not hub membership — the lift moved the hub out from under the finger, so "am I in the hub" stopped answering "did this press move at all", and a drift that reaches no wedge is still an abandoned gesture rather than a tap.
 - **A pad drag preserves the soft keyboard by capture-and-restore, because it has no event left to refuse.**
@@ -1858,15 +1874,15 @@ Its rules, and what each one is defending:
   The modified bytes are resolved where a chip is *rendered*, not where it is sent, because both repeating paths capture what they are repeating when the press opens — resolving at send time would drop the modifier from the second repetition onwards.
   The phase is a colour and never a label change, so the chip's width is identical off, armed and locked and the row's rhythm does not shift as one is used.
   Modifiers clear on session change, so one armed on one pane cannot apply to another.
-- **The default rail places the four shipped pads instead of the fifteen Actions they hold**: Copy (reply/input/resume) and Arrows (left/up/right, with Down as the tap) at three wedges, Pick (clipboard/skills/prompts/Actions) and Jump at four.
+- **The default rail places the four shipped pads instead of the fifteen Actions they hold**: Copy (reply/input/resume) at three wedges, and Arrows, Pick (clipboard/skills/prompts/Actions) and Jump at four.
+  Arrows reads left to right as left, up, down, right: the ends are the horizontal pair and the vertical pair sits between them, with Down in the upper-right wedge beside Up so the two keys that scroll a transcript are neighbours under the thumb.
   Jump's four read left to right as one gradient — document-start, line-start, line-end, document-end — so the outer pair is the document, the inner pair is the line, and left is always a start.
   Everything a pad holds stays in the catalog and can be placed as its own chip again; a pad is a *placement* decision and this is the default one.
   The invariant that replaced "one placement per built-in": every visible built-in is **reachable** on a fresh rail, directly or through a placed pad, and a pad and its contents are never both placed.
   An existing saved layout is untouched — the pads arrive as newly shipped built-ins appended to its first row, beside the individual chips that operator already has.
 - A pad's shape and slots are the one behaviour field a saved layout may override on a built-in, deliberately: a pad is a container, and which things it holds is the same kind of choice as which chips sit in a row.
-  Its editor is a **picture of the pad** — one row per ring with the wedges across it in the order they are reached, the far ring above the near one because it is further out, and the centre underneath where a tap lands — because "which Action is up" is a question about a position and a list of rows makes you translate every answer back into one.
+  Its editor is a **picture of the pad** — one row per ring with the wedges across it in the order they are reached, and the far ring above the near one because it is further out — because "which Action is up" is a question about a position and a list of rows makes you translate every answer back into one.
   Changing the wedge or ring count carries bindings across position for position, as far as the new shape has positions: growing keeps everything and adds empty wedges, shrinking drops what no longer has a place, which beats stacking two Actions on one wedge or refusing the change outright.
-  The centre survives every reshape, having no wedge or ring to lose.
   A pad may not hold a pad: one level is a control, two is a menu with a hidden second page, and the gesture has no way to say "and then" without the dwell the whole design avoids.
 - **A slot's address is positional (`ring:wedge`), not a compass name.**
   A name that means up-left on a four-wedge pad means something else on a three-wedge one, and no table of names covers five, so the human-readable name is derived from the wedge's actual centre angle instead.
