@@ -58,11 +58,39 @@ Two S2 decisions worth knowing before D1:
 
 Run only after S1 and S2 have both landed on master.
 
-- [ ] D1.1 Full gate on master, then confirm `supervisor_bundle_current()` reports stale (expected after S1).
-- [ ] D1.2 From a terminal outside swe-mux: `uv run muxd --shutdown`, verify no `swe-mux`/`swe-mux-supervisor` processes, `uv run python packaging/build_desktop.py --supervisor-only`, relaunch the app. This is the deliberate reap; follow the CLAUDE.md supervisor-update flow exactly.
-- [ ] D1.3 Full redeploy of the app bundle (`uv run python packaging/redeploy_desktop.py`) so the daemon half (S2) ships too.
-- [ ] D1.4 Live soak, isolated daemon first (port 8799 + `~/.mux-hardening` per the isolated-daemon pattern), then the real daemon: spawn/kill/reload cycles; daemon restart with live sessions (sessions must survive); forced supervisor-socket close with the supervisor alive (sessions must NOT be marked ended, UI shows unreachable, restart reattaches); spawn-reply-drop drill via the new `spawn_status`; run the gated live tiers (`live_agent`, `live_subagent`, MCP-wire).
-- [ ] D1.5 Watch `daemon.log` and `supervisor.log` for the new desync/PtyError/unreachable diagnostics firing spuriously.
+- [x] D1.1 Full gate on master, then confirm `supervisor_bundle_current()` reports stale (expected after S1).
+- [x] D1.2 From a terminal outside swe-mux: `uv run muxd --shutdown`, verify no `swe-mux`/`swe-mux-supervisor` processes, `uv run python packaging/build_desktop.py --supervisor-only`, relaunch the app. This is the deliberate reap; follow the CLAUDE.md supervisor-update flow exactly.
+- [x] D1.3 Full redeploy of the app bundle (`uv run python packaging/redeploy_desktop.py`) so the daemon half (S2) ships too.
+- [x] D1.4 Live soak, isolated daemon first (port 8799 + `~/.mux-hardening` per the isolated-daemon pattern), then the real daemon: spawn/kill/reload cycles; daemon restart with live sessions (sessions must survive); forced supervisor-socket close with the supervisor alive (sessions must NOT be marked ended, UI shows unreachable, restart reattaches); spawn-reply-drop drill via the new `spawn_status`; run the gated live tiers (`live_agent`, `live_subagent`, MCP-wire).
+- [x] D1.5 Watch `daemon.log` and `supervisor.log` for the new desync/PtyError/unreachable diagnostics firing spuriously.
+
+Run 2026-08-24 against the rebuilt supervisor bundle (`dist/swe-mux-supervisor`, source hash `94066ae7`) and a full `redeploy_desktop.py` pass.
+The fleet held no live sessions at D1.2, so the deliberate reap cost nothing.
+
+What the soak proved, on the isolated daemon (8799) and again on the real one (8765):
+
+- A forced supervisor-socket close with the supervisor alive left every session `running` with no `exit_code` and no end reason for the whole 75s watch, health reported `supervisor_state=lost`, doctor named the supervisor unreachable, and a restart reattached every session at its original pid.
+  The socket was dropped by routing the daemon through a frame-aware loopback proxy (the discovery file's port rewritten to it) and killing the proxy, so the supervisor process itself was never touched.
+- Dropping exactly the reply frame to a successful `spawn` left the connection open, and the daemon queried `spawn_status`, was told `live`, and adopted the existing session (`process_job_assignment=supervisor_adopted_after_lost_reply`) instead of starting a second process.
+  One session, one process, on both daemons: F2 is closed on the live wire, not only in tests.
+- The other S2 decision held too: when `spawn_status` could not be delivered and the supervisor was alive, the daemon refused the in-process fallback and failed the spawn, creating nothing.
+- D1.5 is clean. Across both daemons and both supervisors the new counters stayed at zero: no frame desync, no swallowed `PtyError`, and no output-drop/backpressure line.
+  Every `unreachable` and `connection lost` entry maps to a drill that deliberately caused it, and the per-session unreachable warning repeated on its intended 60s cadence rather than per tick.
+
+One defect found, and it needs no second reap because it lives in `server.py`, outside the supervisor closure:
+
+- `daemon_restart` still gates on `supervisor.connected` alone, which is exactly the binary collapse S2.1 replaced everywhere else.
+  While the supervisor is unreachable-but-alive it answers `409 supervisor_not_attached`, so the recovery that `supervisor_client` logs ("restart the daemon to reattach") and that `doctor` recommends is refused through both `POST /api/daemon/restart` and `mux reload-daemon`.
+  Worse, the escape it advertises makes things worse: with `force=true` the same `attached` flag is still false, so the shutdown intent becomes `quit` and `reap_all_and_exit` destroys the very sessions that were still alive and adoptable.
+  The fix is to treat a live supervisor as attachable (`connected or lost`) for both the gate and the intent; reattach itself already works, and was verified by restarting out of band.
+- Smaller, same area: the refused-spawn path surfaces as a bare `500 {"error": "internal server error"}` because the `TimeoutError` reaches aiohttp's generic handler, so the operator never sees the reason the daemon logged.
+
+Three live-tier failures, all pre-existing and none on a supervisor code path (each asserts on a direct `subprocess.run`, not on a PTY):
+
+- `test_request_land_enqueues_the_callers_own_worktree` (all four harnesses) dies in 1s with `TypeError: _spawn_agent() got an unexpected keyword argument 'cwd'`.
+  The call was added by ef9ccb9 on 2026-08-20 and the helper never took that argument, so this test has never once executed and `mux.request_land` has no live-wire coverage.
+- The `opencode` store canary fails intermittently (twice in-file, passing five times standalone against the same isolated `XDG_DATA_HOME`); opencode rotated models between runs, and `_run` sends the CLI's stdout and stderr to `DEVNULL`, so the tier can never say why it failed.
+- The `codex` subagent canary now fails consistently: the transcript carries `tool_use`/`tool_result` but no `subagent_activity`, which is provider drift the canary exists to catch.
 
 ## Wave 2 - structure and stores (S3, S4, S5, S6 in parallel, then D2)
 
