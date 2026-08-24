@@ -49,6 +49,18 @@ Only *approved* and *static* registrations are mirrored, because detected ones a
 
 **Not:** being authoritative at runtime (`PreviewRegistry.items` is), minting ids (`processes.preview_id` does), or ever failing loudly enough to stop the daemon starting.
 
+## `preview_transport.py`
+
+Serving a registered Preview through the daemon at `/preview/{preview_id}/…`: the injected runtime bridge, HTML/CSS/JavaScript URL rewriting, the static-preview content-type table and its sandbox CSP, upstream target resolution, the forwarded and hop-by-hop header sets, the concurrency slots, the WebSocket relay, and the HTTP proxy itself.
+
+The proxy streams its own `StreamResponse`, so it stamps `apply_security_headers` before `prepare()`: the security middleware stamps after a handler returns, which is too late once bytes are on the wire.
+It never copies `Content-Length` from an upstream response it decompressed, because aiohttp would then truncate the outbound body to the compressed length - a silent fail-open.
+
+The JavaScript rewriting is lexical, so a `from '/x'` inside an ordinary string or comment is rewritten too (audit F21).
+The surface is narrow and the tree-sitter stack is already a dependency if it ever bites; this module is where that work would go.
+
+**Not:** the registry that answers *which* Preview this is (`processes.py`), the durable mirror (`preview_store.py`), screenshots (`preview_capture.py`), or route registration (`routes/processes.py`).
+
 ## `clipboard_store.py`
 
 The in-memory clipboard-history ring - dedupe by content hash, pins, count and time bounds, secret-shape refusal - plus its opt-in SQLite mirror.

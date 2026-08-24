@@ -51,6 +51,21 @@ The types are annotations (`CONFIG: web.AppKey[Config]`) with the runtime type a
 
 **Not:** creating or owning any handle - it names them; and not request-scoped state, which belongs on the request.
 
+### `http_support.py`
+
+The transport primitives with no domain knowledge: the compact JSON response, response security headers, the loopback-peer check, and one-shot task-failure logging.
+Outside `routes/` deliberately, because `preview_transport.py` streams its own response and needs the security headers, and a module below the route layer reaching up into `routes/` would invert the dependency direction the package boundary states.
+
+**Not:** the middlewares themselves, static-asset cache headers, or resolving a request to the Project or session it names (`routes/support.py`).
+
+### `runtime_config.py`
+
+Applying a changed config to a live runtime without a restart: the config-file mtime probe, the watch loop that notices an external edit, the field set that invalidates LLM readiness, and `apply_runtime_config`, which pushes each changed hot field onto the handle that owns it.
+
+Its callers are the composition root (the watch loop) and every route that writes config - `PATCH /api/config`, the configurator's settings write, a grant, and a Project ignore write - which is why it is a module rather than a private helper of any one of them.
+
+**Not:** validation or the write itself (`config.update_config`), which fields are hot rather than restart-required (also `config.py`), or the event that tells attached clients (`server.py` emits `settings_changed`).
+
 ### `server.py` startup
 
 - **Bind first, build behind it.** `runtime_context` returns at once and the runtime is constructed by a background task (`_build_runtime`), so the socket is open for the whole start.
@@ -65,14 +80,17 @@ The types are annotations (`CONFIG: web.AppKey[Config]`) with the runtime type a
 - What may be deferred is decided by whether serving depends on it, and the reason is recorded at each site. Deferred: process-ownership restore (a full psutil sweep, measured 20.7s cold / 6.0s warm over 482 processes; the inspector's own poll refreshes it forever afterwards, and `start()` lives inside the deferring task so the poll cannot run against a half-restored map).
   Deliberately not deferred: the historical provider-collision reconcile (it hides false runs from the first request), the provider-account reconcile (system auth is authoritative, `architecture.md` invariant 10), and every `restore()` whose loop is started immediately after it.
 
-### `server.py` event and PTY transport
+### Event and PTY transport
+
+`routes/pty.py` serves both WebSockets; the module map is `routes.md`.
 
 - UI identity hello before event recovery, cold event watermarks, 64-record reconnect recovery, and snapshot fallback for wider gaps.
 - Browser omission of audit-only hook payloads.
 - Delta attach for reconnecting terminals: a handshake-first replay decision, `since`-validated missed-bytes replay, and `replay_end` position anchors, with `Session.attach_and_subscribe` owning the coverage rule.
 - Zero-delay batching of already-queued PTY output.
 - Content-free physical-input acknowledgements and allowlisted per-phase client latency diagnostics.
-- Integrated or split create-worktree, setup, and spawn transport orchestration, with configured-root-bounded parent creation, exact repair and remove post-state validation, and atomic quarantine of unregistered directory remnants.
+
+Worktree transport - integrated or split create, setup, and spawn orchestration, and configured-root-bounded parent creation - is `routes/git.py`; the removal transaction it calls is `worktree_mutation.py`.
 
 **Not:** durable event storage, browser state ownership, or transport-level compression.
 

@@ -80,7 +80,7 @@ A decision is made from the harness's structured permission request, never from 
 
 The durable per-session detection timeline: `LedgerRing` (seq and run-id stamping plus a guarded sink nudge), the write-behind batched drain into `status_timeline`, time-ranged and post-mortem queries, retention, and `note_layer_reading` for on-change layer entries.
 
-**Not:** the transition contract itself, since `apply_state_transition` never touches persistence; state decisions; or HTTP handlers (`server.py`).
+**Not:** the transition contract itself, since `apply_state_transition` never touches persistence; state decisions; or HTTP handlers (`routes/`).
 
 Incident procedure: `../../../development/STATUS_INCIDENT_RUNBOOK.md`.
 

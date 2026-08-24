@@ -6,8 +6,12 @@ The map is split by domain so a change touches one file; this page is the index,
 ## Composition boundary
 
 `src/swe_mux/server.py` is the aiohttp composition root.
-It creates stores and managers, wires background workers, validates transport input, and translates domain errors to HTTP and WebSocket results.
+It creates stores and managers, wires background workers, and registers the route table; it holds no handlers.
 It should call domain packages rather than acquire their storage or process responsibilities.
+
+The handlers live in `src/swe_mux/routes/`, one module per domain, described in [`packages/routes.md`](packages/routes.md).
+The direction is one-way and enforced: `server.py` may import any route module, and a route module may not import `server.py` (`tests/test_route_modules.py`).
+Transport input validation and domain-error-to-HTTP translation happen there and in `error_middleware`, whose shared error shapes are in `../../design/interfaces.md`.
 
 ## Dependency direction
 
@@ -45,6 +49,7 @@ Feature stores sharing `mux.db` use their own single-worker executor and connect
 - [`packages/harnesses.md`](packages/harnesses.md) - the harness registry, adapters and launchers, skills and environment inventory, provider accounts, usage collection.
 - [`packages/processes-and-devices.md`](packages/processes-and-devices.md) - process inspection, Previews, clipboard, device presence, push, operational telemetry.
 - [`packages/voice-and-assistant.md`](packages/voice-and-assistant.md) - TTS and STT, the Kokoro engine and its models, the Mux assistant.
+- [`packages/routes.md`](packages/routes.md) - the HTTP and WebSocket route modules, the rules that keep the package a decomposition, and which module serves which surface.
 - [`packages/runtime-rules.md`](packages/runtime-rules.md) - the rules every background worker, poller, and subprocess in the daemon obeys, and the measurements behind them.
 
 ## Related design

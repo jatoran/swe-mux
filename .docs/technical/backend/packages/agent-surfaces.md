@@ -29,7 +29,7 @@ Two tools rather than one flagged tool, so the call that moves a trunk is never 
 
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
 
-**Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`server.py`).
+**Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`routes/`).
 Nor any authority a write tool borrows: session control (`session_control.py`), landing (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`).
 
 Also the configurator family (`CONFIGURATOR_TOOLS`), which is a *separate* array rather than flagged entries in `TOOLS`: `tools_for` returns the ordinary list unchanged to every session but a configurator, so nothing has to remember to filter.
@@ -61,7 +61,8 @@ The configurator agent's substrate (`design/features/configurator.md`).
   It is never a writer: writes stay path-scoped operations that need no schema at all.
 - Section-scoped manifests. `settings` is 45 KB of the 56 KB and is omitted by default; `settings_query` narrows it further.
 
-**Not:** the settings write itself (`config.update_config`, reached through the injected callable), the device-settings write (`settings_store.apply_operations`, likewise), the health report (`doctor.py`, gathered by `server._doctor_report`), harness resolution (`harness.resolve_default_harness`), the routes and the session marker (`server.py`, `models.py`), or MCP transport (`mcp.py`).
+**Not:** the settings write itself (`config.update_config`, reached through the injected callable), or the device-settings write (`settings_store.apply_operations`, likewise).
+Nor the health report (`doctor.py`, gathered by `routes/diagnostics.py`), harness resolution (`harness.resolve_default_harness`), the routes and the session marker (`routes/configurator.py`, `models.py`), or MCP transport (`mcp.py`).
 
 ### `settings_patch.py`
 
@@ -88,7 +89,7 @@ Without it, an agent that read, thought, and wrote back would silently discard a
 The backup exists because nothing here can validate an opaque domain.
 The honest guarantee is not "this write is correct" but "the previous document is still on disk" - which `config.toml` already had and this file did not.
 
-**Not:** the browser's own whole-domain `update()` path, notification policy, or the event that repaints attached clients (`server.py` emits `settings_changed`; the store does not know about the event bus).
+**Not:** the browser's own whole-domain `update()` path, notification policy, or the event that repaints attached clients (`routes/settings.py` emits `settings_changed`; the store does not know about the event bus).
 
 ### `project_scope.py`
 
@@ -108,7 +109,7 @@ The `project` argument shared by the agent-facing read and write surfaces: own-P
 
 Every refusal is a typed `QueueError`.
 
-**Not:** the interrupt and graceful-end PTY operations themselves and the daemon-owner check (both in `server.py`), MCP transport (`mcp.py`), or observation storage (`project_files.py`).
+**Not:** the interrupt and graceful-end PTY operations themselves and the daemon-owner check (all three in `routes/terminal.py`), MCP transport (`mcp.py`), or observation storage (`project_files.py`).
 
 ### `session_watch.py`
 
@@ -158,7 +159,7 @@ It draws that evidence from two sources: the queue's own `open_reply_windows`, a
 Relay policy for agent-authored messages: requested Project scope re-resolved through `project_scope.py`, size, per-origin budget, target backlog, propagation depth, per-thread turn budget, ring detection, kill switch, and expiry.
 Also the `dry_run` projection (every bound run, nothing staged, no budget spent), sender-attributed `revoke` of a still-undelivered message, sender-only message and request status, inert `spawn_request` drafts, and the Fleet Queue projection over messages plus targetless spawn approvals and drafted `control_request` interrupt and end rows.
 
-**Not:** delivery, spawning (approval is a `server.py` human act), session-control authority (`session_control.py`), or MCP protocol.
+**Not:** delivery, spawning (approval is a `routes/observations.py` human act), session-control authority (`session_control.py`), or MCP protocol.
 
 ## Scheduled runs
 

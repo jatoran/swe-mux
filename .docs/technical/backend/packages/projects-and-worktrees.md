@@ -85,7 +85,23 @@ Where a removed checkout goes so the deletion does not have to happen in front o
 
 The purge clears the read-only bit before retrying a file (Git writes loose objects read-only, and Windows cannot unlink one at all), counts what it could not delete rather than raising, and never removes the graveyard root - a purge racing a burial must not delete the directory another removal is renaming into.
 
-**Not:** deciding *whether* a worktree may be buried, which is Git's set of refusals and lives with the removal route in `server.py`; running Git; or scheduling the purge.
+**Not:** deciding *whether* a worktree may be buried, which is Git's set of refusals and lives in `worktree_mutation.py`; running Git; or scheduling the purge.
+
+### `worktree_mutation.py`
+
+The worktree removal transaction, as a service rather than a route.
+It owns the repository's registered-worktree listing, the root-identity check, orphan quarantine, the clean and removable probes, and the startup graveyard sweep.
+`bury_worktree` decides whether the fast path applies, returning `None` for every case where renaming first would change what the removal means.
+`remove_registered_worktree` sequences repair, burial, Git's own removal, rollback, and cleanup.
+
+The result is `RemovalCompleted` or `RemovalRefused`, and the refusal carries its own HTTP status.
+That belongs to the outcome rather than to the caller because the distinction the codes encode - a timeout is 504, a refusal 409, Git's own failure 400 - is a property of what happened; a second mapping at the transport boundary is a second thing that can disagree.
+`RemovalRefused.repaired` is optional: a removal refused before Git ran never repaired anything, and reporting `repaired: false` there reads as a repair that was tried and failed.
+
+A repair is verified against the post-repair listing, never against Git's exit code: the code says Git tried, only the listing says it worked.
+A Git failure that nevertheless dropped the registration is reported as a completion with a quarantined directory, not as a failure - reporting Git's error there would leave the operator looking at a checkout the repository no longer knows about.
+
+**Not:** HTTP (`routes/git.py` translates the outcome), scheduling the purge, the rename and purge mechanics (`worktree_graveyard.py`), or worktree creation.
 
 ### `worktree_verify.py`
 

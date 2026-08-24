@@ -100,6 +100,14 @@ Trusted Project and worktree storage selection, filename normalization, image co
 
 **Not:** HTTP multipart parsing, PTY insertion, provider parsing, or retention cleanup.
 
+## `session_media.py`
+
+What a session may store and when it stops being stored: the accepted media types and their magic-byte signatures, the per-session media directory, and the two expiry sweeps (session media at `SESSION_MEDIA_TTL_SECONDS`, Preview screenshots at `PREVIEW_SHOT_TTL_SECONDS`).
+
+Validation is by signature rather than by declared type, because the declared type is the caller's claim.
+
+**Not:** the attachment path (`session_attachments.py`, which is durable and Project-scoped), multipart parsing, or the loops that call the sweeps (`server.py` owns those).
+
 ## `terminal_arbitration.py`
 
 Pure multi-device rules for one shared PTY.
@@ -108,9 +116,9 @@ Pure multi-device rules for one shared PTY.
 - Epoch and release bookkeeping.
 - The arbitrated geometry: the owner's viewport, else the smallest visible one.
 
-`server.py` records every decision in the session's bounded claim log and stops answering a connection's repeated passive claims for a second after refusing one.
+`routes/pty.py` records every decision in the session's bounded claim log and stops answering a connection's repeated passive claims for a second after refusing one.
 
-**Not:** sockets, PTYs, telemetry, or *which* device is in use - `device_presence.py` answers that, `session.py` holds the state, and `server.py` applies the decisions.
+**Not:** sockets, PTYs, telemetry, or *which* device is in use - `device_presence.py` answers that, `session.py` holds the state, and `routes/pty.py` applies the decisions.
 
 ## `composer_input.py`
 
@@ -127,7 +135,7 @@ It also **builds** an insertion (`composer_insertion`), not only classifies one,
 The body is a bracketed paste with newlines as CR; a *leading* newline run is lifted out and emitted as `newline_keys` presses ahead of it when the harness declares `paste_leading_newline_submits`, because Codex reads a paste's first newline as Enter and submits whatever the composer held (measured 2026-08-22 against v0.149.0).
 `harness.composer_insertion_rules(backend)` resolves the pair, `server._composer_insertion` is the daemon's one caller-facing wrapper, and `composerInsertion.ts` is the browser's mirror.
 
-`server.py` calls it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
+`routes/pty.py` and `routes/terminal.py` call it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
 
 **Not:** reading the composer, which nothing can, or authorizing anything - `delivery_readiness.py` keeps its own coarse boundary and never consults this.
 Not the queue's delivery bytes either: `prompt_queue.delivery_payload` builds those on top of this, and *drops* a leading newline rather than lifting it, because a delivery has passed the readiness gate and is about to submit.
