@@ -38,11 +38,25 @@ It travels with the repository, so it is shared with everyone who clones it - wh
 is why it is a deliberately small, closed set of fields, and why some fields are
 refused outright rather than ignored.
 
-`configurator_capabilities` reports the allowed and forbidden sets under
-`project_settings`. The forbidden ones are a boundary, not an oversight: a
-repository must not be able to set this daemon's bind address, its token, or the
-command a harness runs. If a Project config is rejected naming one of those, that is
-the system working.
+Read with `configurator_project_settings`, write with
+`configurator_apply_project_settings`. Both default to the Project this session is
+standing in; name another explicitly to reach it.
+
+The read is worth more than the file, because it resolves the automation opt-ins:
+`effective` are the ones actually running, `blocked` are the ones switched on whose
+dependencies are not. That distinction is the answer to "why is this panel empty",
+and the raw file cannot give it.
+
+The forbidden fields are a boundary, not an oversight: a repository must not be able
+to set this daemon's bind address, its token, or the command a harness runs. If a
+write is refused naming one of those, that is the system working.
+
+**Say out loud that this file is committed.** Turning an automation on here turns it
+on for everyone who clones that repository, which is a different sentence from
+"turned it on for you" and the operator deserves the accurate one.
+
+Changes are merged over what is there, not substituted for it, and the write is
+revision-guarded.
 
 This is where a Project's automation opt-ins, its worktree setup and verification
 commands, its preferred backend, and its agent authority grants live.
@@ -56,9 +70,29 @@ notification behaviour.
 Sounds, alert routing, push preferences, the command rail's contents, the file
 tree's expanded state, drawer tab order, sidebar row layout.
 
-You do not write these. They are edited where they are used, and several of them are
-opaque blobs the browser owns. If someone asks for a change here, point at the
-control.
+Read with `configurator_device_settings`, write with
+`configurator_edit_device_settings`. **The rail has its own guide
+(`rail-and-actions`); read it before touching the rail.**
+
+Two of the seven domains - `alerts` and `notifications` - the daemon interprets,
+because the push sender has to apply the master switch and quiet hours before any
+browser tab is alive to filter. The other five it stores **verbatim**: the browser
+owns their schema and nothing here can tell a valid one from a mangled one.
+
+That asymmetry decides how you edit them:
+
+- **Never resend a whole document.** Use path-scoped operations. Everything an
+  operation did not name is untouched because the request could not name it, which
+  is a property of the shape of the write rather than of how carefully you composed
+  it.
+- **Read first and pass back the `digest`.** The store has no revision, so without
+  it an edit the operator made between your read and your write is silently
+  discarded rather than refused.
+- **Read the result back** and tell them what it is now.
+
+The previous file is kept beside itself on every write, so a bad edit is
+recoverable by hand. That is the honest guarantee available here - not "this write
+is correct", which nothing in the daemon can promise about an opaque document.
 
 ## Hot versus restart-required
 
@@ -80,12 +114,22 @@ let them ask.
 
 ## The order to work in
 
-1. Read the row in `configurator_capabilities` before proposing a value. The name
-   you remember may not be the name it has.
-2. Tell the operator the current value, the proposed value, and what will visibly
+1. Work out **which of the three** the setting lives in. Getting this wrong is how
+   you change the right value somewhere it does nothing.
+2. Read it before proposing a value. The name you remember may not be the name it
+   has, and the current value is half the sentence you owe them.
+3. Tell the operator the current value, the proposed value, and what will visibly
    differ.
-3. Ask.
-4. Apply, and report `hot_applied` versus `restart_required` honestly.
+4. Ask.
+5. Apply, read it back, and report `hot_applied` versus `restart_required` honestly.
+
+**Do the thing they asked.** They pressed a button that opens an agent, not a help
+page. Pointing at the editor instead of making a change they asked for is a
+non-answer; name the control *as well*, so they can do it themselves next time.
+
+**Default to the shared scope.** Almost every setting here has a broad form and a
+narrow one - a global rail and a per-Project override, an install-wide switch and a
+per-Project opt-in. An unqualified request means the broad one.
 
 If a batch is refused, nothing was written - validation runs over the whole
 candidate before anything is saved. The result names the offending fields; fix

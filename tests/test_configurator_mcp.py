@@ -23,9 +23,16 @@ from swe_mux.mcp_contract import (
 )
 
 
-def session(sid: str, *, configurator: bool = False) -> Any:
+def session(sid: str, *, configurator: bool = False, project: str = "p1") -> Any:
     return SimpleNamespace(
-        record=SimpleNamespace(id=sid, project_id="p1", configurator=configurator),
+        record=SimpleNamespace(
+            id=sid,
+            project_id=project,
+            project_label="Work",
+            cwd="D:/work",
+            run_cwd="",
+            configurator=configurator,
+        ),
         mcp_token=f"tok-{sid}",
     )
 
@@ -33,10 +40,12 @@ def session(sid: str, *, configurator: bool = False) -> Any:
 class ConfiguratorStub:
     def __init__(self, apply_result: dict[str, Any] | None = None) -> None:
         self.applied: list[dict[str, Any]] = []
+        self.calls: list[dict[str, Any]] = []
         self.apply_result = apply_result or {"applied": True, "hot_applied": ["theme"]}
 
-    async def capabilities(self) -> dict[str, Any]:
-        return {"install": {"mode": "source"}, "settings": []}
+    async def capabilities(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"tool": "capabilities", **kwargs})
+        return {"install": {"mode": "source", "session": kwargs.get("session") or {}}}
 
     async def diagnostics(self) -> dict[str, Any]:
         return {"ok": True, "checks": []}
@@ -44,6 +53,22 @@ class ConfiguratorStub:
     async def apply_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         self.applied.append(changes)
         return self.apply_result
+
+    async def device_settings(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"tool": "device_settings", **kwargs})
+        return {"profiles": ["desktop", "mobile"], "index": {}}
+
+    async def edit_device_settings(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"tool": "edit_device_settings", **kwargs})
+        return {"applied": ["removed 4"], "digest": "abc"}
+
+    async def project_settings(self, project: str = "") -> dict[str, Any]:
+        self.calls.append({"tool": "project_settings", "project": project})
+        return {"project": {"id": project}}
+
+    async def apply_project_settings(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"tool": "apply_project_settings", **kwargs})
+        return {"applied": True, "changed": sorted(kwargs.get("changes") or {})}
 
 
 def service_for(*sessions: Any, configurator: Any = None) -> McpService:
@@ -210,6 +235,92 @@ async def test_a_daemon_with_no_configurator_service_says_so_rather_than_faking_
         with pytest.raises(QueueError) as caught:
             await service.dispatch_tool(caller, name, {})
         assert caught.value.code == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_every_configurator_read_carries_where_the_caller_is_standing() -> None:
+    """The fact whose absence produced a confident, wrong answer (2026-08-24).
+
+    A configurator launched into somebody else's Project cannot derive its own
+    Project id, so every per-Project override it meets reads as "this one". The
+    session block is how it stops guessing, and it has to be attached by the
+    dispatcher rather than asked for - an argument the model has to remember is
+    an argument it will omit exactly when it matters.
+    """
+    caller = session("s1", configurator=True, project="p-cmr")
+    stub = ConfiguratorStub()
+    service = service_for(caller, configurator=stub)
+    result = await service.dispatch_tool(caller, "configurator_capabilities", {})
+    assert result["install"]["session"]["project_id"] == "p-cmr"
+    assert result["install"]["session"]["project_name"] == "Work"
+
+    await service.dispatch_tool(caller, "configurator_device_settings", {"domain": "commandRail"})
+    device = next(call for call in stub.calls if call["tool"] == "device_settings")
+    assert device["session_project_id"] == "p-cmr"
+
+
+@pytest.mark.asyncio
+async def test_a_project_tool_defaults_to_the_callers_own_project() -> None:
+    caller = session("s1", configurator=True, project="p-cmr")
+    stub = ConfiguratorStub()
+    service = service_for(caller, configurator=stub)
+    await service.dispatch_tool(caller, "configurator_project_settings", {})
+    assert stub.calls[-1]["project"] == "p-cmr"
+    # An explicit ask still wins: reading another Project is legitimate, guessing
+    # which one you are in is not.
+    await service.dispatch_tool(caller, "configurator_project_settings", {"project": "other"})
+    assert stub.calls[-1]["project"] == "other"
+
+
+@pytest.mark.asyncio
+async def test_the_settings_catalog_is_omitted_until_it_is_asked_for() -> None:
+    caller = session("s1", configurator=True)
+    stub = ConfiguratorStub()
+    service = service_for(caller, configurator=stub)
+    await service.dispatch_tool(caller, "configurator_capabilities", {})
+    assert "settings" not in stub.calls[-1]["sections"]
+    await service.dispatch_tool(
+        caller, "configurator_capabilities", {"sections": ["settings"], "settings_query": "theme"}
+    )
+    assert stub.calls[-1]["sections"] == ("settings",)
+    assert stub.calls[-1]["settings_query"] == "theme"
+
+
+@pytest.mark.asyncio
+async def test_a_device_settings_edit_passes_operations_and_the_digest_through() -> None:
+    caller = session("s1", configurator=True)
+    stub = ConfiguratorStub()
+    service = service_for(caller, configurator=stub)
+    operations = [
+        {"op": "remove_values", "path": "/layouts/mobile/strip/[id=row-2]/items",
+         "values": ["up", "down"]}
+    ]
+    await service.dispatch_tool(
+        caller,
+        "configurator_edit_device_settings",
+        {"domain": "commandRail", "operations": operations, "expect_digest": "d1"},
+    )
+    call = stub.calls[-1]
+    assert call["operations"] == operations
+    assert call["expect_digest"] == "d1"
+    assert service.writes == 1
+
+
+@pytest.mark.asyncio
+async def test_an_edit_with_no_operations_is_refused_before_the_service() -> None:
+    caller = session("s1", configurator=True)
+    stub = ConfiguratorStub()
+    service = service_for(caller, configurator=stub)
+    with pytest.raises(ValueError, match="non-empty array"):
+        await service.dispatch_tool(
+            caller, "configurator_edit_device_settings", {"domain": "commandRail", "operations": []}
+        )
+    with pytest.raises(ValueError, match="domain is required"):
+        await service.dispatch_tool(
+            caller, "configurator_edit_device_settings", {"domain": "", "operations": [{}]}
+        )
+    assert stub.calls == []
+    assert service.writes == 0
 
 
 @pytest.mark.asyncio

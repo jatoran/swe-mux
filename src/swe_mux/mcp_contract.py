@@ -105,14 +105,42 @@ CONFIGURATOR_READ_TOOL_NAMES = (
     "configurator_capabilities",
     "configurator_guide",
     "configurator_diagnostics",
+    # The other two settings locations. Reads only: `device_settings` serves the
+    # per-device UI store (the command rail, sounds, alerts) with the rail
+    # resolved into something legible, and `project_settings` serves one
+    # Project's own committed config with its automation closure resolved.
+    #
+    # They exist because the alternative is what actually happened without them:
+    # the agent found and parsed `~/.mux/settings.json` itself, spent 195 KB of
+    # transcript on a question about twelve strings, and - having no way to
+    # resolve a Project id to a name - attributed another Project's rail button
+    # to the one it was standing in (2026-08-24).
+    "configurator_device_settings",
+    "configurator_project_settings",
 )
 
-#: The one configurator write. It changes install-wide settings through
-#: `update_config` - the same call `PATCH /api/config` makes - so it can do
-#: nothing the Settings panel could not, cannot skip a validation, and cannot
-#: half-apply a batch. It is deliberately the *only* write in the family: reading
-#: a diagnostic is safe to repeat, and changing an install is not.
-CONFIGURATOR_WRITE_TOOL_NAMES = ("configurator_apply_settings",)
+#: The configurator's writes: one per settings location, each through the same
+#: validated path the corresponding UI surface uses.
+#:
+#: `apply_settings` changes install-wide config through `update_config` - the same
+#: call `PATCH /api/config` makes. `apply_project_settings` writes a Project's own
+#: committed `.swe-mux/config.toml` through `write_project_config`, which is
+#: revision-guarded and validates against a closed field set that *refuses* the
+#: daemon-authority keys outright. `edit_device_settings` is the odd one and its
+#: shape reflects that: five of the seven device-settings domains are stored
+#: opaquely because the browser owns their schema, so it takes path-scoped
+#: operations rather than a document - everything an operation did not name is
+#: untouched by construction, which is the only safety available when nothing in
+#: this process can tell a valid rail from a mangled one (`settings_patch.py`).
+#:
+#: Three tools rather than one with a `location` argument, deliberately. They have
+#: different blast radii and different validators, and collapsing them would make
+#: the committed, repository-shared write the same call as the local one.
+CONFIGURATOR_WRITE_TOOL_NAMES = (
+    "configurator_apply_settings",
+    "configurator_edit_device_settings",
+    "configurator_apply_project_settings",
+)
 
 
 def claude_read_permissions() -> list[str]:

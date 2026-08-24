@@ -44,10 +44,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import platform
 import re
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -145,6 +146,13 @@ GUIDES: tuple[Guide, ...] = (
         "Harnesses, accounts, and the default harness",
         "Registering and enabling agent CLIs, saving provider logins, launch "
         "profiles, and what the default harness selects.",
+    ),
+    Guide(
+        "rail-and-actions",
+        "The command rail, and editing it",
+        "Where the rail is stored and the profile trap that comes with it, the "
+        "catalog/layout/override split, why an unqualified request means the "
+        "global rail, and how to edit one safely.",
     ),
     Guide(
         "automations",
@@ -487,22 +495,78 @@ def read_guide(guide_id: str) -> str:
 # ------------------------------------------------------------------- manifest
 
 
+#: Sections `build_manifest` can answer, and the default set.
+#:
+#: The default omits `settings`, which is 45 KB of the manifest's 56 KB. A first
+#: call almost never wants all 197 rows - it wants to know what kind of thing it
+#: is looking at - and paying eleven thousand tokens to find that out, on every
+#: turn of a tool loop, is the difference between a cheap question and an
+#: expensive one (measured 2026-08-24: 61k input tokens for a question whose
+#: answer was twelve strings). `settings` is reachable by naming it, and
+#: `settings_query` narrows it further.
+MANIFEST_SECTIONS = (
+    "install",
+    "settings",
+    "project_settings",
+    "harnesses",
+    "automations",
+    "mcp_tools",
+    "guides",
+    "projects",
+)
+DEFAULT_MANIFEST_SECTIONS = (
+    "install",
+    "harnesses",
+    "automations",
+    "mcp_tools",
+    "guides",
+    "projects",
+)
+
+
 def build_manifest(
     config: Config,
     *,
     installations: dict[str, HarnessInstallation] | None = None,
     projects: list[dict[str, Any]] | None = None,
     version: str = "",
+    session: dict[str, Any] | None = None,
+    sections: Sequence[str] = DEFAULT_MANIFEST_SECTIONS,
+    settings_query: str = "",
 ) -> dict[str, Any]:
     """Everything structural the configurator needs to reason about this install.
 
     Assembled from live registries on every call rather than cached: it is read
     a handful of times per session, and a cached manifest is a manifest that
     disagrees with the settings the agent just changed.
+
+    ``session`` is where the caller is *standing*, and it is not a convenience.
+    A configurator launched into somebody else's Project can read this whole
+    install and has no way to tell which of twenty-four Projects it is in, so
+    every per-Project fact it meets - a rail override, an automation opt-in -
+    reads as "this one" when it is the only one present. That is not a
+    hypothetical: it produced a confident, wrong warning about another Project's
+    rail button on 2026-08-24.
     """
+    wanted = [name for name in MANIFEST_SECTIONS if name in set(sections)]
+    unknown = sorted(set(sections) - set(MANIFEST_SECTIONS))
+    if unknown:
+        raise ValueError(
+            f"unknown manifest section(s): {', '.join(unknown)}; "
+            f"available: {', '.join(MANIFEST_SECTIONS)}"
+        )
+    if not wanted:
+        raise ValueError(f"name at least one of: {', '.join(MANIFEST_SECTIONS)}")
     checkout = source_checkout()
-    return {
-        "install": {
+    listed = projects if projects is not None else []
+
+    def settings_section() -> list[dict[str, Any]]:
+        rows = settings_catalog(config)
+        needle = settings_query.strip().casefold()
+        return [row for row in rows if needle in row["name"].casefold()] if needle else rows
+
+    builders: dict[str, Any] = {
+        "install": lambda: {
             "mode": install_mode(),
             "source_checkout": str(checkout) if checkout else None,
             "version": version,
@@ -516,15 +580,241 @@ def build_manifest(
             "host": config.host,
             "port": config.port,
             "config_revision": config.revision,
+            "session": session or {},
         },
-        "settings": settings_catalog(config),
-        "project_settings": project_settings_catalog(),
-        "harnesses": harness_catalog(config, installations),
-        "automations": automation_catalog(),
-        "mcp_tools": mcp_catalog(),
-        "guides": guide_index(),
-        "projects": projects if projects is not None else [],
+        "settings": settings_section,
+        "project_settings": project_settings_catalog,
+        "harnesses": lambda: harness_catalog(config, installations),
+        "automations": automation_catalog,
+        "mcp_tools": mcp_catalog,
+        "guides": guide_index,
+        "projects": lambda: [
+            {**entry, "is_this_session_project": bool(
+                session and entry.get("id") == session.get("project_id")
+            )}
+            for entry in listed
+        ],
     }
+    manifest = {name: builders[name]() for name in wanted}
+    manifest["sections"] = {
+        "returned": wanted,
+        "available": list(MANIFEST_SECTIONS),
+        "omitted": [name for name in MANIFEST_SECTIONS if name not in wanted],
+        "note": (
+            "Ask for `settings` when you need a setting's current value, default, "
+            "or accepted values, and pass `settings_query` to narrow it - the full "
+            "catalog is 197 rows."
+        ),
+    }
+    return manifest
+
+
+# ------------------------------------------------------------- device settings
+
+
+#: Where the command rail actually lives. Both device layouts are inside **one**
+#: blob under the **desktop** profile - a deliberate frontend decision
+#: (`deviceSettings.ts`, `RAIL_PROFILE`): the catalog of commands is shared while
+#: the arrangements are not, so splitting the layouts across the store's two
+#: profile buckets would make a save two writes with a window where one device's
+#: layout names a command the catalog has not got yet.
+#:
+#: It is stated here, loudly, because it is the trap a second editor walks into
+#: without ever being told it did: "edit the mobile rail" reads as "write the
+#: mobile profile", and a `commandRail` document under `profiles.mobile` is
+#: valid, stored, and read by nothing.
+RAIL_PROFILE = "desktop"
+RAIL_DOMAIN = "commandRail"
+
+_RAIL_STORAGE_NOTE = (
+    "The command rail lives in ONE document, under the `desktop` profile, and "
+    "carries both device layouts inside it (`layouts.desktop` and "
+    "`layouts.mobile`). Editing the mobile rail means editing "
+    "`profile=desktop domain=commandRail` at a path under `/layouts/mobile`. A "
+    "`commandRail` document written under the `mobile` profile is stored and "
+    "read by nothing."
+)
+
+
+def _rail_row_view(
+    row: Any, labels: dict[str, str], pointer: str
+) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for raw in row.get("items") or []:
+        item_id = raw if isinstance(raw, str) else str((raw or {}).get("id") or "")
+        entry: dict[str, Any] = {"id": item_id}
+        if item_id in labels:
+            entry["label"] = labels[item_id]
+        entries.append(entry)
+    return {
+        "row_id": str(row.get("id") or ""),
+        "items": entries,
+        # The exact pointer an edit would name, so the agent does not compose one
+        # from a shape it inferred. Selector form rather than an index: a row
+        # named by its own id cannot be reordered out from under the write.
+        "items_path": f"{pointer}/[id={row.get('id')}]/items",
+    }
+
+
+def rail_projection(
+    document: Any, *, project_names: dict[str, str], session_project_id: str = ""
+) -> dict[str, Any]:
+    """A legible read of the rail blob, resolved against the Project registry.
+
+    Purely derived, and it never writes: the blob's schema belongs to the browser
+    and this is a *reading* of it, so anything it cannot make sense of is reported
+    as unreadable rather than guessed at, and a write still goes through
+    path-scoped operations that need no schema at all.
+
+    Two things it supplies that a raw file read cannot, and both are why it
+    exists. Catalog **labels**, so a row is a list of names rather than of
+    identifiers. And every project override resolved to its **Project name**,
+    with the caller's own Project marked - a blob keyed by bare UUIDs invites the
+    reader to assume the one override it can see belongs to wherever it is
+    standing, which is exactly the mistake that produced a confident, wrong
+    warning about another Project's button (2026-08-24).
+    """
+    if not isinstance(document, dict):
+        return {"readable": False, "reason": "the stored rail is not an object"}
+    labels = {
+        str(item.get("id") or ""): str(item.get("label") or "")
+        for item in (document.get("items") or [])
+        if isinstance(item, dict) and item.get("label")
+    }
+    layouts: dict[str, Any] = {}
+    raw_layouts = document.get("layouts")
+    if isinstance(raw_layouts, dict):
+        for device, surfaces in raw_layouts.items():
+            if not isinstance(surfaces, dict):
+                continue
+            device_view: dict[str, Any] = {}
+            for surface, rows in surfaces.items():
+                if not isinstance(rows, list):
+                    continue
+                pointer = f"/layouts/{device}/{surface}"
+                device_view[str(surface)] = [
+                    _rail_row_view(row, labels, pointer) for row in rows if isinstance(row, dict)
+                ]
+            layouts[str(device)] = device_view
+
+    overrides: list[dict[str, Any]] = []
+    raw_projects = document.get("projects")
+    if isinstance(raw_projects, dict):
+        for project_id, scope in raw_projects.items():
+            mode = str((scope or {}).get("mode") or "fork") if isinstance(scope, dict) else "?"
+            added = [
+                {"id": str(item.get("id") or ""), "label": str(item.get("label") or "")}
+                for item in ((scope or {}).get("items") or [])
+                if isinstance(scope, dict) and isinstance(item, dict)
+            ]
+            overrides.append(
+                {
+                    "project_id": project_id,
+                    "project_name": project_names.get(project_id, "<not a registered Project>"),
+                    "is_this_session_project": bool(
+                        session_project_id and project_id == session_project_id
+                    ),
+                    "mode": mode,
+                    "adds_items": added,
+                    "path": f"/projects/{project_id}",
+                }
+            )
+
+    return {
+        "readable": True,
+        "version": document.get("version"),
+        "storage": {
+            "profile": RAIL_PROFILE,
+            "domain": RAIL_DOMAIN,
+            "note": _RAIL_STORAGE_NOTE,
+        },
+        "catalog_items": len(document.get("items") or []),
+        "layouts": layouts,
+        "project_overrides": overrides,
+        "this_session_has_an_override": any(
+            entry["is_this_session_project"] for entry in overrides
+        ),
+        "scope_rule": (
+            "The rail an operator sees in most Projects is the GLOBAL one, under "
+            "`/layouts`. Edit that unless they have said the change is for one "
+            "Project. A project override under `/projects/<id>` belongs to the "
+            "Project named beside it and to no other - never read one as 'this "
+            "Project's' because it is the only one present."
+        ),
+    }
+
+
+def device_settings_view(
+    store: Any,
+    *,
+    project_names: dict[str, str] | None = None,
+    session_project_id: str = "",
+    profile: str = "",
+    domain: str = "",
+) -> dict[str, Any]:
+    """The per-device UI settings, with the rail resolved into something readable.
+
+    The third settings location (`settings.md`), and until now the one the
+    configurator could see only by finding and parsing `~/.mux/settings.json`
+    itself - 195 KB of transcript to answer a question about twelve strings,
+    with the schema reverse-engineered per session and no way to resolve a
+    Project id to a name.
+
+    With no arguments it answers the index: which profiles hold which domains,
+    which of them the daemon interprets, and how large each is. That is the shape
+    a first call should be, because most questions are answered by *which* domain
+    to look at, and pulling every document to find out costs the caller the thing
+    this tool exists to save.
+    """
+    from .settings_store import DOMAINS, INTERPRETED_DOMAINS, PROFILES
+
+    names = project_names or {}
+    if profile and profile not in PROFILES:
+        raise ValueError(f"profile must be one of {', '.join(PROFILES)}")
+    if domain and domain not in DOMAINS:
+        raise ValueError(f"domain must be one of {', '.join(DOMAINS)}")
+
+    index: dict[str, Any] = {}
+    for name in PROFILES:
+        stored = store.all()["profiles"].get(name) or {}
+        index[name] = {
+            key: {
+                "present": key in stored,
+                "interpreted": key in INTERPRETED_DOMAINS,
+                "bytes": len(json.dumps(stored.get(key) or {})),
+            }
+            for key in DOMAINS
+        }
+
+    result: dict[str, Any] = {
+        "profiles": list(PROFILES),
+        "domains": list(DOMAINS),
+        "interpreted_domains": list(INTERPRETED_DOMAINS),
+        "index": index,
+        "rail_storage": {
+            "profile": RAIL_PROFILE,
+            "domain": RAIL_DOMAIN,
+            "note": _RAIL_STORAGE_NOTE,
+        },
+        "note": (
+            "A domain the daemon does not interpret is stored verbatim: a "
+            "malformed write is kept, not refused, and the browser normalizes "
+            "whatever it finds. Edit them with path-scoped operations "
+            "(`configurator_edit_device_settings`), never by resending a whole "
+            "document, and read the result back."
+        ),
+    }
+    if not domain:
+        return result
+
+    target_profile = profile or (RAIL_PROFILE if domain == RAIL_DOMAIN else "desktop")
+    entry = store.domain(target_profile, domain)
+    result["requested"] = entry
+    if domain == RAIL_DOMAIN:
+        result["rail"] = rail_projection(
+            entry["document"], project_names=names, session_project_id=session_project_id
+        )
+    return result
 
 
 # --------------------------------------------------------------------- service
@@ -554,6 +844,14 @@ class ConfiguratorService:
         installations: Callable[[], dict[str, HarnessInstallation]],
         diagnostics: Callable[[], Awaitable[dict[str, Any]]],
         apply_settings: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+        # A callable rather than the store itself: this service is constructed
+        # while the daemon's runtime is still being assembled, and resolving the
+        # store eagerly binds to whatever exists at that instant. Every other
+        # dependency here is late-bound for the same reason.
+        settings_store: Callable[[], Any] | None = None,
+        edit_device_settings: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+        read_project_settings: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        apply_project_settings: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         version: str = "",
     ) -> None:
         self._config = config
@@ -561,9 +859,27 @@ class ConfiguratorService:
         self._installations = installations
         self._diagnostics = diagnostics
         self._apply_settings = apply_settings
+        # The device-settings store is read directly (it is a plain file store
+        # with no HTTP layer behind it) while the *write* is injected, because a
+        # write has to emit the event that makes every attached browser refetch -
+        # an agent-applied rail change that does not repaint reads as a change
+        # that did not happen.
+        self._settings_store = settings_store
+        self._edit_device_settings = edit_device_settings
+        self._read_project_settings = read_project_settings
+        self._apply_project_settings = apply_project_settings
         self.version = version
 
-    async def capabilities(self) -> dict[str, Any]:
+    def _project_names(self) -> dict[str, str]:
+        return {str(entry.get("id")): str(entry.get("name")) for entry in self._projects()}
+
+    async def capabilities(
+        self,
+        *,
+        session: dict[str, Any] | None = None,
+        sections: Sequence[str] = DEFAULT_MANIFEST_SECTIONS,
+        settings_query: str = "",
+    ) -> dict[str, Any]:
         installations = await asyncio.to_thread(self._installations)
         return await asyncio.to_thread(
             build_manifest,
@@ -571,6 +887,9 @@ class ConfiguratorService:
             installations=installations,
             projects=self._projects(),
             version=self.version,
+            session=session,
+            sections=sections,
+            settings_query=settings_query,
         )
 
     async def diagnostics(self) -> dict[str, Any]:
@@ -578,6 +897,45 @@ class ConfiguratorService:
 
     async def apply_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         return await self._apply_settings(changes)
+
+    async def device_settings(
+        self,
+        *,
+        profile: str = "",
+        domain: str = "",
+        session_project_id: str = "",
+    ) -> dict[str, Any]:
+        if self._settings_store is None:
+            raise RuntimeError("device settings are not available on this daemon")
+        return await asyncio.to_thread(
+            device_settings_view,
+            self._settings_store(),
+            project_names=self._project_names(),
+            session_project_id=session_project_id,
+            profile=profile,
+            domain=domain,
+        )
+
+    async def edit_device_settings(
+        self, *, profile: str, domain: str, operations: Any, expect_digest: str = ""
+    ) -> dict[str, Any]:
+        if self._edit_device_settings is None:
+            raise RuntimeError("device settings are not writable on this daemon")
+        return await self._edit_device_settings(
+            profile=profile, domain=domain, operations=operations, expect_digest=expect_digest
+        )
+
+    async def project_settings(self, project: str = "") -> dict[str, Any]:
+        if self._read_project_settings is None:
+            raise RuntimeError("project settings are not available on this daemon")
+        return await self._read_project_settings(project)
+
+    async def apply_project_settings(
+        self, *, project: str, changes: dict[str, Any]
+    ) -> dict[str, Any]:
+        if self._apply_project_settings is None:
+            raise RuntimeError("project settings are not writable on this daemon")
+        return await self._apply_project_settings(project=project, changes=changes)
 
 
 # --------------------------------------------------------------- seed prompt
@@ -601,6 +959,8 @@ def compose_seed_prompt(
     projects: list[dict[str, Any]] | None = None,
     doctor_summary: str = "",
     version: str = "",
+    project_name: str = "",
+    project_id: str = "",
 ) -> str:
     """The message the configurator session runs as its first turn.
 
@@ -648,21 +1008,36 @@ A human just pressed a button in swe-mux asking for help configuring, understand
 or diagnosing it. You are running as a `{harness}` session inside swe-mux itself, in
 `{cwd}`. Your job is that conversation - not a task in their codebase.
 
-## What you can see and change
+## Settings live in three places, and you can write all three
 
-You hold four tools the rest of the fleet does not, under the `mux` MCP server:
+Getting this wrong is the most common way to change the right value somewhere it
+does nothing. Every one of these has its own tool, and the `settings` guide covers
+the split.
 
-- `configurator_capabilities` - this install's generated inventory: every setting
-  with its current value, default, and the constraint its own validator enforces;
-  the harness registry with live detection; the automation dependency graph; the
-  MCP surface. Read this instead of guessing what a setting is called.
+1. **Install-wide daemon config** (`config.toml`) - ports, themes, terminal
+   behaviour, harnesses, budgets, voice. Read with `configurator_capabilities`
+   (`sections: ["settings"]`, `settings_query` to narrow), write with
+   `configurator_apply_settings`.
+2. **Per-device UI settings** (`settings.json`) - the command rail, sounds,
+   alerts, drawer tabs, sidebar rows, the file tree. Read with
+   `configurator_device_settings`, write with `configurator_edit_device_settings`.
+3. **Per-Project config** (`.swe-mux/config.toml`, committed to that repository) -
+   automation opt-ins, agent authority grants, worktree commands. Read with
+   `configurator_project_settings`, write with `configurator_apply_project_settings`.
+
+## Your other tools
+
+- `configurator_capabilities` - this install's generated inventory: the harness
+  registry with live detection, the automation dependency graph, the MCP surface,
+  and - when you ask for the `settings` section - every setting with its current
+  value, default, and the constraint its own validator enforces. Read it instead
+  of guessing what a setting is called. It omits the 197-row settings catalog by
+  default; name the section when you need it.
 - `configurator_guide` - the shipped guides. Call it with no argument for the
   index, then with an `id` for the text. They explain the design decisions behind
-  what you will see, including why so much starts switched off.
+  what you will see, including why so much starts switched off. Read the guide for
+  a surface before editing it.
 - `configurator_diagnostics` - the health report and prerequisite checks.
-- `configurator_apply_settings` - changes install-wide settings. It runs the same
-  validated path the Settings panel uses, so it can do nothing the panel could
-  not, and it refuses anything invalid rather than half-applying it.
 
 ## This machine, right now
 
@@ -672,6 +1047,12 @@ You hold four tools the rest of the fleet does not, under the `mux` MCP server:
 - Data directory: {config.data_dir}
 - Projects registered: {project_count}
 - Default harness setting: {config.default_harness or "(unset - resolved by detection)"}
+
+**You are standing in the Project `{project_name or "(unknown)"}`**, id
+`{project_id or "(unknown)"}`. That matters more than it looks: this install has
+{project_count} Projects and most per-Project settings you will meet belong to one of
+the others. A per-Project override is *this* Project's only when its id matches the
+one above - never because it is the only one you can see.
 
 Harnesses:
 {known_harnesses}
@@ -686,11 +1067,23 @@ need a daemon restart; `configurator_capabilities` marks which, and you must say
 which one you are about to cause. Never restart the daemon yourself without being
 asked to.
 
-**Prefer showing them the control over changing it for them.** If a one-line answer
-is "Settings → Terminals → cursor style", that is a better answer than doing it
-silently: they will want to change it again. Reach for `configurator_apply_settings`
-when they have asked you to make the change, when the change is fiddly, or when
-several settings have to move together.
+**Do the thing they asked for.** They pressed a button that opens an agent, not a
+manual. When they say "remove these four buttons", the answer is to propose the exact
+edit and make it once they agree - not to describe where the editor is. Name the
+control *as well*, because they will want to change it again, but do not use it as a
+substitute for doing the work.
+
+**Global unless they said otherwise.** Most settings have a shared scope and a
+narrower one - a global command rail and a per-Project override, an install-wide
+switch and a per-Project opt-in. An unqualified request means the shared one. Only
+reach for the narrow scope when they named a Project, or when the thing they are
+changing exists only there.
+
+**Edit device settings with path-scoped operations, never a whole document.** The
+daemon cannot validate a rail or a sound map - the browser owns those schemas - so
+an operation that names what to change is the only kind that cannot lose what it did
+not mean to touch. Read the domain, pass back the `digest` you read, and read the
+result afterwards.
 
 **Explain what is off on purpose.** Nearly every analysis and automation surface in
 swe-mux ships disabled, per Project, and an empty panel is usually that rather than a
@@ -707,4 +1100,4 @@ transcript that outlives it.
 Greet them in a sentence, say what you can do, and ask what they want. Do not dump
 the inventory at them. If they have no idea what to ask, the useful opening offers are:
 a health check, a walk through what is switched off and what it would cost to switch
-on, or setting up remote access from a phone."""
+on, rearranging the command rail, or setting up remote access from a phone."""

@@ -408,12 +408,20 @@ operator's.
 
 ## The configurator family
 
-Four tools sit outside every list above and are shown to **one kind of session**: one the
-daemon itself launched as the configurator (`configurator.md`). They are
-`configurator_capabilities`, `configurator_guide`, `configurator_diagnostics`, and
-`configurator_apply_settings`, and they describe and change *swe-mux* rather than the work
-any session is doing - which is why they are a separate contract list rather than additions
-to the read/write sets here.
+Eight tools sit outside every list above and are shown to **one kind of session**: one the
+daemon itself launched as the configurator (`configurator.md`). Five reads
+(`configurator_capabilities`, `configurator_guide`, `configurator_diagnostics`,
+`configurator_device_settings`, `configurator_project_settings`) and one write per settings
+location (`configurator_apply_settings`, `configurator_edit_device_settings`,
+`configurator_apply_project_settings`). They describe and change *swe-mux* rather than the
+work any session is doing - which is why they are a separate contract list rather than
+additions to the read/write sets here.
+
+The device-settings write is the one whose *shape* is unusual and worth knowing here: it
+takes path-scoped operations rather than a document, because five of the seven device
+domains are stored opaquely and nothing in this process can tell a valid one from a mangled
+one. Everything an operation did not name is untouched by construction, which is the only
+safety available where validation is not.
 
 Three properties matter to this document:
 
@@ -429,7 +437,7 @@ Three properties matter to this document:
   document's own spawn-request tool would be a way for any agent to ask for a session that can
   rewrite the install's settings, and the approving human would read it as an ordinary spawn.
 
-The three reads are in the generated Claude permission allowlist; the write is not.
+The five reads are in the generated Claude permission allowlist; the three writes are not.
 
 ## Registration per backend
 
@@ -486,8 +494,10 @@ Both tiers are excluded from `.worktree-verify` and CI.
   `AutomationStore.scan_records` in `src/swe_mux/automation_store.py`
 - The `project` argument, shared by the read and write surfaces: `src/swe_mux/project_scope.py`
 - Closed read/write declarations and Claude read permissions: `src/swe_mux/mcp_contract.py`
-- The configurator family's substrate (generated inventory, shipped guides, seed prompt):
-  `src/swe_mux/configurator.py`; its session marker: `src/swe_mux/models.py`
+- The configurator family's substrate (generated inventory, the rail projection, shipped
+  guides, seed prompt): `src/swe_mux/configurator.py`; its session marker:
+  `src/swe_mux/models.py`; path-scoped device-settings edits:
+  `src/swe_mux/settings_patch.py`, `src/swe_mux/settings_store.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
 - Session-control authority and bounds (grant, budget, cycle, idempotency, readiness gate):
   `src/swe_mux/session_control.py`

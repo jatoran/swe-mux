@@ -28,6 +28,19 @@
   what the wheel and the PyInstaller bundle both carry, and `.docs/` is in neither. A guide
   moved into `.docs/` reads correctly from source and is silently absent for every user of
   the frozen app, which is the entire audience.
+  The third rule governs **writes to a document this process cannot validate** (the
+  per-device settings store, five of whose seven domains are the browser's schema):
+  the write takes path-scoped operations, never a document, so everything it did not name
+  is untouched by construction - the only safety available where validation is not - and it
+  is guarded by a content digest the caller must have read plus a backup of the previous
+  file. Whole-document replacement is the obvious way to give an agent this power and is the
+  wrong one: nothing downstream can tell a mangled rail from an intended one, so the failure
+  is silent and total.
+  And the rule the *misattribution* taught (2026-08-24): every answer carries which Project
+  the caller is standing in, and every per-Project fact is resolved to a Project **name**.
+  A configurator launched into a foreign Project cannot derive its own Project id, so one
+  override in a blob keyed by bare UUIDs reads as "this one" - which produced a confident,
+  specific, wrong warning about another Project's rail button.
 - Adding a tool to the mux MCP surface, or changing who may see one: `design/features/mux-mcp.md`,
   `src/swe_mux/mcp_contract.py`. A tool visible to a subset of sessions is listed *and*
   dispatched behind the same check (`design/features/configurator.md`, "The gate") - a tool

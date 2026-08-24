@@ -66,7 +66,140 @@ The guide set is closed (`GUIDES` in `configurator.py`) rather than a directory 
 
 A listed guide whose *file* is missing raises rather than returning empty text, because "reads blank in the frozen app, fine from source" is the packaging fault this whole section is designed around.
 
-The eight guides: `orientation`, `settings`, `harnesses`, `automations`, `remote`, `worktrees`, `diagnostics`, `modifying-swe-mux`.
+The nine guides: `orientation`, `settings`, `harnesses`, `rail-and-actions`, `automations`, `remote`, `worktrees`, `diagnostics`, `modifying-swe-mux`.
+
+## Three settings locations, three writes
+
+swe-mux keeps settings in three places, and the configurator can now write all
+three. Each goes through the same validated path the corresponding UI surface
+uses, and each has a different validator because they have different blast radii.
+
+| Location | Read | Write | Validated by |
+|---|---|---|---|
+| Install-wide `config.toml` | `configurator_capabilities` (`sections: ["settings"]`) | `configurator_apply_settings` | `update_config` / `_validate` |
+| Per-device `settings.json` | `configurator_device_settings` | `configurator_edit_device_settings` | nothing can - see below |
+| Per-Project `.swe-mux/config.toml` | `configurator_project_settings` | `configurator_apply_project_settings` | `parse_project_config`, closed field set |
+
+Three write tools rather than one with a `location` argument, deliberately:
+collapsing them would make the committed, repository-shared write the same call
+as the local one.
+
+### The device-settings write takes operations, not documents
+
+Five of the seven device-settings domains are stored **opaquely** - the browser
+owns their schema and `settings_store` checks only "is a dict" and "≤ 1 MiB". That
+was fine while the browser was the only editor. It is not fine for a second one.
+
+Whole-document replacement is the obvious way to give an agent this power and it
+is the wrong one. A rail blob is twelve kilobytes of nested identifiers; asking a
+model to resend all of it in order to delete four strings makes every byte it did
+not mean to touch part of the blast radius, and the store cannot catch the damage
+because it cannot tell a valid rail from a mangled one. The failure is silent and
+total: the browser normalizes the wreckage rather than rejecting it.
+
+So a write names what to change and nothing else (`settings_patch.py`). Four
+operations - `set`, `remove`, `remove_values`, `insert` - over JSON Pointer paths
+with one addition: `[key=value]` selects the element of an array whose field
+matches, so a row is named by its own id rather than by position.
+
+`remove_values` carries most of the ergonomic weight, and its existence is a
+correctness argument rather than a convenience one: four positional deletes
+composed against one reading remove the wrong things after the first, because each
+removal shifts the indices of everything after it. Naming the values is
+order-independent and cannot be thrown off.
+
+Three guards, each answering a different failure:
+
+- **The operations themselves.** Everything not named is untouched by
+  construction - a property of the shape of the request, not of the care taken in
+  composing it.
+- **A digest precondition.** The store has no revision and the browser writes
+  whole domains, so an agent that read a rail, thought, and wrote back would
+  silently discard a drag the operator did in between. Presenting the digest that
+  was read makes that a refusal.
+- **A backup.** Nothing here can promise "this write is correct"; the honest
+  guarantee is "the previous document is still on disk". `config.toml` already
+  earned that through `save_config(backup=True)`; `settings.json` had not.
+
+A batch is all-or-nothing, enforced by working on a private deep copy: half-edited
+is the worst outcome available on an opaque document, because nothing downstream
+can tell it from an intended one.
+
+**The write emits `settings_changed`.** That event is what makes every attached
+browser refetch its device-settings cache and repaint; without it the write lands
+on disk and the rail on screen does not move, which reads to the operator as a
+change that did not happen.
+
+### The command rail, and the global-first rule
+
+The rail is where this power will mostly be used, and it has two traps that cost
+real money the first time out.
+
+**Storage.** One document, under the **desktop** profile, carrying *both* device
+layouts inside it (`deviceSettings.ts`, `RAIL_PROFILE`). "Edit the mobile rail"
+therefore means `profile=desktop domain=commandRail` at a path under
+`/layouts/mobile`. A `commandRail` document written under the mobile profile is
+valid, stored, and read by nothing. The frontend's reason for the single bucket is
+good - the catalog is shared while the arrangements are not, so splitting them
+would make a save two writes with a window where one layout names a command the
+catalog has not got yet - but nothing in the daemon recorded it, so both the read
+tool and the `rail-and-actions` guide now state it.
+
+**Scope.** An unqualified request means the **global** rail. Most Projects have no
+override at all, and the narrow scope is reached only when the operator named a
+Project or the thing being changed exists only there.
+
+That rule is stated in the seed prompt, the tool description, the guide, and in
+the read tool's own answer, because its failure mode is not a refusal - it is a
+confident, specific, wrong change.
+
+### `rail_projection`: reading an opaque document without guessing
+
+`configurator_device_settings` with `domain: "commandRail"` returns a derived
+reading alongside the raw document: rows with their items' labels, the exact path
+an edit would name, and **every per-Project override resolved to its Project
+name** with the caller's own marked.
+
+That last part is not decoration. It is the fix for a measured failure. On
+2026-08-24 a configurator launched into `cmr-capture-manager` read the rail blob
+by hand, found the install's single project override, and warned that "this
+project (CMR Capture Manager) has a per-project rail delta" - about a button
+belonging to `swe-mux`. The read was otherwise byte-exact; the agent simply had no
+way to know which of twenty-four Projects it was standing in, and one override in
+a blob keyed by bare UUIDs invites exactly that inference.
+
+The projection is a *reading*, never a second writer: writes stay path-scoped
+operations that need no schema, so the projection can degrade (it reports
+`readable: false`, or an empty `layouts`, rather than raising) without ever making
+a write unsafe.
+
+## Session identity
+
+Every configurator answer carries where the caller is standing:
+`install.session` on the manifest, `is_this_session_project` on each entry of
+`projects[]`, and the same marking inside the rail projection. The project tools
+default to it.
+
+The dispatcher attaches it from `caller.record` rather than accepting it as an
+argument, because an argument the model has to remember is one it will omit
+exactly when it matters.
+
+This is the single highest-value field in the whole surface. A configurator
+launched into a foreign Project can read the entire install and, without it,
+cannot attribute a single per-Project fact.
+
+## Cost
+
+The first version answered a question about twelve strings in 195 KB of transcript
+and 61k input tokens, because the agent had to find and parse
+`~/.mux/settings.json` itself and re-read a 56 KB inventory on every turn of the
+loop.
+
+Two changes address that directly. `configurator_device_settings` serves the store
+structurally, and `configurator_capabilities` takes `sections` - **omitting the
+197-row settings catalog by default**, which is 45 KB of the manifest's 56 KB - plus
+a `settings_query` substring filter. A first call almost never wants all 197 rows;
+it wants to know what kind of thing it is looking at.
 
 ## Authority
 
@@ -178,7 +311,9 @@ An empty `harness` is omitted from the request rather than sent blank: the daemo
 
 ## Key files
 
-- The module: generated catalogs, guides, install shape, seed prompt, service: `src/swe_mux/configurator.py`
+- The module: generated catalogs, the rail projection, guides, install shape, seed prompt, service: `src/swe_mux/configurator.py`
+- Path-scoped edits to a schema this process does not hold: `src/swe_mux/settings_patch.py`
+- The device-settings store's agent-facing door (digest, backup, ops): `src/swe_mux/settings_store.py`
 - Shipped guide prose: `src/swe_mux/assets/configurator/*.md`
 - The gated tool family and its listing/dispatch checks: `src/swe_mux/mcp.py`, `src/swe_mux/mcp_contract.py`
 - Routes, harness/Project resolution, the settings write, the health line: `src/swe_mux/server.py`
@@ -188,4 +323,4 @@ An empty `harness` is omitted from the request rather than sent blank: the daemo
 - Footer button, rail twin, chooser menu, launch path: `frontend/src/App.tsx`
 - Default-harness control and the Diagnostics entry: `frontend/src/Settings.tsx`
 - The tutorial hand-off step: `frontend/src/GuidedTutorial.tsx`
-- Tests: `tests/test_configurator.py`, `tests/test_configurator_mcp.py`, `tests/test_configurator_endpoint.py`, `frontend/test/configurator.test.ts`
+- Tests: `tests/test_configurator.py`, `tests/test_configurator_mcp.py`, `tests/test_configurator_endpoint.py`, `tests/test_settings_patch.py`, `tests/test_settings_store_edits.py`, `frontend/test/configurator.test.ts`

@@ -1648,19 +1648,44 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
     {
         "name": "configurator_capabilities",
         "description": (
-            "This swe-mux install's generated inventory: every install-wide "
-            "setting with its current value, its default, whether changing it "
-            "needs a daemon restart, and the constraint its own validator "
-            "enforces; the harness registry with this machine's live detection; "
-            "the automation dependency graph with each entry's full transitive "
-            "requirement set and whether it can spend money; the MCP surface; "
-            "and whether this install has a source checkout you could edit. "
-            "Every part is derived from the code that enforces it, so it cannot "
-            "drift from the truth - read it instead of guessing what a setting "
-            "is called or what values it accepts. Secrets are reported as "
-            "<set>/<unset> and never by value."
+            "This swe-mux install's generated inventory, and which Project this "
+            "session is standing in. Carries the harness registry with live "
+            "detection, the automation dependency graph with each entry's full "
+            "transitive requirement set and whether it can spend money, the MCP "
+            "surface, the registered Projects with yours marked, and whether "
+            "this install has a source checkout you could edit. Ask for the "
+            "`settings` section to get every install-wide setting with its "
+            "current value, default, restart requirement, and the constraint its "
+            "own validator enforces - it is 197 rows, so it is omitted by "
+            "default and `settings_query` narrows it. Every part is derived from "
+            "the code that enforces it, so it cannot drift from the truth: read "
+            "it instead of guessing what a setting is called or what values it "
+            "accepts. Secrets are reported as <set>/<unset> and never by value."
         ),
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sections": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Which sections to return: install, settings, "
+                        "project_settings, harnesses, automations, mcp_tools, "
+                        "guides, projects. Omit for everything except `settings`, "
+                        "which is 197 rows and is left out unless you name it."
+                    ),
+                },
+                "settings_query": {
+                    "type": "string",
+                    "description": (
+                        "Substring filter on setting names, applied when the "
+                        "`settings` section is returned. Use it: 'theme', "
+                        "'voice', 'budget' narrow 197 rows to a handful."
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
     },
     {
         "name": "configurator_guide",
@@ -1721,6 +1746,148 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
                         "come from `configurator_capabilities`."
                     ),
                 }
+            },
+            "required": ["changes"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "configurator_device_settings",
+        "description": (
+            "The per-device UI settings - the command rail, sounds, alerts, push "
+            "notifications, drawer tabs, sidebar rows, the file tree. A different "
+            "store from install-wide config, and where most 'change how the UI is "
+            "arranged' questions actually live. "
+            "With no arguments it answers the index: which profiles hold which "
+            "domains, how large each is, and which two the daemon interprets "
+            "rather than storing verbatim. Name a `domain` to get its document "
+            "plus the `digest` a write must present. "
+            "For `commandRail` it also returns a resolved reading: every row with "
+            "its items' labels, the exact path an edit would name, and every "
+            "per-Project override resolved to its Project NAME with yours marked "
+            "- never read an override as this Project's merely because it is the "
+            "only one present. The rail lives in one document under the `desktop` "
+            "profile and carries both device layouts inside it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "description": (
+                        "alerts, sounds, notifications, commandRail, fileTree, "
+                        "drawerTabs, or sessionRows. Omit for the index."
+                    ),
+                },
+                "profile": {
+                    "type": "string",
+                    "description": (
+                        "desktop or mobile. Omit and the right one is chosen - "
+                        "notably `commandRail` is always under `desktop`."
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "configurator_edit_device_settings",
+        "description": (
+            "Change one per-device UI settings domain with path-scoped "
+            "operations. Read the domain first and pass back the `digest` you "
+            "read, so an edit the operator made in between is refused rather "
+            "than silently discarded. "
+            "Operations, applied in order and all-or-nothing: `set` "
+            "{path, value}; `remove` {path}; `remove_values` {path, values[]} to "
+            "take named entries out of an array regardless of order; `insert` "
+            "{path, value, after|before|index}. "
+            "Paths are JSON Pointer with one addition: `[key=value]` selects the "
+            "element of an array whose field matches, so name a row by its id "
+            "(`/layouts/mobile/strip/[id=row-2]/items`) rather than by position. "
+            "Never resend a whole document: nothing in the daemon can validate an "
+            "opaque domain, so anything replaced wholesale is yours to get right, "
+            "while an operation cannot lose what it did not name. The previous "
+            "file is kept beside itself on every write. "
+            "Default to the GLOBAL scope: an unqualified request to change the "
+            "rail means `/layouts`, not a per-Project override under `/projects`."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "domain": {"type": "string", "description": "The domain to edit"},
+                "profile": {
+                    "type": "string",
+                    "description": "desktop or mobile; omit for the domain's own store",
+                },
+                "operations": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Ordered operations; all apply or none do",
+                },
+                "expect_digest": {
+                    "type": "string",
+                    "description": (
+                        "The digest from the read this edit was composed against. "
+                        "Omitting it skips the concurrency check; only do that "
+                        "when you have just read and are the only writer."
+                    ),
+                },
+            },
+            "required": ["domain", "operations"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "configurator_project_settings",
+        "description": (
+            "One Project's own committed configuration (`.swe-mux/config.toml`) "
+            "and what it resolves to: the automation opt-ins with the ones that "
+            "are actually *effective* separated from the ones still blocked by a "
+            "dependency, the agent authority grants, the worktree commands. "
+            "This is where the answer to 'why is this panel empty' lives - a "
+            "consumer switched on without its substrate is inert, not broken. "
+            "Defaults to the Project this session is in; name another to read it. "
+            "The file is committed and shared with everyone who clones that "
+            "repository, which is why some fields are refused outright."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Project id or name; omit for this session's own",
+                }
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "configurator_apply_project_settings",
+        "description": (
+            "Change one Project's committed configuration. Takes a `changes` "
+            "object of field to value, merged over what is there; validated "
+            "against the closed project field set, which refuses this daemon's "
+            "own authority keys (token, host, port, command) outright rather "
+            "than ignoring them. Revision-guarded, so an edit made elsewhere in "
+            "between is a refusal rather than a clobber. "
+            "Defaults to this session's Project; name another explicitly. "
+            "Say out loud that this file is committed: turning an automation on "
+            "here turns it on for everyone who clones that repository."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Project id or name; omit for this session's own",
+                },
+                "changes": {
+                    "type": "object",
+                    "description": (
+                        "Field to value, merged over the current file. Names come "
+                        "from `configurator_project_settings`."
+                    ),
+                },
             },
             "required": ["changes"],
             "additionalProperties": False,
@@ -4616,11 +4783,108 @@ class McpService:
             )
         return self.configurator
 
+    @staticmethod
+    def _caller_session(caller: Any) -> dict[str, Any]:
+        """Where the caller is standing, for every configurator answer.
+
+        The one fact a configurator launched into somebody else's Project cannot
+        derive and repeatedly needs: with two dozen Projects registered, every
+        per-Project override it meets belongs to one of the others until proven
+        otherwise, and "it is the only one I can see" is not that proof.
+        """
+        record = getattr(caller, "record", None)
+        return {
+            "session_id": str(getattr(record, "id", "") or ""),
+            "project_id": str(getattr(record, "project_id", "") or ""),
+            "project_name": str(getattr(record, "project_label", "") or ""),
+            "cwd": str(getattr(record, "run_cwd", "") or getattr(record, "cwd", "") or ""),
+        }
+
     async def configurator_capabilities(
         self, caller: Any, args: dict[str, Any]
     ) -> dict[str, Any]:
         """`mux.configurator_capabilities`: this install's generated inventory."""
-        return dict(await self._configurator_service().capabilities())
+        from .configurator import DEFAULT_MANIFEST_SECTIONS
+
+        raw = args.get("sections")
+        if raw is not None and (
+            not isinstance(raw, list) or not all(isinstance(item, str) for item in raw)
+        ):
+            raise ValueError("sections must be an array of section names")
+        return dict(
+            await self._configurator_service().capabilities(
+                session=self._caller_session(caller),
+                sections=tuple(raw) if raw else DEFAULT_MANIFEST_SECTIONS,
+                settings_query=str(args.get("settings_query") or ""),
+            )
+        )
+
+    async def configurator_device_settings(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_device_settings`: the per-device UI store, read."""
+        return dict(
+            await self._configurator_service().device_settings(
+                profile=str(args.get("profile") or ""),
+                domain=str(args.get("domain") or ""),
+                session_project_id=self._caller_session(caller)["project_id"],
+            )
+        )
+
+    async def configurator_edit_device_settings(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_edit_device_settings`: path-scoped UI settings write.
+
+        The shape checks live here and every bound lives in the store and in
+        `settings_patch`: this refuses only what it can refuse without knowing a
+        schema, which is the same division the install-wide write already keeps
+        with `update_config`.
+        """
+        domain = str(args.get("domain") or "").strip()
+        if not domain:
+            raise ValueError("domain is required")
+        operations = args.get("operations")
+        if not isinstance(operations, list) or not operations:
+            raise ValueError("operations must be a non-empty array")
+        self.writes += 1
+        return dict(
+            await self._configurator_service().edit_device_settings(
+                profile=str(args.get("profile") or ""),
+                domain=domain,
+                operations=operations,
+                expect_digest=str(args.get("expect_digest") or ""),
+            )
+        )
+
+    async def configurator_project_settings(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_project_settings`: one Project's committed config."""
+        requested = str(args.get("project") or "").strip()
+        return dict(
+            await self._configurator_service().project_settings(
+                requested or self._caller_session(caller)["project_id"]
+            )
+        )
+
+    async def configurator_apply_project_settings(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.configurator_apply_project_settings`: a Project's committed config, written."""
+        changes = args.get("changes")
+        if not isinstance(changes, dict):
+            raise ValueError("changes must be an object of field name to new value")
+        if not changes:
+            raise ValueError("changes must name at least one field")
+        requested = str(args.get("project") or "").strip()
+        self.writes += 1
+        return dict(
+            await self._configurator_service().apply_project_settings(
+                project=requested or self._caller_session(caller)["project_id"],
+                changes=dict(changes),
+            )
+        )
 
     async def configurator_guide(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         """`mux.configurator_guide`: the index, or one shipped guide's text.
@@ -4731,6 +4995,12 @@ class McpService:
                     "configurator_guide": self.configurator_guide,
                     "configurator_diagnostics": self.configurator_diagnostics,
                     "configurator_apply_settings": self.configurator_apply_settings,
+                    "configurator_device_settings": self.configurator_device_settings,
+                    "configurator_edit_device_settings": self.configurator_edit_device_settings,
+                    "configurator_project_settings": self.configurator_project_settings,
+                    "configurator_apply_project_settings": (
+                        self.configurator_apply_project_settings
+                    ),
                 }
             )
         handler = handlers.get(name)

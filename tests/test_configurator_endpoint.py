@@ -275,6 +275,117 @@ async def test_an_unknown_setting_is_refused_rather_than_silently_dropped(
     assert "not_a_setting" in result["errors"]
 
 
+# ------------------------------------------------- device and project writes
+
+
+@pytest.mark.asyncio
+async def test_a_device_settings_edit_repaints_every_attached_browser(
+    tmp_path: Path, config: Config
+) -> None:
+    """The event is the difference between a change and an apparent no-op.
+
+    An agent-applied rail edit that lands on disk without `settings_changed`
+    leaves the rail on screen where it was: the browser's device-settings cache
+    is only refetched on that event. To the operator that is indistinguishable
+    from the tool not working, which is the worst outcome for a tool whose value
+    is doing the thing they asked.
+    """
+    from swe_mux.settings_store import SettingsStore
+
+    store = SettingsStore(tmp_path)
+    store.update("desktop", {"commandRail": {"layouts": {"mobile": {"strip": [
+        {"id": "row-2", "items": ["up", "down", "padArrows"]}
+    ]}}}})
+    app = {**_app(config), "settings_store": store}
+    result = await server._configurator_edit_device_settings(
+        app,
+        profile="",
+        domain="commandRail",
+        operations=[{
+            "op": "remove_values",
+            "path": "/layouts/mobile/strip/[id=row-2]/items",
+            "values": ["up", "down"],
+        }],
+    )
+    assert result["document"]["layouts"]["mobile"]["strip"][0]["items"] == ["padArrows"]
+    name, payload = app["events"].emitted[0]
+    assert name == "settings_changed"
+    assert payload["source"] == "configurator"
+    # The rail is stored under `desktop` whatever device it describes, so an
+    # omitted profile has to resolve there rather than to a plausible default.
+    assert payload["profile"] == "desktop"
+
+
+@pytest.mark.asyncio
+async def test_a_project_is_resolvable_by_name_as_well_as_id(
+    tmp_path: Path, config: Config
+) -> None:
+    # An agent reading a Project *name* out of a rail projection should be able
+    # to act on it without translating back to a UUID first.
+    app = _app(config, _project("p1", tmp_path / "a"))
+    assert server._configurator_resolve_project(app, "p1").id == "p1"
+    with pytest.raises(ValueError, match="registered Projects"):
+        server._configurator_resolve_project(app, "nope")
+    with pytest.raises(ValueError, match="not owned by one"):
+        server._configurator_resolve_project(app, "")
+
+
+@pytest.mark.asyncio
+async def test_a_project_settings_write_merges_rather_than_replaces(
+    tmp_path: Path, config: Config
+) -> None:
+    """A committed file holds other people's settings too.
+
+    Replacing it would silently drop every field the agent did not restate - the
+    same failure the device-settings ops exist to prevent, in the one place where
+    the loss is shared with everyone who clones the repository.
+    """
+    root = tmp_path / "repo"
+    (root / ".swe-mux").mkdir(parents=True)
+    (root / ".swe-mux" / "config.toml").write_text(
+        'version = 1\npreferred_backend = "codex"\n', encoding="utf-8"
+    )
+    app = {
+        **_app(config, _project("p1", root)),
+        "history": SimpleNamespace(register_project_scope=_noop),
+    }
+    result = await server._configurator_apply_project_settings(
+        app, project="p1", changes={"automations": {"tier0": True, "raw_store": True}}
+    )
+    assert result["applied"] is True
+    assert result["values"]["automations"] == {"tier0": True, "raw_store": True}
+    assert result["values"]["preferred_backend"] == "codex"
+    assert app["events"].emitted[-1][0] == "project_configuration_changed"
+
+
+@pytest.mark.asyncio
+async def test_a_forbidden_project_field_is_refused_as_a_result(
+    tmp_path: Path, config: Config
+) -> None:
+    """The boundary, reported rather than raised.
+
+    A committed repository file must not be able to set this daemon's bind
+    address or the command a harness runs. The refusal comes back as a result so
+    the agent can tell "you may not do that" from "the server broke".
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    app = {
+        **_app(config, _project("p1", root)),
+        "history": SimpleNamespace(register_project_scope=_noop),
+    }
+    result = await server._configurator_apply_project_settings(
+        app, project="p1", changes={"token": "secret", "port": 9999}
+    )
+    assert result["applied"] is False
+    assert result["errors"]
+    assert app["events"].emitted == []
+
+
+async def _noop(*_args: Any, **_kwargs: Any) -> None:
+    return None
+
+
 # ------------------------------------------------------------- health summary
 
 

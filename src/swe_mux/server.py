@@ -91,6 +91,8 @@ from .composer_input import (
 )
 from .config import Config, load_config, update_config
 from .configurator import (
+    RAIL_DOMAIN,
+    RAIL_PROFILE,
     ConfiguratorService,
     compose_seed_prompt,
     install_mode,
@@ -226,6 +228,7 @@ from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
     GLOBAL_SCRATCHPAD_ID,
+    PROJECT_CONFIG_FIELDS,
     ObservationsUnreadableError,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
@@ -3887,6 +3890,159 @@ async def _configurator_apply_settings(
     }
 
 
+async def _configurator_edit_device_settings(
+    app: web.Application,
+    *,
+    profile: str,
+    domain: str,
+    operations: Any,
+    expect_digest: str = "",
+) -> dict[str, Any]:
+    """Apply path-scoped operations to one per-device settings domain.
+
+    The reason this is a closure over the app rather than a call straight into
+    the store: an edit has to emit `settings_changed`, and that event is what
+    makes every attached browser refetch its device-settings cache and repaint.
+    Without it the write lands on disk and the rail on screen does not move,
+    which reads to the operator as a change that did not happen - the worst
+    possible outcome for a tool whose whole value is doing the thing they asked.
+    """
+    store: SettingsStore = app["settings_store"]
+    target = profile or (RAIL_PROFILE if domain == RAIL_DOMAIN else "desktop")
+    result = await asyncio.to_thread(
+        store.apply_operations, target, domain, operations, expect_digest
+    )
+    await app["events"].emit("settings_changed", source="configurator", profile=target)
+    log.info(
+        "configurator_device_settings_applied profile=%s domain=%s operations=%d",
+        target,
+        domain,
+        len(operations) if isinstance(operations, list) else 0,
+    )
+    return result
+
+
+def _configurator_resolve_project(app: web.Application, requested: str) -> Any:
+    """A Project by id or exact name, or raise naming what exists.
+
+    Name as well as id because an agent reading a Project *name* out of a rail
+    projection and having to translate it back to a UUID to act on it is a
+    round-trip that exists only to be got wrong.
+    """
+    manager: ProjectManager = app["projects"]
+    needle = requested.strip()
+    if not needle:
+        raise ValueError("name a Project: this session is not owned by one")
+    if needle in manager.projects:
+        return manager.projects[needle]
+    matches = [item for item in manager.ordered_projects() if item.name == needle]
+    if len(matches) == 1:
+        return matches[0]
+    known = ", ".join(sorted(item.name for item in manager.ordered_projects())[:20])
+    raise ValueError(f"no Project called {needle!r}; registered Projects: {known}")
+
+
+async def _configurator_project_settings(
+    app: web.Application, requested: str
+) -> dict[str, Any]:
+    """One Project's committed config, with its automation opt-ins resolved.
+
+    The resolution is the part worth serving rather than the file: a consumer
+    switched on without its substrate is *inert*, and the raw opt-in map cannot
+    say which of the two an empty panel is. `effective` and `blocked` answer that
+    directly, from the same resolver the runtime gates on.
+    """
+    project = _configurator_resolve_project(app, requested)
+    stored = await read_project_config(str(project.root))
+    values = stored["values"] if stored["status"] in {"ready", "read-only"} else {}
+    opt_ins = values.get("automations")
+    # The same resolver the runtime gates on, through the same readiness probe,
+    # so this can never report a Project as enabled for something the consumers
+    # are declining to run.
+    readiness = await app["llm_ready"]()
+    resolution = resolve_automation_config(
+        opt_ins if isinstance(opt_ins, dict) else {}, llm_ready=readiness.ready
+    )
+    return {
+        "project": {"id": project.id, "name": project.name, "root": str(project.root)},
+        "path": stored["path"],
+        "exists": stored["exists"],
+        "status": stored["status"],
+        "revision": stored["revision"],
+        "values": values,
+        "error": stored.get("error"),
+        "automations": {
+            "requested": sorted(
+                key for key, value in (opt_ins or {}).items() if value
+            ) if isinstance(opt_ins, dict) else [],
+            "effective": sorted(resolution.enabled),
+            "blocked": {key: list(value) for key, value in resolution.blocked.items()},
+            "unverified": sorted(resolution.unverified),
+            "note": (
+                "`blocked` names dependencies that are still off: a consumer "
+                "there is inert rather than broken. `unverified` is held back by "
+                "something outside the graph (an unproven model provider), which "
+                "no automation opt-in can fix."
+            ),
+        },
+        "editable_fields": sorted(PROJECT_CONFIG_FIELDS),
+        "committed": (
+            "This file is committed to the repository. A change here reaches "
+            "everyone who clones it."
+        ),
+    }
+
+
+async def _configurator_apply_project_settings(
+    app: web.Application, *, project: str, changes: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge `changes` into one Project's committed config, or change nothing.
+
+    Merged rather than replaced, and validated by `write_project_config`, which
+    is the same revision-guarded path `PUT /api/project/config` takes: the closed
+    field set refuses the daemon-authority keys outright, so a repository can
+    never be talked into setting this daemon's bind address or the command a
+    harness runs.
+    """
+    record = _configurator_resolve_project(app, project)
+    stored = await read_project_config(str(record.root))
+    if stored["status"] == "malformed":
+        return {
+            "applied": False,
+            "errors": {"file": f"the existing file cannot be parsed: {stored.get('error')}"},
+            "path": stored["path"],
+        }
+    merged = {**(stored["values"] or {}), **changes}
+    try:
+        result = await write_project_config(
+            str(record.root), merged, str(stored["revision"])
+        )
+    except ValueError as exc:
+        detail = exc.args[0] if exc.args else str(exc)
+        return {
+            "applied": False,
+            "errors": detail if isinstance(detail, dict) else {"changes": str(detail)},
+            "path": stored["path"],
+        }
+    identity = await resolve_project(result["project"]["root"])
+    await app["history"].register_project_scope(identity)
+    await app["events"].emit(
+        "project_configuration_changed", source="configurator", project_id=record.id
+    )
+    log.info(
+        "configurator_project_settings_applied project=%s fields=%s",
+        record.id,
+        sorted(changes),
+    )
+    return {
+        "applied": True,
+        "changed": sorted(changes),
+        "path": result["path"],
+        "revision": result["revision"],
+        "values": result["values"],
+    }
+
+
 def build_configurator_service(app: web.Application) -> ConfiguratorService:
     """Wire the configurator's tools to the daemon's own operations.
 
@@ -3902,6 +4058,15 @@ def build_configurator_service(app: web.Application) -> ConfiguratorService:
         installations=lambda: detect_installations_with_versions(dict(config.harness_exe)),
         diagnostics=lambda: _doctor_report(app),
         apply_settings=lambda changes: _configurator_apply_settings(app, changes),
+        # Read straight from the store (a plain file store, no HTTP layer) but
+        # write through a closure, because a write has to emit the event that
+        # repaints every attached browser.
+        settings_store=lambda: app["settings_store"],
+        edit_device_settings=lambda **kwargs: _configurator_edit_device_settings(app, **kwargs),
+        read_project_settings=lambda project: _configurator_project_settings(app, project),
+        apply_project_settings=lambda **kwargs: _configurator_apply_project_settings(
+            app, **kwargs
+        ),
         version=__version__,
     )
 
@@ -4028,6 +4193,8 @@ async def launch_configurator(request: web.Request) -> web.Response:
         projects=_project_summaries(request.app),
         doctor_summary=await _configurator_health_preview(request.app),
         version=__version__,
+        project_name=project.name,
+        project_id=project.id,
     )
     session = await _spawn_from_body(
         request.app,

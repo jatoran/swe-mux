@@ -19,11 +19,18 @@ master, quiet hours, and push-channel policy before any tab is alive to filter i
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
+
+from .settings_patch import apply_operations
+
+log = logging.getLogger(__name__)
 
 SETTINGS_SCHEMA_VERSION = 1
 PROFILES: tuple[str, ...] = ("desktop", "mobile")
@@ -36,6 +43,23 @@ DOMAINS: tuple[str, ...] = (
     "drawerTabs",
     "sessionRows",
 )
+#: The two the daemon reads and enforces policy over, because the Web Push sender
+#: has to apply the master switch and quiet hours before any tab is alive to
+#: filter. Everything else in ``DOMAINS`` is stored verbatim and understood only
+#: by the browser - which is the distinction an agent editing them has to be told,
+#: because it decides whether a malformed write is refused or merely stored.
+INTERPRETED_DOMAINS: tuple[str, ...] = ("alerts", "notifications")
+
+
+def domain_digest(document: Any) -> str:
+    """A stable fingerprint of one domain's document.
+
+    Canonical JSON so key order cannot change the answer: the browser and this
+    module both round-trip these documents through `json`, and a digest that
+    moved on re-serialization would refuse every second write for no reason.
+    """
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 NOTIFICATION_EVENTS: tuple[str, ...] = ("complete", "waiting", "attention", "failure", "reset")
 #: Which presence silences a profile's push. See ``default_notifications``.
 SUPPRESS_MODES: tuple[str, ...] = ("never", "focused", "anyDevice")
@@ -228,6 +252,86 @@ class SettingsStore:
             ).encode("utf-8"),
         )
         return current
+
+    # ------------------------------------------------------ agent-facing edits
+    #
+    # The browser writes whole domains, which is right for it: it holds the
+    # schema, it normalizes, and the value it sends is one it just built. A
+    # second editor that does not hold the schema needs a narrower door, and the
+    # three methods below are it (`configurator.md`, `settings_patch.py`).
+
+    def domain(self, profile: str, name: str) -> dict[str, Any]:
+        """One domain's stored document, with the digest a write must present.
+
+        The digest is over the document rather than the file: two editors working
+        on different domains do not conflict, and making them wait for each other
+        would be a lock invented to protect nothing.
+        """
+        if profile not in PROFILES:
+            raise ValueError("profile must be desktop or mobile")
+        if name not in DOMAINS:
+            raise ValueError(f"unknown settings domain: {name}")
+        document = self._profiles()[profile].get(name)
+        document = document if isinstance(document, dict) else {}
+        return {
+            "profile": profile,
+            "domain": name,
+            "document": document,
+            "digest": domain_digest(document),
+            "interpreted": name in INTERPRETED_DOMAINS,
+        }
+
+    def apply_operations(
+        self, profile: str, name: str, operations: Any, expected_digest: str = ""
+    ) -> dict[str, Any]:
+        """Apply path-scoped operations to one domain, or change nothing.
+
+        Three guards, and each answers a different way this can go wrong.
+
+        ``expected_digest`` is the one that matters most in practice: this store
+        has no revision and the browser writes whole domains, so an agent that
+        read a rail, thought about it, and wrote it back would silently discard a
+        drag the operator did in between. Requiring the digest it read makes that
+        a refusal instead.
+
+        The **backup** is what makes a bad write survivable. Nothing here can
+        validate an opaque domain, so the honest position is not "this write is
+        correct" but "the previous document is still on disk". `config.toml`
+        already earns this through `save_config(backup=True)`; this file did not.
+
+        And the operations themselves are the third guard, in `settings_patch`:
+        everything not named is untouched because the request could not name it.
+        """
+        current = self.domain(profile, name)
+        if expected_digest and expected_digest != current["digest"]:
+            raise ValueError(
+                "these settings changed since you read them "
+                f"(you have {expected_digest[:12]}, they are now {current['digest'][:12]}); "
+                "read them again before editing"
+            )
+        document, notes = apply_operations(current["document"], operations)
+        self._backup()
+        self.update(profile, {name: document})
+        return {
+            **self.domain(profile, name),
+            "applied": notes,
+            "previous_digest": current["digest"],
+        }
+
+    def _backup(self) -> None:
+        """Keep the pre-write file beside itself. Best effort by design.
+
+        A backup that could fail the write it protects would be a way for a full
+        disk to stop an operator changing a setting, which is a worse failure
+        than the one it guards against.
+        """
+        try:
+            if self.path.exists():
+                shutil.copy2(self.path, self.path.with_suffix(".json.bak"))
+        except OSError as exc:  # noqa: BLE001 - never fail the write over the safety net
+            log.warning(
+                "settings_backup_failed path=%s error_type=%s", self.path, type(exc).__name__
+            )
 
     def notifications(self, profile: str) -> dict[str, Any]:
         """Effective push settings after the shared alert policy is applied."""

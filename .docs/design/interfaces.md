@@ -1638,7 +1638,13 @@ Two refusals, both `409` and deliberately distinct, because they are different p
 
 `SessionRecord.configurator` is set here and by nothing else, and is **not** a `SpawnRequest` field: were it one, `request_spawn` would be a way for any agent to ask for a session that can rewrite this install's settings, and the human approving that request would read it as an ordinary spawn (`features/configurator.md`).
 
-The four MCP tools that marker unlocks — `configurator_capabilities`, `configurator_guide`, `configurator_diagnostics`, `configurator_apply_settings` — are listed only to such a session, and `apply_settings` runs the same `update_config` path as `PATCH /api/config`, reporting `hot_applied` and `restart_required` separately and refusing an invalid batch as a typed result that changes nothing.
+The MCP tools that marker unlocks are listed only to such a session (`features/configurator.md`). Five reads — `configurator_capabilities` (section-scoped; the 197-row settings catalog is omitted unless named), `configurator_guide`, `configurator_diagnostics`, `configurator_device_settings`, `configurator_project_settings` — and one write per settings location:
+
+- `configurator_apply_settings` runs the same `update_config` path as `PATCH /api/config`, reporting `hot_applied` and `restart_required` separately.
+- `configurator_apply_project_settings` runs the same revision-guarded `write_project_config` path as `PUT /api/project/config`, merging over the existing file and refusing the forbidden project fields.
+- `configurator_edit_device_settings` writes one per-device settings domain through **path-scoped operations** rather than a document, because five of the seven domains are stored opaquely and nothing in the daemon can validate one. It is guarded by a content digest the caller must have read, backs the previous file up, and emits `settings_changed` so every attached browser repaints.
+
+All three refuse as typed results that change nothing, rather than as protocol errors: the agent has to be able to tell "bad value" from "server broke".
 
 ## History and reviews
 

@@ -56,7 +56,39 @@ The configurator agent's substrate (`design/features/configurator.md`).
 - `install_mode()` / `source_checkout()`: whether this daemon can be edited at all.
 - The seed prompt, and `ConfiguratorService`, whose diagnostics and settings write are injected callables so this module stays free of the HTTP layer.
 
-**Not:** the settings write itself (`config.update_config`, reached through the injected callable), the health report (`doctor.py`, gathered by `server._doctor_report`), harness resolution (`harness.resolve_default_harness`), the routes and the session marker (`server.py`, `models.py`), or MCP transport (`mcp.py`).
+- `rail_projection`: a *reading* of the opaque command-rail blob - rows with their items' labels, the exact path an edit would name, and every per-Project override resolved to its Project **name** with the caller's own marked.
+  It degrades (reports `readable: false`, or an empty `layouts`) rather than raising, because it is a projection over a document whose schema belongs to the browser.
+  It is never a writer: writes stay path-scoped operations that need no schema at all.
+- Section-scoped manifests. `settings` is 45 KB of the 56 KB and is omitted by default; `settings_query` narrows it further.
+
+**Not:** the settings write itself (`config.update_config`, reached through the injected callable), the device-settings write (`settings_store.apply_operations`, likewise), the health report (`doctor.py`, gathered by `server._doctor_report`), harness resolution (`harness.resolve_default_harness`), the routes and the session marker (`server.py`, `models.py`), or MCP transport (`mcp.py`).
+
+### `settings_patch.py`
+
+Path-scoped edits to a JSON document whose schema this process does not hold.
+
+Four operations - `set`, `remove`, `remove_values`, `insert` - over JSON Pointer paths with one addition: `[key=value]` selects the element of an array whose field matches, so a row is named by its own id rather than by a position that a reorder invalidates.
+A batch applies to a private deep copy and is all-or-nothing, because half-edited is the worst outcome available on a document nothing downstream can validate.
+
+The reason it exists rather than a whole-document write: five of the seven device-settings domains are opaque, so anything replaced wholesale is unvalidatable, and an operation cannot touch what it did not name.
+`remove_values` is the load-bearing one and its justification is correctness rather than ergonomics - four positional deletes composed against one reading remove the wrong things after the first, because each shifts the indices after it.
+
+**Not:** storage, digests, backups, or any knowledge of what a rail, a sound map, or a drawer-tab order means.
+
+### `settings_store.py` - the agent-facing door only
+
+The store itself is the browser's: per-device-class UI settings, with the `alerts`/`notifications` half interpreted server-side for the push sender (`design/features/notifications.md`).
+What belongs to this map is the second editor it grew.
+`domain()` returns one domain's document with a content digest.
+`apply_operations()` applies `settings_patch` operations behind a digest precondition and a file backup.
+
+The digest exists because the store has **no revision** and the browser writes **whole domains**.
+Without it, an agent that read, thought, and wrote back would silently discard a drag made in between.
+
+The backup exists because nothing here can validate an opaque domain.
+The honest guarantee is not "this write is correct" but "the previous document is still on disk" - which `config.toml` already had and this file did not.
+
+**Not:** the browser's own whole-domain `update()` path, notification policy, or the event that repaints attached clients (`server.py` emits `settings_changed`; the store does not know about the event bus).
 
 ### `project_scope.py`
 
