@@ -36,6 +36,11 @@ _QUEUE_PUT_POLL_SECONDS = 5.0
 # only applies after whole seconds of silence, where the sole cost is that unprompted
 # output (a build finishing, a first token) can appear up to 40 ms late — invisible,
 # and paid once per wake rather than per chunk.
+# A read failure the reader swallows and keeps going from is invisible by
+# construction: the session stays alive and simply stops producing output (F14).
+# Log the first one immediately, then at most one line per interval carrying the
+# counts, so a storm is diagnosable without becoming the storm.
+_READ_ERROR_LOG_INTERVAL_SECONDS = 30.0
 _READ_POLL_ACTIVE_SECONDS = 0.0005
 _READ_POLL_RECENT_SECONDS = 0.01
 _READ_POLL_DEEP_IDLE_SECONDS = 0.04
@@ -121,6 +126,16 @@ class PtyHost:
     # anything.
     _io_wake: threading.Event = field(default_factory=threading.Event, init=False)
     reaper_assignment: str = field(default="not_attempted", init=False)
+    # Swallowed read-failure accounting (F14). Read by the supervisor's session
+    # inventory, so a silent-but-alive session can be told apart from a session
+    # whose agent is merely thinking - the daemon cannot see this reader thread.
+    # Written only by the reader thread; ints and object references are assigned
+    # atomically under the GIL and a torn read could only mis-report one sample.
+    read_errors: int = field(default=0, init=False)
+    last_read_error: str | None = field(default=None, init=False)
+    last_read_error_at: float | None = field(default=None, init=False)
+    _read_errors_since_log: int = field(default=0, init=False)
+    _read_error_logged_at: float = field(default=0.0, init=False)
 
     @property
     def pid(self) -> int:
@@ -169,11 +184,13 @@ class PtyHost:
         # session can detach ``self._pty`` as soon as the root exits, allowing
         # teardown once this reader drops its last reference.
         pty = self._pty
+        pid = pty.pid
         try:
             while not self._stop.is_set():
                 try:
                     chunk = pty.read()
-                except PtyError:
+                except PtyError as exc:
+                    self._note_read_error(exc, pid)
                     chunk = None
                 if chunk:
                     buffer = bytearray(chunk)
@@ -185,7 +202,8 @@ class PtyHost:
                     while len(buffer) < _MAX_COALESCE_BYTES:
                         try:
                             more = pty.read()
-                        except PtyError:
+                        except PtyError as exc:
+                            self._note_read_error(exc, pid)
                             break
                         if not more:
                             break
@@ -207,10 +225,92 @@ class PtyHost:
                     self._io_wake.wait(read_poll_interval(time.monotonic() - self._last_io_at))
                     self._io_wake.clear()
         finally:
+            log.info(
+                "pty reader stopped pid=%s stop_requested=%s read_errors=%d",
+                pid,
+                self._stop.is_set(),
+                self.read_errors,
+            )
+            self._put_end_of_output(pid)
+
+    def _note_read_error(self, exc: BaseException, pid: int) -> None:
+        """Record a read failure the reader is about to continue past.
+
+        The reader deliberately keeps going: a transient read error on a live
+        pseudoterminal is not a reason to end a session. What it must not do is
+        keep going *silently* - that turns a broken reader into a session that is
+        alive and permanently quiet, with nothing anywhere saying why.
+        """
+        self.read_errors += 1
+        self._read_errors_since_log += 1
+        self.last_read_error = f"{type(exc).__name__}: {exc}"
+        self.last_read_error_at = time.time()
+        now = time.monotonic()
+        if (
+            self.read_errors == 1
+            or now - self._read_error_logged_at >= _READ_ERROR_LOG_INTERVAL_SECONDS
+        ):
+            log.warning(
+                "pty read failed pid=%s error=%s since_last_report=%d total=%d",
+                pid,
+                self.last_read_error,
+                self._read_errors_since_log,
+                self.read_errors,
+            )
+            self._read_error_logged_at = now
+            self._read_errors_since_log = 0
+
+    def _put_end_of_output(self, pid: int) -> None:
+        """Deliver the b"" end-of-output sentinel, waiting the way a chunk does.
+
+        This used to give up after two seconds and swallow the failure (F14).
+        The sentinel is the *only* signal that a session's output ended: losing
+        it under a momentarily full queue leaves a phantom-alive session that
+        never emits `pty_exit`, a supervisor that lingers forever because it
+        still counts a live session, and a pane that never resolves. A data chunk
+        already waits indefinitely for exactly this reason
+        (`_put_with_backpressure`); the exit signal must not be the one thing
+        that gives up first.
+
+        The single bounded case is a deliberate teardown. `stop()` and
+        `release()` set `_stop`, and removing a supervised session cancels its
+        fanout - the only consumer - so there provably will never be a reader for
+        this put, and waiting on it would park this thread for the life of the
+        process. One poll interval is the whole wait there, and it is logged.
+        """
+        queue, loop = self._queue, self._loop
+        if queue is None or loop is None:
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(queue.put(b""), loop)
+        except RuntimeError:
+            # The event loop is already closed; there is nobody left to tell.
+            return
+        waited = 0.0
+        while True:
             try:
-                asyncio.run_coroutine_threadsafe(self._queue.put(b""), self._loop).result(timeout=2)
-            except Exception:
-                pass
+                future.result(timeout=_QUEUE_PUT_POLL_SECONDS)
+                return
+            except TimeoutError:
+                waited += _QUEUE_PUT_POLL_SECONDS
+                if self._stop.is_set():
+                    log.warning(
+                        "pty %s: end-of-output sentinel undeliverable %.0fs after a "
+                        "requested stop (queue full, consumer gone); dropping it",
+                        pid,
+                        waited,
+                    )
+                    future.cancel()
+                    return
+                log.warning(
+                    "pty %s: end-of-output sentinel still queued after %.0fs; the "
+                    "consumer is not draining, still waiting rather than losing the exit",
+                    pid,
+                    waited,
+                )
+            except (RuntimeError, asyncio.CancelledError):
+                # The event loop is closing (daemon teardown) - nothing to deliver.
+                return
 
     def _put_with_backpressure(self, payload: bytes, pty: PtyProcess) -> bool:
         """Hand a chunk to the loop, waiting as long as the child is alive.

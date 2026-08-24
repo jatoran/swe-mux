@@ -708,6 +708,52 @@ async def test_remove_stops_a_session_the_daemon_wrongly_believes_is_dead(
     assert host.released is False
 
 
+# ---- F2 — spawn ambiguity, over the real wire ---------------------------------
+#
+# The control-flow properties of `spawn_status` and spawn deduplication live in
+# `test_supervisor_protocol.py`, against fakes and on every host. These two pin
+# the same contract where it actually has to hold: a real supervisor, a real
+# ConPTY, and real framed traffic.
+
+
+async def test_spawn_status_answers_over_the_wire(
+    harness: SupervisorHarness, tmp_path: Path
+) -> None:
+    host, client = await spawn_host("remote", harness, tmp_path, "wire-status")
+    assert client is not None
+    try:
+        response, _ = await client.request({"t": "spawn_status", "sid": "wire-status"})
+        assert response["ok"] is True
+        assert response["state"] == "live"
+        assert response["pid"] == host.pid
+        assert isinstance(response["started_at"], float)
+
+        # An id that was never reserved is "unknown" — the one answer that makes
+        # a daemon-side fallback safe, because nothing exists to duplicate.
+        unknown, _ = await client.request({"t": "spawn_status", "sid": "never-reserved"})
+        assert unknown["state"] == "unknown"
+    finally:
+        await asyncio.to_thread(host.stop, graceful=False)
+
+
+async def test_a_repeated_spawn_returns_the_first_outcome_over_the_wire(
+    harness: SupervisorHarness, tmp_path: Path
+) -> None:
+    """A retry after a lost reply must not put a second agent on one workspace."""
+    host, client = await spawn_host("remote", harness, tmp_path, "wire-dedupe")
+    assert client is not None
+    try:
+        first_pid = host.pid
+        await client.spawn_session(host)  # the retry the daemon would send
+        assert host.pid == first_pid
+        listed, _ = await client.request({"t": "list"})
+        matching = [s for s in listed["sessions"] if s["sid"] == "wire-dedupe"]
+        assert len(matching) == 1
+        assert matching[0]["pid"] == first_pid
+    finally:
+        await asyncio.to_thread(host.stop, graceful=False)
+
+
 def test_the_reader_poll_follows_the_session_instead_of_a_single_fixed_interval() -> None:
     """One interval cannot serve a live burst and a session idle at its prompt.
 

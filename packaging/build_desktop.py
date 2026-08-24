@@ -29,6 +29,10 @@ SUPERVISOR_SOURCES = (
     ROOT / "src" / "swe_mux" / "pty_backend.py",
     ROOT / "src" / "swe_mux" / "pty_backend_windows.py",
     ROOT / "src" / "swe_mux" / "process_reaper.py",
+    # The nested per-session owner, shared with the daemon. It imports nothing
+    # but `process_reaper`, which is already here, so sharing it did not widen
+    # the closure - the property that made extracting it safe at all.
+    ROOT / "src" / "swe_mux" / "nested_job.py",
     ROOT / "src" / "swe_mux" / "scrollback.py",
     ROOT / "src" / "swe_mux" / "timer_resolution.py",
     ROOT / "src" / "swe_mux" / "win_jobobj.py",

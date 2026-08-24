@@ -11,6 +11,12 @@ Wire format: 4-byte big-endian header length, JSON header, then an optional
 binary payload whose size is the header's ``plen``. Requests carry ``id`` and
 are answered with ``{id, ok, ...}``; ``output``/``pty_exit`` frames are
 unsolicited and tagged with ``sid``.
+
+The two directions are bounded differently on purpose. Daemon-inbound frames are
+capped and an unauthenticated connection is capped harder still and given a
+deadline; the reverse direction is left unbounded, because a legitimate
+``subscribe`` reply carries a whole scrollback buffer whose size is the daemon's
+``scrollback_bytes`` setting.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
+from .nested_job import create_nested_session_job
 from .process_reaper import ProcessReaper, create_reaper, process_in_job
 from .pty_host import PtyHost
 from .scrollback import ScrollbackBuffer
@@ -45,13 +52,48 @@ log = logging.getLogger(__name__)
 PROTOCOL_VERSION = 1
 DISCOVERY_FILENAME = "supervisor.json"
 MAX_HEADER_BYTES = 4 * 1024 * 1024
+# Daemon-inbound bounds (F13). A header carries the child's whole environment
+# block and the session's mirrored metadata, so it is not small; a payload
+# carries at most one paste or one respawn's seeded scrollback. Both are far
+# above anything legitimate and finite, which is the point: before this, a
+# header could name any payload size at all and the supervisor read it.
+#
+# The interaction to know about: `scrollback_bytes` is settable up to 1 GiB, and
+# a respawn seeds the new session with the old one's buffer. A configuration
+# above `REQUEST_MAX_PAYLOAD_BYTES` would have that seed refused (the spawn then
+# fails and the daemon falls back), which is why this is 12x the 5 MiB default
+# rather than snug against it.
+REQUEST_MAX_HEADER_BYTES = MAX_HEADER_BYTES
+REQUEST_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
+# Before `hello`, a connection has proven nothing. It gets a header cap sized for
+# the only frame it is allowed to send and no payload allowance at all, so an
+# unauthenticated peer cannot make the supervisor allocate.
+HELLO_MAX_HEADER_BYTES = 64 * 1024
+# ...and a deadline, so it cannot hold a connection and a task open by simply
+# never speaking.
+AUTH_DEADLINE_SECONDS = 15.0
 # Backpressure threshold per client connection before the fanout awaits drain.
 WRITE_BUFFER_HIGH_WATER = 2 * 1024 * 1024
 # With no attached daemon and no live sessions there is nothing to preserve;
 # self-exit keeps a forgotten supervisor from lingering forever (tmux-style).
 LINGER_POLL_SECONDS = 30.0
 LINGER_IDLE_EXIT_SECONDS = 15 * 60.0
+# Teardown waits this long for in-flight background work - a ConPTY spawn already
+# past its refusal check - before reaping anyway (F8).
+SHUTDOWN_DRAIN_SECONDS = 20.0
+# How long a duplicate `spawn` waits for the original one to resolve before
+# answering honestly that it is still in flight. Kept under the client's RPC
+# timeout so the answer arrives rather than the caller timing out again.
+SPAWN_DEDUPE_WAIT_SECONDS = 55.0
 ERROR_ALREADY_EXISTS = 183
+
+# `spawn_status` states. "unknown" is the load-bearing one: it is the only answer
+# that lets a daemon whose spawn reply was lost fall back without risking a
+# second agent process in the same workspace.
+SPAWN_STATE_UNKNOWN = "unknown"
+SPAWN_STATE_RESERVED = "reserved"
+SPAWN_STATE_LIVE = "live"
+SPAWN_STATE_EXITED = "exited"
 
 
 def encode_frame(header: dict[str, Any], payload: bytes = b"") -> bytes:
@@ -61,14 +103,36 @@ def encode_frame(header: dict[str, Any], payload: bytes = b"") -> bytes:
     return struct.pack(">I", len(raw)) + raw + payload
 
 
-async def read_frame(reader: asyncio.StreamReader) -> tuple[dict[str, Any], bytes]:
+async def read_frame(
+    reader: asyncio.StreamReader,
+    *,
+    max_header_bytes: int = MAX_HEADER_BYTES,
+    max_payload_bytes: int | None = None,
+) -> tuple[dict[str, Any], bytes]:
+    """Read one framed message, refusing a payload length before honouring it.
+
+    ``max_payload_bytes`` of None means unbounded and is the default *on
+    purpose*: the same function reads the client-inbound direction, where a
+    single legitimate frame carries a whole scrollback buffer. The supervisor's
+    own server loop passes explicit caps; a caller that does not is the generous
+    direction. A malformed or negative length is refused either way, because
+    ``readexactly`` would otherwise be handed a value it cannot mean.
+    """
     (size,) = struct.unpack(">I", await reader.readexactly(4))
-    if size > MAX_HEADER_BYTES:
+    if size > max_header_bytes:
         raise ValueError(f"oversized frame header: {size} bytes")
     header = json.loads(await reader.readexactly(size))
     if not isinstance(header, dict):
         raise ValueError("frame header must be a JSON object")
-    plen = int(header.get("plen", 0))
+    raw_plen = header.get("plen", 0)
+    try:
+        plen = int(raw_plen)
+    except (TypeError, ValueError):
+        raise ValueError(f"frame payload length is not a number: {raw_plen!r}") from None
+    if plen < 0:
+        raise ValueError(f"negative frame payload length: {plen}")
+    if max_payload_bytes is not None and plen > max_payload_bytes:
+        raise ValueError(f"oversized frame payload: {plen} bytes (cap {max_payload_bytes})")
     payload = await reader.readexactly(plen) if plen else b""
     return header, payload
 
@@ -135,6 +199,20 @@ class SupervisedSession:
     # keeps its process tree (and its kill-on-close job) but produces no further
     # output; an implicit remove must not reap it as if it had exited.
     output_ended_while_alive: bool = False
+    # Spawn idempotency and the `spawn_status` query (F2). The reservation exists
+    # from the instant the request is accepted, so a duplicate spawn - or a
+    # client asking what became of a reply it never received - is answered from
+    # the first attempt's outcome rather than by starting a second agent process
+    # in the same workspace. `spawn_done` is set exactly once, on success and on
+    # failure alike, so nothing can wait on it forever after the attempt ended.
+    spawn_done: asyncio.Event = field(default_factory=asyncio.Event)
+    spawn_error: str | None = None
+    started_at: float | None = None
+
+    def spawn_state(self) -> str:
+        if not self.spawn_done.is_set():
+            return SPAWN_STATE_RESERVED
+        return SPAWN_STATE_LIVE if self.alive else SPAWN_STATE_EXITED
 
 
 @dataclass(eq=False)
@@ -159,6 +237,9 @@ class SupervisorServer:
         self._server: asyncio.Server | None = None
         self._last_busy = time.monotonic()
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Set before the listener closes, so nothing new is accepted while
+        # in-flight work drains (F8).
+        self._closing = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -202,10 +283,28 @@ class SupervisorServer:
             await asyncio.gather(linger, return_exceptions=True)
             await self._teardown()
 
+    @property
+    def refusing_spawns(self) -> bool:
+        """Whether this supervisor has begun shutting down.
+
+        Read at two points on purpose: when a `spawn` is dispatched, and again
+        after its blocking ConPTY creation returns. One check cannot cover both,
+        because the whole failure this exists for (F8) is a spawn that was
+        already past the first check when teardown began.
+        """
+        return self._closing or self.exit_event.is_set()
+
     async def _teardown(self) -> None:
+        # The order is the entire fix (F8). Refuse new work and stop accepting
+        # connections, let in-flight spawns finish and be accounted for, and only
+        # then close the Jobs -- a child created after the reaper Job closed is
+        # assigned to nothing and killed by nothing, which is how an orphaned
+        # agent escapes a reap that reported success.
+        self._closing = True
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        await self._drain_background_tasks()
         for entry in self.sessions.values():
             if entry.fanout_task and not entry.fanout_task.done():
                 entry.fanout_task.cancel()
@@ -217,7 +316,32 @@ class SupervisorServer:
         self._remove_discovery()
         # Closing the Job handle is the reap: kill-on-close terminates every
         # process tree that was assigned to it.
+        log.info("supervisor teardown: reaping %d session(s)", len(self.sessions))
         self.reaper.close()
+
+    async def _drain_background_tasks(self) -> None:
+        """Let in-flight handlers finish before anything is reaped.
+
+        Bounded, because a wedged ConPTY creation must not hold the reap open
+        forever; overrunning is logged rather than silent, since what escapes
+        past the bound is exactly the orphan this drain exists to prevent.
+        """
+        pending = {task for task in self._background_tasks if not task.done()}
+        if not pending:
+            return
+        log.info("supervisor teardown: draining %d in-flight operation(s)", len(pending))
+        _done, still_pending = await asyncio.wait(pending, timeout=SHUTDOWN_DRAIN_SECONDS)
+        if still_pending:
+            log.warning(
+                "supervisor teardown: %d operation(s) still running after %.0fs; "
+                "cancelling and reaping anyway (a child created after this point "
+                "is not owned by the reaper Job)",
+                len(still_pending),
+                SHUTDOWN_DRAIN_SECONDS,
+            )
+            for task in still_pending:
+                task.cancel()
+            await asyncio.gather(*still_pending, return_exceptions=True)
 
     async def _linger_loop(self) -> None:
         while True:
@@ -236,13 +360,33 @@ class SupervisorServer:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         connection = Connection(reader, writer)
+        peer = writer.get_extra_info("peername")
         self.connections.add(connection)
         self._last_busy = time.monotonic()
         try:
             while not self.exit_event.is_set():
                 try:
-                    header, payload = await read_frame(reader)
+                    header, payload = await self._read_request(connection)
                 except (asyncio.IncompleteReadError, ConnectionError):
+                    break
+                except TimeoutError:
+                    log.warning(
+                        "supervisor: dropping connection from %s that never authenticated "
+                        "within %.0fs",
+                        peer,
+                        AUTH_DEADLINE_SECONDS,
+                    )
+                    break
+                except ValueError as exc:
+                    # A refused or malformed frame leaves the stream desynced at
+                    # an unknown offset, so there is nothing to resynchronise to:
+                    # the connection is the unit that has to go.
+                    log.warning(
+                        "supervisor: refusing frame from %s (authenticated=%s): %s",
+                        peer,
+                        connection.authenticated,
+                        exc,
+                    )
                     break
                 try:
                     await self._dispatch(connection, header, payload)
@@ -266,6 +410,31 @@ class SupervisorServer:
             with contextlib.suppress(Exception):
                 writer.close()
 
+    async def _read_request(self, connection: Connection) -> tuple[dict[str, Any], bytes]:
+        """Read one daemon-inbound frame under the bounds its state has earned (F13).
+
+        An unauthenticated connection is allowed exactly one shape - a
+        payload-free ``hello`` with a small header - and a deadline to send it.
+        The payload cap of zero is what makes "payload-free" enforced rather than
+        assumed: before this, the supervisor read an arbitrary number of bytes
+        named by an unauthenticated peer's header, and only then checked the
+        token.
+        """
+        if connection.authenticated:
+            return await read_frame(
+                connection.reader,
+                max_header_bytes=REQUEST_MAX_HEADER_BYTES,
+                max_payload_bytes=REQUEST_MAX_PAYLOAD_BYTES,
+            )
+        return await asyncio.wait_for(
+            read_frame(
+                connection.reader,
+                max_header_bytes=HELLO_MAX_HEADER_BYTES,
+                max_payload_bytes=0,
+            ),
+            timeout=AUTH_DEADLINE_SECONDS,
+        )
+
     async def _dispatch(
         self, connection: Connection, header: dict[str, Any], payload: bytes
     ) -> None:
@@ -277,12 +446,37 @@ class SupervisorServer:
         if not connection.authenticated:
             raise PermissionError("hello with a valid token is required first")
         if kind == "spawn":
-            # Reserve and validate synchronously; run the blocking ConPTY spawn
-            # off the read loop so one slow spawn cannot stall other sessions'
-            # input frames on this connection.
-            entry = self._reserve_spawn(connection, header, payload)
-            self._spawn_background(
-                self._finish_spawn(connection, entry, request_id), connection, request_id
+            if self.refusing_spawns:
+                raise RuntimeError("supervisor is shutting down; spawn refused")
+            existing = self.sessions.get(str(header.get("sid")))
+            if existing is not None:
+                # Idempotency (F2). A spawn whose reply was lost - a >60s ConPTY
+                # stall under Defender is enough - used to be retried into a
+                # *second* agent process on the same workspace, because the id
+                # was already reserved and the supervisor answered "session
+                # already exists". Answer with the first attempt's outcome
+                # instead; the reservation is the deduplication key.
+                log.info(
+                    "spawn for %s deduplicated against an existing %s reservation",
+                    existing.sid,
+                    existing.spawn_state(),
+                )
+                self._spawn_background(
+                    self._reply_existing_spawn(connection, existing, request_id),
+                    connection,
+                    request_id,
+                )
+            else:
+                # Reserve and validate synchronously; run the blocking ConPTY
+                # spawn off the read loop so one slow spawn cannot stall other
+                # sessions' input frames on this connection.
+                entry = self._reserve_spawn(connection, header, payload)
+                self._spawn_background(
+                    self._finish_spawn(connection, entry, request_id), connection, request_id
+                )
+        elif kind == "spawn_status":
+            connection.send(
+                {"id": request_id, "ok": True, **self._spawn_status(str(header.get("sid")))}
             )
         elif kind == "write":
             self._require(header).host.write(payload)
@@ -399,6 +593,38 @@ class SupervisorServer:
                 continue
         return result
 
+    def _spawn_status(self, sid: str) -> dict[str, Any]:
+        """What became of the spawn for ``sid`` (F2).
+
+        The daemon reaches this exactly when it does not know: a spawn RPC timed
+        out, or its connection dropped mid-request. The lost reply was the only
+        thing that said whether an agent process now exists, and both guesses are
+        harmful - assume it failed and a live agent is orphaned and re-adopted at
+        next boot beside its replacement, assume it succeeded and a genuinely
+        failed spawn leaves a dead pane. "unknown" here is a real answer: the id
+        was never reserved, so falling back cannot duplicate anything.
+
+        Deliberately *not* gated on PROTOCOL_VERSION, for the same reason
+        `job_pids` is not: an older supervisor answers "unknown message type",
+        the daemon degrades to its previous behaviour, and a new daemon can still
+        drive a running older supervisor rather than orphaning every live session
+        over a query.
+        """
+        entry = self.sessions.get(sid)
+        if entry is None:
+            log.info("spawn_status sid=%s state=%s", sid, SPAWN_STATE_UNKNOWN)
+            return {"sid": sid, "state": SPAWN_STATE_UNKNOWN}
+        state = entry.spawn_state()
+        status: dict[str, Any] = {"sid": sid, "state": state}
+        if state != SPAWN_STATE_RESERVED:
+            status["pid"] = entry.host.pid
+            status["started_at"] = entry.started_at
+            status["reaper_assignment"] = entry.host.reaper_assignment
+        if state == SPAWN_STATE_EXITED:
+            status["exit_code"] = entry.exit_code
+        log.info("spawn_status sid=%s state=%s pid=%s", sid, state, status.get("pid"))
+        return status
+
     def _session_infos(self) -> list[dict[str, Any]]:
         return [
             {
@@ -410,6 +636,14 @@ class SupervisorServer:
                 "rows": entry.host.rows,
                 "reaper_assignment": entry.host.reaper_assignment,
                 "meta": entry.meta,
+                "started_at": entry.started_at,
+                # Read failures the reader swallows and keeps going from (F14).
+                # A session that is alive and silent is otherwise indistinguishable
+                # from one whose agent is simply thinking, and the daemon cannot
+                # see the supervisor's reader thread at all.
+                "read_errors": entry.host.read_errors,
+                "last_read_error": entry.host.last_read_error,
+                "last_read_error_at": entry.host.last_read_error_at,
             }
             for entry in self.sessions.values()
         ]
@@ -481,22 +715,47 @@ class SupervisorServer:
         try:
             host.prepare()
             await asyncio.to_thread(host.spawn)
-        except BaseException:
+        except BaseException as exc:
+            # Release the reservation: the id is free again, so a retry spawns
+            # rather than being deduplicated against a session that never
+            # existed. Anything already waiting on this attempt gets the reason.
             self.sessions.pop(entry.sid, None)
+            entry.spawn_error = f"spawn failed: {exc}"
+            entry.spawn_done.set()
+            log.warning("session %s: spawn failed: %s", entry.sid, exc)
             raise
-        ownership_job: ProcessReaper | None = None
-        try:
-            ownership_job = self.reaper.create_child()
-            ownership_job.assign(host.pid)
-            host.reaper_assignment += ";nested_session_job_assigned"
-        except OSError as exc:
-            host.reaper_assignment += f";nested_session_job_failed:{exc}"
-            if ownership_job:
-                ownership_job.close()
-            ownership_job = None
-        entry.ownership_job = ownership_job
+        if self.refusing_spawns:
+            # This spawn was already past the dispatch-time refusal when teardown
+            # began (F8). Its child exists now, moments before the reaper Job
+            # closes, and if it were left alone it would be owned by nothing and
+            # killed by nothing - a reap that reported success while an agent
+            # kept running.
+            log.warning(
+                "session %s: spawn completed during shutdown (pid=%s); stopping it "
+                "so it cannot escape the reap",
+                entry.sid,
+                host.pid,
+            )
+            self.sessions.pop(entry.sid, None)
+            entry.spawn_error = "supervisor is shutting down"
+            entry.spawn_done.set()
+            await asyncio.to_thread(host.stop, graceful=False)
+            raise RuntimeError("supervisor is shutting down; the spawned child was stopped")
+        nested = create_nested_session_job(self.reaper, host.pid, sid=entry.sid)
+        host.reaper_assignment += nested.suffix
+        entry.ownership_job = nested.job
+        entry.started_at = time.time()
+        # Set before the reply is written: a duplicate spawn waiting on this
+        # event must never observe a session the client has already been told about.
+        entry.spawn_done.set()
         entry.fanout_task = asyncio.create_task(
             self._fanout(entry), name=f"sup-fanout-{entry.sid}"
+        )
+        log.info(
+            "session %s spawned pid=%s assignment=%s",
+            entry.sid,
+            host.pid,
+            host.reaper_assignment,
         )
         connection.send(
             {
@@ -504,6 +763,65 @@ class SupervisorServer:
                 "ok": True,
                 "pid": host.pid,
                 "reaper_assignment": host.reaper_assignment,
+                "state": entry.spawn_state(),
+                "started_at": entry.started_at,
+            }
+        )
+
+    async def _reply_existing_spawn(
+        self, connection: Connection, entry: SupervisedSession, request_id: Any
+    ) -> None:
+        """Answer a duplicate `spawn` with the first attempt's outcome (F2).
+
+        Deliberately does *not* add this connection as a subscriber. Registration
+        and the scrollback snapshot are one indivisible step in `subscribe`, and
+        the whole reason they are indivisible is that splitting them either drops
+        or duplicates the chunk on the boundary. A client recovering a lost reply
+        attaches with `subscribe`, which is the path that already gets this right.
+        """
+        try:
+            await asyncio.wait_for(entry.spawn_done.wait(), timeout=SPAWN_DEDUPE_WAIT_SECONDS)
+        except TimeoutError:
+            # Honest beats convenient: replying "ok" with no pid would have the
+            # daemon record a session whose process may not exist.
+            log.warning(
+                "session %s: duplicate spawn timed out waiting for the original attempt",
+                entry.sid,
+            )
+            if request_id is not None:
+                connection.send(
+                    {
+                        "id": request_id,
+                        "ok": False,
+                        "error": f"spawn for {entry.sid} is still in flight",
+                        "state": SPAWN_STATE_RESERVED,
+                        "deduped": True,
+                    }
+                )
+            return
+        if request_id is None:
+            return
+        if entry.spawn_error is not None:
+            connection.send(
+                {
+                    "id": request_id,
+                    "ok": False,
+                    "error": entry.spawn_error,
+                    "deduped": True,
+                }
+            )
+            return
+        connection.send(
+            {
+                "id": request_id,
+                "ok": True,
+                "deduped": True,
+                "state": entry.spawn_state(),
+                "pid": entry.host.pid,
+                "reaper_assignment": entry.host.reaper_assignment,
+                "started_at": entry.started_at,
+                "alive": entry.alive,
+                "exit_code": entry.exit_code,
             }
         )
 
