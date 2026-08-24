@@ -92,6 +92,11 @@ Also runs an observer batch.
 Projects and their order, Groups, Project config, Project context, Git-Project scope, artifacts, directory pins, the filesystem browser, and launch profiles.
 Also builds the Project snapshot every listing is drawn from.
 
+`PUT /api/project/config` takes two shapes: `changes` with `base` writes named fields through `merge_project_config`, and `values` with `revision` replaces the document through `write_project_config`.
+`base` is required whenever `changes` is sent - defaulting it to "no base" would turn the guard off for whoever omitted it.
+`ProjectConfigConflict` is deliberately not caught here: `error_middleware` answers it with `409 revision_conflict` plus `conflicts` and `current`, so every route that merges reports a collision identically.
+`PUT /api/projects/{id}/automations` (`routes/automation.py`) takes the same two shapes over its own two fields.
+
 **Not:** Project files (`routes/project_files.py`) or Project Actions (`routes/project_actions.py`).
 
 ### `routes/project_files.py`

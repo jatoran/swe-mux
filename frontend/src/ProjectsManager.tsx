@@ -6,7 +6,19 @@ import { revealSetting } from './settingReveal'
 import { SettingLink } from './SettingLink'
 import { automationSetting } from './settingTargets'
 import type { LlmReadiness } from './llmProvider'
-import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
+import { parseIgnorePatternDraft } from './settingsDraft'
+import {
+  PANEL_CONFIG_FIELDS,
+  conflictNotice,
+  nextWorktreeTable,
+  projectConfigDelta,
+  revisionConflict,
+  type ProjectConfigChanges,
+  type ProjectConfigValues,
+  type WorktreeValues,
+} from './projectConfig'
+import { PROJECT_AUTOMATIONS_CHANGED } from './projectAutomations'
+import { useProjectConfig, type ProjectConfigStore } from './projectConfigState'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
 import { allBackendNames, harnessDisplayName } from './harnessRegistry'
 import { useDismissLevel } from './modalFocus'
@@ -25,23 +37,6 @@ import { ProjectPicker, type ProjectPickerOption } from './ProjectPicker'
 // `.swe-mux/config.toml` and travels with the checkout. Precedence is
 // device > repo > global, so a value is only ever written to one of them.
 type Layer = 'device' | 'repo'
-
-type PortableValues = {
-  default_shell_profile?: string
-  /** Backend name to launch profile id. A selection only; the profile itself is
-   *  defined on the device, because argv for an agent CLI is an authority field. */
-  default_agent_profiles?: Record<string, string>
-  preferred_backend?: ProjectBackend
-  prompt_library_scope?: PromptLibraryScope
-  notification_sounds_enabled?: boolean
-  ignore_patterns?: string[]
-  worktree?: { setup_command?: string }
-}
-type ProjectConfig = {
-  project: { id: string; label: string; root: string }
-  path: string; status: string; revision: string; error?: string
-  values: PortableValues
-}
 
 type AutomationEntry = {
   id: string
@@ -79,32 +74,81 @@ type AutomationState = {
  * here is what makes it run at all — nothing in this layer touches a project
  * that did not opt in.
  */
-function AutomationOptIns({ project, busy, onError }: {
+function AutomationOptIns({ project, busy, onError, store }: {
   project: Project
   busy: boolean
   onError: (message: string) => void
+  /** The panel's one copy of `.swe-mux/config.toml`, which this table writes two fields of. */
+  store: ProjectConfigStore
 }) {
   const [state, setState] = useState<AutomationState | null>(null)
   const [saving, setSaving] = useState(false)
-  useEffect(() => {
-    let stale = false
-    setState(null)
-    api<AutomationState>('GET', `/api/projects/${project.id}/automations`)
-      .then(result => { if (!stale) setState(result) })
-      .catch(cause => { if (!stale) onError(cause instanceof Error ? cause.message : String(cause)) })
-    return () => { stale = true }
+  // The resolution this pane draws - which opt-ins are blocked, and by what - is
+  // computed by the daemon and is not in the file, so it is read separately from the
+  // shared config. Only the newest read may paint, so switching Projects twice
+  // quickly cannot leave the first Project's table on screen.
+  const issued = useRef(0)
+  const read = useCallback(async () => {
+    const ticket = ++issued.current
+    try {
+      const result = await api<AutomationState>('GET', `/api/projects/${project.id}/automations`)
+      if (ticket === issued.current) setState(result)
+    } catch (cause) {
+      if (ticket === issued.current) onError(cause instanceof Error ? cause.message : String(cause))
+    }
   }, [project.id])
+  useEffect(() => { setState(null); void read() }, [read])
+  // A grant gate elsewhere in the app switches these same opt-ins on. Without this the
+  // checkbox that gate just ticked keeps reading "off" until the panel is reopened.
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string }>).detail
+      if (detail?.projectId && detail.projectId !== project.id) return
+      void read()
+    }
+    window.addEventListener(PROJECT_AUTOMATIONS_CHANGED, changed)
+    return () => window.removeEventListener(PROJECT_AUTOMATIONS_CHANGED, changed)
+  }, [project.id, read])
 
   const write = async (next: Record<string, boolean>, autoEnable?: boolean) => {
     if (!state) return
     setSaving(true)
     try {
-      setState(await api<AutomationState>('PUT', `/api/projects/${project.id}/automations`, {
+      // Guarded by what the shared copy says these two fields hold, not by a revision
+      // of the whole file: the authority table and the repo options below write the
+      // same file, and a whole-file guard made each of them read as an external edit
+      // to this one. The revision stays the fallback for a shared copy that could not
+      // be read at all, where naming a base would be asserting something unknown.
+      const saved = store.config?.values
+      const guard = saved
+        ? {
+          base: {
+            automations: saved.automations ?? null,
+            scan_timeline_auto_enable: saved.scan_timeline_auto_enable ?? null,
+          },
+        }
+        : { revision: state.revision }
+      // A write takes a read's ticket too: refreshing the shared copy makes the daemon
+      // broadcast, which fires a read, and this answer must not paint over a newer one.
+      const ticket = ++issued.current
+      const written = await api<AutomationState>('PUT', `/api/projects/${project.id}/automations`, {
         automations: next,
         scan_timeline_auto_enable: autoEnable ?? state.scan_timeline_auto_enable,
-        revision: state.revision,
-      }))
-    } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)) }
+        ...guard,
+      })
+      if (ticket === issued.current) setState(written)
+      // Those two fields live in the file the rest of the panel is editing.
+      await store.refresh()
+    } catch (cause) {
+      const conflict = revisionConflict(cause)
+      onError(conflict
+        ? conflictNotice(conflict.fields)
+        : cause instanceof Error ? cause.message : String(cause))
+      // Resync both halves, so the click the operator makes next acts on the file as
+      // it now stands rather than failing the same way again.
+      await store.refresh()
+      await read()
+    }
     finally { setSaving(false) }
   }
 
@@ -231,19 +275,14 @@ function AutomationOptIns({ project, busy, onError }: {
  * and only an editor may take a permission away. A gate elsewhere may raise one; nothing
  * but this can lower it.
  */
-function AgentAuthority({ project, busy, onError }: {
-  project: Project
+function AgentAuthority({ busy, onError, store }: {
   busy: boolean
   onError: (message: string) => void
+  /** The panel's one copy of `.swe-mux/config.toml`, which these four rows write to. */
+  store: ProjectConfigStore
 }) {
-  const [config, setConfig] = useState<ProjectConfig | null>(null)
   const [saving, setSaving] = useState(false)
-  const read = useCallback(() => {
-    api<ProjectConfig>('GET', `/api/project/config?cwd=${encodeURIComponent(project.root)}&project_id=${encodeURIComponent(project.id)}`)
-      .then(setConfig)
-      .catch(cause => onError(cause instanceof Error ? cause.message : String(cause)))
-  }, [project.id, project.root])
-  useEffect(() => { setConfig(null); read() }, [read])
+  const config = store.config
 
   const write = async (field: string, value: string) => {
     if (!config) return
@@ -252,16 +291,11 @@ function AgentAuthority({ project, busy, onError }: {
       // Written straight through rather than into the panel's Save draft: an authority
       // change is a decision of its own, and staging it behind a button that also
       // renames the Project would leave the other rows describing a state the daemon
-      // does not have yet.
-      setConfig(await api<ProjectConfig>('PUT', '/api/project/config', {
-        cwd: project.root,
-        project_id: project.id,
-        values: { ...config.values, [field]: value },
-        revision: config.revision,
-      }))
+      // does not have yet. One named field, so it can neither collide with nor revert
+      // the automation opt-ins and repo options that share this file.
+      await store.commit({ [field]: value })
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
-      read()
     } finally { setSaving(false) }
   }
 
@@ -292,8 +326,7 @@ function AgentAuthority({ project, busy, onError }: {
     },
   ]
   const inertFor = (field: string) => field === 'interject_grant' ? 'off' : 'draft'
-  const value = (field: string) =>
-    String((config?.values as Record<string, unknown> | undefined)?.[field] || inertFor(field))
+  const value = (field: string) => String(config?.values[field] || inertFor(field))
 
   return <div class="project-automations project-authority">
     <h4 data-setting="agent_authority">Agent authority<em class="project-setting-chip">repo</em></h4>
@@ -363,9 +396,6 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const [name,setName]=useState('')
   const [groupId,setGroupId]=useState('')
   const [overrides,setOverrides]=useState<Overrides>({default_agent_profiles:{}})
-  const [config,setConfig]=useState<ProjectConfig|null>(null)
-  const [values,setValues]=useState<PortableValues>({})
-  const [savedValues,setSavedValues]=useState<PortableValues>({})
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   const [confirmRemove,setConfirmRemove]=useState(false)
@@ -373,6 +403,14 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   // a fast pick (the mobile dropdown especially) cannot silently discard them.
   const [pendingSwitch,setPendingSwitch]=useState<string|null>(null)
   const selected=projects.find(project=>project.id===selectedId)||ordered[0]||null
+  // One copy of `.swe-mux/config.toml` for the whole panel, refreshed when anything
+  // writes it. The three sections below used to hold three, which is why editing any
+  // one of them made the next edit answer "changed externally".
+  const configStore=useProjectConfig(selected)
+  const config=configStore.config
+  // Only the fields the operator has actually touched. An overlay rather than a copy
+  // of the file, so a refresh moves what nobody is editing and cannot discard a draft.
+  const [draft,setDraft]=useState<ProjectConfigChanges>({})
   const shown=ordered.filter(project=>{
     if(filter==='visible'&&!isVisible(project))return false
     if(filter==='hidden'&&isVisible(project))return false
@@ -399,20 +437,20 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     return revealSetting(root,initialSetting)
   },[initialSetting,revealToken,selected?.id])
 
-  // The portable layer lives in the checkout, so it is read per Project rather than
-  // taken from the registry payload — its revision is what guards the write.
-  useEffect(()=>{
-    if(!selected||selected.root_available===false){setConfig(null);setValues({});setSavedValues({});return}
-    let stale=false
-    setConfig(null);setValues({});setSavedValues({})
-    // project_id names the registered Project explicitly: without it the daemon
-    // re-resolves the root through Git, and a Project registered inside a larger
-    // worktree edits the enclosing worktree's config instead of its own.
-    api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(selected.root)}&project_id=${encodeURIComponent(selected.id)}`)
-      .then(result=>{if(stale)return;setConfig(result);setValues(result.values);setSavedValues(result.values)})
-      .catch(cause=>{if(!stale)setError(cause instanceof Error?cause.message:String(cause))})
-    return ()=>{stale=true}
-  },[selected?.id,selected?.root])
+  // Switching Projects abandons the overlay; the shared copy re-reads itself.
+  useEffect(()=>{setDraft({})},[selected?.id,selected?.root])
+
+  // What the form draws: the file, with the operator's unsaved edits on top. Written
+  // back as the difference between the two, never as this whole map - it holds fields
+  // this form does not draw (the opt-ins, the authority table, the approval posture,
+  // the land queue's verify command), and writing it back whole is how a stale copy
+  // silently reverts them.
+  const values:ProjectConfigValues={...(config?.values||{}),...draft}
+  // One field's current worth: the operator's edit where they have made one, the file
+  // otherwise. Read inside the state updater so two edits in one tick compose.
+  const fieldOf=(current:ProjectConfigChanges,key:string):unknown=>
+    key in current?current[key]:config?.values[key]
+  const editValues=(patch:ProjectConfigChanges)=>setDraft(current=>({...current,...patch}))
 
   const effective=selected?.effective_options
   const backendLayer:Layer=overrides.default_backend?'device':values.preferred_backend?'repo':'device'
@@ -424,11 +462,11 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   // would silently win over the value the user just chose.
   const setBackend=(value:string,layer:Layer)=>{
     setOverrides(current=>({...current,default_backend:layer==='device'&&value?value as ProjectBackend:undefined}))
-    setValues(current=>({...current,preferred_backend:layer==='repo'&&value?value as ProjectBackend:undefined}))
+    editValues({preferred_backend:layer==='repo'&&value?value as ProjectBackend:undefined})
   }
   const setProfile=(value:string,layer:Layer)=>{
     setOverrides(current=>({...current,default_profile_id:layer==='device'&&value?value:undefined}))
-    setValues(current=>({...current,default_shell_profile:layer==='repo'&&value?value:undefined}))
+    editValues({default_shell_profile:layer==='repo'&&value?value:undefined})
   }
   // One selection per harness, in the same two layers. The repo layer stores an id
   // and never argv, so a checkout can say which locally-defined profile to use
@@ -453,13 +491,28 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     setOverrides(current=>({...current,default_agent_profiles:layer==='device'&&value
       ?{...current.default_agent_profiles,[backend]:value}
       :without(current.default_agent_profiles)}))
-    setValues(current=>{
-      const next=layer==='repo'&&value
-        ?{...(current.default_agent_profiles||{}),[backend]:value}
-        :without(current.default_agent_profiles||{})
+    setDraft(current=>{
+      const map=(fieldOf(current,'default_agent_profiles')||{}) as Record<string,string>
+      const next=layer==='repo'&&value?{...map,[backend]:value}:without(map)
       return {...current,default_agent_profiles:Object.keys(next).length?next:undefined}
     })
   }
+  const setWorktreeSetup=(command:string)=>setDraft(current=>({
+    ...current,
+    // Only this field of the table. The land queue owns `verify_command` in the same
+    // table, and replacing the table wholesale used to delete the approved
+    // verification command whenever someone cleared the setup command.
+    worktree:nextWorktreeTable(fieldOf(current,'worktree') as WorktreeValues|undefined,'setup_command',command),
+  }))
+  // "Inherited" means the fields this form draws, not the whole file: the button once
+  // wrote an empty document, taking the automation opt-ins, the authority table, the
+  // approval rules and the verify command with it.
+  const resetRepoOptions=()=>setDraft(current=>{
+    const next:ProjectConfigChanges={...current}
+    for(const field of PANEL_CONFIG_FIELDS)next[field]=undefined
+    next.worktree=nextWorktreeTable(fieldOf(current,'worktree') as WorktreeValues|undefined,'setup_command','')
+    return next
+  })
 
   const detailsDirty=!!selected&&(name.trim()!==selected.name||(groupId||null)!==(selected.group_id||null))
   const overridesDirty=!!selected&&(
@@ -467,7 +520,8 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     ||(overrides.default_profile_id||null)!==(selected.default_profile_id||null)
     ||JSON.stringify(overrides.default_agent_profiles)!==JSON.stringify(selected.default_agent_profiles||{})
   )
-  const portableDirty=!sameDraftValue(values,savedValues)
+  const portableChanges=projectConfigDelta(draft,config?.values)
+  const portableDirty=Object.keys(portableChanges).length>0
   const dirty=detailsDirty||overridesDirty||portableDirty
 
   // Switching Projects re-seeds every draft field, so an unsaved edit would be lost.
@@ -496,12 +550,10 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
         })
       }
       if(config&&portableDirty){
-        const payload:PortableValues={
-          ...values,
-          ...(values.ignore_patterns?{ignore_patterns:normalizeIgnorePatterns(values.ignore_patterns)}:{}),
-        }
-        const result=await api<ProjectConfig>('PUT','/api/project/config',{cwd:selected.root,project_id:selected.id,values:payload,revision:config.revision})
-        setConfig(result);setValues(result.values);setSavedValues(result.values)
+        await configStore.commit(portableChanges)
+        // The shared copy now holds what the daemon wrote, so the overlay has nothing
+        // left to say; keeping it would re-send the same fields on the next save.
+        setDraft({})
       }
     }
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
@@ -568,23 +620,23 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               </div>)}
               <h4 class="projects-manager-section">Repository options</h4>
               <label><span class="project-setting-name">Prompt library scope<em class="project-setting-chip">repo</em></span>
-                <Dropdown value={values.prompt_library_scope||''} disabled={busy||!config} onChange={value=>setValues(current=>({...current,prompt_library_scope:(value||undefined) as PromptLibraryScope|undefined}))} options={[{value:'',label:`Inherit (${SCOPE_LABELS[effective?.prompt_library_scope||'both']})`},...(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=>({value:scope,label:SCOPE_LABELS[scope]}))]}/>
+                <Dropdown value={values.prompt_library_scope||''} disabled={busy||!config} onChange={value=>editValues({prompt_library_scope:(value||undefined) as PromptLibraryScope|undefined})} options={[{value:'',label:`Inherit (${SCOPE_LABELS[effective?.prompt_library_scope||'both']})`},...(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=>({value:scope,label:SCOPE_LABELS[scope]}))]}/>
               </label>
-              <label class="check"><span class="project-setting-name">Allow device notification sounds<em class="project-setting-chip">repo</em></span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>setValues(current=>({...current,notification_sounds_enabled:event.currentTarget.checked}))}/></label>
+              <label class="check"><span class="project-setting-name">Allow device notification sounds<em class="project-setting-chip">repo</em></span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>editValues({notification_sounds_enabled:event.currentTarget.checked})}/></label>
               <label><span class="project-setting-name">Additional ignore patterns<em class="project-setting-chip">repo</em></span>
-                <textarea value={(values.ignore_patterns||[]).join('\n')} disabled={busy||!config} onInput={event=>setValues(current=>({...current,ignore_patterns:parseIgnorePatternDraft(event.currentTarget.value)}))}/>
+                <textarea value={(values.ignore_patterns||[]).join('\n')} disabled={busy||!config} onInput={event=>editValues({ignore_patterns:parseIgnorePatternDraft(event.currentTarget.value)})}/>
               </label>
               <p>One glob per line, added to the global ignore list. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p>
               <section class="project-setting">
                 <h4>Git and worktrees<em class="project-setting-chip">repo</em></h4>
                 <label><span class="project-setting-name">Worktree setup command</span>
-                  <input value={values.worktree?.setup_command||''} disabled={busy||!config} placeholder="Use executable .worktree-setup when blank" onInput={event=>setValues(current=>({...current,worktree:event.currentTarget.value?{...current.worktree,setup_command:event.currentTarget.value}:undefined}))}/>
+                  <input value={values.worktree?.setup_command||''} disabled={busy||!config} placeholder="Use executable .worktree-setup when blank" onInput={event=>setWorktreeSetup(event.currentTarget.value)}/>
                 </label>
                 <p>Runs only after Run creates a new worktree and before its session starts. Blank uses an executable <code>.worktree-setup</code> in the new checkout. The command is committed in <code>.swe-mux/config.toml</code>, so review changes like other repository code.</p>
               </section>
-              <div><button disabled={busy||!config} onClick={()=>setValues({})}>Reset repo options to inherited</button></div>
-              <AutomationOptIns project={selected} busy={busy} onError={setError} />
-              <AgentAuthority project={selected} busy={busy} onError={setError} />
+              <div><button disabled={busy||!config} onClick={resetRepoOptions}>Reset repo options to inherited</button></div>
+              <AutomationOptIns project={selected} busy={busy} onError={setError} store={configStore} />
+              <AgentAuthority busy={busy} onError={setError} store={configStore} />
             </div>
           </div>
           {confirmRemove&&<section class="project-removal-summary" aria-label="Remove Project confirmation">
@@ -593,7 +645,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
             <p>The Project leaves the sidebar and registry. Its folder and <code>.swe-mux</code> contents are not changed. Re-adding this folder restores the same Project identity, history, settings, and layout.</p>
             <div><button onClick={()=>setConfirmRemove(false)}>Cancel</button><button class="danger" disabled={busy} onClick={()=>void remove(liveCount>0)}>{liveCount>0?`Close ${liveCount} session${liveCount===1?'':'s'} and remove`:'Remove from swe-mux'}</button></div>
           </section>}
-          {error&&<p class="projects-manager-error" role="alert">{error}</p>}
+          {(error||configStore.error)&&<p class="projects-manager-error" role="alert">{error||configStore.error}</p>}
           <footer><button class="danger" disabled={busy} onClick={()=>setConfirmRemove(true)}>Remove from swe-mux…</button><span>History is preserved. The folder is never deleted.</span><button class="primary" disabled={!dirty||busy||!name.trim()} onClick={()=>void save()}>{busy?'Saving…':'Save changes'}</button></footer>
         </>:<div class="projects-manager-empty"><strong>No Projects configured</strong><p>Add a folder-backed Project to begin.</p><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button></div>}</main>
       </div>

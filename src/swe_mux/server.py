@@ -107,6 +107,7 @@ from .project_actions import (
 )
 from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
+    ProjectConfigConflict,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
     ProjectNoteProtected,
@@ -243,6 +244,20 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             exc.status,
         )
         return json_response({"error": str(exc), "code": exc.code}, exc.status)
+    except ProjectConfigConflict as exc:
+        # A field-scoped conflict, so it says which fields moved and hands back the
+        # current file: the editor resyncs and shows the collision in place rather
+        # than telling the operator to close the panel and open it again. Must
+        # precede the generic `ValueError` clause below.
+        return json_response(
+            {
+                "error": str(exc),
+                "code": "revision_conflict",
+                "conflicts": exc.fields,
+                "current": exc.current,
+            },
+            409,
+        )
     except ProjectFileRevisionConflict as exc:
         return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
     except ProjectImageUnavailable as exc:

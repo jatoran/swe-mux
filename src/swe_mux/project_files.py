@@ -163,6 +163,31 @@ class ProjectNoteProtected(ValueError):
     """A Project keeps at least one note, so its final note cannot be deleted."""
 
 
+class ProjectConfigConflict(ValueError):
+    """A field the caller edited moved on disk since the caller read it.
+
+    Narrower than a whole-file revision mismatch on purpose. `.swe-mux/config.toml`
+    is written by several surfaces that own disjoint keys - the Projects editor's
+    three sections, a grant gate, the land queue's verify command, the configurator,
+    the file browser's ignore - so a file-level guard reports every one of them as a
+    collision with every other, which is a conflict the operator cannot act on and
+    did not cause. Only the keys the caller actually named are compared.
+
+    Kept a `ValueError` carrying "changed externally" so the routes that string-match
+    that phrase still answer 409, and a distinct type so the surface can say *which*
+    fields collided and hand back the current file instead of asking for a reload.
+    """
+
+    def __init__(self, fields: Sequence[str], current: dict[str, Any]) -> None:
+        super().__init__(
+            "project config changed externally in "
+            + ", ".join(fields)
+            + "; reload before saving"
+        )
+        self.fields = list(fields)
+        self.current = current
+
+
 def revision(data: bytes | None) -> str:
     return hashlib.sha256(data or b"").hexdigest()[:24] if data is not None else "missing"
 
@@ -1597,9 +1622,86 @@ async def write_project_config(
     *,
     project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
+    """Replace the whole file, guarded by the revision the caller read.
+
+    For a caller that read the file and is writing it back in the same breath -
+    every daemon-side writer does exactly this. A caller holding a *cached* read
+    across a user's editing session wants `merge_project_config` instead: a
+    whole-file guard reports a change to any key as a conflict with every key,
+    and this file has six independent writers.
+    """
     current = await read_project_config(cwd, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("project config changed externally; reload before saving")
+    data = serialize_project_config(values)
+    _atomic_write(Path(current["path"]), data)
+    return await read_project_config(cwd, project=project)
+
+
+def normalized_project_values(values: dict[str, Any]) -> dict[str, Any]:
+    """`values` as this file would store them and hand them back.
+
+    Round-tripped through the real writer and reader rather than compared raw,
+    because the two are not the same map: retired keys are dropped, a falsy string
+    or an empty `ignore_patterns` list is not written at all, and `automations`
+    loses ids the registry no longer knows. Comparing raw maps would call an unset
+    key that arrived as `""` a change from an unset key that arrived as absent, and
+    the false conflict that produces is the whole reason this exists. Deriving it
+    from the pair that owns the format means it cannot drift from them.
+    """
+    return parse_project_config(serialize_project_config(values))
+
+
+async def merge_project_config(
+    cwd: str | Path,
+    changes: dict[str, Any],
+    base: dict[str, Any],
+    *,
+    project: ProjectIdentity | None = None,
+) -> dict[str, Any]:
+    """Write only the named fields, leaving every other field on disk untouched.
+
+    `changes` names the fields to set, with `None` meaning remove. `base` is what
+    the caller believed those same fields held when it composed the edit; a field
+    whose stored value has moved away from `base` since then is a real collision
+    and is refused by name, while a field nobody else touched is applied whatever
+    else changed in the file. This is the same rule the configurator's settings
+    write already follows (`.docs/design/features/configurator.md`): take
+    operations, never a document, so everything the caller did not name survives by
+    construction rather than by the caller having read it recently enough.
+
+    A malformed file is refused rather than merged into: `read_project_config`
+    reports no values for one, so merging would write the caller's fields over a
+    file whose remaining contents were never read - silently discarding whatever
+    the operator was in the middle of fixing by hand.
+    """
+    current = await read_project_config(cwd, project=project)
+    if current["status"] == "malformed":
+        raise ValueError(
+            "this Project's .swe-mux/config.toml cannot be parsed; fix it before saving"
+        )
+    if current["status"] == "read-only":
+        raise ValueError("this Project's .swe-mux/config.toml is read-only")
+    # Retired keys are dropped rather than refused, for the same reason
+    # `serialize_project_config` drops them: a caller that read a config and changed
+    # one thing does not have to know which keys have since moved to global settings.
+    requested = {key: value for key, value in changes.items() if key not in LEGACY_PROJECT_FIELDS}
+    invalid = sorted(set(requested) - PROJECT_CONFIG_FIELDS)
+    if invalid:
+        raise ValueError(f"unknown project fields: {', '.join(invalid)}")
+    stored = normalized_project_values(dict(current["values"]))
+    expected = normalized_project_values(
+        {key: value for key, value in base.items() if value is not None}
+    )
+    conflicts = sorted(key for key in requested if stored.get(key) != expected.get(key))
+    if conflicts:
+        raise ProjectConfigConflict(conflicts, current)
+    values = dict(current["values"])
+    for key, value in requested.items():
+        if value is None:
+            values.pop(key, None)
+        else:
+            values[key] = value
     data = serialize_project_config(values)
     _atomic_write(Path(current["path"]), data)
     return await read_project_config(cwd, project=project)

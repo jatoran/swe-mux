@@ -42,6 +42,7 @@ from ..openrouter import OpenRouterClient, OpenRouterError, cache_saving_usd
 from ..project_card import PROJECT_CARD_RULE_ID
 from ..project_context import ProjectContext
 from ..project_files import (
+    merge_project_config,
     read_project_config,
     write_project_config,
 )
@@ -882,7 +883,15 @@ async def put_project_automations(request: web.Request) -> web.Response:
     """Replace a project's opt-in table.
 
     Writes through the ordinary project-config path, so the file stays the source
-    of truth and the revision check still guards a concurrent edit.
+    of truth and a concurrent edit is still guarded.
+
+    Two guard shapes, matching `PUT /api/project/config`. `base` - what the caller
+    believed the `automations` table and `scan_timeline_auto_enable` held - writes
+    only those two fields and collides only when one of them actually moved, which
+    is what the toggle list in the Projects editor needs: it shares one file with
+    the authority table and the portable options beside it, and a whole-file guard
+    made every one of those writes read as an external edit to the other two. A
+    bare `revision` keeps the older whole-file check.
     """
     project = _observations_project(request)
     identity = _registered_identity(project)
@@ -914,27 +923,39 @@ async def put_project_automations(request: web.Request) -> web.Response:
     # more: it is one global setting in Settings -> Automation. A body that
     # still sends it is ignored rather than refused, and the retired key is
     # dropped from the file on this write.
-    current = await read_project_config(project.root, project=identity)
-    values = dict(current["values"]) if current["status"] != "malformed" else {}
-    values["automations"] = {key: bool(value) for key, value in requested.items() if value}
-    if auto_enable is not None:
-        values["scan_timeline_auto_enable"] = auto_enable
+    automations = {key: bool(value) for key, value in requested.items() if value}
+    changes: dict[str, Any] = {"automations": automations}
     # Auto-enable is meaningless without the permission it rides on, and leaving
     # it set would silently re-arm every run the moment the Project is opted in
     # again. Opting out clears it.
-    if not values["automations"].get("scan_timeline"):
-        values.pop("scan_timeline_auto_enable", None)
-    try:
-        await write_project_config(
-            project.root,
-            values,
-            str(body.get("revision") or current["revision"]),
-            project=identity,
-        )
-    except ValueError as exc:
-        if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
-        raise
+    if not automations.get("scan_timeline"):
+        changes["scan_timeline_auto_enable"] = None
+    elif auto_enable is not None:
+        changes["scan_timeline_auto_enable"] = auto_enable
+    base = body.get("base")
+    if isinstance(base, dict):
+        # `ProjectConfigConflict` is answered by the error middleware, which names
+        # the field that moved instead of blaming the whole file.
+        await merge_project_config(project.root, changes, dict(base), project=identity)
+    else:
+        current = await read_project_config(project.root, project=identity)
+        values = dict(current["values"]) if current["status"] != "malformed" else {}
+        for key, value in changes.items():
+            if value is None:
+                values.pop(key, None)
+            else:
+                values[key] = value
+        try:
+            await write_project_config(
+                project.root,
+                values,
+                str(body.get("revision") or current["revision"]),
+                project=identity,
+            )
+        except ValueError as exc:
+            if "changed externally" in str(exc):
+                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            raise
     if gate_cache := request.app.get(keys.AUTOMATION_GATE_CACHE):
         gate_cache.clear()
     if requested.get("scan_timeline") and request.app.get(keys.PROJECT_CONTEXTS) is not None:

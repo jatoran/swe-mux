@@ -68,6 +68,7 @@ import './llmProvider.test.ts'
 // Was never registered here, so the invariant `setting-links.md` credits it with -
 // "a renamed switch fails a test, never a click" - was not actually being run.
 import './grants.test.ts'
+import './projectConfig.test.ts'
 import './modelDisplay.test.ts'
 import './phase3Workflow.test.ts'
 import './terminalClipboard.test.ts'

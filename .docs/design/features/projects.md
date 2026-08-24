@@ -247,8 +247,38 @@ GET|PUT /api/project/config?cwd=<root>
 
 The registry reads and writes both layers directly: `PATCH /api/projects/{id}` for database
 overrides (`default_backend`, `default_profile_id`, `default_agent_profiles`,
-`git_compare_ref`, sent as `null` to clear) and revision-checked
-`PUT /api/project/config` for the portable file.
+`git_compare_ref`, sent as `null` to clear) and `PUT /api/project/config` for the portable file.
+
+### Writing the portable file
+
+`.swe-mux/config.toml` has several independent writers that own disjoint keys: the registry's
+own form, its automation opt-ins, its agent authority table, a grant gate
+(`features/setting-links.md`), the land queue's verify command
+(`features/land-queue.md`), the configurator agent (`features/configurator.md`), and the file
+browser's per-Project ignore (`features/project-resources.md`).
+An editor therefore writes **fields**, not the document.
+
+`PUT /api/project/config` takes `changes` (the fields to set, `null` to remove one) together
+with `base` (what the caller believed those same fields held).
+A field whose stored value has moved away from `base` is refused by name with `409
+revision_conflict`, carrying `conflicts` and the current file as `current`; a field nobody
+else touched is applied whatever else changed in the file.
+`base` is required whenever `changes` is sent, because defaulting it to "no base" would turn
+the guard off for whoever omitted it.
+
+`values` with `revision` remains for the whole-document write: it replaces the file under a
+whole-file content digest, which is the right guard for a caller that reads and writes in one
+breath, and is what an older client sends.
+It is the wrong guard for a caller holding a cached read across an editing session, where a
+whole-file digest reports every other writer as a collision with every field - the failure
+that reached operators as "project config changed externally; reload before saving" on their
+own second edit, recoverable only by closing and reopening the panel.
+
+The registry holds **one** copy of the file for the whole panel and refreshes it on the
+daemon's `project_configuration_changed` broadcast, so an edit made by any of the other
+writers - including from another device - reaches an open panel rather than staling it.
+A conflict resyncs that copy before it is reported, so the operator's next click acts on the
+current file.
 
 Project layout writes are revision checked. Whole-order reorder writes are validated as a
 complete permutation of every registered Project ID and normalized transactionally. Group

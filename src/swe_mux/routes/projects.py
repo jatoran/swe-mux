@@ -27,6 +27,7 @@ from ..http_support import json_response
 from ..profiles import find_profile, profile_payload, resolve_profile
 from ..project_context import ProjectContext, ProjectContextService
 from ..project_files import (
+    merge_project_config,
     read_project_config,
     write_project_config,
 )
@@ -53,29 +54,59 @@ async def get_project_config(request: web.Request) -> web.Response:
     )
 
 
+def _validate_project_shell_profile(
+    request: web.Request, values: dict[str, Any], project_cwd: Path
+) -> None:
+    """Refuse a `default_shell_profile` this device cannot resolve, naming the field."""
+    if not values.get("default_shell_profile"):
+        return
+    try:
+        resolve_profile(request.app[keys.CONFIG], str(values["default_shell_profile"]), project_cwd)
+    except ValueError as exc:
+        raise ValueError({"default_shell_profile": str(exc)}) from exc
+
+
 async def put_project_config(request: web.Request) -> web.Response:
+    """Write the portable per-Project file, by field or as a whole document.
+
+    Two shapes, and the field-scoped one is what an editor should send. `changes`
+    (with `base`, what the caller believed those fields held) writes only the named
+    fields and collides only on a field that actually moved - which is what a panel
+    whose several sections own disjoint keys needs, because they share one file and
+    each other's writes would otherwise read as an external edit. `values` with
+    `revision` replaces the document under a whole-file guard, kept for the callers
+    that read and write in one breath and for an older client talking to this daemon.
+    """
     body = await request.json()
-    values = dict(body.get("values") or {})
     identity = _config_identity(request, str(body.get("project_id") or ""))
     project_cwd = Path(str(body.get("cwd") or Path.cwd())).resolve()
-    if values.get("default_shell_profile"):
+    changes = body.get("changes")
+    if isinstance(changes, dict):
+        base = body.get("base")
+        if not isinstance(base, dict):
+            # Without it there is nothing to compare against, and defaulting to
+            # "no base" would silently turn the guard off for whoever forgot it.
+            raise ValueError("base must accompany changes")
+        _validate_project_shell_profile(request, changes, project_cwd)
+        # `ProjectConfigConflict` is answered by the error middleware, which carries
+        # the colliding field names and the current file back to the caller.
+        result = await merge_project_config(
+            str(project_cwd), dict(changes), dict(base), project=identity
+        )
+    else:
+        values = dict(body.get("values") or {})
+        _validate_project_shell_profile(request, values, project_cwd)
         try:
-            resolve_profile(
-                request.app[keys.CONFIG], str(values["default_shell_profile"]), project_cwd
+            result = await write_project_config(
+                str(project_cwd),
+                values,
+                str(body.get("revision") or "missing"),
+                project=identity,
             )
         except ValueError as exc:
-            raise ValueError({"default_shell_profile": str(exc)}) from exc
-    try:
-        result = await write_project_config(
-            str(project_cwd),
-            values,
-            str(body.get("revision") or "missing"),
-            project=identity,
-        )
-    except ValueError as exc:
-        if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
-        raise
+            if "changed externally" in str(exc):
+                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            raise
     project = await resolve_project(result["project"]["root"])
     await request.app[keys.HISTORY].register_project_scope(project)
     await request.app[keys.EVENTS].emit(

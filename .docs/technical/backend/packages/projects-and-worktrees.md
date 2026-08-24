@@ -40,6 +40,22 @@ The shared Windows-safe filesystem-leaf validator - invalid characters, reserved
 `read_project_config_values` is the named accessor for the *values* rather than the envelope.
 Handing a consumer the envelope reads as "this Project configured nothing" with no symptom, which is how `[worktree] verify_command` came to be inert for the land gate.
 
+`.swe-mux/config.toml` has two writers, for two different callers.
+
+- `write_project_config(values, expected_revision)` replaces the document under a whole-file content digest. Correct for a caller that reads and writes in one breath, which every daemon-side writer does.
+- `merge_project_config(changes, base)` writes only the named fields, `None` removing one, and refuses by name (`ProjectConfigConflict`) any field whose stored value has moved away from `base`. Correct for a caller holding a cached read across an editing session.
+
+The distinction is not stylistic.
+The file has several independent writers owning disjoint keys - the Projects editor's three sections, `routes/grants.py`, `routes/land.py`, `routes/configurator.py`, `routes/project_files.py` - so a whole-file digest reports each of them as a collision with every other, which reached operators as "project config changed externally" on their own second edit.
+It is the same rule the configurator's settings write already follows: take operations, never a document, so everything the caller did not name survives by construction.
+
+`normalized_project_values` decides whether a field moved, by round-tripping through `serialize_project_config` and `parse_project_config` rather than comparing raw maps.
+The two are not the same map - retired keys are dropped, a falsy string and an empty `ignore_patterns` are not written at all, and `automations` loses ids the registry no longer knows - so a raw comparison invents conflicts out of how a value happened to arrive.
+Deriving the comparison from the pair that owns the format is what keeps it from drifting into a second opinion about the format.
+
+`merge_project_config` refuses a `malformed` file rather than merging into it: `read_project_config` reports no values for one, so a merge would write the caller's fields over contents nobody read and silently discard whatever a human was fixing by hand.
+It refuses a `read-only` file for the same reason `routes/grants.py` does - a clear refusal beats a `PermissionError` surfacing as a 500.
+
 Once a route has resolved an explicit Project, these helpers must receive that canonical identity - `_registered_identity(project)` into the `project=` keyword.
 Git discovery answers "which worktree contains this path", which is the wrong question once the owner is known: a Project registered *inside* a larger worktree resolves to the enclosing toplevel, and every derived path lands in the wrong Project.
 

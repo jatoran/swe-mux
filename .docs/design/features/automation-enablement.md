@@ -189,7 +189,7 @@ in" stays literally true and no existing Project changes behaviour because the c
 
 ```text
 GET  /api/projects/{project_id}/automations
-PUT  /api/projects/{project_id}/automations   {automations: {id: bool}, revision?}
+PUT  /api/projects/{project_id}/automations   {automations: {id: bool}, base? | revision?}
 GET  /api/automation/projects
 GET  /api/grants
 POST /api/grants   {install?, project_id?, automations?, values?, revision?}
@@ -199,9 +199,18 @@ POST /api/grants   {install?, project_id?, automations?, values?, revision?}
 `needs_llm`), the project's `requested` table, and the resolution (`enabled`, `blocked` →
 missing dependencies, `unverified` → held back by the provider, plus the `llm` verdict and
 its reason so the surface states it rather than paraphrasing). `PUT`
-replaces the opt-in table through the ordinary project-config write: `409 revision_conflict`
-on a stale revision, `409 automation_not_implemented` for a reserved id. The typed project
-config endpoints (`GET|PUT /api/project/config`) still carry the same table.
+replaces the opt-in table through the ordinary project-config write, and takes the same two
+guard shapes that write does (`features/projects.md`): `base` - what the caller believed
+`automations` and `scan_timeline_auto_enable` held - writes only those two fields and
+collides only when one of them actually moved, while a bare `revision` keeps the whole-file
+check. Field-scoped is what the toggle list needs, because it shares one file with the
+authority table and the repository options beside it and a whole-file guard made each of
+those writes read as an external edit to the others. Refusals are `409 revision_conflict`
+(naming the fields in `conflicts`) and `409 automation_not_implemented` for a reserved id.
+Opting out of `scan_timeline` still clears `scan_timeline_auto_enable`, whichever guard was
+used: a permission the Project gave up must not silently re-arm every run when it is granted
+again. The typed project config endpoints (`GET|PUT /api/project/config`) still carry the
+same table.
 `GET /api/automation/projects` is the read-only fleet aggregation of the same per-Project
 resolution — one row per registered Project, including Projects that opted into nothing —
 drawn by the Automation dashboard's `projects` view so "what runs where" is answerable from

@@ -12,6 +12,7 @@ from swe_mux.project_files import (
     DEFAULT_NOTE_STORAGE_ID,
     SEARCH_MAX_FILES,
     ObservationsUnreadableError,
+    ProjectConfigConflict,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
     ProjectResourceExists,
@@ -22,6 +23,8 @@ from swe_mux.project_files import (
     initialize_note,
     list_project_directories,
     list_project_directory,
+    merge_project_config,
+    normalized_project_values,
     note_exists,
     parse_project_config,
     read_note,
@@ -67,6 +70,110 @@ async def test_project_config_is_explicit_versioned_and_conflict_safe(tmp_path: 
         await write_project_config(tmp_path, {}, "missing")
     with pytest.raises(ValueError, match="unknown project fields"):
         await write_project_config(tmp_path, {"token": "forbidden"}, saved["revision"])
+
+
+async def test_a_field_scoped_write_leaves_every_other_field_alone(tmp_path: Path) -> None:
+    # The defect this exists for: three sections of one panel own disjoint keys in one
+    # file, so each one's write invalidated the other two's cached revision and the
+    # operator's second edit was refused until they closed and reopened the panel.
+    await write_project_config(
+        tmp_path,
+        {
+            "automations": {"raw_store": True},
+            "session_control_grant": "draft",
+            "worktree": {"setup_command": "uv sync", "verify_command": "./verify"},
+        },
+        "missing",
+    )
+
+    # The authority table's write names one field and says what it believed that field
+    # held. The automations it never mentioned are untouched, and no revision was involved.
+    after_grant = await merge_project_config(
+        tmp_path, {"session_control_grant": "granted"}, {"session_control_grant": "draft"}
+    )
+    assert after_grant["values"]["session_control_grant"] == "granted"
+    assert after_grant["values"]["automations"] == {"raw_store": True}
+
+    # And the opt-in table's write, composed against the file as it stood *before* the
+    # authority change, still succeeds: nothing it named has moved.
+    after_optins = await merge_project_config(
+        tmp_path,
+        {"automations": {"raw_store": True, "tier0": True}},
+        {"automations": {"raw_store": True}},
+    )
+    assert after_optins["values"]["automations"] == {"raw_store": True, "tier0": True}
+    assert after_optins["values"]["session_control_grant"] == "granted"
+    # The land queue's field lives in the same table as the panel's setup command and
+    # survives a write that named neither.
+    assert after_optins["values"]["worktree"] == {
+        "setup_command": "uv sync",
+        "verify_command": "./verify",
+    }
+
+
+async def test_a_field_that_moved_underneath_conflicts_by_name(tmp_path: Path) -> None:
+    await write_project_config(tmp_path, {"approval_ceiling": "wait"}, "missing")
+    await merge_project_config(
+        tmp_path, {"approval_ceiling": "allowlisted"}, {"approval_ceiling": "wait"}
+    )
+
+    # A second editor still believing "wait" is a real collision, and is refused by the
+    # name of the field rather than by "the file changed" - which is the whole point:
+    # the caller can say what it would overwrite.
+    with pytest.raises(ProjectConfigConflict) as conflict:
+        await merge_project_config(
+            tmp_path, {"approval_ceiling": "allow_all"}, {"approval_ceiling": "wait"}
+        )
+    assert conflict.value.fields == ["approval_ceiling"]
+    assert conflict.value.current["values"]["approval_ceiling"] == "allowlisted"
+    # The refusal changed nothing.
+    assert (await read_project_config(tmp_path))["values"]["approval_ceiling"] == "allowlisted"
+
+
+async def test_a_field_scoped_write_removes_with_none_and_refuses_the_unwritable(
+    tmp_path: Path,
+) -> None:
+    await write_project_config(
+        tmp_path, {"preferred_backend": "shell", "ignore_patterns": [".cache"]}, "missing"
+    )
+    cleared = await merge_project_config(
+        tmp_path, {"preferred_backend": None}, {"preferred_backend": "shell"}
+    )
+    assert "preferred_backend" not in cleared["values"]
+    assert cleared["values"]["ignore_patterns"] == [".cache"]
+
+    with pytest.raises(ValueError, match="unknown project fields"):
+        await merge_project_config(tmp_path, {"token": "forbidden"}, {})
+
+    # Merging into a file this process could not parse would write the caller's fields
+    # over contents nobody read - discarding whatever the operator was fixing by hand.
+    (tmp_path / ".swe-mux" / "config.toml").write_text("version = 1\nnot toml", encoding="utf-8")
+    with pytest.raises(ValueError, match="cannot be parsed"):
+        await merge_project_config(tmp_path, {"preferred_backend": "shell"}, {})
+
+
+def test_a_base_is_compared_as_the_file_would_store_it() -> None:
+    # Raw comparison would call these three pairs changes, and each false conflict is a
+    # refusal the operator cannot act on. They are compared after the round trip the
+    # writer and reader actually perform, so the format decides rather than a second
+    # opinion about the format.
+    assert normalized_project_values({"ignore_patterns": []}) == normalized_project_values({})
+    assert normalized_project_values({"preferred_backend": ""}) == normalized_project_values({})
+    assert normalized_project_values(
+        {"scan_timeline_daily_budget_usd": 5}
+    ) == normalized_project_values({})
+    # And a value that really is stored still compares as itself.
+    assert normalized_project_values({"notification_sounds_enabled": False}) == {
+        "notification_sounds_enabled": False
+    }
+
+
+async def test_a_base_that_normalizes_away_does_not_conflict(tmp_path: Path) -> None:
+    await write_project_config(tmp_path, {"session_control_grant": "draft"}, "missing")
+    written = await merge_project_config(
+        tmp_path, {"ignore_patterns": [".cache"]}, {"ignore_patterns": []}
+    )
+    assert written["values"]["ignore_patterns"] == [".cache"]
 
 
 async def test_project_config_reuses_a_resolved_project(

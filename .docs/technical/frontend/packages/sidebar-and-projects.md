@@ -104,11 +104,25 @@ Data keys, comparisons, filters, configuration controls, and API values never us
 
 ## Projects
 
-`ProjectsManager.tsx`
+`ProjectsManager.tsx`, `projectConfig.ts`, `projectConfigState.ts`
 
 The configured catalog UI plus the single per-Project settings editor: missing-folder state, removal preflight with live and history counts, preserved-history disclosure, the committed Git/worktree setup command, and both default storage layers.
 It does not own workspace placement.
 It is also the one editor for every per-Project switch, which is what makes a `GrantGate` elsewhere additive-only (`settings-and-gates.md`).
+
+`projectConfigState.ts` holds **one** copy of `.swe-mux/config.toml` for the whole panel and every section reads and writes through it.
+Three sections draw over that one file - the defaults and repository options form, the automation opt-ins, the agent authority table - and each of them used to fetch and cache its own revision, so the first successful edit anywhere in the panel invalidated the other two and the second edit answered "project config changed externally".
+The hook refreshes on `mux:project-automations-changed`, which `App.tsx` re-broadcasts from the daemon's `project_configuration_changed`, so an edit made by a grant gate, the land queue, the configurator agent or another device reaches an open panel instead of staling it.
+
+`projectConfig.ts` owns the pure rules, split out because the node test runner strips types from `.ts` and cannot load `.tsx`:
+
+- The **delta**: a write carries only the fields that differ from the file, `null` to remove one, with `base` naming what the editor believed those fields held. Sending the document back is what lets a stale copy revert a field the editor does not draw.
+- `PANEL_CONFIG_FIELDS`, the closed set the form owns. "Reset repo options to inherited" clears exactly those; it once wrote an empty document, which took the opt-ins, the authority table, the approval rules and the land queue's verify command with it.
+- `nextWorktreeTable`, which edits one field of the `[worktree]` table. The land queue owns `verify_command` in the same table, and replacing the table wholesale deleted it whenever someone cleared the setup command.
+- Conflict reading: a `409 revision_conflict` names the fields that moved and carries the current file, so the panel resyncs from the refusal and says what it would overwrite rather than telling the reader to reload.
+
+The one draft in the panel is an **overlay** of touched fields on top of that shared copy, never a copy of it.
+That is what makes refreshing safe while someone is typing: a refresh moves the fields nobody is editing and cannot discard an edit.
 
 ## Project actions
 

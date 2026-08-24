@@ -147,5 +147,10 @@ def test_project_ignore_editors_preserve_newlines_until_save() -> None:
         "project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns)" in source
     )
     assert "parseIgnorePatternDraft(event.currentTarget.value)" in manager
-    assert "ignore_patterns:normalizeIgnorePatterns(values.ignore_patterns)" in manager
+    # The registry normalizes on the way out, not while typing, and that step belongs to
+    # the delta the panel sends: `projectConfig.ts` is the single place that decides what
+    # a draft is worth in the file, so the panel itself must not normalize at all.
+    delta = (src / "projectConfig.ts").read_text(encoding="utf-8")
+    assert "normalizeIgnorePatterns(value as string[])" in delta
+    assert "normalizeIgnorePatterns" not in manager
     assert "e.currentTarget.value.split('\\n').map(item=>item.trim()).filter(Boolean)" not in source

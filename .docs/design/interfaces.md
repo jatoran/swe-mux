@@ -349,12 +349,13 @@ POST    /projects/{project_id}/ignore {path: RELATIVE, scope: global|project}
 PUT     /projects/{project_id}/watch  {watch_id?, paths: RELATIVE_DIRECTORY[], worktree?}
 DELETE  /projects/{project_id}/watch/{watch_id}
 GET|PUT /project/config               typed portable Project options
+                                      PUT {changes, base} field-scoped, or {values, revision}
 GET     /projects/{project_id}/observations
 POST    /projects/{project_id}/observations   {body}                append one
 PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
-PUT     /projects/{project_id}/automations    {automations, revision?}
+PUT     /projects/{project_id}/automations    {automations, base?} or {automations, revision?}
 GET     /grants
 POST    /grants   {install?, project_id?, automations?, values?, revision?}
 GET     /schedules?project_id=                every schedule, or one Project's
@@ -1699,7 +1700,7 @@ Two refusals, both `409` and deliberately distinct, because they are different p
 The MCP tools that marker unlocks are listed only to such a session (`features/configurator.md`). Five reads — `configurator_capabilities` (section-scoped; the 197-row settings catalog is omitted unless named), `configurator_guide`, `configurator_diagnostics`, `configurator_device_settings`, `configurator_project_settings` — and one write per settings location:
 
 - `configurator_apply_settings` runs the same `update_config` path as `PATCH /api/config`, reporting `hot_applied` and `restart_required` separately.
-- `configurator_apply_project_settings` runs the same revision-guarded `write_project_config` path as `PUT /api/project/config`, merging over the existing file and refusing the forbidden project fields.
+- `configurator_apply_project_settings` runs the same revision-guarded `write_project_config` path as the whole-document half of `PUT /api/project/config`, merging over the existing file and refusing the forbidden project fields.
 - `configurator_edit_device_settings` writes one per-device settings domain through **path-scoped operations** rather than a document, because five of the seven domains are stored opaquely and nothing in the daemon can validate one. It is guarded by a content digest the caller must have read, backs the previous file up, and emits `settings_changed` so every attached browser repaints.
 
 All three refuse as typed results that change nothing, rather than as protocol errors: the agent has to be able to tell "bad value" from "server broke".
@@ -2237,7 +2238,16 @@ model provider), the `llm` verdict the row was resolved under, and
 fields for one Project. `unverified` is separate from `blocked` because `blocked` values are
 ids a grant can switch on and no automation's enabling fixes an unproven endpoint. Projects that opted into nothing are listed rather than omitted.
 Drawn by the Automation dashboard's `projects` view; it has no write half — the
-revision-checked `PUT /api/projects/{project_id}/automations` stays the only editor.
+guarded `PUT /api/projects/{project_id}/automations` stays the only editor.
+
+`PUT /api/project/config` and `PUT /api/projects/{project_id}/automations` both take a
+**field-scoped** write - `changes`/`automations` plus `base`, the values the caller believed
+those fields held - alongside the older whole-document write guarded by `revision`. Field
+scope exists because `.swe-mux/config.toml` has several writers owning disjoint keys, so a
+whole-file digest reports each of them as a collision with every other; the field-scoped
+refusal is `409 revision_conflict` carrying `conflicts` (the field names that moved) and
+`current` (the file as it stands, so the caller resyncs from the refusal rather than a second
+read). `base` is mandatory when `changes` is sent.
 
 `POST /api/grants` is the one write behind every gate notice in the app: the way a surface
 that cannot work turns on the thing it needs without sending the reader to an overlay
