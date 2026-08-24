@@ -4447,6 +4447,63 @@ button.
   This is the part that actually answers "a new user on a new system": the contract travels with
   the product, and the convention travels with the repository.
 
+### What the prompt does not yet say (field report, 2026-08-24)
+
+An agent that set the gate up in an unfamiliar repository from the current prompt reported seven
+things it hit that the text does not cover.
+They are content requirements for the prompt, so they land in whatever this phase builds and in the
+copyable text as it stands today - the two must not diverge, which is itself an argument for the
+single daemon-owned source above.
+
+- [ ] **Pin every external resource to something disposable inside the worktree.**
+  The contract covers *collision* (ports, temp paths, singletons) and never asks the question one
+  step before it: what live thing could this reach?
+  In that repository `Settings.database_url` defaulted to the production SQLite file, so a gate run
+  would have opened and written it.
+  The line to add names the classes: database, cache, queue, API base URL.
+- [ ] **Ignore the worktree root and the gate's own scratch directory, and prove it with a worktree
+  open.**
+  Whatever creates worktrees puts them somewhere, and that somewhere is usually inside the
+  repository - `.claude/worktrees/`, `.agents/worktrees/`, `.codex/worktrees/`, and a bare
+  `.worktrees/` are the ones this repository has had to ignore.
+  Un-ignored, every open worktree makes the primary checkout read dirty forever.
+  The precise consequence differs by consumer and the prompt should say the general rule rather
+  than the local one: swe-mux's own precondition counts *tracked* changes only
+  (`_tracked_changes`, `land_preconditions.py`) and the trunk check is narrowed to the incoming
+  paths, so an un-ignored worktree root does not block a land here - but it breaks every gate,
+  drift check, or tool that reads `git status --porcelain` for cleanliness, and it becomes a
+  blocking fact the moment anything adds those paths.
+  The verification step is one sentence: open a worktree and confirm `git status` is still empty.
+- [ ] **Commit the script with `text eol=lf` and the exec bit.**
+  This is the failure mode with the worst blast radius, because it is invisible where you author it.
+  With `core.autocrlf=true` and no `.gitattributes`, Git writes CRLF into the working tree, so the
+  script works in the checkout it was written in and breaks in every worktree it actually runs in -
+  observed as exit 120 with a *different* set of failures, the stray `\r` landing outside the
+  closing quote of each `export`.
+  A gate that fails for a reason that is not the branch attributes a verdict to the wrong branch,
+  which is the one outcome the whole approval model exists to prevent.
+- [ ] **The gate must not perturb what it checks.**
+  A scratch directory inside the worktree is correct per the contract and is still walked by
+  anything that walks the tree; there, the repository's file-tree generator picked it up and the
+  drift check failed *because the check was running*.
+  Self-referential failure is not obvious from the outside and one sentence covers it.
+- [ ] **Inventory what Git does not carry, then decide whether the gate needs it.**
+  A worktree is not a runnable checkout.
+  The two surprises were in opposite directions: `data/` was gitignored so no worktree had a
+  database at all, while `backend/.env` was tracked, so secrets propagated into every worktree.
+  Both are found by the same instruction and neither is found by reading the contract.
+- [ ] **Say plainly that a red suite blocks the whole queue.**
+  The gate is the suite, so until the suite is green no branch can land regardless of what it
+  changes.
+  The current text implies it ("write it as the full check suite") and never states the
+  consequence, which is what makes "get the suite green" a prerequisite of setup rather than a
+  nice-to-have, and which changes how parallel work is sequenced.
+- [ ] **Give the proof step a way to be carried out.**
+  It asks for two simultaneous worktree runs and says nothing about creating them, and `git
+  worktree` was policy-blocked in that environment.
+  Two concurrent runs in one tree is a legitimate substitute and is strictly harsher, since they
+  share every path rather than only the machine; say so rather than leaving the reader to invent it.
+
 ### Deliberately not in scope
 
 A library of per-stack starter verify scripts (uv/pytest, cargo, go, plain npm).
@@ -4464,6 +4521,8 @@ Stack detection may inform the prompt; it may not substitute for writing and pro
   queue, each with its fix.
 - [ ] Approval remains a human act against the exact bytes on every one of the new paths, and no
   new path can produce an approved command.
+- [ ] Every item in the field report is either in the shipped prompt text or recorded here as
+  rejected with its reason, and the setup half is checked against the same list.
 
 ## Decision-gated capabilities
 
