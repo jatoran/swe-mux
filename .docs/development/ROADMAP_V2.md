@@ -134,7 +134,17 @@ Pure moves plus the AppKey migration; no behavior changes, so review is structur
 - [ ] S6.2 Poll-path cheapening (F10): stop re-opening the file for the 64-byte prefix probe on every 250ms poll where a cheaper identity check suffices.
 - [ ] S6.T Tests: attach a large synthetic transcript and assert loop responsiveness (use the `until` settle helpers, no fixed sleeps); rewrite-detection regression.
 
+### W2.5 - live-tier repair (added from the D1 soak findings; parallel with S3-S6, lands before D2)
+
+The three live-tier failures D1 recorded are pre-existing and none touch the supervisor; their files are disjoint from S3-S6, so this runs alongside Wave 2.
+
+- [ ] W2.5.1 `request_land` live coverage: fix the `_spawn_agent() cwd` TypeError (introduced ef9ccb9) so `test_request_land_enqueues_the_callers_own_worktree` executes at all, then run it on the live wire for every harness - it has never once run, so treat what it finds as a fresh result, not a regression.
+- [ ] W2.5.2 opencode canary diagnosability: stop sending the CLI's stdout/stderr to `DEVNULL` in `_run`; capture bounded output into the failure message, then diagnose the intermittency from actual evidence.
+- [ ] W2.5.3 codex subagent drift: the canary consistently finds `tool_use`/`tool_result` but no `subagent_activity` - investigate whether current codex stopped emitting those records, and if so adapt swe-mux's subagent-visibility detection to the new transcript shape and update the canary to match. This is potentially a live product defect, not a test fix; report the investigation outcome either way.
+
 ### D2 - deploy checkpoint (primary; no reap)
+
+Precondition: W2.5 landed, so the live tiers D2.2 exercises are trustworthy.
 
 - [ ] D2.1 Full gate on master, `redeploy_desktop.py` (normal session-preserving flow).
 - [ ] D2.2 Live soak: UI regression pass on desktop and mobile (fleet refresh under a simulated hung endpoint, palette, sidebar tick); MCP `scan_search` against a >2000-record project; a land-queue cycle end-to-end; confirm retention runs without visible stalls.
