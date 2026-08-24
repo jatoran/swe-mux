@@ -2168,6 +2168,28 @@ stale.
 The provider section supplies the cached structured-output model catalog used by the Automation
 tab's live-filtered cheap and standard model pickers.
 
+```text
+POST /api/settings/apply   {config?: {...}, keybindings?: {...} | {bindings: {...}}, _revision?: int}
+```
+
+The Settings panel's Save, as one transaction.
+Save used to be a `PATCH /api/config` and a `PUT /api/keybindings` fired together, either of which could fail alone, with the panel reporting both outcomes as "invalid · nothing was changed" - a claim about the daemon's disk that the client was in no position to make.
+A `_revision` conflict raised by another device produced exactly that message *after* the keybindings file had already been rewritten.
+
+`config` is the same field delta `PATCH /api/config` takes; `keybindings` is a full chord → command map, accepted either bare or under a `bindings` key as `PUT /api/keybindings` accepts it.
+Both are optional, and an absent `keybindings` leaves the file untouched rather than blanking it.
+The revision is read from `If-Match` or from `_revision` in the body, and a mismatch is the same `409 {error, revision}` as the PATCH.
+
+The ordering is the guarantee, because the two documents are separate files: the revision is checked and the chords are normalized first (both pure, so an invalid document of either kind is a `422` with nothing written), the keybindings document is staged beside its destination, `update_config` validates the whole candidate config before saving it, and only then is the staged file renamed into place.
+A rejected save therefore leaves both halves as they were.
+
+Every answer carries `committed`, an array naming the halves that landed, and the client derives its message from it rather than assuming.
+Success is `200 {config: {...public config, hot_applied, restart_required}, keybindings: {...payload}, committed: ["config","keybindings"]}` with the new revision in `ETag`.
+A refusal is `422 {error, section: "config"|"keybindings", fields, committed: []}`.
+The single case that cannot be made atomic is the final rename failing after the config has committed and been hot-applied; that is `500 {error, section: "keybindings", committed: ["config"], failed: ["keybindings"], config}`, which names the half that landed instead of denying both.
+One `configuration_changed` is emitted for the transaction, carrying `changed` and a `keybindings` flag, in place of the two the split pair used to raise.
+`PATCH /api/config` and `PUT /api/keybindings` remain, unchanged, for callers with only one half to write.
+
 `GET /api/automation/dashboard` includes recent observer-call diagnostics without response
 content: requested and resolved model, generation, provider, finish reason, HTTP status,
 retryability, token and cost usage, latency, and response content type and length.

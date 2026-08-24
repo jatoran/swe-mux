@@ -22,7 +22,7 @@ import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
 import { composerInsertion } from './composerInsertion'
 import { QueuePane } from './QueuePane'
-import { ChangeMapPane } from './ChangeMapPane'
+import { LazyChangeMap } from './LazyChangeMap'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
 import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
@@ -6385,7 +6385,7 @@ export function App() {
       // is the *owner's*, not the active one: a pinned map outlives the sidebar
       // selection, and opening one of its files must land in the right checkout.
       const mapProject=projects.find(item=>item.id===owner.project_id)||activeProject
-      return <ChangeMapPane key={node.id} session={owner} project={mapProject}
+      return <LazyChangeMap key={node.id} session={owner} project={mapProject}
         onOpenFile={(path,worktree)=>{
           if(!mapProject)return
           if(worktree)openWorktreeFile(mapProject,worktree,path)

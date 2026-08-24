@@ -29,7 +29,24 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 ```
 
 The node test runner strips types from `.ts` but cannot load `.tsx`.
-That is why several pure models are split out of the component that renders them (`dotShapes.ts`, `coldSession.ts`, `settingsTabs.ts`, `modelRouting.ts`).
+That is why several pure models are split out of the component that renders them (`dotShapes.ts`, `coldSession.ts`, `settingsTabs.ts`, `modelRouting.ts`, `settingsSave.ts`).
+
+## Lazy boundaries
+
+A surface only ever reached by a deliberate act, whose libraries nothing else uses, gets a `Lazy*.tsx` boundary rather than a static import.
+There are four: `LazyGitDiff.tsx` (`react-diff-view`), `LazyCodeEditor.tsx` (CodeMirror's core), `LazyChangeMap.tsx` (Sigma and Graphology), and the ONNX/VAD stack behind voice capture.
+`codeLanguage.ts` is a fifth of a different shape - one `import()` per grammar, so a session opening one `.ts` file fetches one of ~28 rather than the set.
+The measured effect of the last three: the entry chunk went from 3.38 MB raw / 1.06 MB gzip to 2.17 MB / 654 KB.
+
+Three rules the existing boundaries follow, each of which has a failure mode:
+
+- **The placeholder carries the loaded component's own class** (`.code-editor`, `.change-map-pane`), so it occupies the same box and the layout cannot jump when the real thing arrives.
+  Its caption is delayed a third of a second, because a chunk served from the same origin usually lands within a frame and a message that appears and vanishes that fast reads as a glitch rather than as progress.
+- **A dynamic specifier also belongs in `vite.config.ts`'s `optimizeDeps.include`.**
+  Dev answers a dependency it first discovers at runtime with a full page reload; in the renderer suite that reload lands mid-spec and reads as an unrelated failure.
+  The Change Map's layout worker carries the original note about this.
+- **A static import from any host puts the library straight back into the entry chunk**, silently, and nothing about the app behaves differently.
+  `test/bundleSplit.test.ts` asserts the absence for each boundary, because a build-size number is not something the unit suite can measure.
 
 ## Domain maps
 

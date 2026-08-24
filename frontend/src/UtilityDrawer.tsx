@@ -8,7 +8,7 @@ import { QueuePane } from './QueuePane'
 import { TranscriptTab } from './TranscriptTab'
 import { ScanTimelineTab } from './ScanTimelineTab'
 import { FindingsPane } from './FindingsPane'
-import { ChangeMapPane } from './ChangeMapPane'
+import { LazyChangeMap } from './LazyChangeMap'
 import { GitTab, type GitView } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
@@ -380,7 +380,7 @@ export function UtilityDrawer(props: Props) {
           return <ScanTimelineTab session={session} onOpenProjectSettings={props.onOpenProjectSettings} />
         }
         if (segment === 'changes') {
-          return <ChangeMapPane
+          return <LazyChangeMap
             session={session}
             project={project}
             // The pop-out survived the merge, and matters more now: a force-directed graph

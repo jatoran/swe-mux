@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -90,17 +91,11 @@ async def settings_bundle(request: web.Request) -> web.Response:
 
 async def patch_config(request: web.Request) -> web.Response:
     config: Config = request.app[keys.CONFIG]
-    supplied = request.headers.get("If-Match", "").strip('"')
-    if supplied and supplied != str(config.revision):
-        return json_response(
-            {"error": "configuration changed externally", "revision": config.revision}, 409
-        )
     body = await request.json()
     body_revision = body.pop("_revision", None)
-    if body_revision is not None and int(body_revision) != config.revision:
-        return json_response(
-            {"error": "configuration changed externally", "revision": config.revision}, 409
-        )
+    conflict = _revision_conflict(config, request, body_revision)
+    if conflict is not None:
+        return conflict
     try:
         hot, restart = update_config(config, body)
     except ValueError as exc:
@@ -118,6 +113,164 @@ async def patch_config(request: web.Request) -> web.Response:
     )
     response = json_response(
         {**config.public_dict(), "hot_applied": sorted(hot), "restart_required": sorted(restart)}
+    )
+    response.headers["ETag"] = f'"{config.revision}"'
+    return response
+
+
+def _revision_conflict(
+    config: Config, request: web.Request, body_revision: Any
+) -> web.Response | None:
+    """The other-device contract, shared by `PATCH /api/config` and the atomic save.
+
+    Either channel carries it: the `If-Match` header, or a `_revision` in the body.
+    A mismatch is a 409 naming the revision the daemon actually holds, so the client
+    can reload and re-present the edit rather than silently overwriting a stranger's.
+    """
+    supplied = request.headers.get("If-Match", "").strip('"')
+    if supplied and supplied != str(config.revision):
+        return json_response(
+            {"error": "configuration changed externally", "revision": config.revision}, 409
+        )
+    if body_revision is not None and int(body_revision) != config.revision:
+        return json_response(
+            {"error": "configuration changed externally", "revision": config.revision}, 409
+        )
+    return None
+
+
+async def apply_settings(request: web.Request) -> web.Response:
+    """Commit the config delta and the keybindings document, or commit neither.
+
+    The Settings panel used to spend two requests here - a `PATCH /api/config` and a
+    `PUT /api/keybindings` fired together through `Promise.all`. Either could fail
+    alone, and the panel's one catch reported the pair as "invalid · nothing was
+    changed"; a `_revision` conflict raised by another device saying exactly that while
+    the keybindings file had already been rewritten. Pre-validating the keybindings
+    closed one direction only, because the conflict lives on the other one.
+
+    So both halves land here, and the ordering makes the lie impossible:
+
+    1. the revision is checked, and the chords are normalized - both pure, so an
+       invalid document of either kind is a 422 with nothing written;
+    2. the keybindings document is *staged* next to its destination;
+    3. `update_config` validates the whole candidate config before it saves, so a
+       rejected field leaves the staged file unpublished and discarded;
+    4. the staged file is renamed into place - one `os.replace`, the last step, and
+       the only one that can fail after something has committed.
+
+    Step 4 failing is a disk-level fault rather than a validation one, and it is the
+    single case where a half-commit is real. The response says so - 500 with
+    `committed: ["config"]` - instead of claiming nothing changed.
+    """
+    config: Config = request.app[keys.CONFIG]
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("body must be an object")
+
+    changes = body.get("config")
+    if changes is None:
+        changes = {}
+    if not isinstance(changes, dict):
+        raise ValueError("config must be an object")
+    changes = dict(changes)
+
+    supplied_bindings = body.get("keybindings")
+    if isinstance(supplied_bindings, dict) and isinstance(
+        supplied_bindings.get("bindings"), dict
+    ):
+        supplied_bindings = supplied_bindings["bindings"]
+    if supplied_bindings is not None and not isinstance(supplied_bindings, dict):
+        raise ValueError("keybindings must be an object")
+
+    body_revision = body.get("_revision", changes.pop("_revision", None))
+    conflict = _revision_conflict(config, request, body_revision)
+    if conflict is not None:
+        return conflict
+
+    normalized: dict[str, str] | None = None
+    if supplied_bindings is not None:
+        normalized, rejected = _normalize_bindings(supplied_bindings)
+        if rejected:
+            return json_response(
+                {
+                    "error": "invalid keybindings",
+                    "section": "keybindings",
+                    "fields": rejected,
+                    "committed": [],
+                },
+                422,
+            )
+
+    staged: Path | None = None
+    if normalized is not None:
+        staged = _stage_keybindings(config, normalized)
+
+    try:
+        hot, restart = update_config(config, changes)
+    except ValueError as exc:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        detail = exc.args[0]
+        return json_response(
+            {
+                "error": "invalid configuration",
+                "section": "config",
+                "fields": detail if isinstance(detail, dict) else {},
+                "committed": [],
+            },
+            422,
+        )
+    except Exception:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        raise
+
+    committed = ["config"]
+    if staged is not None:
+        try:
+            _publish_keybindings(config, staged)
+        except OSError as exc:
+            # The config is already on disk and already hot-applied; saying otherwise
+            # would be the exact lie this endpoint exists to remove.
+            log.error("keybindings commit failed after the config committed: %s", exc)
+            apply_runtime_config(request.app, hot)
+            await request.app[keys.EVENTS].emit(
+                "configuration_changed", source="settings", changed=sorted(hot | restart)
+            )
+            return json_response(
+                {
+                    "error": f"settings saved, but the shortcuts could not be written: {exc}",
+                    "section": "keybindings",
+                    "committed": committed,
+                    "failed": ["keybindings"],
+                    "config": {
+                        **config.public_dict(),
+                        "hot_applied": sorted(hot),
+                        "restart_required": sorted(restart),
+                    },
+                },
+                500,
+            )
+        committed.append("keybindings")
+
+    apply_runtime_config(request.app, hot)
+    await request.app[keys.EVENTS].emit(
+        "configuration_changed",
+        source="settings",
+        changed=sorted(hot | restart),
+        keybindings=staged is not None,
+    )
+    response = json_response(
+        {
+            "config": {
+                **config.public_dict(),
+                "hot_applied": sorted(hot),
+                "restart_required": sorted(restart),
+            },
+            "keybindings": _keybindings_payload(config),
+            "committed": committed,
+        }
     )
     response.headers["ETag"] = f'"{config.revision}"'
     return response
@@ -199,11 +352,13 @@ async def get_keybindings(request: web.Request) -> web.Response:
     return json_response(_keybindings_payload(request.app[keys.CONFIG]))
 
 
-async def put_keybindings(request: web.Request) -> web.Response:
-    body = await request.json()
-    bindings = body.get("bindings", body)
-    if not isinstance(bindings, dict):
-        raise ValueError("bindings must be an object")
+def _normalize_bindings(bindings: dict[Any, Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """Chord/command pairs the daemon will accept, and the ones it will not.
+
+    Pure: nothing here touches the filesystem, which is what lets the atomic
+    endpoint below learn that the keybindings half is invalid before it has
+    committed the config half.
+    """
     rejected: dict[str, str] = {}
     normalized: dict[str, str] = {}
     for chord, command in bindings.items():
@@ -212,11 +367,18 @@ async def put_keybindings(request: web.Request) -> web.Response:
             normalized[key] = command_id
         except ValueError as exc:
             rejected[str(chord)] = str(exc)
-    if rejected:
-        return json_response({"error": "invalid keybindings", "fields": rejected}, 422)
-    if request.query.get("validate") == "1":
-        return json_response({"ok": True})
-    path = request.app[keys.CONFIG].data_dir / "keybindings.json"
+    return normalized, rejected
+
+
+def _stage_keybindings(config: Config, normalized: dict[str, str]) -> Path:
+    """Write the keybindings document beside its destination without publishing it.
+
+    Splitting the write from the rename is the whole trick: after this returns,
+    committing the keybindings half is a single `os.replace`, so it can be
+    ordered *after* the config commit and still be the one step that cannot
+    half-succeed.
+    """
+    path = config.data_dir / "keybindings.json"
     temporary = path.with_suffix(".json.tmp")
     document = {
         "version": KEYBINDINGS_FILE_VERSION,
@@ -224,7 +386,25 @@ async def put_keybindings(request: web.Request) -> web.Response:
         "bindings": normalized,
     }
     temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    return temporary
+
+
+def _publish_keybindings(config: Config, temporary: Path) -> None:
+    temporary.replace(config.data_dir / "keybindings.json")
+
+
+async def put_keybindings(request: web.Request) -> web.Response:
+    body = await request.json()
+    bindings = body.get("bindings", body)
+    if not isinstance(bindings, dict):
+        raise ValueError("bindings must be an object")
+    normalized, rejected = _normalize_bindings(bindings)
+    if rejected:
+        return json_response({"error": "invalid keybindings", "fields": rejected}, 422)
+    if request.query.get("validate") == "1":
+        return json_response({"ok": True})
+    config: Config = request.app[keys.CONFIG]
+    _publish_keybindings(config, _stage_keybindings(config, normalized))
     await request.app[keys.EVENTS].emit("configuration_changed", source="keybindings")
     return await get_keybindings(request)
 
@@ -275,6 +455,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/config", get_config),
     web.get("/api/settings/bundle", settings_bundle),
     web.patch("/api/config", patch_config),
+    web.post("/api/settings/apply", apply_settings),
     web.post("/api/config/reset", reset_config),
     web.get("/api/keybindings", get_keybindings),
     web.put("/api/keybindings", put_keybindings),

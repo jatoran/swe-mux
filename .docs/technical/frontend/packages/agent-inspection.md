@@ -36,13 +36,18 @@ Pure helpers own scope, state, completeness, and owner labels, local filtering, 
 
 ## Activity tab: Timeline, Findings, Change Map
 
-`FindingsPane.tsx`, `ScanTimelineTab.tsx`, `ChangeMapPane.tsx`, `ProjectContextEditor.tsx`
+`FindingsPane.tsx`, `ScanTimelineTab.tsx`, `LazyChangeMap.tsx`, `ChangeMapPane.tsx`, `ProjectContextEditor.tsx`
 
 The three segments are mounted by `UtilityDrawer.tsx` from the segment registry, with no per-tab wrapper component.
 Timeline gates on a harness transcript; Findings and Changes do not, so a shell session still reaches its Project findings.
 
 Change Map is the one segment marked `keepMounted`: its layout worker's settled positions are the expensive part, and remounting would re-run the force simulation on every return.
 It keeps its pop-out into a workspace tab, which is what makes a graph tolerable in a 380 px column.
+
+Both mount points - the drawer segment and the popped-out pane in `App.tsx` - go through `LazyChangeMap.tsx`, the dynamic boundary for Sigma and Graphology.
+Nothing outside this pane uses either, and the pane is only ever mounted by a deliberate act, so importing it statically put a WebGL graph renderer in the entry chunk for every page load - including the phone, where the pane renders lists and draws no canvas at all.
+A static import from either host puts it back; `bundleSplit.test.ts` asserts neither has one.
+The stand-in shown while the chunk is in flight carries `.change-map-pane` so the drawer does not reflow when the real pane arrives, and holds its caption back a third of a second so a chunk that lands in a frame shows no message.
 
 Everything **Project-wide** - permission, auto-arm, and the user-owned context Markdown via `ProjectContextEditor.tsx` - lives in `ProjectsManager.tsx`; the tab only links there.
 The application topbar carries no scan action, and the surface never sends terminal input.

@@ -100,12 +100,55 @@ const RESPONSES: Record<string, unknown> = {
   '/api/diagnostics/prerequisites': { prerequisites: [] },
   '/api/voice': null,
   '/api/voice/stt-latency': null,
+  // Save is one request now, and its answer carries both halves plus what committed.
+  '/api/settings/apply': {
+    config: { ...BUNDLE.config, hot_applied: [], restart_required: [] },
+    keybindings: KEYBINDINGS,
+    committed: ['config', 'keybindings'],
+  },
+  '/api/config/reset': SETTINGS_CONFIG_FIXTURE,
 }
 
+/**
+ * Failures a spec can ask for, by query string: `?fail=reset` or `?fail=apply`.
+ *
+ * Both are destructive-path failures the panel used to swallow — a rejected reset was an
+ * unhandled rejection with no visible trace, and a rejected save claimed nothing had been
+ * changed regardless of what the daemon said. A spec cannot assert on either without the
+ * daemon being able to say no.
+ */
+const FAILURES: Record<string, { path: string; status: number; body: unknown }> = {
+  reset: {
+    path: '/api/config/reset',
+    status: 500,
+    body: { error: 'the configuration directory is read-only' },
+  },
+  apply: {
+    path: '/api/settings/apply',
+    status: 409,
+    body: { error: 'configuration changed externally', revision: 99, committed: [] },
+  },
+}
+
+declare global {
+  interface Window {
+    /** Every request the panel made, in order, for asserting what a click did not send. */
+    settingsCalls: Array<{ method: string; path: string }>
+  }
+}
+window.settingsCalls = []
+
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-  void init
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
   const path = raw.split('?')[0]
+  window.settingsCalls.push({ method: (init?.method || 'GET').toUpperCase(), path })
+  const failure = FAILURES[new URLSearchParams(location.search).get('fail') || '']
+  if (failure && failure.path === path) {
+    return new Response(JSON.stringify(failure.body), {
+      status: failure.status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   const body = path in RESPONSES ? RESPONSES[path] : {}
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }) as typeof fetch

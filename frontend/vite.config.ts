@@ -45,8 +45,30 @@ export default defineConfig({
   // "serve the .wasm as application/wasm" error - every note editor blank under `npm run dev`,
   // and no way to exercise one from the renderer suite. Served unbundled, the relative URL
   // resolves to the real file. Production builds emit the asset properly and are unaffected.
+  // The CodeMirror grammars are listed for the same reason as the layout worker's
+  // dependencies above, and it is the same failure: every grammar is now behind an
+  // `import()` (so each is its own chunk in production instead of riding the entry), which
+  // makes it a dependency vite first sees when a file is actually opened - and answers with
+  // a full page reload. In the renderer suite that reload lands mid-spec and reads as an
+  // editor that stopped responding to typing. Listing them here is dev-server only and
+  // changes nothing about the production chunking. Keep in step with `codeLanguage.ts`.
   optimizeDeps: {
-    include: ['sigma', 'graphology', 'graphology-layout-forceatlas2'],
+    include: [
+      'sigma', 'graphology', 'graphology-layout-forceatlas2',
+      '@codemirror/lang-cpp', '@codemirror/lang-css', '@codemirror/lang-go',
+      '@codemirror/lang-html', '@codemirror/lang-java', '@codemirror/lang-javascript',
+      '@codemirror/lang-json', '@codemirror/lang-markdown', '@codemirror/lang-php',
+      '@codemirror/lang-python', '@codemirror/lang-rust', '@codemirror/lang-sql',
+      '@codemirror/lang-xml', '@codemirror/lang-yaml',
+      '@codemirror/legacy-modes/mode/clike', '@codemirror/legacy-modes/mode/diff',
+      '@codemirror/legacy-modes/mode/dockerfile', '@codemirror/legacy-modes/mode/haskell',
+      '@codemirror/legacy-modes/mode/lua', '@codemirror/legacy-modes/mode/nginx',
+      '@codemirror/legacy-modes/mode/perl', '@codemirror/legacy-modes/mode/powershell',
+      '@codemirror/legacy-modes/mode/properties', '@codemirror/legacy-modes/mode/protobuf',
+      '@codemirror/legacy-modes/mode/r', '@codemirror/legacy-modes/mode/ruby',
+      '@codemirror/legacy-modes/mode/shell', '@codemirror/legacy-modes/mode/swift',
+      '@codemirror/legacy-modes/mode/toml',
+    ],
     exclude: ['@continuity-editor/editor'],
   },
   server: { proxy: { '/api': 'http://127.0.0.1:8765', '/pty': { target: 'ws://127.0.0.1:8765', ws: true }, '/events': { target: 'ws://127.0.0.1:8765', ws: true } } },

@@ -1251,6 +1251,20 @@ body {
 .code-editor .cm-editor { height:100% }
 .code-editor .cm-editor.cm-focused { outline:none }
 .code-editor .cm-scroller { overflow:auto }
+/* The lazy editor's stand-in, while its chunk is in flight. It carries `.code-editor` so it
+   keeps the same grid box and the layout cannot jump when the real editor replaces it. The
+   message is held back rather than the box: the chunk is served from the same origin and
+   normally lands within a frame or two, and a caption that appears and vanishes that fast
+   reads as a glitch. After a third of a second the wait is real and worth naming. */
+.code-editor-state { display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px }
+.code-editor-state>span { opacity:0;animation:code-editor-wait .15s linear .35s forwards }
+.code-editor-state.error { color:var(--red) }
+@keyframes code-editor-wait { to { opacity:1 } }
+/* Same contract for the Change Map's stand-in: `.change-map-pane` keeps the box, the
+   caption waits until the delay is one a person can perceive. */
+.change-map-state { align-items:center;justify-content:center;color:var(--muted);font-size:10px }
+.change-map-state>span { opacity:0;animation:code-editor-wait .15s linear .35s forwards }
+.change-map-state.error { color:var(--red) }
 /* Continuity contains its shadow tree's paint, so its internal z-index cannot outrank the
    sibling heading trail. Promote the editor host only while the touch selection toolbar is
    open; Copy/Cut/Paste then wins the overlap without changing the trail's ordinary layer. */

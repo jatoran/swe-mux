@@ -316,12 +316,33 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 
 ### S10 - frontend quality (Settings, CodeEditor, bundle; server half lands in the S3-created route modules)
 
-- [ ] S10.1 Atomic settings save (F11): one server endpoint transacting config and keybindings together; client sends one request; the failure message can no longer claim "nothing was changed" when half committed.
-- [ ] S10.2 Restore defaults (F11): confirmation dialog on the destructive action, error handling with a visible failure status.
-- [ ] S10.3 Post-save chain dedup (F22): one shared apply-config function for the save/reset/load paths.
-- [ ] S10.4 CodeEditor (F/codex): last-emitted-string ref to skip the second full-document serialization and compare.
-- [ ] S10.5 Bundle splitting (F17): lazy-load the resource editor (with on-demand grammar loading) and the change map (Sigma/Graphology); record the before/after main-asset size in the PR description.
-- [ ] S10.T Tests: settings-atomicity test (server rejects half-commits); renderer specs for the confirm dialog and lazy routes; bundle-size assertion if the build exposes one cheaply.
+- [x] S10.1 Atomic settings save (F11): one server endpoint transacting config and keybindings together; client sends one request; the failure message can no longer claim "nothing was changed" when half committed.
+- [x] S10.2 Restore defaults (F11): confirmation dialog on the destructive action, error handling with a visible failure status.
+- [x] S10.3 Post-save chain dedup (F22): one shared apply-config function for the save/reset/load paths.
+- [x] S10.4 CodeEditor (F/codex): last-emitted-string ref to skip the second full-document serialization and compare.
+- [x] S10.5 Bundle splitting (F17): lazy-load the resource editor (with on-demand grammar loading) and the change map (Sigma/Graphology); record the before/after main-asset size in the PR description.
+- [x] S10.T Tests: settings-atomicity test (server rejects half-commits); renderer specs for the confirm dialog and lazy routes; bundle-size assertion if the build exposes one cheaply.
+
+`POST /api/settings/apply` (in the S3 settings route module) is the transaction, and its guarantee is an *ordering* rather than a database one, because the config and the keybindings are separate files: check the revision and normalize the chords (both pure, so an invalid document of either kind is a 422 with nothing written), stage the keybindings beside their destination, let `update_config` validate the whole candidate before it saves, then rename the staged file into place.
+Only that last rename can fail after something has committed, and it answers 500 with `committed: ["config"]` instead of denying both.
+Every answer carries `committed`, and `settingsSave.ts` derives the footer message from it - including the case the old code could not distinguish at all, a request that never came back, which now says the outcome is unknown rather than that nothing changed.
+
+Two things found while doing it, both fixed here:
+
+- The footer's dirty hint won over everything but "saving…", and a rejected save leaves the draft dirty - so the explanation the panel had just produced was replaced by "unsaved changes" and only the errors block said anything. A write in flight or refused now speaks over the hint.
+- `CodeEditor`'s value reconcile could not tell a *lagging echo* from an external rewrite. The parent stores each emitted string and re-renders, so it is a turn behind the keyboard; during a burst the effect ran with a document the editor had already moved past, replaced the document with that older copy, re-emitted, and replaced it again. At machine typing speed this wedges the page outright (reproduced on the pre-change code, so it predates S10.4); at human speed it silently drops characters. `pendingEchoes` answers it - the ref S10.4 asked for handles the caught-up case in O(1), and the count handles the lagging one.
+
+Bundle, measured on this branch (`npm run build`, entry chunk):
+
+| | raw | gzip |
+| --- | --- | --- |
+| before | 3,421.45 kB | 1,075.35 kB |
+| after | 2,165.91 kB | 654.55 kB |
+| change | -1,255.54 kB (-36.7%) | -420.80 kB (-39.1%) |
+
+CSS moved 467.10 -> 467.60 kB raw (77.70 -> 77.78 kB gzip), the two placeholder rules.
+`CodeEditor` (361.56 kB / 117.32 kB gzip) and `ChangeMapPane` (176.28 kB / 44.40 kB gzip) became their own chunks, and each grammar its own; none is preloaded from `index.html`, so they are fetched on the click that needs them.
+The dynamic grammar specifiers are mirrored into `optimizeDeps.include` because dev answers a runtime-discovered dependency with a full page reload that lands mid-spec in the renderer suite; `bundleSplit.test.ts` fails if the two lists drift.
 
 ### D3 - deploy checkpoint (primary; no reap)
 

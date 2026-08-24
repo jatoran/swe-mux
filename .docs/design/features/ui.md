@@ -614,6 +614,18 @@ Its rules, and what each one is defending:
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- **Save is one request, so the panel can say what happened.**
+  It used to be two - a config PATCH and a keybindings PUT fired together - and one catch reported either failure as "invalid · nothing was changed".
+  That is a statement about the daemon's disk, and half the failures it covered had already committed the other request; a `_revision` conflict raised from a second device said it while the shortcuts had just been rewritten.
+  `POST /api/settings/apply` (`design/interfaces.md`) commits both halves or neither, and every answer names what committed, so the footer reports three distinct outcomes instead of one: nothing changed (the daemon said so), part of it landed (only a disk fault at the final rename can do this, and it names the half), or the daemon never answered and the outcome is unknown.
+  The last one matters because the reassuring answer there would be a guess, which is what the original message was.
+- **The dirty hint is a default, not an override.**
+  "unsaved changes" used to win over everything except "saving…", and a rejected save leaves the draft dirty - so the explanation the panel had just produced was replaced by the hint, and only the validation-errors block said anything.
+  A write in flight or a write that failed has something to say that the hint does not, and says it.
+- **Restore defaults asks first.**
+  It is the one control in the panel that rewrites the whole saved configuration on a single click, is not staged behind Save, discards unsaved edits, and cannot be undone.
+  The confirmation is an `alertdialog` and its own dismiss level, so back, Escape, and the scrim all back out of it before they reach the panel; the click that opens it sends nothing.
+  Its failure is visible for the same reason every other write's is - a refused reset used to be an unhandled rejection, leaving the panel showing a draft the daemon no longer held with no indication that anything had gone wrong.
 - **One tab names one subsystem.** Seventeen tabs are grouped into four runs, declared once
   in `settingsTabs.ts` and rendered from that single order by both layouts:
 
